@@ -1,0 +1,281 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional custom version (for example, 1.2.3). If omitted, increments the patch version.
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  JAVA_VERSION: 21
+  JAVA_DISTRIBUTION: temurin
+
+jobs:
+  version:
+    name: Validate and bump version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate and bump version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version="$(grep '^andy.versionName=' gradle.properties | cut -d'=' -f2- | tr -d '[:space:]')"
+          if [[ -z "${current_version}" ]]; then
+            echo "::error::gradle.properties must define andy.versionName"
+            exit 1
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            new_version="${{ inputs.version }}"
+          else
+            IFS='.' read -r major minor patch <<< "${current_version}"
+            if [[ ! "${major}" =~ ^[0-9]+$ || ! "${minor}" =~ ^[0-9]+$ || ! "${patch}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Cannot auto-increment non-numeric version '${current_version}'"
+              exit 1
+            fi
+            new_version="${major}.${minor}.$((patch + 1))"
+          fi
+
+          if [[ ! "${new_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must be plain semver-like digits (for example, 1.2.3)"
+            exit 1
+          fi
+
+          echo "Bumping version from ${current_version} to ${new_version}"
+          perl -pi -e "s/^andy.versionName=.*/andy.versionName=${new_version}/" gradle.properties
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add gradle.properties
+          git commit -m "Bump version to ${new_version} [skip ci]"
+
+          if ! git push origin HEAD:main; then
+            echo "::error::Failed to push version bump to main. If main is protected, allow GitHub Actions to bypass protection or switch this workflow to use a release PAT."
+            exit 1
+          fi
+
+          tag_name="release/${new_version}"
+          git tag "${tag_name}"
+          git push origin "${tag_name}"
+
+          {
+            echo "version=${new_version}"
+            echo "tag_name=${tag_name}"
+          } >> "${GITHUB_OUTPUT}"
+
+  linux:
+    name: Linux release
+    needs:
+      - version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Linux DEB
+        run: xvfb-run -a ./gradlew packageReleaseDeb -Pandy.versionName=${{ needs.version.outputs.version }}
+
+      - name: Collect Linux release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          deb="$(find build -name '*.deb' -print -quit)"
+          if [[ -z "${deb}" ]]; then
+            echo "::error::Could not find Linux DEB release artifact"
+            exit 1
+          fi
+          cp "${deb}" "release-artifacts/Andy-${VERSION}.deb"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          if-no-files-found: error
+          path: release-artifacts/*
+
+  windows:
+    name: Windows release
+    needs:
+      - version
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: choco install wixtoolset --yes --no-progress
+
+      - name: Build Windows MSI
+        shell: pwsh
+        run: ./gradlew.bat packageReleaseMsi "-Pandy.versionName=${{ needs.version.outputs.version }}"
+
+      - name: Collect Windows release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-artifacts" | Out-Null
+          $msi = Get-ChildItem -Path "build" -Recurse -Filter "*.msi" | Select-Object -First 1
+          if (-not $msi) {
+            throw "Could not find Windows MSI release artifact"
+          }
+          Copy-Item $msi.FullName "release-artifacts/Andy-${env:VERSION}.msi"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          if-no-files-found: error
+          path: release-artifacts/*
+
+  macos:
+    name: macOS release
+    needs:
+      - version
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build macOS DMG
+        run: ./gradlew packageReleaseDmg -Pandy.versionName=${{ needs.version.outputs.version }}
+
+      - name: Print macOS packaging logs
+        if: failure()
+        shell: bash
+        run: |
+          log_dir="build/compose/logs"
+          if [[ ! -d "${log_dir}" ]]; then
+            echo "No Compose packaging logs found."
+            exit 0
+          fi
+
+          while IFS= read -r log_file; do
+            echo "::group::${log_file}"
+            sed -n '1,240p' "${log_file}"
+            echo "::endgroup::"
+          done < <(find "${log_dir}" -type f -name 'jpackage-*.txt' | sort)
+
+      - name: Collect macOS release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          dmg="$(find build -name '*.dmg' -print -quit)"
+          if [[ -z "${dmg}" ]]; then
+            echo "::error::Could not find macOS DMG release artifact"
+            exit 1
+          fi
+          cp "${dmg}" "release-artifacts/Andy-${VERSION}.dmg"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          if-no-files-found: error
+          path: release-artifacts/*
+
+  github-release:
+    name: Create GitHub release
+    needs:
+      - version
+      - linux
+      - windows
+      - macos
+    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag_name }}
+          name: Andy ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/**/*.deb
+            release-artifacts/**/*.msi
+            release-artifacts/**/*.dmg

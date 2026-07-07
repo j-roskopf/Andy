@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Andy: Run Desktop",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": ["run"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Andy: Test Desktop",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": ["desktopTest", "assemble"],
+      "group": "test",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    }
+  ]
+}
+

@@ -1,0 +1,76 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  JAVA_DISTRIBUTION: temurin
+
+jobs:
+  desktop:
+    name: Desktop checks (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Linux desktop dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+
+      - name: Run Linux checks
+        if: matrix.os == 'linux'
+        run: xvfb-run -a ./gradlew desktopTest assemble
+
+      - name: Run macOS checks
+        if: matrix.os == 'macos'
+        run: ./gradlew desktopTest assemble
+
+      - name: Run Windows checks
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./gradlew.bat desktopTest assemble
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-checks-${{ matrix.os }}-reports
+          if-no-files-found: ignore
+          path: |
+            build/reports/tests/**
+            build/test-results/**
+

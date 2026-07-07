@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Andy: Run Desktop",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew run",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+        "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,217 @@
+package app.andy.model
+
+enum class DeviceKind { Physical, Emulator, Unknown }
+enum class DeviceConnectionState { Online, Offline, Unauthorized, Missing, Unknown }
+
+data class AndroidDevice(
+    val serial: String,
+    val displayName: String,
+    val kind: DeviceKind,
+    val state: DeviceConnectionState,
+    val apiLevel: String? = null,
+    val abi: String? = null,
+    val model: String? = null,
+    val product: String? = null,
+    val batteryPercent: Int? = null,
+    val screenSize: String? = null,
+    val storageSummary: String? = null,
+)
+
+data class SdkDiscovery(
+    val sdkPath: String?,
+    val adbPath: String?,
+    val emulatorPath: String?,
+    val sdkManagerPath: String?,
+    val avdManagerPath: String?,
+    val issues: List<String> = emptyList(),
+) {
+    val hasAdb: Boolean get() = adbPath != null
+    val hasEmulatorTools: Boolean get() = emulatorPath != null && avdManagerPath != null
+}
+
+data class SystemImage(
+    val packageId: String,
+    val api: String,
+    val variant: String,
+    val abi: String,
+    val displayName: String,
+    val installed: Boolean,
+)
+
+data class AvdProfile(
+    val id: String,
+    val name: String,
+    val oem: String?,
+    val tag: String?,
+    val resolution: String?,
+    val density: String?,
+)
+
+data class VirtualDevice(
+    val name: String,
+    val path: String?,
+    val target: String?,
+    val abi: String?,
+    val running: Boolean,
+)
+
+enum class LogLevel { Verbose, Debug, Info, Warn, Error, Fatal, Silent }
+
+data class LogcatEntry(
+    val time: String,
+    val pid: String?,
+    val tid: String?,
+    val level: LogLevel,
+    val tag: String,
+    val message: String,
+)
+
+enum class IntentMode { Activity, DeepLink, Service, Broadcast }
+enum class ExtraType { StringValue, BooleanValue, IntValue, LongValue, FloatValue }
+
+data class IntentExtra(
+    val key: String,
+    val type: ExtraType,
+    val value: String,
+)
+
+data class IntentDraft(
+    val mode: IntentMode = IntentMode.DeepLink,
+    val action: String = "android.intent.action.VIEW",
+    val component: String = "",
+    val dataUri: String = "",
+    val categories: List<String> = listOf("android.intent.category.DEFAULT"),
+    val flags: List<String> = emptyList(),
+    val extras: List<IntentExtra> = emptyList(),
+)
+
+data class DeviceFile(
+    val path: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val sizeBytes: Long?,
+    val permissions: String?,
+    val modified: String?,
+)
+
+data class AndroidApp(
+    val packageName: String,
+    val label: String? = null,
+    val system: Boolean = false,
+    val enabled: Boolean = true,
+    val versionName: String? = null,
+    val versionCode: String? = null,
+)
+
+data class AndroidPermission(
+    val name: String,
+    val granted: Boolean?,
+)
+
+data class AndroidActivity(
+    val name: String,
+    val exported: Boolean?,
+)
+
+data class ProxyRule(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+    val urlPattern: String,
+    val method: String? = null,
+    val statusCode: Int? = null,
+    val setHeaders: Map<String, String> = emptyMap(),
+    val removeHeaders: List<String> = emptyList(),
+    val responseBody: String? = null,
+)
+
+fun ProxyRule.matches(method: String, url: String): Boolean {
+    if (!enabled) return false
+    if (urlPattern.isNotBlank() && !url.contains(urlPattern, ignoreCase = true)) return false
+    if (!this.method.isNullOrBlank() && !this.method.equals(method, ignoreCase = true)) return false
+    return true
+}
+
+data class NetworkExchange(
+    val id: String,
+    val startedAtMillis: Long,
+    val completedAtMillis: Long?,
+    val method: String,
+    val url: String,
+    val statusCode: Int?,
+    val contentType: String?,
+    val sizeBytes: Long?,
+    val durationMillis: Long?,
+    val requestHeaders: Map<String, String>,
+    val responseHeaders: Map<String, String>,
+    val requestBodyPreview: String?,
+    val responseBodyPreview: String?,
+    val error: String?,
+    val tlsStatus: String?,
+    val matchedRuleId: String?,
+    val flowId: String,
+)
+
+data class PerformanceSample(
+    val timestampMillis: Long,
+    val cpuPercent: Float?,
+    val memoryMb: Float?,
+    val fps: Float?,
+    val batteryPercent: Int?,
+    val thermalStatus: String?,
+    val processes: List<ProcessMetric> = emptyList(),
+    val frameRenderTimes: List<FrameRenderMetric> = emptyList(),
+)
+
+data class ProcessMetric(
+    val pid: String,
+    val name: String,
+    val cpuPercent: Float?,
+    val memoryMb: Float?,
+)
+
+data class FrameRenderMetric(
+    val label: String,
+    val millis: Float,
+)
+
+data class AccessibilityNode(
+    val id: String,
+    val className: String?,
+    val packageName: String? = null,
+    val resourceId: String?,
+    val text: String?,
+    val contentDescription: String?,
+    val hint: String? = null,
+    val bounds: String?,
+    val clickable: Boolean,
+    val longClickable: Boolean = false,
+    val focusable: Boolean,
+    val focused: Boolean = false,
+    val enabled: Boolean,
+    val selected: Boolean = false,
+    val checkable: Boolean = false,
+    val checked: Boolean = false,
+    val scrollable: Boolean = false,
+    val password: Boolean = false,
+    val visible: Boolean = true,
+    val attributes: Map<String, String> = emptyMap(),
+    val children: List<AccessibilityNode> = emptyList(),
+)
+
+data class WorkspaceState(
+    val selectedSdkPath: String? = null,
+    val selectedDeviceSerial: String? = null,
+    val savedIntents: List<IntentDraft> = emptyList(),
+    val logSearch: String = "",
+    val enabledLogLevels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
+    val proxyRules: List<ProxyRule> = emptyList(),
+    val proxyPort: Int = 9099,
+    val liveDevicePaneWidth: Float = 720f,
+    val liveControlsPaneHeight: Float = 230f,
+    val appsListPaneWidth: Float = 520f,
+    val appsDetailsPaneWidth: Float = 420f,
+    val performanceProcessesPaneWidth: Float = 760f,
+    val designDevicePaneWidth: Float = 820f,
+    val accessibilityTreePaneWidth: Float = 560f,
+)

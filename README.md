@@ -1,2 +1,3 @@
 # Andy
-Andy is a desktop companion for Android development.
+
+Andy is a desktop companion for Android developers.

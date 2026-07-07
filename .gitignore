@@ -1,34 +1,27 @@
-# Gradle files
 .gradle/
 build/
-
-# Local configuration file (sdk path, etc)
+**/build/
 local.properties
-
-# Log/OS Files
-*.log
-
-# Android Studio generated files and folders
-captures/
-.externalNativeBuild/
-.cxx/
-*.aab
-*.apk
-output-metadata.json
-
-# IntelliJ
+.DS_Store
 *.iml
+
+prebuilds/fullsdk-linux
+prebuilds/fullsdk-darwin
+bin
+out
+*.iml
+.gradle
+/local.properties
 .idea/
-misc.xml
-deploymentTargetDropDown.xml
-render.experimental.xml
-
-# Keystore files
-*.jks
-*.keystore
-
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Android Profiling
-*.hprof
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+.kotlin
+node_modules/
+playwright-report/
+test-results/
+iosApp/Vendor/GoogleCastSDK/
+.vercel
+.env*
