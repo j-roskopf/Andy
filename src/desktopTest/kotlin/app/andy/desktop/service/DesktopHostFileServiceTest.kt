@@ -3,9 +3,12 @@ package app.andy.desktop.service
 import app.andy.model.HostFileSaveResult
 import app.andy.model.HostSearchMatchKind
 import app.andy.model.HostSearchMode
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,7 +35,7 @@ class DesktopHostFileServiceTest {
         assertEquals(2, status.indexedFiles)
 
         val nameResults = service.search("main", HostSearchMode.FileName, listOf(root.absolutePath), 10)
-        assertEquals("Main.kt", nameResults.single().path.substringAfterLast('/'))
+        assertEquals("Main.kt", File(nameResults.single().path).name)
 
         val contentResults = service.search("needle", HostSearchMode.Content, listOf(root.absolutePath), 10)
         assertEquals(1, contentResults.size)
@@ -41,7 +44,7 @@ class DesktopHostFileServiceTest {
 
         val reloaded = DesktopHostFileService(indexDir = indexDir)
         val persistedResults = reloaded.search("Andy", HostSearchMode.Content, listOf(root.absolutePath), 10)
-        assertEquals("README.md", persistedResults.single().path.substringAfterLast('/'))
+        assertEquals("README.md", File(persistedResults.single().path).name)
     }
 
     @Test
@@ -84,6 +87,33 @@ class DesktopHostFileServiceTest {
         assertIs<HostFileSaveResult.Saved>(result)
         assertEquals("readme after", readme.readText())
         assertEquals("source before", source.readText())
+    }
+
+    @Test
+    fun watcherRemovesDeletedDirectoryDescendantsFromIndex() = runBlocking {
+        val root = createTempDirectory("andy-host-delete-root").toFile()
+        val indexDir = createTempDirectory("andy-host-delete-index").toFile()
+        val deletedDir = root.resolve("gone").apply { mkdirs() }
+        deletedDir.resolve("stale.txt").writeText("stale searchable content")
+        val service = DesktopHostFileService(indexDir = indexDir)
+        val collector = launch { service.indexRoot(root.absolutePath).collect {} }
+        try {
+            withTimeout(5_000) {
+                while (service.search("stale", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
+                    delay(50)
+                }
+            }
+
+            deletedDir.deleteRecursively()
+
+            withTimeout(5_000) {
+                while (service.search("stale", HostSearchMode.Content, listOf(root.absolutePath), 10).isNotEmpty()) {
+                    delay(50)
+                }
+            }
+        } finally {
+            collector.cancel()
+        }
     }
 
     @Test

@@ -22,14 +22,18 @@ import java.io.File
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.FileSystems
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardWatchEventKinds.ENTRY_CREATE
 import java.nio.file.StandardWatchEventKinds.ENTRY_DELETE
 import java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY
 import java.nio.file.WatchKey
 import java.nio.file.WatchService
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -38,7 +42,6 @@ import kotlin.io.path.extension
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
-import kotlin.streams.asSequence
 
 class DesktopHostFileService(
     private val indexDir: File = File(System.getProperty("user.home"), ".andy/file-index"),
@@ -79,7 +82,7 @@ class DesktopHostFileService(
             file.parentFile?.mkdirs()
             val temp = File(file.parentFile ?: File("."), ".${file.name}.andy-${System.nanoTime()}.tmp")
             temp.writeText(content, StandardCharsets.UTF_8)
-            Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            moveReplacing(temp.toPath(), file.toPath())
             refreshFileInIndexes(file.toPath())
             HostFileSaveResult.Saved(file.lastModified())
         }.getOrElse {
@@ -103,6 +106,7 @@ class DesktopHostFileService(
         awaitClose {
             collector.cancel()
             indexer.cancel()
+            watchers.remove(normalized)?.close()
         }
     }
 
@@ -210,7 +214,7 @@ class DesktopHostFileService(
                 key.reset()
                 delay(350)
                 changed.forEach { path ->
-                    if (path.isDirectory()) path.walkDirectories { register(it) }
+                    if (path.isDirectory() && !shouldExclude(path)) path.walkDirectories { register(it) }
                     refreshPath(root, path)
                 }
             }
@@ -223,6 +227,7 @@ class DesktopHostFileService(
         val file = path.toFile()
         if (!file.exists() || shouldExclude(path)) {
             index.files.remove(file.absolutePath)
+            removeIndexedDescendants(index, path)
         } else if (file.isFile) {
             index.files[file.absolutePath] = indexFile(root, file)
         }
@@ -261,6 +266,13 @@ class DesktopHostFileService(
         file.printWriter().use { writer ->
             writer.println("andy-index-v1")
             index.files.values.sortedBy { it.path }.forEach { writer.println(encodeIndexedFile(it)) }
+        }
+    }
+
+    private fun removeIndexedDescendants(index: RootIndex, path: Path) {
+        val normalized = path.toAbsolutePath().normalize()
+        index.files.keys.removeIf { indexedPath ->
+            Path.of(indexedPath).toAbsolutePath().normalize().startsWith(normalized)
         }
     }
 
@@ -351,23 +363,45 @@ private val ExcludedNames = setOf(
 
 private fun Path.walkIndexedFiles(onFile: (Path) -> Unit) {
     if (!exists()) return
-    Files.walk(this).use { stream ->
-        stream.asSequence()
-            .filter { it.isRegularFile() && !shouldExclude(it) }
-            .forEach(onFile)
-    }
+    Files.walkFileTree(this, object : SimpleFileVisitor<Path>() {
+        override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+            return if (dir != this@walkIndexedFiles && dir.name in ExcludedNames) {
+                FileVisitResult.SKIP_SUBTREE
+            } else {
+                FileVisitResult.CONTINUE
+            }
+        }
+
+        override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+            if (attrs.isRegularFile && file.name !in ExcludedNames) onFile(file)
+            return FileVisitResult.CONTINUE
+        }
+    })
 }
 
 private fun Path.walkDirectories(onDirectory: (Path) -> Unit) {
     if (!exists()) return
-    Files.walk(this).use { stream ->
-        stream.asSequence()
-            .filter { it.isDirectory() && !shouldExclude(it) }
-            .forEach(onDirectory)
-    }
+    Files.walkFileTree(this, object : SimpleFileVisitor<Path>() {
+        override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+            return if (dir != this@walkDirectories && dir.name in ExcludedNames) {
+                FileVisitResult.SKIP_SUBTREE
+            } else {
+                onDirectory(dir)
+                FileVisitResult.CONTINUE
+            }
+        }
+    })
 }
 
 private fun shouldExclude(path: Path): Boolean = path.asSequence().any { it.name in ExcludedNames }
+
+private fun moveReplacing(source: Path, target: Path) {
+    try {
+        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    } catch (_: AtomicMoveNotSupportedException) {
+        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
+    }
+}
 
 private fun File.toHostFileEntry(): HostFileEntry = HostFileEntry(
     path = absolutePath,

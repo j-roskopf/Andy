@@ -146,8 +146,9 @@ private class HostCodeEditorPanel(
         currentPath = path
         if (!pathChanged && editor.text == value) return
         programmaticUpdate = true
+        val caret = editor.caretPosition
         editor.text = value
-        editor.caretPosition = 0
+        editor.caretPosition = if (pathChanged) 0 else caret.coerceAtMost(value.length)
         programmaticUpdate = false
     }
 

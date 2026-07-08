@@ -882,13 +882,17 @@ internal object ScrcpyServerLocator {
     }
 
     private fun bundledServer(): File? {
-        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server") ?: return null
         val target = File(System.getProperty("user.home"), ".andy/scrcpy/scrcpy-server")
+        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server") ?: return null
         target.parentFile.mkdirs()
-        resource.use { input ->
-            Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        try {
+            resource.use { input ->
+                Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            target.setReadable(true, false)
+        } catch (_: Exception) {
+            if (!target.isFile || target.length() == 0L) return null
         }
-        target.setReadable(true, false)
         return target.takeIf { it.isFile && it.length() > 0 }
     }
 }

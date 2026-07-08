@@ -3547,9 +3547,11 @@ private fun HostFilesScreen(
                         OutlinedButton(onClick = {
                             selectedRoot?.let { root ->
                                 scope.launch {
+                                    var sawIndexing = false
                                     service.indexRoot(root).first { status ->
                                         statuses[root] = status
-                                        !status.indexing
+                                        if (status.indexing) sawIndexing = true
+                                        sawIndexing && !status.indexing
                                     }
                                 }
                             }
@@ -3601,7 +3603,7 @@ private fun HostFilesScreen(
                     }
                 } else {
                     LazyColumn(Modifier.weight(1f), state = treeListState) {
-                        items(treeRows) { row ->
+                        items(treeRows, key = { it.entry.path }) { row ->
                             HostTreeRowView(
                                 row = row,
                                 expanded = expandedPaths[row.entry.path] == true,
@@ -3674,7 +3676,11 @@ private fun HostFilesScreen(
     }
 }
 
-private fun hostFileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifBlank { path }
+private fun hostFileName(path: String): String {
+    val trimmed = trimHostTrailingSeparators(path)
+    val index = maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+    return if (index >= 0 && index < trimmed.lastIndex) trimmed.substring(index + 1) else trimmed.ifBlank { path }
+}
 
 private fun hostTreeRows(root: String, children: Map<String, List<HostFileEntry>>, expanded: Map<String, Boolean>): List<HostTreeRow> {
     val rootEntry = HostFileEntry(
@@ -3821,9 +3827,15 @@ private fun SearchModePill(text: String, shortcut: String, selected: Boolean, co
 }
 
 private fun hostParentPath(path: String): String {
-    val trimmed = path.trimEnd('/').ifBlank { "/" }
-    if (trimmed == "/") return "/"
-    return trimmed.substringBeforeLast('/', "").ifBlank { "/" }
+    val trimmed = trimHostTrailingSeparators(path)
+    if (trimmed == "/" || trimmed.matches(Regex("^[A-Za-z]:$"))) return trimmed
+    val index = maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+    return when {
+        index < 0 -> trimmed.ifBlank { "/" }
+        index == 0 -> trimmed.substring(0, 1)
+        index == 2 && trimmed.getOrNull(1) == ':' -> trimmed.substring(0, 3)
+        else -> trimmed.substring(0, index).ifBlank { "/" }
+    }
 }
 
 private fun resolveHostRootForPath(path: String?, roots: List<String>): String? {
@@ -3839,24 +3851,43 @@ private fun hostPathStartsWith(path: String, root: String): Boolean {
     return normalizedPath == normalizedRoot || normalizedPath.startsWith("$normalizedRoot/")
 }
 
-private fun normalizeHostPath(path: String): String = path.trimEnd('/').ifBlank { "/" }
+private fun normalizeHostPath(path: String): String = trimHostTrailingSeparators(path).replace('\\', '/').ifBlank { "/" }
+
+private fun trimHostTrailingSeparators(path: String): String {
+    var value = path.trim()
+    while (value.length > 1 && (value.endsWith('/') || value.endsWith('\\'))) {
+        if (value.length == 3 && value[1] == ':') break
+        value = value.dropLast(1)
+    }
+    return value.ifBlank { "/" }
+}
 
 private fun hostAncestorDirectories(path: String, root: String): List<String> {
     val normalizedRoot = normalizeHostPath(root)
+    val displayRoot = trimHostTrailingSeparators(root)
     val parent = hostParentPath(path)
-    if (!hostPathStartsWith(parent, normalizedRoot)) return listOf(normalizedRoot)
-    val relativeParent = parent.removePrefix(normalizedRoot).trim('/')
-    if (relativeParent.isBlank()) return listOf(normalizedRoot)
-    val ancestors = mutableListOf(normalizedRoot)
-    var current = normalizedRoot
+    if (!hostPathStartsWith(parent, normalizedRoot)) return listOf(displayRoot)
+    val relativeParent = normalizeHostPath(parent).removePrefix(normalizedRoot).trim('/')
+    if (relativeParent.isBlank()) return listOf(displayRoot)
+    val separator = if (root.contains('\\') && !root.contains('/')) "\\" else "/"
+    val ancestors = mutableListOf(displayRoot)
+    var current = displayRoot
     relativeParent.split('/').filter { it.isNotBlank() }.forEach { segment ->
-        current = if (current == "/") "/$segment" else "$current/$segment"
+        current = when {
+            current == "/" -> "/$segment"
+            current.matches(Regex("^[A-Za-z]:$")) -> "$current$separator$segment"
+            else -> "$current$separator$segment"
+        }
         ancestors += current
     }
     return ancestors
 }
 
-private fun hostDisplayPath(path: String, root: String): String = path.removePrefix(root).trimStart('/').ifBlank { hostFileName(path) }
+private fun hostDisplayPath(path: String, root: String): String {
+    val normalizedPath = normalizeHostPath(path)
+    val normalizedRoot = normalizeHostPath(root)
+    return normalizedPath.removePrefix(normalizedRoot).trimStart('/').ifBlank { hostFileName(path) }
+}
 
 private val DebugNetworkSecurityConfigSnippet = """
 res/xml/network_security_config.xml
