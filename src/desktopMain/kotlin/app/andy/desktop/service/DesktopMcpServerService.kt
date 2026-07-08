@@ -754,24 +754,92 @@ class DesktopMcpServerService(
             val port = args["port"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("port is required")
             val rulesJson = args["rules"]?.jsonArray
             val rules = rulesJson?.map { ruleObj ->
-                val obj = ruleObj.jsonObject
-                ProxyRule(
-                    id = obj["id"]?.jsonPrimitive?.contentOrNull ?: java.util.UUID.randomUUID().toString(),
-                    name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "rule",
-                    enabled = obj["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
-                    urlPattern = obj["urlPattern"]?.jsonPrimitive?.contentOrNull ?: "",
-                    method = obj["method"]?.jsonPrimitive?.contentOrNull,
-                    statusCode = obj["statusCode"]?.jsonPrimitive?.intOrNull,
-                    setHeaders = obj["setHeaders"]?.jsonObject?.entries?.associate { it.key to it.value.jsonPrimitive.content } ?: emptyMap(),
-                    removeHeaders = obj["removeHeaders"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList(),
-                    responseBody = obj["responseBody"]?.jsonPrimitive?.contentOrNull
-                )
+                proxyRuleFromJson(ruleObj.jsonObject, existing = null, requirePatternForNew = false)
             } ?: emptyList()
             val result = proxy.start(port, rules)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
                 isError = !result.isSuccess
             )
+        }
+
+        mcpServer.registerTool(
+            "list_network_mock_rules",
+            "List persisted network mocking rules used by the Andy proxy",
+        ) { args ->
+            val state = workspaceStore.load()
+            val json = buildJsonArray {
+                state.proxyRules.forEach { add(proxyRuleToJson(it)) }
+            }
+            CallToolResult(content = listOf(TextContent(text = json.toString())))
+        }
+
+        mcpServer.registerTool(
+            "upsert_network_mock_rule",
+            "Add a new network mocking rule or edit an existing rule by id. Existing rules keep omitted fields; new rules require urlPattern.",
+            mapOf(
+                "id" to stringProp("Optional rule id. Provide an existing id to edit that rule; omit to create a new rule."),
+                "name" to stringProp("Human-readable rule name"),
+                "enabled" to boolProp("Whether the rule is active"),
+                "urlPattern" to stringProp("URL substring or wildcard pattern. Wildcards use * and match the full URL."),
+                "method" to stringProp("Optional HTTP method to match, for example GET or POST"),
+                "statusCode" to intProp("Optional response status code override"),
+                "setHeaders" to objectProp("Optional response headers to set, as a string map"),
+                "removeHeaders" to arrayProp("string", "Optional response headers to remove"),
+                "responseBody" to stringProp("Optional UTF-8 response body override")
+            )
+        ) { args ->
+            val state = workspaceStore.load()
+            val existingId = args["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val existing = existingId?.let { id -> state.proxyRules.firstOrNull { it.id == id } }
+            val updatedRule = proxyRuleFromJson(
+                obj = JsonObject(args),
+                existing = existing,
+                requirePatternForNew = existing == null
+            )
+            val updatedRules = if (existing == null) {
+                state.proxyRules + updatedRule
+            } else {
+                state.proxyRules.map { if (it.id == updatedRule.id) updatedRule else it }
+            }
+            saveProxyRules(state, updatedRules)
+            CallToolResult(content = listOf(TextContent(text = proxyRuleToJson(updatedRule).toString())))
+        }
+
+        mcpServer.registerTool(
+            "set_network_mock_rules",
+            "Replace all persisted network mocking rules used by the Andy proxy",
+            mapOf(
+                "rules" to arrayObjectProp("Rules: list of { id, name, enabled, urlPattern, method, statusCode, setHeaders, removeHeaders, responseBody }")
+            ),
+            listOf("rules")
+        ) { args ->
+            val rules = args["rules"]?.jsonArray?.map { ruleObj ->
+                proxyRuleFromJson(ruleObj.jsonObject, existing = null, requirePatternForNew = true)
+            } ?: throw IllegalArgumentException("rules is required")
+            val state = workspaceStore.load()
+            saveProxyRules(state, rules)
+            val json = buildJsonObject {
+                put("count", rules.size)
+                putJsonArray("rules") { rules.forEach { add(proxyRuleToJson(it)) } }
+            }
+            CallToolResult(content = listOf(TextContent(text = json.toString())))
+        }
+
+        mcpServer.registerTool(
+            "delete_network_mock_rule",
+            "Delete a persisted network mocking rule by id",
+            mapOf("id" to stringProp("Rule id to delete")),
+            listOf("id")
+        ) { args ->
+            val id = args["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            val state = workspaceStore.load()
+            val updatedRules = state.proxyRules.filterNot { it.id == id }
+            if (updatedRules.size == state.proxyRules.size) {
+                throw IllegalArgumentException("Rule not found for id: $id")
+            }
+            saveProxyRules(state, updatedRules)
+            CallToolResult(content = listOf(TextContent(text = """{"deleted":"$id","count":${updatedRules.size}}""")))
         }
 
         mcpServer.registerTool("stop_network_proxy", "Stop the network proxy") { args ->
@@ -1040,6 +1108,90 @@ class DesktopMcpServerService(
             put("type", "object")
         }
         put("description", desc)
+    }
+
+    private fun boolProp(desc: String) = buildJsonObject {
+        put("type", "boolean")
+        put("description", desc)
+    }
+
+    private fun objectProp(desc: String) = buildJsonObject {
+        put("type", "object")
+        put("description", desc)
+    }
+
+    private suspend fun saveProxyRules(state: WorkspaceState, rules: List<ProxyRule>) {
+        workspaceStore.save(state.copy(proxyRules = rules))
+        proxy.updateRules(rules)
+    }
+
+    private fun proxyRuleFromJson(
+        obj: JsonObject,
+        existing: ProxyRule?,
+        requirePatternForNew: Boolean,
+    ): ProxyRule {
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: existing?.id
+            ?: java.util.UUID.randomUUID().toString()
+        val urlPattern = stringArg(obj, "urlPattern", existing?.urlPattern)
+        if (requirePatternForNew && urlPattern.isNullOrBlank()) {
+            throw IllegalArgumentException("urlPattern is required for a new network mock rule")
+        }
+
+        return ProxyRule(
+            id = id,
+            name = stringArg(obj, "name", existing?.name) ?: "Mock rule",
+            enabled = boolArg(obj, "enabled", existing?.enabled) ?: true,
+            urlPattern = urlPattern.orEmpty(),
+            method = stringArg(obj, "method", existing?.method)?.takeIf { it.isNotBlank() },
+            statusCode = intArg(obj, "statusCode", existing?.statusCode),
+            setHeaders = stringMapArg(obj, "setHeaders", existing?.setHeaders) ?: emptyMap(),
+            removeHeaders = stringListArg(obj, "removeHeaders", existing?.removeHeaders) ?: emptyList(),
+            responseBody = stringArg(obj, "responseBody", existing?.responseBody),
+        )
+    }
+
+    private fun proxyRuleToJson(rule: ProxyRule): JsonObject {
+        return buildJsonObject {
+            put("id", rule.id)
+            put("name", rule.name)
+            put("enabled", rule.enabled)
+            put("urlPattern", rule.urlPattern)
+            put("method", rule.method)
+            put("statusCode", rule.statusCode)
+            putJsonObject("setHeaders") {
+                rule.setHeaders.forEach { (name, value) -> put(name, value) }
+            }
+            putJsonArray("removeHeaders") {
+                rule.removeHeaders.forEach { add(it) }
+            }
+            put("responseBody", rule.responseBody)
+        }
+    }
+
+    private fun stringArg(obj: JsonObject, name: String, fallback: String?): String? {
+        if (name !in obj) return fallback
+        return obj[name]?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun boolArg(obj: JsonObject, name: String, fallback: Boolean?): Boolean? {
+        if (name !in obj) return fallback
+        return obj[name]?.jsonPrimitive?.booleanOrNull
+    }
+
+    private fun intArg(obj: JsonObject, name: String, fallback: Int?): Int? {
+        if (name !in obj) return fallback
+        return obj[name]?.jsonPrimitive?.intOrNull
+    }
+
+    private fun stringListArg(obj: JsonObject, name: String, fallback: List<String>?): List<String>? {
+        if (name !in obj) return fallback
+        return obj[name]?.jsonArray?.map { it.jsonPrimitive.content }
+    }
+
+    private fun stringMapArg(obj: JsonObject, name: String, fallback: Map<String, String>?): Map<String, String>? {
+        if (name !in obj) return fallback
+        return obj[name]?.jsonObject?.entries?.associate { it.key to it.value.jsonPrimitive.content }
     }
 
     private fun mapNode(node: AccessibilityNode): JsonObject {
