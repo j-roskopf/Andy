@@ -176,6 +176,35 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun prepareUserCertificateInstallCopiesCaAndOpensSecuritySettings() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-proxy-test-home").toFile()
+        val result = try {
+            System.setProperty("user.home", testHome.absolutePath)
+            val service = DesktopProxyService(
+                env.runner,
+                env.devices,
+                mitmdumpExecutable = { "/usr/bin/mitmdump" },
+                processStarter = { _, _, _ -> MockProxyProcess() },
+                certificateSubjectHash = { "abcdef12" },
+                certificateSpkiFingerprint = { "spki-fingerprint" },
+            )
+            service.ensureCertificateAuthority()
+            File(testHome, ".andy/proxy/mitmproxy-ca-cert.cer").writeText("CERT")
+
+            service.prepareUserCertificateInstall("R3CXB056ZZB")
+        } finally {
+            System.setProperty("user.home", originalHome)
+        }
+
+        assertTrue(result.isSuccess)
+        assertTrue(result.stdout.contains("/sdcard/Download/andy-mitmproxy-ca-cert.cer"))
+        assertTrue(env.ran("push", File(testHome, ".andy/proxy/mitmproxy-ca-cert.cer").absolutePath, "/sdcard/Download/andy-mitmproxy-ca-cert.cer"))
+        assertTrue(env.ran("shell", "am", "start", "-a", "android.settings.SECURITY_SETTINGS"))
+    }
+
+    @Test
     fun systemCaInstallFallsBackToRuntimeInjectionWhenPersistentInstallIsLocked() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val originalHome = System.getProperty("user.home")

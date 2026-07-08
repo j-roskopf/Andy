@@ -1317,6 +1317,27 @@ class DesktopProxyService(
         return runAdbShellSequence(adb, serial, commands, "Device proxy cleared")
     }
 
+    override suspend fun prepareUserCertificateInstall(serial: String): CommandResult = withContext(Dispatchers.IO) {
+        val adb = devices.adbPath() ?: return@withContext CommandResult.failure("ADB not found")
+        val certificate = usableCertificateAuthority()
+            ?: return@withContext CommandResult.failure(
+                "Could not find a valid mitmproxy CA. Start the proxy once so mitmproxy can generate ${File(proxyDir, "mitmproxy-ca-cert.cer").absolutePath}.",
+            )
+        val remotePath = "/sdcard/Download/andy-mitmproxy-ca-cert.cer"
+        val push = runner.run(listOf(adb, "-s", serial, "push", certificate.absolutePath, remotePath), 60)
+        if (!push.isSuccess) return@withContext push
+
+        val settings = runner.run(listOf(adb, "-s", serial, "shell", "am", "start", "-a", "android.settings.SECURITY_SETTINGS"), 10)
+        val settingsNote = if (settings.isSuccess) {
+            "Opened Security settings."
+        } else {
+            "Could not open Security settings automatically. ${settings.combinedOutput()}".trim()
+        }
+        CommandResult.success(
+            "Copied Andy CA to $remotePath. $settingsNote On the device, install it from Settings > Security > Encryption & credentials > Install a certificate > CA certificate.",
+        )
+    }
+
     override suspend fun installSystemCertificateAuthority(serial: String): CommandResult = withContext(Dispatchers.IO) {
         val adb = devices.adbPath() ?: return@withContext CommandResult.failure("ADB not found")
         val certificate = usableCertificateAuthority()
@@ -1330,7 +1351,7 @@ class DesktopProxyService(
         val rootOutput = "${root.stdout}\n${root.stderr}".trim()
         if (!root.isSuccess || rootOutput.contains("cannot run as root", ignoreCase = true)) {
             return@withContext CommandResult.failure(
-                "ADB root is not available for this emulator. Use a non-Google-Play emulator image to install Andy's CA as a system root. $rootOutput".trim(),
+                "ADB root is not available for this device. Physical devices can only use Android's manual user-credential install unless they are rooted. For emulator system trust, use a non-Google-Play emulator image. $rootOutput".trim(),
             )
         }
         runner.run(listOf(adb, "-s", serial, "wait-for-device"), 60)
@@ -1636,7 +1657,6 @@ class DesktopProxyService(
         stdoutJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stdout.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
-                    println("[Proxy stdout] $line")
                     parseMitmproxyFlowLine(line)?.let { exchange ->
                         val current = exchanges.value
                         val index = current.indexOfFirst { it.id == exchange.id }

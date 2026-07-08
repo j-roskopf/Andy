@@ -160,6 +160,7 @@ internal class MockAndroidDeviceEnvironment {
             listOf("monkey", "-p", "com.example.app", "-c", "android.intent.category.LAUNCHER", "1") -> CommandResult.success("Events injected: 1")
             listOf("am", "force-stop", "com.example.app") -> CommandResult.success()
             listOf("am", "force-stop", "com.android.chrome") -> CommandResult.success()
+            listOf("am", "start", "-a", "android.settings.SECURITY_SETTINGS") -> CommandResult.success("Starting: Intent")
             listOf("sh", "/data/local/tmp/andy-inject-ca.sh") -> runtimeCaInjectionResult
             listOf("sh", "/data/local/tmp/andy-chrome-proxy-flags.sh") -> chromeFlagsResult
             listOf("pm", "clear", "com.example.app") -> CommandResult.success("Success")

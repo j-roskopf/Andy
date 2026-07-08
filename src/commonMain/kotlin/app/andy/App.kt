@@ -2907,6 +2907,14 @@ AndroidManifest.xml
 <application android:networkSecurityConfig="@xml/network_security_config" />
 """.trimIndent()
 
+private fun manualCertificateSteps(caPath: String, proxyHost: String, port: Int): List<String> = listOf(
+    "Start the proxy so Andy creates ${caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}.",
+    "Click Prepare phone CA, then finish the CA certificate install on the device from Downloads.",
+    "Set the device Wi-Fi proxy to Manual with host ${proxyHost.ifBlank { "this Mac's LAN IP" }} and port $port, or click Configure.",
+    "Run a debug build whose network security config trusts user certificates.",
+    "Disable Private DNS and retry over HTTP/1.1 if a request is missing; pinned apps and QUIC/HTTP3 will not decrypt.",
+)
+
 @Composable
 private fun NetworkScreen(
     services: AndyServices,
@@ -2966,6 +2974,10 @@ private fun NetworkScreen(
     val visibleTrafficRows = remember(trafficTree, expandedTrafficKeys.toMap()) {
         flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
     }
+    val userCaVerifiedByTraffic = remember(exchanges) {
+        exchanges.any { it.tlsStatus == "tls" && it.error == null }
+    }
+    val proxyTrafficObserved = exchanges.isNotEmpty()
 
     var caInstalled by remember { mutableStateOf(false) }
     var proxyConfigured by remember { mutableStateOf(false) }
@@ -3160,7 +3172,7 @@ private fun NetworkScreen(
                                 proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                             }
                         },
-                    ) { Text("Configure") }
+                    ) { Text("Configure device proxy") }
                     OutlinedButton(
                         enabled = serial != null,
                         onClick = {
@@ -3181,7 +3193,17 @@ private fun NetworkScreen(
                                 caInstalled = proxy.isCertificateInstalled(serial)
                             }
                         },
-                    ) { Text("Install CA") }
+                    ) { Text("System CA (root)") }
+                    OutlinedButton(
+                        enabled = serial != null,
+                        onClick = {
+                            if (serial != null) scope.launch {
+                                proxy.ensureCertificateAuthority()
+                                val result = proxy.prepareUserCertificateInstall(serial)
+                                status = if (result.isSuccess) result.stdout else result.stderr
+                            }
+                        },
+                    ) { Text("Prepare phone CA") }
                     OutlinedButton(onClick = {
                         scope.launch {
                             val result = proxy.clearTraffic()
@@ -3195,8 +3217,10 @@ private fun NetworkScreen(
                 val proxyStarted = proxyStatus.contains("listening on")
                 val caText = when {
                     serial == null -> "Select a device first"
-                    caInstalled -> "Installed on device"
-                    else -> "Click 'Install CA' to trust"
+                    caInstalled -> "System CA installed"
+                    userCaVerifiedByTraffic -> "User CA verified by HTTPS traffic"
+                    proxyTrafficObserved -> "Traffic observed"
+                    else -> "Use System CA or Prepare phone CA"
                 }
                 val configText = when {
                     serial == null -> "Select a device first"
@@ -3218,8 +3242,8 @@ private fun NetworkScreen(
                         hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
                     )
                     StatusIndicator(
-                        isOk = serial != null && caInstalled,
-                        label = "Root CA Certificate",
+                        isOk = serial != null && (caInstalled || proxyTrafficObserved),
+                        label = "CA Trust",
                         hint = caText
                     )
                     StatusIndicator(
@@ -3251,11 +3275,14 @@ private fun NetworkScreen(
                 AnimatedVisibility(setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("CA: ${caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        ManualCertificateSetupCard(
+                            steps = manualCertificateSteps(caPath, proxyHost, currentPort),
+                        )
                         Text(
-                            "Capture scope: user-CA mode captures debug apps that honor HTTP(S) proxy settings. Chrome and many third-party apps need the CA installed as a system root on a rootable, non-Play emulator; pinned apps, QUIC/HTTP3, private DNS, and direct UDP will not appear in v1.",
+                            "Capture scope: physical devices can trust Andy as a user CA only after manual approval, and only debug apps that opt into user CAs will decrypt. Chrome and many third-party apps need system trust on a rooted device or rootable non-Play emulator; pinned apps, QUIC/HTTP3, private DNS, and direct UDP will not appear in v1.",
                             color = Yellow,
                             fontSize = 12.sp,
-                            maxLines = 3,
+                            maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text("Debug app config", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -3492,6 +3519,26 @@ private fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
                 .background(color, CircleShape)
                 .border(1.dp, color.copy(alpha = 0.8f), CircleShape)
         )
+    }
+}
+
+@Composable
+private fun ManualCertificateSetupCard(steps: List<String>, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Physical device manual CA", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        steps.forEachIndexed { index, step ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                Text("${index + 1}.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text(step, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+            }
+        }
     }
 }
 
