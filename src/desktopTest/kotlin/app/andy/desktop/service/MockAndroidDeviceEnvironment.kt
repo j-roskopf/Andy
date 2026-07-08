@@ -22,6 +22,13 @@ internal class MockAndroidDeviceEnvironment {
     val devices = DesktopDeviceService(runner, locator, store)
     val commands = mutableListOf<List<String>>()
     val proxyCommands = mutableListOf<List<String>>()
+    var adbDevicesOutput: String = """
+        List of devices attached
+        emulator-5554	device product:sdk_gphone64_arm64 model:Pixel_8 device:emu64a transport_id:1
+        R3CXB056ZZB	device product:e3q model:SM_S921U device:e3q transport_id:2
+        OFFLINE	offline
+        UNAUTH	unauthorized
+    """.trimIndent()
     var rootResult: CommandResult = CommandResult.failure("adbd cannot run as root in production builds")
     var runtimeCaInjectionResult: CommandResult = CommandResult.success("Injected CA")
     var chromeFlagsResult: CommandResult = CommandResult.success()
@@ -80,6 +87,10 @@ internal class MockAndroidDeviceEnvironment {
         return commands.any { command -> command.windowed(tokens.size).any { it == tokens.toList() } }
     }
 
+    fun snapshotPath(name: String): File {
+        return File(avdHome, "Pixel_8_API_36.avd/snapshots/$name")
+    }
+
     private fun toolName(name: String, windowsExtension: String): String {
         val os = System.getProperty("os.name")
         return if (os.startsWith("Windows", ignoreCase = true)) "$name.$windowsExtension" else name
@@ -109,15 +120,7 @@ internal class MockAndroidDeviceEnvironment {
 
     private fun runAdb(command: List<String>): CommandResult {
         if (command.drop(1) == listOf("devices", "-l")) {
-            return CommandResult.success(
-                """
-                List of devices attached
-                emulator-5554	device product:sdk_gphone64_arm64 model:Pixel_8 device:emu64a transport_id:1
-                R3CXB056ZZB	device product:e3q model:SM_S921U device:e3q transport_id:2
-                OFFLINE	offline
-                UNAUTH	unauthorized
-                """.trimIndent(),
-            )
+            return CommandResult.success(adbDevicesOutput)
         }
 
         val serial = command.getOrNull(2)

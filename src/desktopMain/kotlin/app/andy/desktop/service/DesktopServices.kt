@@ -435,11 +435,7 @@ class DesktopAvdService(
         val isCompatible = if (serial != null) {
             snapshot.name in compatibleNames
         } else {
-            if (isFolder) {
-                folder.resolve("compatible.pb").exists()
-            } else {
-                true
-            }
+            true
         }
 
         return snapshot.copy(
@@ -523,14 +519,23 @@ class DesktopAvdService(
         val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return@withContext CommandResult.failure("Snapshots folder not found")
         val matches = snapshotsDir.listFiles()?.filter { it.nameWithoutExtension == oldName }.orEmpty()
         if (matches.isEmpty()) return@withContext CommandResult.failure("Snapshot not found: $oldName")
-        var allSuccess = true
-        matches.forEach { file ->
+        val moves = matches.map { file ->
             val ext = file.extension
             val newFile = if (ext.isEmpty()) {
                 File(file.parentFile, newName)
             } else {
                 File(file.parentFile, "$newName.$ext")
             }
+            file to newFile
+        }
+        val collision = moves.firstOrNull { (file, newFile) ->
+            newFile.exists() && newFile.canonicalFile != file.canonicalFile
+        }
+        if (collision != null) {
+            return@withContext CommandResult.failure("Snapshot already exists: $newName")
+        }
+        var allSuccess = true
+        moves.forEach { (file, newFile) ->
             if (!file.renameTo(newFile)) {
                 allSuccess = false
             }

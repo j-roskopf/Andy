@@ -140,6 +140,33 @@ class DesktopServicesMockDeviceTest {
     }
 
     @Test
+    fun offlineDirectorySnapshotsStayCompatibleForRestore() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        env.adbDevicesOutput = "List of devices attached"
+        val services = env.services()
+
+        val snapshots = services.avd.listSnapshots("Pixel_8_API_36")
+
+        assertEquals(listOf("default_boot"), snapshots.map { it.name })
+        assertTrue(snapshots.single().compatible)
+    }
+
+    @Test
+    fun snapshotRenameFailsWhenDestinationAlreadyExists() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        env.snapshotPath("manual").mkdirs()
+        env.snapshotPath("taken").mkdirs()
+        val services = env.services()
+
+        val result = services.avd.renameSnapshot("Pixel_8_API_36", "manual", "taken")
+
+        assertTrue(!result.isSuccess)
+        assertEquals("Snapshot already exists: taken", result.stderr)
+        assertTrue(env.snapshotPath("manual").exists())
+        assertTrue(env.snapshotPath("taken").exists())
+    }
+
+    @Test
     fun mirrorFallbackInputAndScreenshotUseMockDevice() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()
