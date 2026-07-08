@@ -7,7 +7,6 @@ import app.andy.model.RunningAction
 import app.andy.service.ActionRunService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +21,6 @@ class DesktopActionRunService(
 ) : ActionRunService {
     private data class RunHandle(
         val process: Process?,
-        val readerJob: Job?,
         val output: MutableStateFlow<List<String>>,
     )
 
@@ -68,18 +66,17 @@ class DesktopActionRunService(
                 .start()
         }.fold(
             onSuccess = { process ->
-                val job = scope.launch(Dispatchers.IO) {
+                handles[runId] = RunHandle(process, output)
+                scope.launch(Dispatchers.IO) {
                     runCatching { readProcessOutput(process, output) }
                     val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
                     markComplete(runId, if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed, exitCode)
-                    handles[runId] = handles[runId]?.copy(readerJob = null) ?: RunHandle(process, null, output)
                 }
-                handles[runId] = RunHandle(process, job, output)
             },
             onFailure = { error ->
                 output.update { it + "failed to start: ${error.message ?: error::class.simpleName.orEmpty()}" }
                 markComplete(runId, ActionRunStatus.Failed, null)
-                handles[runId] = RunHandle(null, null, output)
+                handles[runId] = RunHandle(null, output)
             },
         )
         return runId
@@ -89,7 +86,6 @@ class DesktopActionRunService(
         val handle = handles[runId] ?: return
         scope.launch(Dispatchers.IO) {
             handle.process?.let(::killTree)
-            handle.readerJob?.cancel()
             markComplete(runId, ActionRunStatus.Stopped, null)
         }
     }
@@ -137,13 +133,15 @@ class DesktopActionRunService(
     }
 
     private fun shellCommand(command: String): List<String> {
-        val osName = System.getProperty("os.name").lowercase()
+        val osName = System.getProperty("os.name")?.lowercase().orEmpty()
         return if (osName.contains("win")) {
             val shell = System.getenv("COMSPEC")?.takeIf { it.isNotBlank() } ?: "cmd.exe"
             listOf(shell, "/c", command)
         } else {
             val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/sh"
-            listOf(shell, "-lc", command)
+            val shellName = shell.replace('\\', '/').substringAfterLast('/')
+            val flag = if (shellName == "sh") "-c" else "-lc"
+            listOf(shell, flag, command)
         }
     }
 

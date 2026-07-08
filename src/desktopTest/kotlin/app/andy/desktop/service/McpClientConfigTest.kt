@@ -16,9 +16,11 @@ class McpClientConfigTest {
             System.setProperty("user.home", testHome.absolutePath)
 
             val file = McpClientConfig.getConfigFile(McpClientConfig.ClientType.ClaudeDesktop)
+            val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
+                ?: File(testHome, "AppData/Roaming").absolutePath
 
             assertEquals(
-                File(testHome, "AppData/Roaming/Claude/claude_desktop_config.json").absolutePath,
+                File(appData, "Claude/claude_desktop_config.json").absolutePath,
                 file?.absolutePath,
             )
         } finally {

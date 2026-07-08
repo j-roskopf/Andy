@@ -68,7 +68,7 @@ object McpClientConfig {
             ClientType.Cursor -> File(home, ".cursor/mcp.json")
             ClientType.Codex -> File(home, ".codex/config.toml")
             ClientType.ClaudeDesktop -> {
-                val osName = System.getProperty("os.name").lowercase()
+                val osName = System.getProperty("os.name")?.lowercase().orEmpty()
                 if (osName.contains("win")) {
                     val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
                         ?: File(home, "AppData/Roaming").absolutePath

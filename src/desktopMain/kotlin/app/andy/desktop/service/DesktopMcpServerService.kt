@@ -17,6 +17,8 @@ import io.modelcontextprotocol.kotlin.sdk.server.mcp
 import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.io.File
 import java.util.Base64
@@ -38,19 +40,20 @@ class DesktopMcpServerService(
 
     private var serverEngine: EmbeddedServer<*, *>? = null
     private var runningPort: Int? = null
+    private val serverMutex = Mutex()
 
-    override suspend fun start(port: Int): CommandResult = withContext(Dispatchers.IO) {
+    override suspend fun start(port: Int): CommandResult = withContext(Dispatchers.IO) { serverMutex.withLock {
         if (serverEngine != null) {
             if (runningPort == port) {
-                return@withContext CommandResult.success("Already running")
+                return@withLock CommandResult.success("Already running")
             }
-            stop()
+            stopEngine()
         }
 
         if (!isPortAvailable(port)) {
             status.value = "error: port $port already in use"
             running.value = false
-            return@withContext CommandResult.failure("Port $port is already in use")
+            return@withLock CommandResult.failure("Port $port is already in use")
         }
 
         try {
@@ -83,9 +86,14 @@ class DesktopMcpServerService(
             runningPort = null
             CommandResult.failure("Failed to start server: ${e.message}")
         }
-    }
+    } }
 
-    override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) {
+    override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) { serverMutex.withLock {
+        stopEngine()
+        CommandResult.success("Server stopped")
+    } }
+
+    private fun stopEngine() {
         val engine = serverEngine
         if (engine != null) {
             try {
@@ -98,7 +106,6 @@ class DesktopMcpServerService(
         runningPort = null
         status.value = "stopped"
         running.value = false
-        CommandResult.success("Server stopped")
     }
 
     override fun getSnippet(clientName: String, port: Int): String {
