@@ -214,7 +214,55 @@ val stripMacReleaseFfmpegExecutables by tasks.registering {
     }
 }
 
+val resignMacReleaseApp by tasks.registering {
+    dependsOn(stripMacReleaseFfmpegExecutables)
+
+    val signingIdentity = providers.gradleProperty("compose.desktop.mac.signing.identity")
+    val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
+
+    onlyIf {
+        System.getProperty("os.name").contains("mac", ignoreCase = true) &&
+            !signingIdentity.orNull.isNullOrBlank()
+    }
+
+    doLast {
+        val releaseAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app").get().asFile
+        val apps = releaseAppDir.listFiles { file -> file.isDirectory && file.extension == "app" }.orEmpty()
+        val identity = signingIdentity.get()
+        val keychainArgs = signingKeychain.orNull
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf("--keychain", it) }
+            .orEmpty()
+
+        fun runCommand(command: List<String>) {
+            val exitCode = ProcessBuilder(command)
+                .inheritIO()
+                .start()
+                .waitFor()
+            if (exitCode != 0) {
+                error("Command failed with exit code $exitCode: ${command.joinToString(" ")}")
+            }
+        }
+
+        apps.forEach { app ->
+            runCommand(
+                listOf(
+                    "codesign",
+                    "--force",
+                    "--deep",
+                    "--options",
+                    "runtime",
+                    "--timestamp",
+                    "--sign",
+                    identity,
+                ) + keychainArgs + app.absolutePath
+            )
+            runCommand(listOf("codesign", "--verify", "--deep", "--strict", "--verbose=2", app.absolutePath))
+        }
+    }
+}
+
 tasks.matching { it.name in setOf("packageReleaseDmg", "notarizeReleaseDmg") }
     .configureEach {
-        dependsOn(stripMacReleaseFfmpegExecutables)
+        dependsOn(resignMacReleaseApp)
     }
