@@ -2981,6 +2981,8 @@ private fun NetworkScreen(
 
     var caInstalled by remember { mutableStateOf(false) }
     var proxyConfigured by remember { mutableStateOf(false) }
+    var userCaVerifiedByTrafficForDevice by remember { mutableStateOf(false) }
+    var proxyTrafficObservedForDevice by remember { mutableStateOf(false) }
     val latestRules by rememberUpdatedState(rules)
 
     LaunchedEffect(Unit) {
@@ -3017,6 +3019,10 @@ private fun NetworkScreen(
             status = it
         }
     }
+    LaunchedEffect(userCaVerifiedByTraffic, proxyTrafficObserved) {
+        if (userCaVerifiedByTraffic) userCaVerifiedByTrafficForDevice = true
+        if (proxyTrafficObserved) proxyTrafficObservedForDevice = true
+    }
     LaunchedEffect(serial, currentPort) {
         if (serial == null) {
             caInstalled = false
@@ -3033,6 +3039,8 @@ private fun NetworkScreen(
         }
     }
     LaunchedEffect(serial) {
+        userCaVerifiedByTrafficForDevice = false
+        proxyTrafficObservedForDevice = false
         proxyHost = serial?.let { selectedSerial ->
             val activation = proxy.activatePersistedCertificateAuthority(selectedSerial)
             if (activation.isSuccess && activation.stdout.isNotBlank()) {
@@ -3218,8 +3226,8 @@ private fun NetworkScreen(
                 val caText = when {
                     serial == null -> "Select a device first"
                     caInstalled -> "System CA installed"
-                    userCaVerifiedByTraffic -> "User CA verified by HTTPS traffic"
-                    proxyTrafficObserved -> "Traffic observed"
+                    userCaVerifiedByTrafficForDevice -> "User CA verified by HTTPS traffic"
+                    proxyTrafficObservedForDevice -> "Traffic observed"
                     else -> "Use System CA or Prepare phone CA"
                 }
                 val configText = when {
@@ -3242,7 +3250,7 @@ private fun NetworkScreen(
                         hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
                     )
                     StatusIndicator(
-                        isOk = serial != null && (caInstalled || proxyTrafficObserved),
+                        isOk = serial != null && (caInstalled || proxyTrafficObservedForDevice),
                         label = "CA Trust",
                         hint = caText
                     )
