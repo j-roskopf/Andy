@@ -132,6 +132,20 @@ class DesktopMcpServerService(
         return McpClientConfig.writeConfig(client, port)
     }
 
+    override fun getToolNames(): List<String> = listOf(
+        "list_devices", "shell", "list_avds", "list_system_images",
+        "create_avd", "clone_avd", "delete_avd", "start_emulator", "stop_emulator",
+        "install_system_image", "tap", "swipe", "input_text", "press_key",
+        "screenshot", "ui_dump", "list_apps", "launch_app", "stop_app",
+        "clear_app_data", "uninstall_app", "list_permissions", "list_activities",
+        "send_intent", "file_list_dir", "file_pull", "file_push", "file_delete",
+        "start_network_proxy", "list_network_mock_rules", "upsert_network_mock_rule",
+        "set_network_mock_rules", "delete_network_mock_rule", "stop_network_proxy",
+        "clear_network_requests", "list_network_requests", "get_network_request",
+        "configure_device_proxy", "save_snapshot", "load_snapshot", "delete_snapshot",
+        "list_snapshots", "logcat_snapshot"
+    )
+
     private fun createMcpServer(): Server {
         val mcpServer = Server(
             serverInfo = Implementation("andy", "1.0.0"),

@@ -9,10 +9,23 @@ import javax.swing.SwingUtilities
 
 actual suspend fun pickDirectory(initialDir: String?): String? = withContext(Dispatchers.IO) {
     val initial = initialDir?.takeIf { it.isNotBlank() }
-    nativeDirectoryPicker(initial) ?: swingDirectoryPicker(initial)
+    // nativeDirectoryPicker returns:
+    //   PickerResult.Selected(path) – user picked something
+    //   PickerResult.Cancelled       – native picker ran but user cancelled (do NOT fall back to Swing)
+    //   null                         – no native picker available (fall back to Swing)
+    when (val result = nativeDirectoryPicker(initial)) {
+        is PickerResult.Selected -> result.path
+        PickerResult.Cancelled -> null
+        null -> swingDirectoryPicker(initial)
+    }
 }
 
-private fun nativeDirectoryPicker(initialDir: String?): String? {
+private sealed class PickerResult {
+    data class Selected(val path: String) : PickerResult()
+    data object Cancelled : PickerResult()
+}
+
+private fun nativeDirectoryPicker(initialDir: String?): PickerResult? {
     val os = System.getProperty("os.name").lowercase()
     return when {
         os.contains("mac") || os.contains("darwin") -> macDirectoryPicker(initialDir)
@@ -22,7 +35,7 @@ private fun nativeDirectoryPicker(initialDir: String?): String? {
     }
 }
 
-private fun macDirectoryPicker(initialDir: String?): String? {
+private fun macDirectoryPicker(initialDir: String?): PickerResult? {
     val defaultLocation = initialDir
         ?.takeIf { File(it).exists() }
         ?.let { """ default location POSIX file "${it.escapeAppleScript()}"""" }
@@ -34,7 +47,7 @@ private fun macDirectoryPicker(initialDir: String?): String? {
     return runPickerCommand(listOf("osascript", "-e", script))
 }
 
-private fun windowsDirectoryPicker(initialDir: String?): String? {
+private fun windowsDirectoryPicker(initialDir: String?): PickerResult? {
     val selectedPath = initialDir
         ?.takeIf { File(it).exists() }
         ?.let { "\$dialog.SelectedPath = '${it.escapePowerShellSingleQuoted()}'" }
@@ -46,25 +59,43 @@ private fun windowsDirectoryPicker(initialDir: String?): String? {
         $selectedPath
         if (${'$'}dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.WriteLine(${'$'}dialog.SelectedPath) }
     """.trimIndent()
-    return runPickerCommand(listOf("powershell", "-NoProfile", "-STA", "-Command", command))
-        ?: runPickerCommand(listOf("pwsh", "-NoProfile", "-Command", command))
+    // Try powershell then pwsh; if both return null the tool isn't available
+    val powershell = runPickerCommand(listOf("powershell", "-NoProfile", "-STA", "-Command", command))
+    if (powershell != null) return powershell
+    return runPickerCommand(listOf("pwsh", "-NoProfile", "-Command", command))
 }
 
-private fun linuxDirectoryPicker(initialDir: String?): String? {
+private fun linuxDirectoryPicker(initialDir: String?): PickerResult? {
     val zenity = mutableListOf("zenity", "--file-selection", "--directory", "--title=Choose folder")
     initialDir?.takeIf { it.isNotBlank() }?.let { zenity += "--filename=$it" }
     return runPickerCommand(zenity)
         ?: runPickerCommand(listOf("kdialog", "--getexistingdirectory", initialDir.orEmpty()))
 }
 
-private fun runPickerCommand(command: List<String>): String? = runCatching {
-    val process = ProcessBuilder(command).redirectErrorStream(true).start()
+/**
+ * Runs an external picker command.
+ * Returns:
+ *   PickerResult.Selected  – process exited 0 and printed a non-blank path
+ *   PickerResult.Cancelled – process launched and exited non-zero (user cancelled)
+ *   null                   – process could not be launched (tool not installed)
+ */
+private fun runPickerCommand(command: List<String>): PickerResult? {
+    val process = runCatching {
+        ProcessBuilder(command).redirectErrorStream(true).start()
+    }.getOrNull() ?: return null  // command not found / couldn't launch → tool unavailable
+
     if (!process.waitFor(24, TimeUnit.HOURS)) {
         process.destroyForcibly()
-        return@runCatching null
+        return PickerResult.Cancelled
     }
-    process.inputStream.bufferedReader().readText().trim().takeIf { process.exitValue() == 0 && it.isNotBlank() }
-}.getOrNull()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    return if (process.exitValue() == 0 && output.isNotBlank()) {
+        PickerResult.Selected(output)
+    } else {
+        // Non-zero exit = user pressed Cancel in the native dialog
+        PickerResult.Cancelled
+    }
+}
 
 private fun swingDirectoryPicker(initialDir: String?): String? {
     var selected: File? = null

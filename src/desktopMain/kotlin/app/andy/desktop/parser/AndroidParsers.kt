@@ -173,7 +173,7 @@ object AndroidParsers {
                     !line.startsWith("List of", ignoreCase = true) &&
                     !line.startsWith("Snapshot", ignoreCase = true) &&
                     !line.startsWith("ID ", ignoreCase = true) &&
-                    !line.startsWith("--")
+                    !line.matches(Regex("^-+$"))
             }
             .mapNotNull { line ->
                 val columns = line.split(Regex("\\s+")).filter(String::isNotBlank)
