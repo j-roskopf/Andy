@@ -5,6 +5,43 @@ plugins {
 }
 
 val andyVersionName = providers.gradleProperty("andy.versionName").orElse("0.1.0").get()
+val andyVersionCode = providers.gradleProperty("andy.versionCode").orElse("1").map { it.toInt() }.get()
+
+val andyJpackagePackageVersion = run {
+    val parts = andyVersionName.split(".")
+    val major = parts.firstOrNull()?.toIntOrNull()
+    if (major != null && major <= 250 && parts.size == 3) {
+        val minor = parts[1].toIntOrNull()
+        val patch = parts[2].toIntOrNull()
+        if (minor != null && minor <= 255 && patch != null && patch <= 65535) {
+            "${major + 1}.$minor.$patch"
+        } else {
+            "100.0.$andyVersionCode"
+        }
+    } else {
+        "100.0.$andyVersionCode"
+    }
+}
+
+val hostPlatform: String = run {
+    val platformOverride = providers.gradleProperty("javacppPlatform").orNull
+    if (!platformOverride.isNullOrBlank()) {
+        platformOverride
+    } else {
+        val osName = System.getProperty("os.name").lowercase()
+        val osArch = System.getProperty("os.arch").lowercase()
+        when {
+            osName.contains("mac") || osName.contains("darwin") -> {
+                if (osArch == "aarch64" || osArch == "arm64") "macosx-arm64" else "macosx-x86_64"
+            }
+            osName.contains("windows") -> "windows-x86_64"
+            osName.contains("linux") -> {
+                if (osArch == "aarch64" || osArch == "arm64") "linux-arm64" else "linux-x86_64"
+            }
+            else -> "linux-x86_64"
+        }
+    }
+}
 
 group = "app.andy"
 version = andyVersionName
@@ -31,7 +68,23 @@ kotlin {
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
-                implementation("org.bytedeco:javacv-platform:1.5.11")
+                
+                // Add the base JavaCV library
+                implementation("org.bytedeco:javacv:1.5.11")
+                
+                // Add base library for FFmpeg
+                implementation("org.bytedeco:ffmpeg:7.1-1.5.11")
+                
+                // Add platform-specific native binaries for FFmpeg
+                if (hostPlatform == "all") {
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:macosx-arm64")
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:macosx-x86_64")
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64")
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:linux-x86_64")
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:linux-arm64")
+                } else {
+                    implementation("org.bytedeco:ffmpeg:7.1-1.5.11:$hostPlatform")
+                }
             }
         }
         val desktopTest by getting {
@@ -55,7 +108,7 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
             )
             packageName = "Andy"
-            packageVersion = andyVersionName
+            packageVersion = andyJpackagePackageVersion
             description = "Android emulator and device companion"
             vendor = "Andy"
             macOS {

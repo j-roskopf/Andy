@@ -4,7 +4,7 @@ import time
 from mitmproxy import http
 
 RULES_PATH = os.environ.get("ANDY_RULES_PATH")
-PREVIEW_LIMIT = 4096
+PREVIEW_LIMIT = 262144
 
 
 def _load_rules():
@@ -60,23 +60,35 @@ def request(flow: http.HTTPFlow):
 
 
 def response(flow: http.HTTPFlow):
+    if not flow.response:
+        return
     matched_rule_id = None
-    for rule in _load_rules():
-        if not _match(rule, flow):
-            continue
-        matched_rule_id = rule.get("id")
-        if rule.get("statusCode") is not None:
-            flow.response.status_code = int(rule["statusCode"])
-        for header, value in (rule.get("setHeaders") or {}).items():
-            flow.response.headers[header] = value
-        for header in rule.get("removeHeaders") or []:
-            flow.response.headers.pop(header, None)
-        if rule.get("responseBody") is not None:
-            flow.response.headers.pop("content-encoding", None)
-            flow.response.headers.pop("content-length", None)
-            flow.response.text = rule["responseBody"]
-        break
-    _emit(flow, matched_rule_id, None)
+    error_msg = None
+    try:
+        for rule in _load_rules():
+            if not _match(rule, flow):
+                continue
+            matched_rule_id = rule.get("id")
+            print(f"[Proxy addon] Rule matched: {matched_rule_id}")
+            if rule.get("statusCode") is not None:
+                flow.response.status_code = int(rule["statusCode"])
+            for header, value in (rule.get("setHeaders") or {}).items():
+                flow.response.headers[header] = value
+            for header in rule.get("removeHeaders") or []:
+                flow.response.headers.pop(header, None)
+            if rule.get("responseBody") is not None:
+                # Remove any encoding/length/transfer headers case-insensitively
+                for name in list(flow.response.headers.keys()):
+                    if name.lower() in ("content-encoding", "content-length", "transfer-encoding"):
+                        flow.response.headers.pop(name, None)
+                body = rule["responseBody"]
+                flow.response.content = body.encode("utf-8") if isinstance(body, str) else body
+                print(f"[Proxy addon] Set response content, size: {len(flow.response.content)}")
+            break
+    except Exception as e:
+        error_msg = f"Rule error: {e}"
+        print(f"[Proxy addon] Exception in response: {e}")
+    _emit(flow, matched_rule_id, error_msg)
 
 
 def error(flow: http.HTTPFlow):

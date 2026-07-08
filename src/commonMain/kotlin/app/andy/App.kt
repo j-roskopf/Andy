@@ -24,9 +24,13 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerMoveFilter
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -299,6 +303,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                     actions = {
                         if (destination == AndyDestination.Network) {
                             FilterPill("Rules", networkRulesVisible, Rust) { networkRulesVisible = !networkRulesVisible }
+                            Spacer(Modifier.width(8.dp))
                             FilterPill("Live", networkLiveVisible, Cyan) { networkLiveVisible = !networkLiveVisible }
                             Spacer(Modifier.width(10.dp))
                         }
@@ -345,6 +350,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             liveVisible = networkLiveVisible,
                             onPortChange = { value -> updateWorkspace { it.copy(proxyPort = value) } },
                             onRulesChange = { value -> updateWorkspace { it.copy(proxyRules = value) } },
+                            onRulesVisibleChange = { networkRulesVisible = it },
                         )
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
@@ -873,6 +879,43 @@ private fun LiveScreen(
 }
 
 @Composable
+private fun NavIconBack(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(16.dp)) {
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(size.width * 0.85f, size.height * 0.1f)
+            lineTo(size.width * 0.15f, size.height * 0.5f)
+            lineTo(size.width * 0.85f, size.height * 0.9f)
+            close()
+        }
+        drawPath(path, color)
+    }
+}
+
+@Composable
+private fun NavIconHome(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(16.dp)) {
+        drawCircle(
+            color = color,
+            radius = size.minDimension / 2f * 0.85f
+        )
+    }
+}
+
+@Composable
+private fun NavIconRecents(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(16.dp)) {
+        val side = size.minDimension * 0.75f
+        val offset = (size.minDimension - side) / 2f
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(offset, offset),
+            size = Size(side, side),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+        )
+    }
+}
+
+@Composable
 private fun LiveDevicePane(
     serial: String?,
     device: AndroidDevice?,
@@ -961,16 +1004,46 @@ private fun LiveDevicePane(
                             Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
                             Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
+                            if (serial != null) {
+                                Spacer(Modifier.height(12.dp))
+                                Button(
+                                    onClick = onConnect,
+                                    colors = primaryButtonColors(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                ) {
+                                    Text("Connect", color = TextPrimary, fontSize = 12.sp)
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onInput(MirrorInput.Back) }, enabled = serial != null) { Text("Back") }
-            OutlinedButton(onClick = { onInput(MirrorInput.Home) }, enabled = serial != null) { Text("Home") }
-            OutlinedButton(onClick = onConnect, enabled = serial != null) { Text("Connect") }
+        Row(
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = { onInput(MirrorInput.Back) },
+                enabled = serial != null
+            ) {
+                NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
+            }
+            IconButton(
+                onClick = { onInput(MirrorInput.Home) },
+                enabled = serial != null
+            ) {
+                NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
+            }
+            IconButton(
+                onClick = { onInput(MirrorInput.Recents) },
+                enabled = serial != null
+            ) {
+                NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
+            }
         }
     }
 }
@@ -1678,6 +1751,7 @@ private fun NetworkScreen(
     liveVisible: Boolean,
     onPortChange: (Int) -> Unit,
     onRulesChange: (List<ProxyRule>) -> Unit,
+    onRulesVisibleChange: (Boolean) -> Unit,
 ) {
     val proxy = services.proxy
     val scope = rememberCoroutineScope()
@@ -1702,8 +1776,24 @@ private fun NetworkScreen(
     var ruleRemoveHeaders by remember { mutableStateOf("") }
     var ruleBody by remember { mutableStateOf("{\"andy\":true}") }
     val selected = exchanges.firstOrNull { it.flowId == selectedFlowId } ?: exchanges.lastOrNull()
+    var trafficWidth by remember { mutableStateOf(260f) }
+    var statusWidth by remember { mutableStateOf(72f) }
+    var typeWidth by remember { mutableStateOf(150f) }
+    var sizeWidth by remember { mutableStateOf(80f) }
+    var msWidth by remember { mutableStateOf(70f) }
+    var focusedPath by remember { mutableStateOf<String?>(null) }
+
     val currentPort = portText.toIntOrNull()?.coerceIn(1, 65535) ?: port
-    val trafficTree = remember(exchanges) { buildNetworkTrafficTree(exchanges) }
+    val filteredExchanges = remember(exchanges, focusedPath) {
+        if (focusedPath == null) {
+            exchanges
+        } else {
+            exchanges.filter { exchange ->
+                focusedPath in networkTrafficAncestorKeys(exchange)
+            }
+        }
+    }
+    val trafficTree = remember(filteredExchanges) { buildNetworkTrafficTree(filteredExchanges) }
     val visibleTrafficRows = remember(trafficTree, expandedTrafficKeys.toMap()) {
         flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
     }
@@ -1791,7 +1881,7 @@ private fun NetworkScreen(
                             it.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let(onPortChange)
                         },
                         singleLine = true,
-                        modifier = Modifier.width(86.dp).height(46.dp),
+                        modifier = Modifier.width(86.dp).height(54.dp),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                         colors = fieldColors(),
                     )
@@ -1883,13 +1973,61 @@ private fun NetworkScreen(
                     }
                 }
             }
-            TableHeader(listOf("TRAFFIC" to 1.dp, "STATUS" to 72.dp, "TYPE" to 150.dp, "SIZE" to 80.dp, "MS" to 70.dp, "RULE" to 110.dp))
+            if (focusedPath != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
+                        .border(1.dp, AndyColors.OrangeBorder, RoundedCornerShape(AndyRadius.R3))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(AndyColors.Orange, RoundedCornerShape(AndyRadius.Pill))
+                        )
+                        Text(
+                            text = "Focus mode: showing only ${focusedPath?.removePrefix("base:")}",
+                            color = AndyColors.Neutral100,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    Text(
+                        text = "Exit Focus",
+                        color = AndyColors.Orange,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clickable { focusedPath = null }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                HeaderCell("TRAFFIC", trafficWidth.dp) { trafficWidth = it.coerceIn(120f, 600f) }
+                HeaderCell("STATUS", statusWidth.dp) { statusWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("TYPE", typeWidth.dp) { typeWidth = it.coerceIn(80f, 250f) }
+                HeaderCell("SIZE", sizeWidth.dp) { sizeWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("MS", msWidth.dp) { msWidth = it.coerceIn(50f, 150f) }
+                Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
+            }
             LazyColumn(Modifier.weight(1f)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
                     NetworkTrafficRow(
                         row = row,
                         expanded = expandedTrafficKeys[row.key] == true,
                         flashing = row.key in flashingTrafficKeys,
+                        trafficWidth = trafficWidth,
+                        statusWidth = statusWidth,
+                        typeWidth = typeWidth,
+                        sizeWidth = sizeWidth,
+                        msWidth = msWidth,
                         onToggle = {
                             if (row.hasChildren) {
                                 expandedTrafficKeys[row.key] = expandedTrafficKeys[row.key] != true
@@ -1899,6 +2037,34 @@ private fun NetworkScreen(
                         onSelect = { exchange ->
                             selectedFlowId = exchange.flowId
                         },
+                        onFocus = { path ->
+                            focusedPath = path
+                        },
+                        onAddRule = { exchange ->
+                            val pathSegment = exchange.url.substringAfterLast("/").substringBefore("?")
+                            ruleName = if (pathSegment.isNotBlank()) "Mock $pathSegment" else "Mock response"
+                            rulePattern = exchange.url
+                            ruleMethod = exchange.method
+                            ruleStatus = exchange.statusCode?.toString() ?: "200"
+                            val excludedHeaders = setOf(
+                                "content-length",
+                                "content-encoding",
+                                "transfer-encoding",
+                                "connection",
+                                "keep-alive",
+                                "date",
+                                "server",
+                                "accept-ranges",
+                                "content-range",
+                                "age"
+                            )
+                            ruleSetHeaders = exchange.responseHeaders.entries
+                                .filter { it.key.lowercase() !in excludedHeaders }
+                                .joinToString("\n") { "${it.key}: ${it.value}" }
+                            ruleRemoveHeaders = ""
+                            ruleBody = exchange.responseBodyPreview ?: ""
+                            onRulesVisibleChange(true)
+                        }
                     )
                 }
                 if (visibleTrafficRows.isEmpty()) {
@@ -2089,53 +2255,106 @@ private fun NetworkTrafficRow(
     row: NetworkTrafficRow,
     expanded: Boolean,
     flashing: Boolean,
+    trafficWidth: Float,
+    statusWidth: Float,
+    typeWidth: Float,
+    sizeWidth: Float,
+    msWidth: Float,
     onToggle: () -> Unit,
     onSelect: (NetworkExchange) -> Unit,
+    onFocus: (String) -> Unit,
+    onAddRule: (NetworkExchange) -> Unit,
 ) {
     val latest = row.latest
     val flashColor by animateColorAsState(
         targetValue = if (flashing) Rust.copy(alpha = 0.24f) else AndyColors.Neutral900.copy(alpha = 0.65f),
     )
     val selectedColor = if (row.exchange != null) AndyColors.Neutral800.copy(alpha = 0.9f) else flashColor
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 32.dp)
-            .background(selectedColor)
-            .border(1.dp, if (flashing) Rust.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.05f))
-            .clickable {
-                row.exchange?.let(onSelect) ?: onToggle()
+    var showMenu by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            Modifier.fillMaxWidth()
+                .heightIn(min = 32.dp)
+                .background(selectedColor)
+                .border(1.dp, if (flashing) Rust.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.05f))
+                .clickable {
+                    row.exchange?.let(onSelect) ?: onToggle()
+                }
+                .pointerInput(row.key) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == PointerEventType.Press) {
+                                if (event.buttons.isSecondaryPressed) {
+                                    if (row.exchange == null) {
+                                        onFocus(row.key)
+                                    } else {
+                                        onSelect(row.exchange)
+                                        showMenu = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(Modifier.width(trafficWidth.dp).padding(start = (row.depth * 16).dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        row.exchange != null -> "•"
+                        row.hasChildren && expanded -> "v"
+                        row.hasChildren -> ">"
+                        else -> " "
+                    },
+                    color = if (row.exchange != null) Rust else TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.width(18.dp),
+                )
+                Text(
+                    if (row.exchange != null) "${latest?.method ?: "-"}  ${row.label}" else "${row.label}  (${row.count})",
+                    color = if (row.exchange != null) TextPrimary else AndyColors.Neutral100,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(Modifier.weight(1f).padding(start = (row.depth * 16).dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                when {
-                    row.exchange != null -> "•"
-                    row.hasChildren && expanded -> "v"
-                    row.hasChildren -> ">"
-                    else -> " "
-                },
-                color = if (row.exchange != null) Rust else TextSecondary,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                modifier = Modifier.width(18.dp),
-            )
-            Text(
-                if (row.exchange != null) "${latest?.method ?: "-"}  ${row.label}" else "${row.label}  (${row.count})",
-                color = if (row.exchange != null) TextPrimary else AndyColors.Neutral100,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val response = row.exchange
+            MonoCell(if (response != null) response.statusCode?.toString() ?: "-" else "", statusWidth.dp, if ((response?.statusCode ?: 200) >= 400) Red else TextSecondary)
+            MonoCell(if (response != null) response.contentType?.substringBefore(';') ?: "-" else "", typeWidth.dp, TextSecondary)
+            MonoCell(if (response != null) response.sizeBytes?.toString() ?: "-" else "", sizeWidth.dp, TextSecondary)
+            MonoCell(if (response != null) response.durationMillis?.toString() ?: "-" else "", msWidth.dp, TextSecondary)
+            Box(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                Text(
+                    if (response != null) response.matchedRuleId ?: "-" else "",
+                    color = if (response?.matchedRuleId != null) Green else TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        val response = row.exchange
-        MonoCell(response?.statusCode?.toString() ?: "-", 72.dp, if ((response?.statusCode ?: 200) >= 400) Red else TextSecondary)
-        MonoCell(response?.contentType?.substringBefore(';') ?: "-", 150.dp, TextSecondary)
-        MonoCell(response?.sizeBytes?.toString() ?: "-", 80.dp, TextSecondary)
-        MonoCell(response?.durationMillis?.toString() ?: "-", 70.dp, TextSecondary)
-        MonoCell(response?.matchedRuleId ?: "-", 110.dp, if (response?.matchedRuleId != null) Green else TextSecondary)
+
+        if (row.exchange != null) {
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false },
+                containerColor = PanelSoft
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Add rule", color = TextPrimary) },
+                    onClick = {
+                        showMenu = false
+                        onAddRule(row.exchange)
+                    }
+                )
+            }
+        }
     }
 }
 

@@ -949,6 +949,7 @@ class DesktopProxyService(
 
     override suspend fun start(port: Int, rules: List<ProxyRule>): CommandResult = withContext(Dispatchers.IO) {
         val executable = mitmdumpExecutable() ?: return@withContext CommandResult.failure("mitmdump not found. Install mitmproxy with `brew install mitmproxy`.")
+        killOrphanedProxies()
         stop()
         proxyDir.mkdirs()
         writeAddon()
@@ -1316,6 +1317,7 @@ class DesktopProxyService(
         stdoutJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stdout.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
+                    println("[Proxy stdout] $line")
                     parseMitmproxyFlowLine(line)?.let { exchange ->
                         exchanges.value = (exchanges.value + exchange).takeLast(MaxNetworkExchanges)
                     }
@@ -1326,6 +1328,7 @@ class DesktopProxyService(
         stderrJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stderr.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
+                    System.err.println("[Proxy stderr] $line")
                     if (line.isNotBlank()) status.value = line.take(220)
                 }
             }
@@ -1334,6 +1337,26 @@ class DesktopProxyService(
 
     private fun writeRules(rules: List<ProxyRule>) {
         rulesFile.writeText(ProxyRuleJson.writeRules(rules))
+    }
+
+    private suspend fun killOrphanedProxies() {
+        val os = System.getProperty("os.name").lowercase()
+        if (os.contains("windows")) {
+            runner.run(listOf("taskkill", "/F", "/IM", "mitmdump.exe"), 5)
+        } else {
+            val psResult = runner.run(listOf("ps", "ax", "-o", "pid,command"), 10)
+            if (psResult.isSuccess) {
+                psResult.stdout.lineSequence()
+                    .map { it.trim() }
+                    .filter { it.contains("mitmdump") && it.contains("andy_mitm_addon.py") }
+                    .forEach { line ->
+                        val pid = line.substringBefore(' ').trim().toIntOrNull()
+                        if (pid != null) {
+                            runner.run(listOf("kill", "-9", pid.toString()), 5)
+                        }
+                    }
+            }
+        }
     }
 
     private fun writeAddon() {
@@ -1360,10 +1383,28 @@ class RealProxyProcess(command: List<String>, directory: File, environment: Map<
         .also { builder -> builder.environment().putAll(environment) }
         .start()
 
+    private val shutdownHook = Thread {
+        try {
+            if (delegate.isAlive) {
+                delegate.destroy()
+                if (!delegate.waitFor(500, TimeUnit.MILLISECONDS)) {
+                    delegate.destroyForcibly()
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    init {
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
+    }
+
     override val stdout: InputStream get() = delegate.inputStream
     override val stderr: InputStream get() = delegate.errorStream
     override fun isAlive(): Boolean = delegate.isAlive
     override fun destroy() {
+        runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
         delegate.destroy()
         if (!delegate.waitFor(800, TimeUnit.MILLISECONDS)) delegate.destroyForcibly()
     }

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional custom version (for example, 1.2.3). If omitted, increments the patch version.
+        description: Optional custom version (e.g. 1.2.3). If omitted, uses auto-increment and timestamp.
         required: false
         type: string
 
@@ -29,6 +29,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      version_code: ${{ steps.version.outputs.version_code }}
       tag_name: ${{ steps.version.outputs.tag_name }}
 
     steps:
@@ -45,49 +46,57 @@ jobs:
           set -euo pipefail
 
           current_version="$(grep '^andy.versionName=' gradle.properties | cut -d'=' -f2- | tr -d '[:space:]')"
+          configured_version_code="$(grep '^andy.versionCode=' gradle.properties | cut -d'=' -f2- | tr -d '[:space:]' || true)"
+
           if [[ -z "${current_version}" ]]; then
             echo "::error::gradle.properties must define andy.versionName"
             exit 1
           fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
-            new_version="${{ inputs.version }}"
-          else
-            IFS='.' read -r major minor patch <<< "${current_version}"
-            if [[ ! "${major}" =~ ^[0-9]+$ || ! "${minor}" =~ ^[0-9]+$ || ! "${patch}" =~ ^[0-9]+$ ]]; then
-              echo "::error::Cannot auto-increment non-numeric version '${current_version}'"
-              exit 1
-            fi
-            new_version="${major}.${minor}.$((patch + 1))"
-          fi
-
-          if [[ ! "${new_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Release version must be plain semver-like digits (for example, 1.2.3)"
+          if [[ -z "${configured_version_code}" ]]; then
+            echo "::error::gradle.properties must define andy.versionCode"
             exit 1
           fi
 
-          echo "Bumping version from ${current_version} to ${new_version}"
-          perl -pi -e "s/^andy.versionName=.*/andy.versionName=${new_version}/" gradle.properties
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            new_version_name="${{ inputs.version }}"
+            new_version_code=$((configured_version_code + 1))
+          else
+            new_version_code=$((configured_version_code + 1))
+            new_version_name=$(date -u +"%Y.%m%d.%H%M")
+          fi
+
+          if [[ ! "${new_version_name}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version name must be plain semver (like 1.2.3 or YYYY.MMDD.HHMM)"
+            exit 1
+          fi
+
+          echo "Bumping version code from ${configured_version_code} to ${new_version_code}"
+          echo "Bumping version name from ${current_version} to ${new_version_name}"
+
+          perl -pi -e "s/^andy.versionCode=.*/andy.versionCode=${new_version_code}/" gradle.properties
+          perl -pi -e "s/^andy.versionName=.*/andy.versionName=${new_version_name}/" gradle.properties
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add gradle.properties
-          git commit -m "Bump version to ${new_version} [skip ci]"
+          git commit -m "Bump version to ${new_version_name} (code: ${new_version_code}) [skip ci]"
 
           if ! git push origin HEAD:main; then
             echo "::error::Failed to push version bump to main. If main is protected, allow GitHub Actions to bypass protection or switch this workflow to use a release PAT."
             exit 1
           fi
 
-          tag_name="release/${new_version}"
+          tag_name="release/${new_version_name}"
           git tag "${tag_name}"
           git push origin "${tag_name}"
 
           {
-            echo "version=${new_version}"
+            echo "version=${new_version_name}"
+            echo "version_code=${new_version_code}"
             echo "tag_name=${tag_name}"
           } >> "${GITHUB_OUTPUT}"
+
 
   linux:
     name: Linux release
