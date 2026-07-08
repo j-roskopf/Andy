@@ -1,3 +1,7 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
+
 plugins {
     kotlin("multiplatform") version "2.4.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.0"
@@ -160,3 +164,57 @@ compose.desktop {
         }
     }
 }
+
+val stripMacReleaseFfmpegExecutables by tasks.registering {
+    dependsOn("createReleaseDistributable")
+
+    doLast {
+        val releaseAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app").get().asFile
+        val ffmpegJars = fileTree(releaseAppDir) {
+            include("**/Contents/app/ffmpeg-*-macosx-*.jar")
+        }.files
+
+        ffmpegJars.forEach { jarFile ->
+            val replacement = temporaryDir.resolve(jarFile.name)
+            var removedEntries = 0
+
+            ZipFile(jarFile).use { source ->
+                ZipOutputStream(replacement.outputStream().buffered()).use { target ->
+                    source.entries().asSequence().forEach { entry ->
+                        if (entry.name.endsWith("/ffmpeg") || entry.name.endsWith("/ffprobe")) {
+                            removedEntries++
+                            return@forEach
+                        }
+
+                        val nextEntry = ZipEntry(entry.name).apply {
+                            time = entry.time
+                            comment = entry.comment
+                            setExtra(entry.extra)
+                            method = entry.method
+                            if (entry.method == ZipEntry.STORED) {
+                                size = entry.size
+                                compressedSize = entry.compressedSize
+                                crc = entry.crc
+                            }
+                        }
+                        target.putNextEntry(nextEntry)
+                        source.getInputStream(entry).use { input ->
+                            input.copyTo(target)
+                        }
+                        target.closeEntry()
+                    }
+                }
+            }
+
+            if (removedEntries > 0) {
+                replacement.copyTo(jarFile, overwrite = true)
+                logger.lifecycle("Removed $removedEntries notarization-blocking FFmpeg executables from ${jarFile.name}")
+            }
+        }
+    }
+}
+
+tasks.matching { it.name in setOf("packageReleaseDmg", "notarizeReleaseDmg") }
+    .configureEach {
+        dependsOn(stripMacReleaseFfmpegExecutables)
+    }
