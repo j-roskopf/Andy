@@ -49,7 +49,7 @@ actual fun MirrorVideoSurface(
 }
 
 private class MirrorPanel : JPanel() {
-    private enum class DragMode { Device, RulerWidth, RulerHeight, Inspect, None }
+    private enum class DragMode { Device, RulerX, RulerY, Inspect, None }
 
     private var image: BufferedImage? = null
     private var frameNumber: Long = -1
@@ -74,7 +74,7 @@ private class MirrorPanel : JPanel() {
                 mapPoint(event.point)?.let { point ->
                     dragMode = rulerDragMode(event.point)
                     when {
-                        dragMode == DragMode.RulerWidth || dragMode == DragMode.RulerHeight -> updateRulerDrag(event.point)
+                        dragMode == DragMode.RulerX || dragMode == DragMode.RulerY -> updateRulerDrag(event.point)
                         passThroughInput -> {
                             dragMode = DragMode.Device
                             lastDeviceMoveSentAtNanos = 0L
@@ -93,7 +93,7 @@ private class MirrorPanel : JPanel() {
                 updateHoverColor(event.point)
                 mapPoint(event.point)?.let { point ->
                     when (dragMode) {
-                        DragMode.RulerWidth, DragMode.RulerHeight -> updateRulerDrag(event.point)
+                        DragMode.RulerX, DragMode.RulerY -> updateRulerDrag(event.point)
                         DragMode.Device -> sendDeviceMove(point)
                         else -> Unit
                     }
@@ -112,8 +112,8 @@ private class MirrorPanel : JPanel() {
             override fun mouseMoved(event: MouseEvent) {
                 updateHoverColor(event.point)
                 cursor = when (rulerDragMode(event.point)) {
-                    DragMode.RulerWidth -> Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)
-                    DragMode.RulerHeight -> Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)
+                    DragMode.RulerX -> Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)
+                    DragMode.RulerY -> Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)
                     else -> Cursor.getDefaultCursor()
                 }
             }
@@ -197,30 +197,20 @@ private class MirrorPanel : JPanel() {
             val color = overlay.rulerColor.toAwtColor(alphaOverride = 0.95f)
             g2.color = color
             g2.stroke = BasicStroke(1.5f)
-            val centerX = rect.x + rect.width / 2
-            val centerY = rect.y + rect.height / 2
             val sourceWidth = overlay.sourceWidth ?: frameImage.width
             val sourceHeight = overlay.sourceHeight ?: frameImage.height
-            val widthPx = overlay.rulerWidth.coerceIn(1f, sourceWidth.toFloat())
-            val heightPx = overlay.rulerHeight.coerceIn(1f, sourceHeight.toFloat())
-            val rulerDrawWidth = (widthPx * rect.width / sourceWidth).roundToInt()
-            val rulerDrawHeight = (heightPx * rect.height / sourceHeight).roundToInt()
-            g2.drawLine(centerX, rect.y, centerX, rect.y + rect.height)
-            g2.drawLine(rect.x, centerY, rect.x + rect.width, centerY)
-            val hY = rect.y + 28
-            val vX = rect.x + 28
-            g2.drawLine(centerX - rulerDrawWidth / 2, hY, centerX + rulerDrawWidth / 2, hY)
-            g2.drawLine(vX, centerY - rulerDrawHeight / 2, vX, centerY + rulerDrawHeight / 2)
-            g2.fillOval(centerX - rulerDrawWidth / 2 - 4, hY - 4, 8, 8)
-            g2.fillOval(centerX + rulerDrawWidth / 2 - 4, hY - 4, 8, 8)
-            g2.fillOval(vX - 4, centerY - rulerDrawHeight / 2 - 4, 8, 8)
-            g2.fillOval(vX - 4, centerY + rulerDrawHeight / 2 - 4, 8, 8)
-            g2.drawLine(centerX, rect.y + rect.height - 18, centerX + rulerDrawWidth / 2, rect.y + rect.height - 18)
-            g2.drawLine(rect.x + rect.width - 18, centerY, rect.x + rect.width - 18, centerY + rulerDrawHeight / 2)
-            drawPill(g2, centerX - 12, rect.y - 3, "V")
-            drawPill(g2, rect.x - 28, centerY - 8, "H")
-            drawPill(g2, centerX - 18, rect.y + 18, widthPx.roundToInt().toString())
-            drawPill(g2, rect.x + 4, centerY - 8, heightPx.roundToInt().toString())
+            val xPx = overlay.rulerX.coerceIn(0f, sourceWidth.toFloat())
+            val yPx = overlay.rulerY.coerceIn(0f, sourceHeight.toFloat())
+            val drawX = rect.x + (xPx * rect.width / sourceWidth).roundToInt()
+            val drawY = rect.y + (yPx * rect.height / sourceHeight).roundToInt()
+            g2.drawLine(drawX, rect.y, drawX, rect.y + rect.height)
+            g2.drawLine(rect.x, drawY, rect.x + rect.width, drawY)
+            g2.fillOval(drawX - 4, rect.y + rect.height / 2 - 4, 8, 8)
+            g2.fillOval(rect.x + rect.width / 2 - 4, drawY - 4, 8, 8)
+            drawPill(g2, drawX + 8, rect.y + 8, "L ${xPx.roundToInt()}")
+            drawPill(g2, (drawX - 70).coerceAtLeast(rect.x + 4), rect.y + rect.height - 24, "R ${(sourceWidth - xPx).roundToInt()}")
+            drawPill(g2, rect.x + 8, drawY + 8, "T ${yPx.roundToInt()}")
+            drawPill(g2, rect.x + rect.width - 74, (drawY - 24).coerceAtLeast(rect.y + 4), "B ${(sourceHeight - yPx).roundToInt()}")
         }
         parseBounds(overlay.highlightBounds)?.let { bounds ->
             val sourceWidth = overlay.sourceWidth ?: frameImage.width
@@ -267,21 +257,15 @@ private class MirrorPanel : JPanel() {
         if (!overlay.showRuler) return DragMode.None
         val frameImage = image ?: return DragMode.None
         val rect = fittedRect(frameImage)
-        val centerX = rect.x + rect.width / 2
-        val centerY = rect.y + rect.height / 2
         val sourceWidth = overlay.sourceWidth ?: frameImage.width
         val sourceHeight = overlay.sourceHeight ?: frameImage.height
-        val rulerDrawWidth = (overlay.rulerWidth.coerceIn(1f, sourceWidth.toFloat()) * rect.width / sourceWidth).roundToInt()
-        val rulerDrawHeight = (overlay.rulerHeight.coerceIn(1f, sourceHeight.toFloat()) * rect.height / sourceHeight).roundToInt()
-        val hY = rect.y + 28
-        val vX = rect.x + 28
-        val nearHorizontalHandle = kotlin.math.abs(point.y - hY) <= 14 &&
-            (kotlin.math.abs(point.x - (centerX - rulerDrawWidth / 2)) <= 18 || kotlin.math.abs(point.x - (centerX + rulerDrawWidth / 2)) <= 18)
-        val nearVerticalHandle = kotlin.math.abs(point.x - vX) <= 14 &&
-            (kotlin.math.abs(point.y - (centerY - rulerDrawHeight / 2)) <= 18 || kotlin.math.abs(point.y - (centerY + rulerDrawHeight / 2)) <= 18)
+        val drawX = rect.x + (overlay.rulerX.coerceIn(0f, sourceWidth.toFloat()) * rect.width / sourceWidth).roundToInt()
+        val drawY = rect.y + (overlay.rulerY.coerceIn(0f, sourceHeight.toFloat()) * rect.height / sourceHeight).roundToInt()
+        val nearVerticalLine = point.y in rect.y..(rect.y + rect.height) && kotlin.math.abs(point.x - drawX) <= 10
+        val nearHorizontalLine = point.x in rect.x..(rect.x + rect.width) && kotlin.math.abs(point.y - drawY) <= 10
         return when {
-            nearHorizontalHandle -> DragMode.RulerWidth
-            nearVerticalHandle -> DragMode.RulerHeight
+            nearVerticalLine -> DragMode.RulerX
+            nearHorizontalLine -> DragMode.RulerY
             else -> DragMode.None
         }
     }
@@ -292,17 +276,17 @@ private class MirrorPanel : JPanel() {
         val source = toSourcePoint(mapped)
         val sourceWidth = overlay.sourceWidth ?: frameImage.width
         val sourceHeight = overlay.sourceHeight ?: frameImage.height
-        val nextWidth = if (dragMode == DragMode.RulerWidth) {
-            (kotlin.math.abs(source.x - sourceWidth / 2f) * 2f).coerceIn(1f, sourceWidth.toFloat())
+        val nextX = if (dragMode == DragMode.RulerX) {
+            source.x.toFloat().coerceIn(0f, sourceWidth.toFloat())
         } else {
-            overlay.rulerWidth
+            overlay.rulerX
         }
-        val nextHeight = if (dragMode == DragMode.RulerHeight) {
-            (kotlin.math.abs(source.y - sourceHeight / 2f) * 2f).coerceIn(1f, sourceHeight.toFloat())
+        val nextY = if (dragMode == DragMode.RulerY) {
+            source.y.toFloat().coerceIn(0f, sourceHeight.toFloat())
         } else {
-            overlay.rulerHeight
+            overlay.rulerY
         }
-        onRulerResize(nextWidth, nextHeight)
+        onRulerResize(nextX, nextY)
     }
 
     private fun toSourcePoint(point: DevicePoint): DevicePoint {

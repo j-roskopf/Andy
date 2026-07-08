@@ -38,6 +38,8 @@ data class SystemImage(
     val installed: Boolean,
 )
 
+enum class AvdProfileCategory { Phone, Foldable, Tablet, Watch, Tv, Automotive, Desktop, Other }
+
 data class AvdProfile(
     val id: String,
     val name: String,
@@ -45,7 +47,10 @@ data class AvdProfile(
     val tag: String?,
     val resolution: String?,
     val density: String?,
+    val category: AvdProfileCategory = AvdProfileCategory.Other,
 )
+
+enum class VirtualDeviceType { Phone, Foldable, Tablet, Watch, Tv, Automotive, Desktop, Unknown }
 
 data class VirtualDevice(
     val name: String,
@@ -53,6 +58,37 @@ data class VirtualDevice(
     val target: String?,
     val abi: String?,
     val running: Boolean,
+    val apiLevel: Int? = null,
+    val deviceType: VirtualDeviceType = VirtualDeviceType.Unknown,
+    val config: Map<String, String> = emptyMap(),
+)
+
+enum class AvdCameraOption(val configValue: String) {
+    None("none"),
+    Emulated("emulated"),
+    Webcam0("webcam0"),
+}
+
+data class AvdCreationConfig(
+    val name: String,
+    val profileId: String,
+    val systemImagePackage: String,
+    val orientation: String = "portrait",
+    val ramMb: Int? = null,
+    val storageMb: Int? = null,
+    val cpuCores: Int? = null,
+    val gpuMode: String = "auto",
+    val backCamera: AvdCameraOption = AvdCameraOption.Emulated,
+    val frontCamera: AvdCameraOption = AvdCameraOption.None,
+    val locale: String = "",
+    val hardwareKeyboard: Boolean = true,
+    val startAfterCreate: Boolean = false,
+)
+
+data class EmulatorSnapshot(
+    val name: String,
+    val avdName: String,
+    val source: String = "",
 )
 
 enum class LogLevel { Verbose, Debug, Info, Warn, Error, Fatal, Silent }
@@ -127,7 +163,14 @@ data class ProxyRule(
 
 fun ProxyRule.matches(method: String, url: String): Boolean {
     if (!enabled) return false
-    if (urlPattern.isNotBlank() && !url.contains(urlPattern, ignoreCase = true)) return false
+    if (urlPattern.isNotBlank()) {
+        if ("*" in urlPattern) {
+            val regex = Regex.escape(urlPattern).replace("\\*", ".*")
+            if (!Regex(regex, RegexOption.IGNORE_CASE).matches(url)) return false
+        } else {
+            if (!url.contains(urlPattern, ignoreCase = true)) return false
+        }
+    }
     if (!this.method.isNullOrBlank() && !this.method.equals(method, ignoreCase = true)) return false
     return true
 }

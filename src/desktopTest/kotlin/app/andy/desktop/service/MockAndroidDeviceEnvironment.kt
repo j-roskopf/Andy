@@ -14,6 +14,7 @@ internal class MockAndroidDeviceEnvironment {
     private val emulator = executable("emulator/emulator")
     private val sdkManager = executable("cmdline-tools/latest/bin/sdkmanager")
     private val avdManager = executable("cmdline-tools/latest/bin/avdmanager")
+    private val avdHome = File(sdkRoot, "avd")
 
     val store = InMemoryWorkspaceStore(WorkspaceState(selectedSdkPath = sdkRoot.absolutePath))
     val runner = CommandRunner { command, _ -> run(command) }
@@ -26,6 +27,29 @@ internal class MockAndroidDeviceEnvironment {
     var chromeFlagsResult: CommandResult = CommandResult.success()
     var remountResult: CommandResult = CommandResult.success("remount succeeded")
     var persistedCaInstalled: Boolean = false
+
+    init {
+        File(avdHome, "Pixel_8_API_36.avd").apply {
+            mkdirs()
+            resolve("config.ini").writeText(
+                """
+                AvdId=Pixel_8_API_36
+                avd.ini.displayname=Pixel_8_API_36
+                image.sysdir.1=system-images/android-36/google_apis/arm64-v8a/
+                hw.device.name=Pixel 8
+                """.trimIndent(),
+            )
+            resolve("snapshots/default_boot").mkdirs()
+        }
+        File(avdHome, "Pixel_8_API_36.ini").writeText(
+            """
+            avd.ini.encoding=UTF-8
+            path=${File(avdHome, "Pixel_8_API_36.avd").absolutePath}
+            path.rel=avd/Pixel_8_API_36.avd
+            target=android-36
+            """.trimIndent(),
+        )
+    }
 
     fun services(): TestDesktopServices {
         return TestDesktopServices(
@@ -47,6 +71,8 @@ internal class MockAndroidDeviceEnvironment {
             ),
             metrics = DesktopMetricsService(runner, devices),
             accessibility = DesktopAccessibilityService(runner, devices),
+            bugs = DesktopBugService(DesktopMirrorEngine(runner, devices), DesktopLogcatService(runner, devices), sdkRoot),
+            artifacts = DesktopArtifactService(runner, devices, DesktopMirrorEngine(runner, devices)),
         )
     }
 
@@ -106,6 +132,10 @@ internal class MockAndroidDeviceEnvironment {
     private fun runEmu(serial: String, args: List<String>): CommandResult {
         return when (args) {
             listOf("kill") -> CommandResult.success("OK")
+            listOf("avd", "snapshot", "list") -> CommandResult.success("default_boot\nmanual\n")
+            listOf("avd", "snapshot", "save", "manual") -> CommandResult.success("OK")
+            listOf("avd", "snapshot", "load", "manual") -> CommandResult.success("OK")
+            listOf("avd", "snapshot", "delete", "manual") -> CommandResult.success("OK")
             else -> CommandResult.failure("Unexpected emu command for $serial: ${args.joinToString(" ")}")
         }
     }
@@ -126,6 +156,7 @@ internal class MockAndroidDeviceEnvironment {
             )
             listOf("cmd", "package", "list", "packages", "-s") -> CommandResult.success("package:com.android.settings\n")
             listOf("cmd", "package", "list", "packages", "-d") -> CommandResult.success("package:com.disabled.app\n")
+            listOf("dumpsys", "package") -> CommandResult.success(allPackageDump())
             listOf("monkey", "-p", "com.example.app", "-c", "android.intent.category.LAUNCHER", "1") -> CommandResult.success("Events injected: 1")
             listOf("am", "force-stop", "com.example.app") -> CommandResult.success()
             listOf("am", "force-stop", "com.android.chrome") -> CommandResult.success()
@@ -209,6 +240,8 @@ internal class MockAndroidDeviceEnvironment {
         return when (command.drop(1)) {
             listOf("--list_installed") -> CommandResult.success("system-images;android-36;google_apis;arm64-v8a | 7 | Google APIs ARM 64 v8a System Image | Installed")
             listOf("--list") -> CommandResult.success("system-images;android-35;google_apis_playstore;arm64-v8a | 6 | Google Play ARM 64 v8a System Image | Available")
+            listOf("--install", "system-images;android-35;google_apis_playstore;arm64-v8a") -> CommandResult.success("Installed")
+            listOf("--uninstall", "system-images;android-36;google_apis;arm64-v8a") -> CommandResult.success("Uninstalled")
             else -> CommandResult.failure("Unexpected sdkmanager command: ${command.joinToString(" ")}")
         }
     }
@@ -227,12 +260,14 @@ internal class MockAndroidDeviceEnvironment {
             command.drop(1) == listOf("list", "avd") -> CommandResult.success(
                 """
                 Name: Pixel_8_API_36
-                Path: /Users/test/.android/avd/Pixel_8_API_36.avd
+                Path: ${File(avdHome, "Pixel_8_API_36.avd").absolutePath}
                 Target: Google APIs (Google Inc.)
                 ABI: arm64-v8a
+                API level: 36
                 """.trimIndent(),
             )
             command.drop(1).take(4) == listOf("create", "avd", "-n", "Pixel_8_API_36") -> CommandResult.success("Created AVD")
+            command.drop(1) == listOf("delete", "avd", "-n", "Pixel_8_API_36") -> CommandResult.success("Deleted AVD")
             else -> CommandResult.failure("Unexpected avdmanager command: ${command.joinToString(" ")}")
         }
     }
@@ -266,6 +301,15 @@ internal class MockAndroidDeviceEnvironment {
         Activity Resolver Table:
           com.example.app/.MainActivity filter 123
           com.example.app/com.example.app.SettingsActivity filter 456
+    """.trimIndent()
+
+    private fun allPackageDump() = """
+        Package [com.example.app] (abc):
+          application-label:'Example'
+        Package [com.android.settings] (def):
+          application-label:'Settings'
+        Package [com.disabled.app] (ghi):
+          application-label:'Disabled'
     """.trimIndent()
 
     private fun fileListing() = """
@@ -316,6 +360,8 @@ internal data class TestDesktopServices(
     val proxy: DesktopProxyService,
     val metrics: DesktopMetricsService,
     val accessibility: DesktopAccessibilityService,
+    val bugs: DesktopBugService,
+    val artifacts: DesktopArtifactService,
 )
 
 internal class InMemoryWorkspaceStore(initialState: WorkspaceState = WorkspaceState()) : WorkspaceStore {

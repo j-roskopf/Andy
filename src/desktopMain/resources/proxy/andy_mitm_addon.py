@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from mitmproxy import http
 
@@ -43,12 +44,26 @@ def _headers(headers):
     return {key: value for key, value in headers.items()}
 
 
+def _remove_header(headers, target):
+    target_lower = target.lower()
+    for name in list(headers.keys()):
+        if name.lower() == target_lower:
+            headers.pop(name, None)
+
+
 def _match(rule, flow):
     if not rule.get("enabled", True):
         return False
-    pattern = (rule.get("urlPattern") or "").lower()
-    if pattern and pattern not in flow.request.pretty_url.lower():
-        return False
+    pattern = (rule.get("urlPattern") or "").strip()
+    if pattern:
+        url = flow.request.pretty_url
+        if "*" in pattern:
+            regex = re.escape(pattern).replace(r"\*", ".*")
+            if not re.fullmatch(regex, url, re.IGNORECASE):
+                return False
+        else:
+            if pattern.lower() not in url.lower():
+                return False
     method = rule.get("method")
     if method and method.upper() != flow.request.method.upper():
         return False
@@ -76,7 +91,7 @@ def response(flow: http.HTTPFlow):
             for header, value in (rule.get("setHeaders") or {}).items():
                 flow.response.headers[header] = value
             for header in rule.get("removeHeaders") or []:
-                flow.response.headers.pop(header, None)
+                _remove_header(flow.response.headers, header)
             if rule.get("responseBody") is not None:
                 # Remove any encoding/length/transfer headers case-insensitively
                 for name in list(flow.response.headers.keys()):

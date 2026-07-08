@@ -29,6 +29,8 @@ data class MirrorOverlay(
     val rulerColor: Color = Color.Transparent,
     val rulerWidth: Float = 0.5f,
     val rulerHeight: Float = 0.5f,
+    val rulerX: Float = 0.5f,
+    val rulerY: Float = 0.5f,
     val pickerColor: Color? = null,
     val pickerHex: String? = null,
 )

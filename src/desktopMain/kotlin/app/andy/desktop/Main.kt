@@ -14,6 +14,7 @@ import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.AndyDestination
 import app.andy.AndyApp
+import app.andy.AndyMirrorPopOut
 import app.andy.desktop.service.createDesktopServices
 import java.awt.Taskbar
 import java.awt.Color
@@ -27,9 +28,10 @@ fun main() {
     installRuntimeAppIcon()
     application {
         val services = remember { createDesktopServices() }
-        val windowState = rememberWindowState(width = 1440.dp, height = 960.dp)
+        val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
+        var popOutSerial by remember { mutableStateOf<String?>(null) }
         val appIcon = painterResource(Res.drawable.andy_robot)
         fun open(destination: AndyDestination) {
             requestedDestination = destination
@@ -64,7 +66,19 @@ fun main() {
                 services = services,
                 requestedDestination = requestedDestination,
                 onDestinationConsumed = { requestedDestination = null },
+                onPopOutMirror = { popOutSerial = it },
+                contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
             )
+        }
+        popOutSerial?.let { serial ->
+            Window(
+                onCloseRequest = { popOutSerial = null },
+                state = rememberWindowState(width = 520.dp, height = 900.dp),
+                title = "Andy mirror - $serial",
+                icon = appIcon,
+            ) {
+                AndyMirrorPopOut(services, serial)
+            }
         }
     }
 }
@@ -94,3 +108,6 @@ private fun configureMacTitleBar(window: JFrame) {
         window.background = Color(0x14, 0x14, 0x16)
     }
 }
+
+private fun isMacOs(): Boolean =
+    System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)

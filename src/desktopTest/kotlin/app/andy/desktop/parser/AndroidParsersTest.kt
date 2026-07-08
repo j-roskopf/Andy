@@ -3,6 +3,8 @@ package app.andy.desktop.parser
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.LogLevel
+import app.andy.model.AvdProfileCategory
+import app.andy.model.VirtualDeviceType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -64,6 +66,96 @@ class AndroidParsersTest {
         assertEquals("google_apis", images[0].variant)
         assertEquals("arm64-v8a", images[0].abi)
         assertTrue(images[0].installed)
+    }
+
+    @Test
+    fun parsesAvdProfilesDevicesAndSnapshots() {
+        val profilesOutput = """
+            id: 34 or "pixel_8"
+                Name: Pixel 8
+                OEM : Google
+                Screen: 1080 x 2400
+                dpis : 420
+            id: 51 or "pixel_fold"
+                Name: Pixel Fold
+                OEM : Google
+                Screen: 1840 x 2208
+                dpis : 420
+            id: 12 or "wear_os_square"
+                Name: Wear OS Square
+                OEM : Google
+                Screen: 384 x 384
+                dpis : 320
+        """.trimIndent()
+        val avdOutput = """
+            Name: Pixel_8_API_36
+            Path: /tmp/Pixel_8_API_36.avd
+            Target: Google APIs (Google Inc.)
+            ABI: arm64-v8a
+            API level: 36
+        """.trimIndent()
+
+        val profiles = AndroidParsers.parseProfiles(profilesOutput)
+        val avds = AndroidParsers.parseAvdList(avdOutput)
+        val snapshots = AndroidParsers.parseSnapshots("default_boot\nmanual\n", "Pixel_8_API_36")
+
+        assertEquals(AvdProfileCategory.Phone, profiles[0].category)
+        assertEquals(AvdProfileCategory.Foldable, profiles[1].category)
+        assertEquals(AvdProfileCategory.Watch, profiles[2].category)
+        assertEquals(36, avds.single().apiLevel)
+        assertEquals(VirtualDeviceType.Phone, avds.single().deviceType)
+        assertEquals(listOf("default_boot", "manual"), snapshots.map { it.name })
+    }
+
+    @Test
+    fun parsesDetailedEmulatorSnapshotTable() {
+        val output = """
+            List of snapshots present on all disks:
+            ID        TAG                 VM SIZE                DATE       VM CLOCK
+            1         default_boot        0 B                    2026-07-07 00:00:00
+            2         manual              12.5 MB                2026-07-07 00:01:00
+            OK
+        """.trimIndent()
+
+        val snapshots = AndroidParsers.parseSnapshots(output, "Pixel_8_API_36")
+
+        assertEquals(listOf("default_boot", "manual"), snapshots.map { it.name })
+    }
+
+    @Test
+    fun parsesMultipleAvdsSeparatedByAvdManagerRules() {
+        val output = """
+            Available Android Virtual Devices:
+                Name: Pixel_6
+              Device: pixel_6 (Google)
+                Path: /Users/joer/.android/avd/Pixel_6.avd
+              Target: Google APIs (Google Inc.)
+                      Based on: Android 17.0 ("CinnamonBun") Tag/ABI: google_apis/arm64-v8a
+                Skin: pixel_6
+              Sdcard: 512M
+            ---------
+                Name: Pixel_8
+              Device: pixel_8 (Google)
+                Path: /Users/joer/.android/avd/Pixel_8.avd
+              Target: Google APIs (Google Inc.)
+                      Based on: Android 17.0 ("CinnamonBun") Tag/ABI: google_apis/arm64-v8a
+                Skin: pixel_8
+              Sdcard: 512M
+            ---------
+                Name: Pixel_9
+              Device: pixel_9 (Google)
+                Path: /Users/joer/.android/avd/Pixel_9.avd
+              Target: Google APIs PlayStore (Google Inc.)
+                      Based on: Android 17.0 ("CinnamonBun") Tag/ABI: google_apis_playstore/arm64-v8a
+                Skin: pixel_9
+              Sdcard: 512M
+        """.trimIndent()
+
+        val avds = AndroidParsers.parseAvdList(output)
+
+        assertEquals(listOf("Pixel_6", "Pixel_8", "Pixel_9"), avds.map { it.name })
+        assertEquals(listOf(17, 17, 17), avds.map { it.apiLevel })
+        assertEquals(listOf(VirtualDeviceType.Phone, VirtualDeviceType.Phone, VirtualDeviceType.Phone), avds.map { it.deviceType })
     }
 
     @Test

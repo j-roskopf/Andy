@@ -14,8 +14,19 @@ interface AvdService {
     suspend fun listProfiles(): List<AvdProfile>
     suspend fun listVirtualDevices(): List<VirtualDevice>
     suspend fun createVirtualDevice(name: String, profileId: String, systemImagePackage: String): CommandResult
+    suspend fun createVirtualDevice(config: AvdCreationConfig): CommandResult
     suspend fun startVirtualDevice(name: String): CommandResult
+    suspend fun coldBootVirtualDevice(name: String): CommandResult
     suspend fun stopVirtualDevice(name: String): CommandResult
+    suspend fun wipeVirtualDevice(name: String): CommandResult
+    suspend fun deleteVirtualDevice(name: String): CommandResult
+    suspend fun cloneVirtualDevice(sourceName: String, newName: String): CommandResult
+    suspend fun installSystemImage(packageId: String): CommandResult
+    suspend fun uninstallSystemImage(packageId: String): CommandResult
+    suspend fun listSnapshots(avdName: String): List<EmulatorSnapshot>
+    suspend fun saveSnapshot(avdName: String, snapshotName: String): CommandResult
+    suspend fun restoreSnapshot(avdName: String, snapshotName: String): CommandResult
+    suspend fun deleteSnapshot(avdName: String, snapshotName: String): CommandResult
 }
 
 interface MirrorEngine {
@@ -71,6 +82,8 @@ interface ProxyService {
     suspend fun clearDeviceProxy(serial: String): CommandResult
     suspend fun installSystemCertificateAuthority(serial: String): CommandResult
     suspend fun activatePersistedCertificateAuthority(serial: String): CommandResult
+    suspend fun isCertificateInstalled(serial: String): Boolean
+    suspend fun isDeviceProxyConfigured(serial: String, host: String, port: Int): Boolean
 }
 
 interface MetricsService {
@@ -79,6 +92,27 @@ interface MetricsService {
 
 interface AccessibilityService {
     suspend fun dump(serial: String): AccessibilityNode?
+}
+
+interface BugService {
+    val status: Flow<BugCaptureStatus>
+    suspend fun startCapture(serial: String, device: AndroidDevice?)
+    suspend fun stopCapture()
+    fun recordAction(kind: String, label: String, detail: String? = null)
+    suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport
+    suspend fun listBugs(): List<BugReport>
+    suspend fun loadBug(id: String): BugReport?
+    suspend fun loadBugLog(id: String): String
+    suspend fun deleteBug(id: String): Boolean
+    suspend fun exportBug(id: String): String?
+    fun playbackFrames(id: String, startFrameIndex: Int = 0): Flow<MirrorFrame>
+    suspend fun bugVideoFrameCount(id: String): Int
+    suspend fun loadBugVideoFrame(id: String, frameIndex: Int): MirrorFrame?
+}
+
+interface ArtifactService {
+    suspend fun saveScreenshot(serial: String, suggestedName: String): CommandResult
+    suspend fun saveBugReport(serial: String, suggestedName: String): CommandResult
 }
 
 interface WorkspaceStore {
@@ -146,6 +180,8 @@ data class AndyServices(
     val proxy: ProxyService,
     val metrics: MetricsService,
     val accessibility: AccessibilityService,
+    val bugs: BugService,
+    val artifacts: ArtifactService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
 )

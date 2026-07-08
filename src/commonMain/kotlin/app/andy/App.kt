@@ -5,6 +5,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,6 +16,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -22,12 +26,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
@@ -36,12 +44,22 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGestures
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
+import app.andy.andy.generated.resources.hardware_bug
+import app.andy.andy.generated.resources.hardware_capture
+import app.andy.andy.generated.resources.hardware_clipboard
+import app.andy.andy.generated.resources.hardware_pop_out
+import app.andy.andy.generated.resources.hardware_power
+import app.andy.andy.generated.resources.hardware_record
+import app.andy.andy.generated.resources.hardware_rotate
+import app.andy.andy.generated.resources.hardware_volume_down
+import app.andy.andy.generated.resources.hardware_volume_up
 import app.andy.model.*
 import app.andy.service.*
 import kotlinx.coroutines.Job
@@ -52,6 +70,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import org.jetbrains.compose.resources.painterResource
 
 enum class AndyDestination(val label: String) {
@@ -72,29 +95,29 @@ enum class AndyDestination(val label: String) {
 }
 
 private object AndyColors {
-    val Neutral100 = Color(0xFFF2F4F7)
-    val Neutral200 = Color(0xFFE1E4E8)
-    val Neutral300 = Color(0xFFB7BBC3)
-    val Neutral400 = Color(0xFF8A8F98)
-    val Neutral500 = Color(0xFF3A3D42)
-    val Neutral600 = Color(0xFF2A2C30)
-    val Neutral700 = Color(0xFF1E1F22)
-    val Neutral750 = Color(0xFF191A1C)
-    val Neutral800 = Color(0xFF141416)
-    val Neutral850 = Color(0xFF101011)
-    val Neutral900 = Color(0xFF0B0B0C)
+    val Neutral100 = Color(0xFFF4F1E8)
+    val Neutral200 = Color(0xFFE4DED0)
+    val Neutral300 = Color(0xFFC6BEAD)
+    val Neutral400 = Color(0xFF8E8779)
+    val Neutral500 = Color(0xFF514D44)
+    val Neutral600 = Color(0xFF302D27)
+    val Neutral700 = Color(0xFF24211C)
+    val Neutral750 = Color(0xFF1D1A16)
+    val Neutral800 = Color(0xFF171511)
+    val Neutral850 = Color(0xFF11100D)
+    val Neutral900 = Color(0xFF0A0908)
 
-    val Orange = Color(0xFFFF8A3D)
-    val OrangeHover = Color(0xFFFF9E5C)
-    val OrangePressed = Color(0xFFE87429)
-    val OrangeSubtle = Color(0xFF3A2214)
-    val OrangeBorder = Color(0xFF7A431F)
-    val Green = Color(0xFF00E676)
-    val GreenSoft = Color(0xFF42F59E)
-    val GreenSubtle = Color(0xFF0E2A1F)
-    val Blue = Color(0xFF4DA3FF)
-    val Warning = Color(0xFFFFB020)
-    val Error = Color(0xFFFF5252)
+    val Orange = Color(0xFFD18A4B)
+    val OrangeHover = Color(0xFFE0A56E)
+    val OrangePressed = Color(0xFFB97138)
+    val OrangeSubtle = Color(0xFF2C2117)
+    val OrangeBorder = Color(0xFF8D6746)
+    val Green = Color(0xFF94C17A)
+    val GreenSoft = Color(0xFFB4D59E)
+    val GreenSubtle = Color(0xFF172418)
+    val Blue = Color(0xFF88AFC8)
+    val Warning = Color(0xFFE3B05E)
+    val Error = Color(0xFFE26F5C)
 }
 
 private object AndySpace {
@@ -107,16 +130,18 @@ private object AndySpace {
 
 private object AndyRadius {
     val R2 = 4.dp
-    val R3 = 8.dp
-    val R4 = 12.dp
-    val R5 = 16.dp
+    val R3 = 6.dp
+    val R4 = 8.dp
+    val R5 = 10.dp
     val Pill = 999.dp
 }
 
+private val MonoFont = FontFamily.Monospace
 private val Ink = AndyColors.Neutral900
 private val Panel = AndyColors.Neutral800
 private val PanelSoft = AndyColors.Neutral700
-private val Border = Color.White.copy(alpha = 0.08f)
+private val Border = AndyColors.Neutral100.copy(alpha = 0.10f)
+private val PaneDividerTint = AndyColors.OrangeBorder.copy(alpha = 0.72f)
 private val TextPrimary = AndyColors.Neutral200
 private val TextSecondary = AndyColors.Neutral400
 private val Rust = AndyColors.Orange
@@ -137,10 +162,124 @@ private fun Modifier.bottomBorder(color: Color): Modifier = drawBehind {
     drawLine(color, Offset(0f, y), Offset(size.width, y), strokeWidth)
 }
 
+private fun Modifier.noiseGridOverlay(alpha: Float = 0.07f): Modifier = drawBehind {
+    val grid = 18.dp.toPx()
+    var x = 0f
+    while (x < size.width) {
+        drawLine(AndyColors.Neutral100.copy(alpha = alpha), Offset(x, 0f), Offset(x, size.height), 1f)
+        x += grid
+    }
+    var y = 0f
+    while (y < size.height) {
+        drawLine(AndyColors.Neutral100.copy(alpha = alpha * 0.6f), Offset(0f, y), Offset(size.width, y), 1f)
+        y += grid
+    }
+}
+
 @Composable
-private fun rememberMirrorInputSender(services: AndyServices, serial: String?, enabled: Boolean = true): (MirrorInput) -> Unit {
+private fun Button(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+    colors: ButtonColors = primaryButtonColors(),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+    content: @Composable RowScope.() -> Unit,
+) {
+    androidx.compose.material3.Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = shape,
+        colors = colors,
+        contentPadding = contentPadding,
+        content = content,
+    )
+}
+
+@Composable
+private fun OutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+    colors: ButtonColors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary, disabledContentColor = AndyColors.Neutral500),
+    border: BorderStroke? = BorderStroke(1.dp, AndyColors.Neutral100.copy(alpha = 0.16f)),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+    content: @Composable RowScope.() -> Unit,
+) {
+    androidx.compose.material3.OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = shape,
+        colors = colors,
+        border = border,
+        contentPadding = contentPadding,
+        content = content,
+    )
+}
+
+@Composable
+private fun TextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    readOnly: Boolean = false,
+    textStyle: TextStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, color = TextPrimary),
+    singleLine: Boolean = false,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    minLines: Int = 1,
+    placeholder: @Composable (() -> Unit)? = null,
+    colors: TextFieldColors = fieldColors(),
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+) {
+    val enabledAlpha = if (enabled) 1f else 0.48f
+    val effectiveTextStyle = textStyle.copy(fontFamily = MonoFont, color = if (textStyle.color == Color.Unspecified) TextPrimary else textStyle.color)
+    val fieldShape = shape
+    @Suppress("UNUSED_VARIABLE")
+    val retainedColorsForCallSiteCompatibility = colors
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
+            .background(AndyColors.Neutral900.copy(alpha = 0.62f * enabledAlpha), fieldShape)
+            .border(1.dp, AndyColors.Neutral100.copy(alpha = 0.18f * enabledAlpha), fieldShape),
+        enabled = enabled,
+        readOnly = readOnly,
+        textStyle = effectiveTextStyle,
+        singleLine = singleLine,
+        maxLines = maxLines,
+        minLines = minLines,
+        cursorBrush = SolidColor(Rust),
+        decorationBox = { innerTextField ->
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
+            ) {
+                if (value.isEmpty() && placeholder != null) {
+                    Box(Modifier.graphicsLayer(alpha = 0.62f)) {
+                        placeholder()
+                    }
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun rememberMirrorInputSender(
+    services: AndyServices,
+    serial: String?,
+    enabled: Boolean = true,
+    recordActions: Boolean = true,
+): (MirrorInput) -> Unit {
     val currentSerial by rememberUpdatedState(serial)
     val currentEnabled by rememberUpdatedState(enabled)
+    val currentRecordActions by rememberUpdatedState(recordActions)
     val channel = remember(services.mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
     LaunchedEffect(channel, services.mirror) {
         for (input in channel) {
@@ -154,9 +293,31 @@ private fun rememberMirrorInputSender(services: AndyServices, serial: String?, e
     }
     return remember(channel) {
         { input ->
+            if (currentEnabled && currentSerial != null && currentRecordActions) {
+                val (label, detail) = mirrorInputBugText(input)
+                services.bugs.recordAction("input", label, detail)
+            }
             if (channel.trySend(input).isFailure) Unit
         }
     }
+}
+
+private fun mirrorInputBugText(input: MirrorInput): Pair<String, String?> = when (input) {
+    is MirrorInput.Touch -> "${input.action.name} ${input.x},${input.y}" to null
+    is MirrorInput.Tap -> "Tap ${input.x},${input.y}" to null
+    is MirrorInput.Swipe -> "Swipe ${input.startX},${input.startY} -> ${input.endX},${input.endY}" to "${input.durationMillis}ms"
+    is MirrorInput.Key -> "Key ${input.keyCode}" to androidKeyLabel(input.keyCode)
+    is MirrorInput.Text -> "Text input" to input.value.take(80)
+    MirrorInput.Back -> "Back" to null
+    MirrorInput.Home -> "Home" to null
+    MirrorInput.Recents -> "Recents" to null
+    MirrorInput.Power -> "Power" to null
+}
+
+private fun androidKeyLabel(keyCode: Int): String? = when (keyCode) {
+    24 -> "Volume up"
+    25 -> "Volume down"
+    else -> null
 }
 
 @Composable
@@ -169,7 +330,13 @@ private fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @C
 }
 
 @Composable
-fun AndyApp(services: AndyServices, requestedDestination: AndyDestination? = null, onDestinationConsumed: () -> Unit = {}) {
+fun AndyApp(
+    services: AndyServices,
+    requestedDestination: AndyDestination? = null,
+    onDestinationConsumed: () -> Unit = {},
+    onPopOutMirror: (String?) -> Unit = {},
+    contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
+) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Ink,
@@ -184,21 +351,92 @@ fun AndyApp(services: AndyServices, requestedDestination: AndyDestination? = nul
             error = Red,
         ),
         typography = Typography(
-            displayLarge = LocalTextStyle.current.copy(fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp),
-            headlineLarge = LocalTextStyle.current.copy(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-            titleMedium = LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
-            bodyMedium = LocalTextStyle.current.copy(fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
-            bodySmall = LocalTextStyle.current.copy(fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.2.sp),
-            labelMedium = LocalTextStyle.current.copy(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.3.sp),
-            labelSmall = LocalTextStyle.current.copy(fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp),
+            displayLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 30.sp, lineHeight = 38.sp, fontWeight = FontWeight.SemiBold),
+            headlineLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
+            titleMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+            bodyMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp),
+            bodySmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 16.sp),
+            labelMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium),
+            labelSmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 9.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium),
         ),
     ) {
-        AndyShell(services, requestedDestination, onDestinationConsumed)
+        AndyShell(services, requestedDestination, onDestinationConsumed, onPopOutMirror, contentTopPadding)
     }
 }
 
 @Composable
-private fun AndyShell(services: AndyServices, requestedDestination: AndyDestination?, onDestinationConsumed: () -> Unit) {
+fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            background = Ink,
+            surface = Panel,
+            surfaceVariant = PanelSoft,
+            primary = Rust,
+            secondary = Green,
+            onBackground = TextPrimary,
+            onSurface = TextPrimary,
+            onSurfaceVariant = TextSecondary,
+            outline = Border,
+            error = Red,
+        ),
+    ) {
+        val scope = rememberCoroutineScope()
+        var mirrorStatus by remember { mutableStateOf("Disconnected") }
+        var connectResult by remember { mutableStateOf("") }
+        val sendInput = rememberMirrorInputSender(services, serial)
+        LaunchedEffect(Unit) {
+            services.mirror.status.collectLatest { mirrorStatus = it }
+        }
+        LaunchedEffect(serial) {
+            if (serial != null) {
+                val result = services.mirror.connect(serial)
+                connectResult = if (result.isSuccess) result.stdout else result.stderr
+            }
+        }
+        Box(Modifier.fillMaxSize().background(Ink).noiseGridOverlay(0.04f).padding(12.dp)) {
+            MirrorFrameContent(services.mirror, serial) { frame ->
+                LiveDevicePane(
+                    serial = serial,
+                    device = null,
+                    frame = frame,
+                    mirrorStatus = mirrorStatus,
+                    connectResult = connectResult,
+                    modifier = Modifier.fillMaxSize(),
+                    onPower = { sendInput(MirrorInput.Power) },
+                    onVolumeUp = { sendInput(MirrorInput.Key(24)) },
+                    onVolumeDown = { sendInput(MirrorInput.Key(25)) },
+                    onRotate = {
+                        if (serial != null) scope.launch { services.devices.shell(serial, listOf("settings", "put", "system", "user_rotation", "1")) }
+                    },
+                    onCaptureScreenshot = {
+                        if (serial != null) scope.launch { services.artifacts.saveScreenshot(serial, "andy-${serial}.png") }
+                    },
+                    onBugReport = {
+                        if (serial != null) scope.launch { services.artifacts.saveBugReport(serial, "andy-bugreport-${serial}.zip") }
+                    },
+                    onClipText = {},
+                    onPopOut = {},
+                    onInput = sendInput,
+                    onConnect = {
+                        if (serial != null) scope.launch {
+                            val result = services.mirror.connect(serial)
+                            connectResult = if (result.isSuccess) result.stdout else result.stderr
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AndyShell(
+    services: AndyServices,
+    requestedDestination: AndyDestination?,
+    onDestinationConsumed: () -> Unit,
+    onPopOutMirror: (String?) -> Unit,
+    contentTopPadding: androidx.compose.ui.unit.Dp,
+) {
     val scope = rememberCoroutineScope()
     var destination by remember { mutableStateOf(AndyDestination.Devices) }
     var devices by remember { mutableStateOf<List<AndroidDevice>>(emptyList()) }
@@ -210,6 +448,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
     var stoppingEmulatorSerial by remember { mutableStateOf<String?>(null) }
     var emulatorStopStatus by remember { mutableStateOf("") }
     val logcatState = remember { LogcatState() }
+    val liveLogcatState = remember { LogcatState() }
     val accessibilityState = remember { AccessibilityState() }
     val pendingUpdateInstallConfirmation by services.updates.pendingInstallConfirmation.collectAsState()
 
@@ -291,10 +530,14 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
         scope.launch { services.workspaceStore.save(updated) }
     }
 
-    Box(Modifier.fillMaxSize().background(Panel)) {
-        Row(Modifier.fillMaxSize().padding(top = 24.dp)) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
+            .noiseGridOverlay(0.035f)
+    ) {
+        Row(Modifier.fillMaxSize().padding(top = contentTopPadding, start = 14.dp, end = 14.dp, bottom = 14.dp)) {
             Sidebar(destination, devices.size, onSelect = { destination = it }, sdk = sdk, updates = services.updates)
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().padding(start = 12.dp)) {
                 TopChrome(
                     destination = destination,
                     selectedDevice = devices.firstOrNull { it.serial == selectedSerial },
@@ -312,7 +555,12 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                         }
                     },
                 )
-                Box(Modifier.fillMaxSize().background(Ink).padding(horizontal = 20.dp, vertical = 16.dp)) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .padding(horizontal = 18.dp, vertical = 16.dp)
+                ) {
                     when (destination) {
                         AndyDestination.Devices -> DevicesScreen(services, devices, sdk, onRefresh = { refreshDevices() }, onLive = {
                             selectedSerial = it
@@ -332,16 +580,19 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             stopStatus = emulatorStopStatus,
                             onDevicePaneWidthChange = { width -> updateWorkspace { it.copy(liveDevicePaneWidth = width) } },
                             onControlsPaneHeightChange = { height -> updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
+                            onBugSaved = { destination = AndyDestination.Bugs },
+                            logcatState = liveLogcatState,
+                            onPopOutMirror = { onPopOutMirror(selectedSerial) },
                         )
                         AndyDestination.Apps -> AppsScreen(
-                            services.apps,
+                            services,
                             selectedSerial,
                             workspaceState.appsListPaneWidth,
                             workspaceState.appsDetailsPaneHeight,
                             onPaneChange = { listWidth, detailsHeight -> updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneHeight = detailsHeight) } },
                         )
                         AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial, logcatState)
-                        AndyDestination.Intents -> IntentsScreen(services.intents, selectedSerial)
+                        AndyDestination.Intents -> IntentsScreen(services, selectedSerial)
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
@@ -355,6 +606,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             onRulesChange = { value -> updateWorkspace { it.copy(proxyRules = value) } },
                             onRulesVisibleChange = { networkRulesVisible = it },
                         )
+                        AndyDestination.Snapshots -> SnapshotsScreen(services.avd)
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
                             services.metrics,
@@ -377,6 +629,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             onTreePaneWidthChange = { width -> updateWorkspace { it.copy(accessibilityTreePaneWidth = width) } },
                             state = accessibilityState
                         )
+                        AndyDestination.Bugs -> BugsScreen(services.bugs)
                         else -> PlaceholderScreen(destination.label)
                     }
                 }
@@ -404,48 +657,51 @@ private fun Sidebar(
     val scope = rememberCoroutineScope()
 
     Column(
-        Modifier.width(238.dp).fillMaxHeight().background(Panel).rightBorder(Border).padding(AndySpace.S3),
+        Modifier.width(246.dp).fillMaxHeight()
+            .background(Brush.verticalGradient(listOf(AndyColors.Neutral750, AndyColors.Neutral850)), RoundedCornerShape(AndyRadius.R4))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+            .padding(AndySpace.S3),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Column {
             Row(
-                Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S3),
+                Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(AndySpace.S2),
             ) {
                 AndyRobotIcon(Modifier.size(28.dp))
                 Column {
-                    Text("ANDY", color = AndyColors.Neutral100, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text("WORKSPACE", color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 10.sp, letterSpacing = 0.8.sp)
+                    Text("andy", color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text("workspace", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
                 }
             }
             AndyDestination.entries.forEach { item ->
                 val active = item == current
                 Row(
                     Modifier.fillMaxWidth()
-                        .height(32.dp)
-                        .background(if (active) PanelSoft else Color.Transparent, RoundedCornerShape(AndyRadius.R3))
-                        .then(if (active) Modifier.border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.R3)) else Modifier)
+                        .height(34.dp)
+                        .background(if (active) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+                        .then(if (active) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.52f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
                         .clickable { onSelect(item) }
-                        .padding(horizontal = 8.dp),
+                        .padding(horizontal = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(navMark(item), color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    Text(navMark(item), color = if (active) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
                     Spacer(Modifier.width(8.dp))
-                    Text(item.label, color = if (active) AndyColors.Neutral100 else AndyColors.Neutral300, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                    if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    if (item == AndyDestination.Logcat) Text("live", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    Text(item.label.lowercase(), color = if (active) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                    if (item == AndyDestination.Logcat) Text("live", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 }
             }
         }
         Column(
             Modifier.fillMaxWidth()
-                .background(AndyColors.Neutral700, RoundedCornerShape(AndyRadius.R4))
+                .background(AndyColors.Neutral900.copy(alpha = 0.56f), RoundedCornerShape(AndyRadius.R3))
                 .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("v${app.andy.updates.AndyBuildInfo.versionName}  H.264 embedded", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            Text("v${app.andy.updates.AndyBuildInfo.versionName}  h.264 embedded", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
             StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
             StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
             StatusRow("Proxy CA", "local", true)
@@ -490,7 +746,7 @@ private fun Sidebar(
                     text = updateText,
                     color = updateColor,
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = MonoFont,
                     fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
                 )
             }
@@ -538,8 +794,8 @@ private fun navMark(item: AndyDestination): String = when (item) {
 @Composable
 private fun StatusRow(label: String, value: String, ok: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = TextSecondary, fontSize = 12.sp)
-        Text(value, color = if (ok) Green else Rust, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        Text(value.lowercase(), color = if (ok) Green else Rust, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
     }
 }
 
@@ -576,12 +832,15 @@ private fun TopChrome(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
-        Modifier.fillMaxWidth().height(64.dp).background(Panel).bottomBorder(Border).padding(horizontal = 16.dp),
+        Modifier.fillMaxWidth().height(62.dp)
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.width(260.dp)) {
-            Text(destination.label, color = AndyColors.Neutral100, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 28.sp)
-            Text(selectedDevice?.let { "${it.displayName} · API ${it.apiLevel ?: "-"} · ${it.abi ?: "-"}" } ?: "No device selected", color = TextSecondary, fontSize = 12.sp)
+            Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
+            Text(selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
         }
         Spacer(Modifier.weight(1f))
         actions()
@@ -589,14 +848,14 @@ private fun TopChrome(
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
                 enabled = stoppingEmulatorSerial != selectedDevice.serial,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(AndyRadius.R2),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop emulator", fontSize = 12.sp)
             }
             Spacer(Modifier.width(10.dp))
         }
-        Button(onClick = onRefresh, colors = primaryButtonColors(), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+        Button(onClick = onRefresh, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
             Text("Refresh", color = TextPrimary, fontSize = 12.sp)
         }
         Spacer(Modifier.width(10.dp))
@@ -608,12 +867,12 @@ private fun TopChrome(
 private fun DevicePicker(devices: List<AndroidDevice>, selectedSerial: String?, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        Button(onClick = { expanded = true }, colors = secondaryButtonColors(), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+        Button(onClick = { expanded = true }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
             Text("•", color = Green, fontSize = 18.sp)
             Spacer(Modifier.width(6.dp))
-            Text(selectedSerial ?: "No device", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            Text(selectedSerial ?: "no device", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = PanelSoft) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = AndyColors.Neutral750) {
             devices.forEach { device ->
                 DropdownMenuItem(text = { Text("${device.serial}  ${device.displayName}", color = TextPrimary) }, onClick = {
                     onSelect(device.serial)
@@ -640,6 +899,11 @@ private fun DevicesScreen(
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     var avdStatus by remember { mutableStateOf("") }
     var startingAvd by remember { mutableStateOf<String?>(null) }
+    var deviceQuery by remember { mutableStateOf("") }
+    var deviceFilter by remember { mutableStateOf(DeviceListFilter.All) }
+    var showCreateWizard by remember { mutableStateOf(false) }
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    var cloneSource by remember { mutableStateOf<VirtualDevice?>(null) }
 
     fun refreshAvds() {
         scope.launch {
@@ -650,12 +914,42 @@ private fun DevicesScreen(
     LaunchedEffect(Unit) {
         refreshAvds()
     }
+    val filteredDevices = devices.filter { device ->
+        val matchesQuery = deviceQuery.isBlank() ||
+            device.displayName.contains(deviceQuery, true) ||
+            device.serial.contains(deviceQuery, true) ||
+            device.apiLevel.orEmpty().contains(deviceQuery, true)
+        matchesQuery && device.matchesFilter(deviceFilter)
+    }
+    val filteredAvds = avds.filter { avd ->
+        val matchesQuery = deviceQuery.isBlank() ||
+            avd.name.contains(deviceQuery, true) ||
+            avd.target.orEmpty().contains(deviceQuery, true) ||
+            avd.abi.orEmpty().contains(deviceQuery, true)
+        matchesQuery && avd.matchesFilter(deviceFilter)
+    }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Toolbar("Devices", "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${avds.size} created", onPrimary = {
             onRefresh()
             refreshAvds()
         }, primaryLabel = "Refresh")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextField(
+                deviceQuery,
+                { deviceQuery = it },
+                placeholder = { Text("Search devices", color = TextSecondary) },
+                singleLine = true,
+                modifier = Modifier.width(280.dp).height(54.dp),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+                colors = fieldColors(),
+            )
+            DeviceListFilter.entries.forEach { filter ->
+                FilterPill(filter.label, deviceFilter == filter, if (deviceFilter == filter) Rust else Cyan) { deviceFilter = filter }
+            }
+            Spacer(Modifier.weight(1f))
+            Button(onClick = { showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
+        }
         if (sdk.issues.isNotEmpty()) {
             PanelCard {
                 Text("SDK setup", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -667,11 +961,11 @@ private fun DevicesScreen(
             Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
             if (avdStatus.isNotBlank()) Text(avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             if (stopStatus.isNotBlank()) Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            if (avds.isEmpty()) {
+            if (filteredAvds.isEmpty()) {
                 Text("No AVDs found. Create one in Catalog or Android Studio, then refresh.", color = TextSecondary, fontSize = 12.sp)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    avds.forEach { avd ->
+                    filteredAvds.forEach { avd ->
                         val runningDevice = devices.firstOrNull {
                             it.kind == DeviceKind.Emulator &&
                                 it.state == DeviceConnectionState.Online &&
@@ -691,6 +985,7 @@ private fun DevicesScreen(
                                 Text(listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" }, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Text(if (runningDevice != null || avd.running) "running" else "stopped", color = if (runningDevice != null || avd.running) Green else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                            Text(avd.deviceType.name.lowercase(), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.width(80.dp))
                             OutlinedButton(
                                 onClick = {
                                     runningDevice?.let {
@@ -725,13 +1020,45 @@ private fun DevicesScreen(
                                     Text(if (stoppingEmulatorSerial == runningDevice.serial) "Stopping" else "Stop")
                                 }
                             }
+                            AvdActionsMenu(
+                                enabled = startingAvd == null,
+                                onColdBoot = {
+                                    scope.launch {
+                                        startingAvd = avd.name
+                                        val result = services.avd.coldBootVirtualDevice(avd.name)
+                                        avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                        startingAvd = null
+                                        refreshAvds()
+                                        if (result.isSuccess) onEmulatorStarted(devices.map { it.serial }.toSet())
+                                    }
+                                },
+                                onWipe = {
+                                    pendingConfirmation = PendingConfirmation("Wipe ${avd.name}?", "This erases user data for the virtual device.") {
+                                        scope.launch {
+                                            val result = services.avd.wipeVirtualDevice(avd.name)
+                                            avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                            refreshAvds()
+                                        }
+                                    }
+                                },
+                                onClone = { cloneSource = avd },
+                                onDelete = {
+                                    pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
+                                        scope.launch {
+                                            val result = services.avd.deleteVirtualDevice(avd.name)
+                                            avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
+                                            refreshAvds()
+                                        }
+                                    }
+                                },
+                            )
                         }
                     }
                 }
             }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(devices) { device ->
+            items(filteredDevices) { device ->
                 val online = device.state == DeviceConnectionState.Online
                 val rowShape = RoundedCornerShape(AndyRadius.R4)
                 Row(
@@ -765,6 +1092,38 @@ private fun DevicesScreen(
             }
         }
         if (devices.isEmpty()) EmptyState("No connected Android devices. Connect USB debugging or start an emulator.")
+        if (showCreateWizard) {
+            CreateVirtualDeviceDialog(
+                avd = services.avd,
+                onDismiss = { showCreateWizard = false },
+                onCreated = {
+                    avdStatus = it
+                    showCreateWizard = false
+                    refreshAvds()
+                    onRefresh()
+                },
+            )
+        }
+        cloneSource?.let { source ->
+            CloneAvdDialog(
+                source = source,
+                onDismiss = { cloneSource = null },
+                onClone = { newName ->
+                    scope.launch {
+                        val result = services.avd.cloneVirtualDevice(source.name, newName)
+                        avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                        cloneSource = null
+                        refreshAvds()
+                    }
+                },
+            )
+        }
+        pendingConfirmation?.let { confirmation ->
+            ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
+                pendingConfirmation = null
+                confirmation.onConfirm()
+            })
+        }
     }
 }
 
@@ -776,6 +1135,252 @@ private fun normalizeName(value: String): String {
     return value.replace('_', ' ').trim().lowercase()
 }
 
+private enum class DeviceListFilter(val label: String) {
+    All("All"),
+    Running("Running"),
+    Phone("Phone"),
+    Foldable("Foldable"),
+    Tablet("Tablet"),
+    Watch("Watch"),
+    Tv("TV"),
+    Api33("API 33+"),
+}
+
+private fun AndroidDevice.matchesFilter(filter: DeviceListFilter): Boolean = when (filter) {
+    DeviceListFilter.All -> true
+    DeviceListFilter.Running -> state == DeviceConnectionState.Online
+    DeviceListFilter.Phone -> kind == DeviceKind.Physical || model.orEmpty().contains("pixel", true) || model.orEmpty().contains("phone", true)
+    DeviceListFilter.Foldable -> model.orEmpty().contains("fold", true)
+    DeviceListFilter.Tablet -> model.orEmpty().contains("tablet", true)
+    DeviceListFilter.Watch -> model.orEmpty().contains("watch", true) || product.orEmpty().contains("wear", true)
+    DeviceListFilter.Tv -> model.orEmpty().contains("tv", true) || product.orEmpty().contains("tv", true)
+    DeviceListFilter.Api33 -> apiLevel?.toIntOrNull()?.let { it >= 33 } == true
+}
+
+private fun VirtualDevice.matchesFilter(filter: DeviceListFilter): Boolean = when (filter) {
+    DeviceListFilter.All -> true
+    DeviceListFilter.Running -> running
+    DeviceListFilter.Phone -> deviceType == VirtualDeviceType.Phone
+    DeviceListFilter.Foldable -> deviceType == VirtualDeviceType.Foldable
+    DeviceListFilter.Tablet -> deviceType == VirtualDeviceType.Tablet
+    DeviceListFilter.Watch -> deviceType == VirtualDeviceType.Watch
+    DeviceListFilter.Tv -> deviceType == VirtualDeviceType.Tv
+    DeviceListFilter.Api33 -> apiLevel?.let { it >= 33 } == true ||
+        Regex("""android-(\d+)""").find(target.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { it >= 33 } == true
+}
+
+private data class PendingConfirmation(
+    val title: String,
+    val message: String,
+    val onConfirm: () -> Unit,
+)
+
+@Composable
+private fun AvdActionsMenu(
+    enabled: Boolean,
+    onColdBoot: () -> Unit,
+    onWipe: () -> Unit,
+    onClone: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.width(42.dp), contentPadding = PaddingValues(0.dp)) {
+            Text("...")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = PanelSoft) {
+            DropdownMenuItem(text = { Text("Cold boot", color = TextPrimary) }, onClick = { expanded = false; onColdBoot() })
+            DropdownMenuItem(text = { Text("Wipe data", color = TextPrimary) }, onClick = { expanded = false; onWipe() })
+            DropdownMenuItem(text = { Text("Clone", color = TextPrimary) }, onClick = { expanded = false; onClone() })
+            DropdownMenuItem(text = { Text("Delete", color = Red) }, onClick = { expanded = false; onDelete() })
+        }
+    }
+}
+
+@Composable
+private fun CloneAvdDialog(source: VirtualDevice, onDismiss: () -> Unit, onClone: (String) -> Unit) {
+    var name by remember(source.name) { mutableStateOf("${source.name}_Copy") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Clone ${source.name}", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            LabeledField("New name", name, { name = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }, Modifier.fillMaxWidth())
+        },
+        confirmButton = {
+            Button(onClick = { onClone(name) }, enabled = name.isNotBlank(), colors = primaryButtonColors()) { Text("Clone") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ConfirmationDialog(confirmation: PendingConfirmation, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text(confirmation.title, color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = { Text(confirmation.message, color = TextSecondary) },
+        confirmButton = { Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = Red)) { Text("Confirm") } },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CreateVirtualDeviceDialog(
+    avd: AvdService,
+    onDismiss: () -> Unit,
+    onCreated: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var profiles by remember { mutableStateOf<List<AvdProfile>>(emptyList()) }
+    var images by remember { mutableStateOf<List<SystemImage>>(emptyList()) }
+    var step by remember { mutableStateOf(1) }
+    var selectedProfile by remember { mutableStateOf<AvdProfile?>(null) }
+    var selectedImage by remember { mutableStateOf<SystemImage?>(null) }
+    var name by remember { mutableStateOf("Andy_Device") }
+    var orientation by remember { mutableStateOf("portrait") }
+    var ram by remember { mutableStateOf("2048") }
+    var storage by remember { mutableStateOf("8192") }
+    var cores by remember { mutableStateOf("4") }
+    var gpuMode by remember { mutableStateOf("auto") }
+    var backCamera by remember { mutableStateOf(AvdCameraOption.Emulated) }
+    var frontCamera by remember { mutableStateOf(AvdCameraOption.None) }
+    var locale by remember { mutableStateOf("en_US") }
+    var keyboard by remember { mutableStateOf(true) }
+    var startAfterCreate by remember { mutableStateOf(true) }
+    var status by remember { mutableStateOf("Loading catalog...") }
+
+    LaunchedEffect(Unit) {
+        profiles = avd.listProfiles()
+        images = avd.listSystemImages()
+        selectedProfile = profiles.firstOrNull()
+        selectedImage = images.firstOrNull { it.installed } ?: images.firstOrNull()
+        status = "${profiles.size} profiles · ${images.size} images"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Create virtual device", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.width(760.dp).heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterPill("Profile", step == 1, Rust) { step = 1 }
+                    FilterPill("Image", step == 2, Rust) { step = 2 }
+                    FilterPill("Configure", step == 3, Rust) { step = 3 }
+                }
+                Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                when (step) {
+                    1 -> LazyColumn(Modifier.height(390.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        profiles.groupBy { it.category }.toSortedMap(compareBy { it.ordinal }).forEach { (category, rows) ->
+                            item { Text(category.name, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                            items(rows) { profile ->
+                                TableRow(Modifier.clickable {
+                                    selectedProfile = profile
+                                    name = profile.name.replace(Regex("""\W+"""), "_")
+                                }) {
+                                    MonoCell(profile.name, 220.dp, if (profile == selectedProfile) Rust else TextPrimary)
+                                    MonoCell(profile.resolution ?: "-", 150.dp, TextSecondary)
+                                    MonoCell(profile.density ?: "-", 90.dp, TextSecondary)
+                                    MonoCell(profile.id, 1.dp, TextSecondary, Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                    2 -> LazyColumn(Modifier.height(390.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(images.take(240)) { image ->
+                            TableRow(Modifier.clickable { selectedImage = image }) {
+                                MonoCell("API ${image.api}", 82.dp, if (image == selectedImage) Rust else TextPrimary)
+                                MonoCell(image.variant, 220.dp, TextPrimary)
+                                MonoCell(image.abi, 140.dp, TextSecondary)
+                                MonoCell(if (image.installed) "Installed" else "Available", 110.dp, if (image.installed) Green else TextSecondary)
+                                MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            LabeledField("Name", name, { name = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }, Modifier.width(220.dp))
+                            LabeledField("Locale", locale, { locale = it }, Modifier.width(120.dp))
+                            LabeledField("GPU", gpuMode, { gpuMode = it }, Modifier.width(110.dp))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterPill("Portrait", orientation == "portrait", Cyan) { orientation = "portrait" }
+                            FilterPill("Landscape", orientation == "landscape", Cyan) { orientation = "landscape" }
+                            FilterPill("Keyboard", keyboard, Green) { keyboard = !keyboard }
+                            FilterPill("Start after create", startAfterCreate, Yellow) { startAfterCreate = !startAfterCreate }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            LabeledField("RAM MB", ram, { ram = it.filter(Char::isDigit) }, Modifier.width(110.dp))
+                            LabeledField("Storage MB", storage, { storage = it.filter(Char::isDigit) }, Modifier.width(130.dp))
+                            LabeledField("CPU cores", cores, { cores = it.filter(Char::isDigit) }, Modifier.width(110.dp))
+                        }
+                        Text("Cameras", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AvdCameraOption.entries.forEach { option ->
+                                FilterPill("Back ${option.name}", backCamera == option, Rust) { backCamera = option }
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            AvdCameraOption.entries.forEach { option ->
+                                FilterPill("Front ${option.name}", frontCamera == option, Rust) { frontCamera = option }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val profile = selectedProfile ?: return@Button
+                    val image = selectedImage ?: return@Button
+                    scope.launch {
+                        status = if (image.installed) "Creating $name..." else "Installing ${image.packageId}..."
+                        if (!image.installed) {
+                            val install = avd.installSystemImage(image.packageId)
+                            if (!install.isSuccess) {
+                                status = install.stderr.ifBlank { install.stdout }
+                                return@launch
+                            }
+                        }
+                        val result = avd.createVirtualDevice(
+                            AvdCreationConfig(
+                                name = name,
+                                profileId = profile.id,
+                                systemImagePackage = image.packageId,
+                                orientation = orientation,
+                                ramMb = ram.toIntOrNull(),
+                                storageMb = storage.toIntOrNull(),
+                                cpuCores = cores.toIntOrNull(),
+                                gpuMode = gpuMode.ifBlank { "auto" },
+                                backCamera = backCamera,
+                                frontCamera = frontCamera,
+                                locale = locale,
+                                hardwareKeyboard = keyboard,
+                                startAfterCreate = startAfterCreate,
+                            ),
+                        )
+                        if (result.isSuccess) onCreated(result.stdout.ifBlank { "Created $name" }) else status = result.stderr.ifBlank { result.stdout }
+                    }
+                },
+                enabled = selectedProfile != null && selectedImage != null && name.isNotBlank(),
+                colors = primaryButtonColors(),
+            ) {
+                Text(if (step < 3) "Create" else "Create")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (step > 1) OutlinedButton(onClick = { step-- }) { Text("Back") }
+                if (step < 3) OutlinedButton(onClick = { step++ }) { Text("Next") }
+                OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}
+
 @Composable
 private fun CatalogScreen(avd: AvdService) {
     val scope = rememberCoroutineScope()
@@ -784,6 +1389,8 @@ private fun CatalogScreen(avd: AvdService) {
     var profiles by remember { mutableStateOf<List<AvdProfile>>(emptyList()) }
     var query by remember { mutableStateOf("api:36 variant:google") }
     var loading by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
 
     fun refresh() {
         scope.launch {
@@ -805,18 +1412,181 @@ private fun CatalogScreen(avd: AvdService) {
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Toolbar("System images", "${images.count { it.installed }} installed · ${avds.size} AVDs · ${profiles.size} profiles", onPrimary = { refresh() }, primaryLabel = if (loading) "Loading" else "Refresh catalog")
+        if (status.isNotBlank()) Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         TextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-        TableHeader(listOf("API" to 90.dp, "Variant" to 360.dp, "ABI" to 170.dp, "State" to 160.dp, "Package" to 1.dp))
+        TableHeader(listOf("API" to 90.dp, "Variant" to 300.dp, "ABI" to 150.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
         LazyColumn {
             items(filtered.take(240)) { image ->
                 TableRow {
                     MonoCell(image.api, 90.dp, TextPrimary)
-                    MonoCell(image.variant, 360.dp, TextPrimary)
-                    MonoCell(image.abi, 170.dp, TextSecondary)
-                    MonoCell(if (image.installed) "Installed" else "Available", 160.dp, if (image.installed) Green else TextSecondary)
+                    MonoCell(image.variant, 300.dp, TextPrimary)
+                    MonoCell(image.abi, 150.dp, TextSecondary)
+                    MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
+                    Box(Modifier.width(100.dp)) {
+                        if (image.installed) {
+                            OutlinedButton(
+                                onClick = {
+                                    val refs = avds.filter { it.referencesImage(image) }
+                                    if (refs.isNotEmpty()) {
+                                        status = "Blocked: used by ${refs.joinToString { it.name }}"
+                                    } else {
+                                        pendingConfirmation = PendingConfirmation("Delete system image?", image.packageId) {
+                                            scope.launch {
+                                                val result = avd.uninstallSystemImage(image.packageId)
+                                                status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                                refresh()
+                                            }
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) { Text("Delete", fontSize = 11.sp) }
+                        } else {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        status = "Downloading ${image.packageId}..."
+                                        val result = avd.installSystemImage(image.packageId)
+                                        status = if (result.isSuccess) result.stdout.ifBlank { "Installed ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                        refresh()
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                colors = primaryButtonColors(),
+                            ) { Text("Download", fontSize = 11.sp) }
+                        }
+                    }
                     MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
                 }
             }
+        }
+        pendingConfirmation?.let { confirmation ->
+            ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
+                pendingConfirmation = null
+                confirmation.onConfirm()
+            })
+        }
+    }
+}
+
+private fun VirtualDevice.referencesImage(image: SystemImage): Boolean {
+    val haystack = (listOfNotNull(target, abi, path) + config.values).joinToString(" ").lowercase()
+    return image.packageId.lowercase() in haystack ||
+        ("android-${image.api}" in haystack && image.variant.lowercase() in haystack && image.abi.lowercase() in haystack)
+}
+
+@Composable
+private fun SnapshotsScreen(avd: AvdService) {
+    val scope = rememberCoroutineScope()
+    var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
+    var selectedAvd by remember { mutableStateOf<VirtualDevice?>(null) }
+    var snapshots by remember { mutableStateOf<List<EmulatorSnapshot>>(emptyList()) }
+    var snapshotName by remember { mutableStateOf("manual") }
+    var status by remember { mutableStateOf("Select an AVD") }
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    var savingSnapshot by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        scope.launch {
+            avds = avd.listVirtualDevices()
+            selectedAvd = selectedAvd?.let { current -> avds.firstOrNull { it.name == current.name } } ?: avds.firstOrNull()
+            selectedAvd?.let {
+                snapshots = avd.listSnapshots(it.name)
+                status = "${snapshots.size} snapshots for ${it.name}"
+            }
+        }
+    }
+
+    fun refreshSnapshots(target: VirtualDevice?, updateStatus: Boolean = true) {
+        if (target == null) return
+        scope.launch {
+            snapshots = avd.listSnapshots(target.name)
+            if (updateStatus) status = "${snapshots.size} snapshots for ${target.name}"
+        }
+    }
+
+    LaunchedEffect(Unit) { refresh() }
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Toolbar("Snapshots", status, onPrimary = { refresh() }, primaryLabel = "Refresh")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            avds.forEach { row ->
+                FilterPill(row.name, selectedAvd?.name == row.name, if (row.running) Green else Rust) {
+                    selectedAvd = row
+                    refreshSnapshots(row)
+                }
+            }
+        }
+        PanelCard {
+            val avdRow = selectedAvd
+            Text(avdRow?.name ?: "No AVD", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextField(snapshotName, { snapshotName = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }, singleLine = true, modifier = Modifier.width(180.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                Button(
+                    onClick = {
+                        val target = avdRow ?: return@Button
+                        scope.launch {
+                            savingSnapshot = true
+                            val name = snapshotName
+                            status = "Saving snapshot $name..."
+                            try {
+                                val result = avd.saveSnapshot(target.name, name)
+                                snapshots = avd.listSnapshots(target.name)
+                                status = if (result.isSuccess) {
+                                    result.stdout.ifBlank { "Saved $name" }
+                                } else {
+                                    result.stderr.ifBlank { result.stdout.ifBlank { "Failed to save $name" } }
+                                }
+                            } finally {
+                                savingSnapshot = false
+                            }
+                        }
+                    },
+                    enabled = avdRow?.running == true && snapshotName.isNotBlank() && !savingSnapshot,
+                    colors = primaryButtonColors(),
+                ) { Text(if (savingSnapshot) "Saving..." else "Save current state") }
+            }
+        }
+        TableHeader(listOf("NAME" to 1.dp, "SOURCE" to 120.dp, "ACTIONS" to 220.dp))
+        LazyColumn {
+            items(snapshots) { snapshot ->
+                TableRow {
+                    MonoCell(snapshot.name, 1.dp, TextPrimary, Modifier.weight(1f))
+                    MonoCell(snapshot.source, 120.dp, TextSecondary)
+                    Row(Modifier.width(220.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val target = selectedAvd ?: return@OutlinedButton
+                                scope.launch {
+                                    val result = avd.restoreSnapshot(target.name, snapshot.name)
+                                    status = if (result.isSuccess) result.stdout.ifBlank { "Restored ${snapshot.name}" } else result.stderr.ifBlank { result.stdout }
+                                    refresh()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) { Text("Restore", fontSize = 11.sp) }
+                        OutlinedButton(
+                            onClick = {
+                                val target = selectedAvd ?: return@OutlinedButton
+                                pendingConfirmation = PendingConfirmation("Delete snapshot?", "${target.name} / ${snapshot.name}") {
+                                    scope.launch {
+                                        val result = avd.deleteSnapshot(target.name, snapshot.name)
+                                        status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${snapshot.name}" } else result.stderr.ifBlank { result.stdout }
+                                        refreshSnapshots(target)
+                                    }
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) { Text("Delete", fontSize = 11.sp) }
+                    }
+                }
+            }
+        }
+        pendingConfirmation?.let { confirmation ->
+            ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
+                pendingConfirmation = null
+                confirmation.onConfirm()
+            })
         }
     }
 }
@@ -833,6 +1603,9 @@ private fun LiveScreen(
     stopStatus: String,
     onDevicePaneWidthChange: (Float) -> Unit,
     onControlsPaneHeightChange: (Float) -> Unit,
+    onBugSaved: () -> Unit,
+    logcatState: LogcatState,
+    onPopOutMirror: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -840,11 +1613,26 @@ private fun LiveScreen(
     var maxSize by remember { mutableStateOf("720") }
     var bitRateMbps by remember { mutableStateOf("4") }
     var maxFps by remember { mutableStateOf("60") }
+    var bugDialogVisible by remember { mutableStateOf(false) }
+    var bugSaveStatus by remember { mutableStateOf("") }
+    var liveActionStatus by remember { mutableStateOf("") }
+    var clipDialogVisible by remember { mutableStateOf(false) }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
     var localControlsPaneHeight by remember(controlsPaneHeight) { mutableStateOf(controlsPaneHeight.coerceIn(170f, 360f)) }
+    val bugCaptureStatus by services.bugs.status.collectAsState(BugCaptureStatus())
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     fun sendHardware(input: MirrorInput) {
         sendMirrorInput(input)
+    }
+    fun runLiveAction(label: String, block: suspend () -> CommandResult) {
+        if (serial == null) {
+            liveActionStatus = "Select an online device"
+            return
+        }
+        scope.launch {
+            val result = block()
+            liveActionStatus = "$label: " + if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
+        }
     }
     fun applyPreset(size: String, mbps: String, fps: String = "60") {
         maxSize = size
@@ -863,17 +1651,32 @@ private fun LiveScreen(
         if (serial != null && device?.state == DeviceConnectionState.Online) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
+            services.bugs.startCapture(serial, device)
+        }
+    }
+    DisposableEffect(serial) {
+        onDispose {
+            scope.launch { services.bugs.stopCapture() }
         }
     }
     Row(Modifier.fillMaxSize()) {
         MirrorFrameContent(services.mirror, serial) { frame ->
+            val visibleFrame = frame.takeUnless { bugDialogVisible || clipDialogVisible }
             LiveDevicePane(
                 serial = serial,
                 device = device,
-                frame = frame,
+                frame = visibleFrame,
                 mirrorStatus = mirrorStatus,
                 connectResult = connectResult,
-                modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight(),
+                modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight().padding(end = 6.dp),
+                onPower = { sendHardware(MirrorInput.Power) },
+                onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
+                onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
+                onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
+                onCaptureScreenshot = { runLiveAction("Screenshot") { services.artifacts.saveScreenshot(serial!!, "andy-${serial}.png") } },
+                onBugReport = { bugDialogVisible = true },
+                onClipText = { clipDialogVisible = true },
+                onPopOut = onPopOutMirror,
                 onInput = sendMirrorInput,
                 onConnect = {
                     if (serial != null) {
@@ -911,16 +1714,12 @@ private fun LiveScreen(
                         }) { Text("Apply") }
                     }
                 }
-                Text("Hardware", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompactHardwareButton("Power", serial) { sendHardware(MirrorInput.Power) }
-                    CompactHardwareButton("Vol +", serial) { sendHardware(MirrorInput.Key(24)) }
-                    CompactHardwareButton("Vol -", serial) { sendHardware(MirrorInput.Key(25)) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompactHardwareButton("Recents", serial) { sendHardware(MirrorInput.Recents) }
-                    CompactHardwareButton("Home", serial) { sendHardware(MirrorInput.Home) }
-                    CompactHardwareButton("Back", serial) { sendHardware(MirrorInput.Back) }
+                    CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
+                    if (liveActionStatus.isNotBlank()) {
+                        Text(liveActionStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(
@@ -933,14 +1732,85 @@ private fun LiveScreen(
                         Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
+                Text(
+                    "Bug buffer: ${bugCaptureStatus.videoFrameCount} frames · ${bugCaptureStatus.actionCount} actions · ${bugCaptureStatus.logCount} logs",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (bugSaveStatus.isNotBlank()) {
+                    Text(bugSaveStatus, color = Rust, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             HorizontalPaneDivider(
                 onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(170f, 520f) },
                 onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
             )
-            LogcatPanel(services.logcat, serial, Modifier.fillMaxWidth().weight(0.55f), compact = true)
+            LogcatPanel(services.logcat, serial, Modifier.fillMaxWidth().weight(0.55f), compact = true, state = logcatState)
         }
     }
+    if (clipDialogVisible) {
+        ClipTextDialog(
+            onDismiss = { clipDialogVisible = false },
+            onSend = { text ->
+                sendHardware(MirrorInput.Text(text))
+                liveActionStatus = "Clip text: sent"
+                clipDialogVisible = false
+            },
+        )
+    }
+    if (bugDialogVisible) {
+        BugCaptureDialog(
+            onDismiss = { bugDialogVisible = false },
+            onSave = { draft ->
+                scope.launch {
+                    runCatching { services.bugs.saveBug(draft, device) }
+                        .onSuccess { report ->
+                            bugSaveStatus = "Saved ${report.title}"
+                            bugDialogVisible = false
+                            onBugSaved()
+                        }
+                        .onFailure { error ->
+                            bugSaveStatus = error.message ?: "Failed to save bug"
+                        }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureDraft) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Capture bug", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth(), placeholder = "Crash opening playlist")
+                LabeledField("Notes / repro steps", notes, { notes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 120.dp, placeholder = "What happened? What should have happened?")
+                Text("Saves the last 30 seconds of Andy actions, live video, and logcat.", color = TextSecondary, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(BugCaptureDraft(title, notes)) },
+                enabled = title.trim().isNotBlank(),
+                colors = primaryButtonColors(),
+            ) {
+                Text("Save bug")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable
@@ -992,6 +1862,8 @@ private fun LiveDevicePane(
     showRuler: Boolean = false,
     rulerWidth: Float = 0.5f,
     rulerHeight: Float = 0.5f,
+    rulerX: Float = 0.5f,
+    rulerY: Float = 0.5f,
     gridSize: Float? = null,
     gridColor: Color = Color.White.copy(alpha = 0.14f),
     pickerColor: Color? = null,
@@ -1001,10 +1873,30 @@ private fun LiveDevicePane(
     passThroughInput: Boolean = true,
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
+    onPower: () -> Unit = {},
+    onVolumeUp: () -> Unit = {},
+    onVolumeDown: () -> Unit = {},
+    onRotate: () -> Unit = {},
+    onCaptureScreenshot: () -> Unit = {},
+    onBugReport: () -> Unit = {},
+    onClipText: () -> Unit = {},
+    onPopOut: () -> Unit = {},
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
-    Column(modifier.background(PanelSoft, RoundedCornerShape(8.dp)).padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Row(modifier.background(PanelSoft, RoundedCornerShape(8.dp)).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        LiveHardwareToolbar(
+            enabled = serial != null,
+            onPower = onPower,
+            onVolumeUp = onVolumeUp,
+            onVolumeDown = onVolumeDown,
+            onRotate = onRotate,
+            onCaptureScreenshot = onCaptureScreenshot,
+            onBugReport = onBugReport,
+            onClipText = onClipText,
+            onPopOut = onPopOut,
+        )
+    Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(device?.serial ?: serial ?: "No device", color = TextPrimary, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
@@ -1060,6 +1952,8 @@ private fun LiveDevicePane(
                                 rulerColor = Rust,
                                 rulerWidth = rulerWidth,
                                 rulerHeight = rulerHeight,
+                                rulerX = rulerX,
+                                rulerY = rulerY,
                                 pickerColor = pickerColor,
                                 pickerHex = pickerHex,
                             ),
@@ -1111,6 +2005,7 @@ private fun LiveDevicePane(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -1123,6 +2018,128 @@ private fun CompactHardwareButton(label: String, serial: String?, onClick: () ->
     ) {
         Text(label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
+}
+
+@Composable
+private fun LiveHardwareToolbar(
+    enabled: Boolean,
+    onPower: () -> Unit,
+    onVolumeUp: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onRotate: () -> Unit,
+    onCaptureScreenshot: () -> Unit,
+    onBugReport: () -> Unit,
+    onClipText: () -> Unit,
+    onPopOut: () -> Unit,
+) {
+    Box(
+        Modifier.width(68.dp).fillMaxHeight(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(58.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(AndyColors.Neutral900.copy(alpha = 0.92f))
+                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(15.dp))
+                .padding(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ToolbarButton(HardwareIcon.Power, "Power", enabled, onPower)
+            ToolbarButton(HardwareIcon.VolumeUp, "Vol +", enabled, onVolumeUp)
+            ToolbarButton(HardwareIcon.VolumeDown, "Vol -", enabled, onVolumeDown)
+            ToolbarButton(HardwareIcon.Rotate, "Rotate", enabled, onRotate)
+            ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
+            ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
+            ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
+            ToolbarButton(HardwareIcon.PopOut, "Pop Out", enabled, onPopOut)
+            ToolbarButton(HardwareIcon.Record, "Record", false) {}
+        }
+    }
+}
+
+@Composable
+private fun ToolbarButton(icon: HardwareIcon, label: String, enabled: Boolean, onClick: () -> Unit) {
+    val contentColor = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.38f)
+    Column(
+        modifier = Modifier
+            .width(54.dp)
+            .height(44.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        HardwareControlIcon(icon, contentColor, Modifier.size(24.dp))
+        Text(
+            label,
+            color = contentColor,
+            fontSize = 10.sp,
+            lineHeight = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private enum class HardwareIcon {
+    Power,
+    VolumeUp,
+    VolumeDown,
+    Rotate,
+    Capture,
+    Bug,
+    Clip,
+    PopOut,
+    Record,
+}
+
+@Composable
+private fun HardwareControlIcon(icon: HardwareIcon, color: Color, modifier: Modifier = Modifier) {
+    val resource = when (icon) {
+        HardwareIcon.Power -> Res.drawable.hardware_power
+        HardwareIcon.VolumeUp -> Res.drawable.hardware_volume_up
+        HardwareIcon.VolumeDown -> Res.drawable.hardware_volume_down
+        HardwareIcon.Rotate -> Res.drawable.hardware_rotate
+        HardwareIcon.Capture -> Res.drawable.hardware_capture
+        HardwareIcon.Bug -> Res.drawable.hardware_bug
+        HardwareIcon.Clip -> Res.drawable.hardware_clipboard
+        HardwareIcon.PopOut -> Res.drawable.hardware_pop_out
+        HardwareIcon.Record -> Res.drawable.hardware_record
+    }
+    Image(
+        painter = painterResource(resource),
+        contentDescription = null,
+        modifier = modifier,
+        colorFilter = ColorFilter.tint(color),
+    )
+}
+
+@Composable
+private fun ClipTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Clip text", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            TextField(
+                text,
+                { text = it },
+                modifier = Modifier.fillMaxWidth().height(110.dp),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+                colors = fieldColors(),
+            )
+        },
+        confirmButton = {
+            Button(onClick = { onSend(text) }, enabled = text.isNotBlank(), colors = primaryButtonColors()) { Text("Send") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
@@ -1270,19 +2287,20 @@ private fun distanceSquaredToBounds(x: Int, y: Int, bounds: List<Int>): Int {
 private fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
     val latestOnDrag by rememberUpdatedState(onDrag)
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val density = LocalDensity.current.density
     Box(
         Modifier.width(14.dp)
             .fillMaxHeight()
             .horizontalResizeCursor()
-            .background(Border.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
+            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragEnd = { latestOnDragEnd() },
                     onDragCancel = { latestOnDragEnd() },
-                ) { _, drag -> latestOnDrag(drag.x) }
+                ) { _, drag -> latestOnDrag(drag.x / density) }
             },
     ) {
-        Box(Modifier.align(Alignment.Center).width(3.dp).fillMaxHeight().background(Border))
+        Box(Modifier.align(Alignment.Center).width(3.dp).fillMaxHeight().background(PaneDividerTint))
     }
 }
 
@@ -1290,19 +2308,20 @@ private fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
 private fun HorizontalPaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
     val latestOnDrag by rememberUpdatedState(onDrag)
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
+    val density = LocalDensity.current.density
     Box(
         Modifier.fillMaxWidth()
             .height(18.dp)
             .verticalResizeCursor()
-            .background(Border.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
+            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragEnd = { latestOnDragEnd() },
                     onDragCancel = { latestOnDragEnd() },
-                ) { _, drag -> latestOnDrag(drag.y) }
+                ) { _, drag -> latestOnDrag(drag.y / density) }
             },
     ) {
-        Box(Modifier.align(Alignment.Center).fillMaxWidth().height(4.dp).background(Rust.copy(alpha = 0.65f), RoundedCornerShape(2.dp)))
+        Box(Modifier.align(Alignment.Center).fillMaxWidth().height(4.dp).background(PaneDividerTint, RoundedCornerShape(2.dp)))
     }
 }
 
@@ -1378,7 +2397,9 @@ private fun LogcatPanel(
 
     PanelCard(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Text(if (compact) "Logcat" else "Logcat", color = TextPrimary, fontWeight = FontWeight.Bold)
+            if (!compact) {
+                Text("Logcat", color = TextPrimary, fontWeight = FontWeight.Bold)
+            }
             TextField(value = state.search, onValueChange = { state.search = it }, placeholder = { Text("filter or package:com.example", color = TextSecondary) }, singleLine = true, modifier = Modifier.weight(1f).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             LogLevel.entries.filter { it != LogLevel.Silent }.forEach { level ->
                 FilterPill(level.name.take(1), state.levels[level] == true, levelColor(level)) { state.levels[level] = !(state.levels[level] ?: false) }
@@ -1492,6 +2513,7 @@ private fun ResizableLogcatHeader(
 private fun HeaderCell(title: String, width: androidx.compose.ui.unit.Dp, onWidthChange: (Float) -> Unit) {
     val latestOnWidthChange by rememberUpdatedState(onWidthChange)
     val latestWidthValue by rememberUpdatedState(width.value)
+    val density = LocalDensity.current.density
     var dragStartWidth by remember { mutableStateOf(0f) }
     var dragDelta by remember { mutableStateOf(0f) }
     Row(
@@ -1504,7 +2526,7 @@ private fun HeaderCell(title: String, width: androidx.compose.ui.unit.Dp, onWidt
                         dragDelta = 0f
                     },
                 ) { _, drag ->
-                    dragDelta += drag.x
+                    dragDelta += drag.x / density
                     latestOnWidthChange(dragStartWidth + dragDelta)
                 }
             },
@@ -1572,7 +2594,8 @@ private fun DraggableScrollbar(
 }
 
 @Composable
-private fun IntentsScreen(intentService: IntentService, serial: String?) {
+private fun IntentsScreen(services: AndyServices, serial: String?) {
+    val intentService = services.intents
     val scope = rememberCoroutineScope()
     var mode by remember { mutableStateOf(IntentMode.DeepLink) }
     var action by remember { mutableStateOf("android.intent.action.VIEW") }
@@ -1591,7 +2614,12 @@ private fun IntentsScreen(intentService: IntentService, serial: String?) {
             FormRow("Data URI") { TextField(dataUri, { dataUri = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("$ $command", color = Green, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                Button(onClick = { if (serial != null) scope.launch { result = intentService.send(serial, draft).let { if (it.isSuccess) it.stdout.ifBlank { "Sent" } else it.stderr } } }) { Text("Send") }
+                Button(onClick = {
+                    if (serial != null) scope.launch {
+                        services.bugs.recordAction("intent", "Send ${mode.name}", command)
+                        result = intentService.send(serial, draft).let { if (it.isSuccess) it.stdout.ifBlank { "Sent" } else it.stderr }
+                    }
+                }) { Text("Send") }
             }
         }
         PanelCard {
@@ -1603,12 +2631,13 @@ private fun IntentsScreen(intentService: IntentService, serial: String?) {
 
 @Composable
 private fun AppsScreen(
-    apps: AppService,
+    services: AndyServices,
     serial: String?,
     listPaneWidth: Float,
     detailsPaneHeight: Float,
     onPaneChange: (Float, Float) -> Unit,
 ) {
+    val apps = services.apps
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<AndroidApp>>(emptyList()) }
     var query by remember { mutableStateOf("") }
@@ -1618,6 +2647,7 @@ private fun AppsScreen(
     var status by remember { mutableStateOf("Select a device") }
     var localListPaneWidth by remember(listPaneWidth) { mutableStateOf(listPaneWidth) }
     var localDetailsPaneHeight by remember(detailsPaneHeight) { mutableStateOf(detailsPaneHeight) }
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
 
     fun refresh() {
         if (serial == null) {
@@ -1632,8 +2662,9 @@ private fun AppsScreen(
         }
     }
 
-    fun runAppAction(label: String, block: suspend () -> CommandResult) {
+    fun runAppAction(label: String, packageName: String? = selected?.packageName, block: suspend () -> CommandResult) {
         scope.launch {
+            packageName?.let { services.bugs.recordAction("app", label, it) }
             val result = block()
             status = "$label: " + if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
             if (label == "Uninstall" || label == "Clear data") refresh()
@@ -1647,7 +2678,7 @@ private fun AppsScreen(
         Column(Modifier.width(localListPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Toolbar("Apps", status, onPrimary = { refresh() }, primaryLabel = "Refresh")
             TextField(query, { query = it }, placeholder = { Text("Filter packages", color = TextSecondary) }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-            TableHeader(listOf("TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 110.dp, "PACKAGE" to 1.dp))
+            TableHeader(listOf("TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
             LazyColumn {
                 items(filtered) { app ->
                     TableRow(Modifier.clickable {
@@ -1659,7 +2690,8 @@ private fun AppsScreen(
                     }) {
                         MonoCell(if (app.system) "system" else "user", 70.dp, if (app.system) TextSecondary else Green)
                         MonoCell(if (app.enabled) "enabled" else "disabled", 80.dp, if (app.enabled) TextPrimary else Rust)
-                        MonoCell(app.versionCode ?: "-", 110.dp, TextSecondary)
+                        MonoCell(app.versionCode ?: "-", 90.dp, TextSecondary)
+                        MonoCell(app.label ?: "-", 160.dp, TextSecondary)
                         MonoCell(app.packageName, 1.dp, if (selected?.packageName == app.packageName) Rust else TextPrimary, Modifier.weight(1f))
                     }
                 }
@@ -1675,13 +2707,21 @@ private fun AppsScreen(
                 Text(app?.packageName ?: "No app selected", color = TextPrimary, fontWeight = FontWeight.Bold)
                 if (app != null && serial != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = { runAppAction("Launch") { apps.launch(serial, app.packageName) } }) { Text("Launch") }
-                        OutlinedButton(onClick = { runAppAction("Stop") { apps.stop(serial, app.packageName) } }) { Text("Stop") }
-                        OutlinedButton(onClick = { runAppAction("Clear data") { apps.clearData(serial, app.packageName) } }) { Text("Clear") }
+                        Button(onClick = { runAppAction("Launch", app.packageName) { apps.launch(serial, app.packageName) } }) { Text("Launch") }
+                        OutlinedButton(onClick = { runAppAction("Stop", app.packageName) { apps.stop(serial, app.packageName) } }) { Text("Stop") }
+                        OutlinedButton(onClick = {
+                            pendingConfirmation = PendingConfirmation("Clear app data?", app.packageName) {
+                                runAppAction("Clear data", app.packageName) { apps.clearData(serial, app.packageName) }
+                            }
+                        }) { Text("Clear") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { runAppAction("Reset permissions") { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
-                        OutlinedButton(onClick = { runAppAction("Uninstall") { apps.uninstall(serial, app.packageName) } }, enabled = !app.system) { Text("Uninstall") }
+                        OutlinedButton(onClick = { runAppAction("Reset permissions", app.packageName) { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
+                        OutlinedButton(onClick = {
+                            pendingConfirmation = PendingConfirmation("Uninstall app?", app.packageName) {
+                                runAppAction("Uninstall", app.packageName) { apps.uninstall(serial, app.packageName) }
+                            }
+                        }, enabled = !app.system) { Text("Uninstall") }
                     }
                     Text("Permissions", color = TextPrimary, fontWeight = FontWeight.Bold)
                     LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
@@ -1707,6 +2747,12 @@ private fun AppsScreen(
                 }
             }
         }
+    }
+    pendingConfirmation?.let { confirmation ->
+        ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
+            pendingConfirmation = null
+            confirmation.onConfirm()
+        })
     }
 }
 
@@ -1878,6 +2924,7 @@ private fun NetworkScreen(
     val scope = rememberCoroutineScope()
     var portText by remember(port) { mutableStateOf(port.toString()) }
     var status by remember { mutableStateOf("Proxy stopped") }
+    var proxyStatus by remember { mutableStateOf("Proxy stopped") }
     var engineStatus by remember { mutableStateOf("Checking mitmdump") }
     var engineReady by remember { mutableStateOf(false) }
     var caPath by remember { mutableStateOf("") }
@@ -1889,13 +2936,14 @@ private fun NetworkScreen(
     var seenFlowIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val expandedTrafficKeys = remember { mutableStateMapOf<String, Boolean>() }
     val flashingTrafficKeys = remember { mutableStateMapOf<String, Long>() }
-    var ruleName by remember { mutableStateOf("Mock response") }
+    var ruleName by remember { mutableStateOf("") }
     var rulePattern by remember { mutableStateOf("") }
     var ruleMethod by remember { mutableStateOf("") }
-    var ruleStatus by remember { mutableStateOf("200") }
-    var ruleSetHeaders by remember { mutableStateOf("content-type: application/json") }
+    var ruleStatus by remember { mutableStateOf("") }
+    var ruleSetHeaders by remember { mutableStateOf("") }
     var ruleRemoveHeaders by remember { mutableStateOf("") }
-    var ruleBody by remember { mutableStateOf("{\"andy\":true}") }
+    var ruleBody by remember { mutableStateOf("") }
+    var editingRuleId by remember { mutableStateOf<String?>(null) }
     val selected = exchanges.firstOrNull { it.flowId == selectedFlowId } ?: exchanges.lastOrNull()
     var trafficWidth by remember { mutableStateOf(260f) }
     var statusWidth by remember { mutableStateOf(72f) }
@@ -1919,6 +2967,10 @@ private fun NetworkScreen(
         flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
     }
 
+    var caInstalled by remember { mutableStateOf(false) }
+    var proxyConfigured by remember { mutableStateOf(false) }
+    val latestRules by rememberUpdatedState(rules)
+
     LaunchedEffect(Unit) {
         caPath = proxy.certificateAuthorityPath()
         val engine = proxy.detectMitmproxy()
@@ -1928,10 +2980,45 @@ private fun NetworkScreen(
         } else {
             engine.stderr
         }
+    }
+    LaunchedEffect(engineReady, currentPort) {
+        if (!engineReady) return@LaunchedEffect
+        val currentStatus = try {
+            withTimeout(200) { proxy.status.first() }
+        } catch (_: Exception) {
+            proxyStatus
+        }
+        if (shouldAutoStartProxy(currentStatus, currentPort)) {
+            proxy.ensureCertificateAuthority()
+            val result = proxy.start(currentPort, latestRules)
+            val message = if (result.isSuccess) result.stdout else result.stderr
+            status = message
+            if (result.isSuccess) proxyStatus = message
+        }
+    }
+    LaunchedEffect(Unit) {
         proxy.exchanges.collectLatest { exchanges = it }
     }
     LaunchedEffect(Unit) {
-        proxy.status.collectLatest { status = it }
+        proxy.status.collectLatest {
+            proxyStatus = it
+            status = it
+        }
+    }
+    LaunchedEffect(serial, currentPort) {
+        if (serial == null) {
+            caInstalled = false
+            proxyConfigured = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            val isCaOk = proxy.isCertificateInstalled(serial)
+            val host = proxy.resolveDeviceProxyHost(serial)
+            val isProxyOk = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+            caInstalled = isCaOk
+            proxyConfigured = isProxyOk
+            delay(3000)
+        }
     }
     LaunchedEffect(serial) {
         proxyHost = serial?.let { selectedSerial ->
@@ -1969,16 +3056,29 @@ private fun NetworkScreen(
         onPortChange(currentPort)
     }
 
-    fun addRule() {
+    fun resetRuleForm() {
+        ruleName = ""
+        rulePattern = ""
+        ruleMethod = ""
+        ruleStatus = ""
+        ruleSetHeaders = ""
+        ruleRemoveHeaders = ""
+        ruleBody = ""
+        editingRuleId = null
+    }
+
+    fun addOrSaveRule() {
         val pattern = rulePattern.trim()
         if (pattern.isBlank()) {
             status = "Enter a URL match pattern before adding a rule"
             return
         }
+        val editId = editingRuleId
+        val editIdx = editId?.let { id -> rules.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
         val rule = ProxyRule(
-            id = "rule-${rules.size + 1}-${pattern.hashCode().toString().replace("-", "n")}",
+            id = editId ?: "rule-${rules.size + 1}-${pattern.hashCode().toString().replace("-", "n")}",
             name = ruleName.ifBlank { pattern },
-            enabled = true,
+            enabled = editIdx?.let { rules[it].enabled } ?: true,
             urlPattern = pattern,
             method = ruleMethod.trim().uppercase().ifBlank { null },
             statusCode = ruleStatus.toIntOrNull(),
@@ -1986,8 +3086,25 @@ private fun NetworkScreen(
             removeHeaders = ruleRemoveHeaders.split(',', '\n').map { it.trim() }.filter { it.isNotBlank() },
             responseBody = ruleBody.takeIf { it.isNotBlank() },
         )
-        onRulesChange(rules + rule)
-        rulePattern = ""
+        if (editIdx != null) {
+            onRulesChange(rules.mapIndexed { i, existing -> if (i == editIdx) rule else existing })
+        } else {
+            onRulesChange(rules + rule)
+        }
+        resetRuleForm()
+    }
+
+    fun editRule(ruleId: String) {
+        val rule = rules.firstOrNull { it.id == ruleId } ?: return
+        ruleName = rule.name
+        rulePattern = rule.urlPattern
+        ruleMethod = rule.method ?: ""
+        ruleStatus = rule.statusCode?.toString() ?: ""
+        ruleSetHeaders = rule.setHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+        ruleRemoveHeaders = rule.removeHeaders.joinToString("\n")
+        ruleBody = rule.responseBody ?: ""
+        editingRuleId = rule.id
+        onRulesVisibleChange(true)
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2011,10 +3128,18 @@ private fun NetworkScreen(
                         scope.launch {
                             proxy.ensureCertificateAuthority()
                             val result = proxy.start(currentPort, rules)
-                            status = if (result.isSuccess) result.stdout else result.stderr
+                            val message = if (result.isSuccess) result.stdout else result.stderr
+                            status = message
+                            if (result.isSuccess) proxyStatus = message
                         }
                     }) { Text("Start") }
-                    OutlinedButton(onClick = { scope.launch { status = proxy.stop().stdout } }) { Text("Stop") }
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            val result = proxy.stop()
+                            status = result.stdout
+                            proxyStatus = result.stdout
+                        }
+                    }) { Text("Stop") }
                     Text(
                         if (setupExpanded) "Hide setup" else "Show setup",
                         color = Rust,
@@ -2032,6 +3157,7 @@ private fun NetworkScreen(
                                 proxyHost = host
                                 val result = proxy.configureDeviceProxy(serial, host, currentPort)
                                 status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
+                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                             }
                         },
                     ) { Text("Configure") }
@@ -2041,6 +3167,8 @@ private fun NetworkScreen(
                             if (serial != null) scope.launch {
                                 val result = proxy.clearDeviceProxy(serial)
                                 status = if (result.isSuccess) "Device proxy cleared" else result.stderr
+                                val host = proxy.resolveDeviceProxyHost(serial)
+                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                             }
                         },
                     ) { Text("Clear proxy") }
@@ -2050,6 +3178,7 @@ private fun NetworkScreen(
                             if (serial != null) scope.launch {
                                 val result = proxy.installSystemCertificateAuthority(serial)
                                 status = if (result.isSuccess) result.stdout else result.stderr
+                                caInstalled = proxy.isCertificateInstalled(serial)
                             }
                         },
                     ) { Text("Install CA") }
@@ -2062,13 +3191,62 @@ private fun NetworkScreen(
                             status = if (result.isSuccess) result.stdout else result.stderr
                         }
                     }) { Text("Clear traffic") }
-                    Spacer(Modifier.weight(1f))
-                    Text("Endpoint ${proxyHost.ifBlank { "select device" }}:$currentPort", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                val proxyStarted = proxyStatus.contains("listening on")
+                val caText = when {
+                    serial == null -> "Select a device first"
+                    caInstalled -> "Installed on device"
+                    else -> "Click 'Install CA' to trust"
+                }
+                val configText = when {
+                    serial == null -> "Select a device first"
+                    proxyConfigured -> "Device is routed"
+                    else -> "Click 'Configure' to route"
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusIndicator(
+                        isOk = proxyStarted,
+                        label = "Proxy Status",
+                        hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
+                    )
+                    StatusIndicator(
+                        isOk = serial != null && caInstalled,
+                        label = "Root CA Certificate",
+                        hint = caText
+                    )
+                    StatusIndicator(
+                        isOk = serial != null && proxyConfigured,
+                        label = "Device Proxy Routing",
+                        hint = configText
+                    )
                 }
                 Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     StatusTag(if (engineReady) "mitmdump ready" else "mitmdump missing", if (engineReady) Green else Red)
-                    Text(engineStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(
+                        text = buildString {
+                            append(engineStatus)
+                            append("  ·  ")
+                            append("Endpoint: ")
+                            append(proxyHost.ifBlank { "select device" })
+                            append(":")
+                            append(currentPort)
+                        },
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
                 AnimatedVisibility(setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2203,54 +3381,242 @@ private fun NetworkScreen(
         }
         if (rulesVisible || liveVisible) {
             Column(Modifier.width(420.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (liveVisible) {
+                if (liveVisible && rulesVisible) {
+                    var livePanelHeight by remember { mutableStateOf(300f) }
                     NetworkLivePanel(
                         services = services,
                         serial = serial,
                         device = device,
-                        modifier = Modifier.fillMaxWidth().weight(if (rulesVisible) 0.45f else 1f),
+                        modifier = Modifier.fillMaxWidth().height(livePanelHeight.dp),
+                    )
+                    HorizontalPaneDivider(
+                        onDrag = { dragY -> livePanelHeight = (livePanelHeight + dragY).coerceIn(100f, 600f) }
+                    )
+                    RulesPaneContent(
+                        rules = rules,
+                        ruleName = ruleName,
+                        onRuleNameChange = { ruleName = it },
+                        rulePattern = rulePattern,
+                        onRulePatternChange = { rulePattern = it },
+                        ruleMethod = ruleMethod,
+                        onRuleMethodChange = { ruleMethod = it },
+                        ruleStatus = ruleStatus,
+                        onRuleStatusChange = { ruleStatus = it },
+                        ruleSetHeaders = ruleSetHeaders,
+                        onRuleSetHeadersChange = { ruleSetHeaders = it },
+                        ruleRemoveHeaders = ruleRemoveHeaders,
+                        onRuleRemoveHeadersChange = { ruleRemoveHeaders = it },
+                        ruleBody = ruleBody,
+                        onRuleBodyChange = { ruleBody = it },
+                        onRulesChange = onRulesChange,
+                        onAddOrSaveRule = ::addOrSaveRule,
+                        editingRuleId = editingRuleId,
+                        onEditRule = ::editRule,
+                        onCancelEdit = ::resetRuleForm,
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                    )
+                } else if (liveVisible) {
+                    NetworkLivePanel(
+                        services = services,
+                        serial = serial,
+                        device = device,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                } else if (rulesVisible) {
+                    RulesPaneContent(
+                        rules = rules,
+                        ruleName = ruleName,
+                        onRuleNameChange = { ruleName = it },
+                        rulePattern = rulePattern,
+                        onRulePatternChange = { rulePattern = it },
+                        ruleMethod = ruleMethod,
+                        onRuleMethodChange = { ruleMethod = it },
+                        ruleStatus = ruleStatus,
+                        onRuleStatusChange = { ruleStatus = it },
+                        ruleSetHeaders = ruleSetHeaders,
+                        onRuleSetHeadersChange = { ruleSetHeaders = it },
+                        ruleRemoveHeaders = ruleRemoveHeaders,
+                        onRuleRemoveHeadersChange = { ruleRemoveHeaders = it },
+                        ruleBody = ruleBody,
+                        onRuleBodyChange = { ruleBody = it },
+                        onRulesChange = onRulesChange,
+                        onAddOrSaveRule = ::addOrSaveRule,
+                        editingRuleId = editingRuleId,
+                        onEditRule = ::editRule,
+                        onCancelEdit = ::resetRuleForm,
+                        modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 }
-                if (rulesVisible) {
-                    PanelCard {
-                        Text("Rules", color = TextPrimary, fontWeight = FontWeight.Bold)
-                        LabeledField("Name", ruleName, { ruleName = it }, Modifier.fillMaxWidth())
-                        LabeledField("URL contains", rulePattern, { rulePattern = it }, Modifier.fillMaxWidth())
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            LabeledField("Method", ruleMethod, { ruleMethod = it.uppercase().take(8) }, Modifier.width(110.dp))
-                            LabeledField("Status", ruleStatus, { ruleStatus = it.filter(Char::isDigit).take(3) }, Modifier.width(100.dp))
-                        }
-                        LabeledField("Set headers", ruleSetHeaders, { ruleSetHeaders = it }, Modifier.fillMaxWidth())
-                        LabeledField("Remove headers", ruleRemoveHeaders, { ruleRemoveHeaders = it }, Modifier.fillMaxWidth())
-                        TextField(ruleBody, { ruleBody = it }, modifier = Modifier.fillMaxWidth().height(120.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp), colors = fieldColors())
-                        Button(onClick = { addRule() }, modifier = Modifier.fillMaxWidth()) { Text("Add rule") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition()
+    val pulseScale by if (isGreen) {
+        infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.6f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            )
+        )
+    } else {
+        remember { mutableStateOf(1f) }
+    }
+
+    val color = if (isGreen) Green else Red
+
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier.size(16.dp)
+    ) {
+        if (isGreen) {
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .graphicsLayer {
+                        scaleX = pulseScale
+                        scaleY = pulseScale
+                        alpha = (2f - pulseScale).coerceIn(0f, 1f)
                     }
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        itemsIndexed(rules) { index, rule ->
-                            PanelCard {
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Checkbox(rule.enabled, { checked ->
-                                        onRulesChange(rules.mapIndexed { i, item -> if (i == index) item.copy(enabled = checked) else item })
-                                    })
-                                    Column(Modifier.weight(1f)) {
-                                        Text(rule.name, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${rule.method ?: "*"} ${rule.urlPattern}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(listOfNotNull(rule.statusCode?.let { "status $it" }, rule.responseBody?.let { "body" }, rule.setHeaders.takeIf { it.isNotEmpty() }?.let { "${it.size} headers" }).joinToString(" · "), color = TextSecondary, fontSize = 11.sp)
-                                    }
-                                }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = { if (index > 0) onRulesChange(rules.swapItems(index, index - 1)) }, enabled = index > 0) { Text("Up") }
-                                    OutlinedButton(onClick = { if (index < rules.lastIndex) onRulesChange(rules.swapItems(index, index + 1)) }, enabled = index < rules.lastIndex) { Text("Down") }
-                                    OutlinedButton(onClick = { onRulesChange(rules.filterIndexed { i, _ -> i != index }) }) { Text("Remove") }
-                                }
-                            }
+                    .background(color.copy(alpha = 0.4f), CircleShape)
+            )
+        }
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(color, CircleShape)
+                .border(1.dp, color.copy(alpha = 0.8f), CircleShape)
+        )
+    }
+}
+
+@Composable
+private fun StatusIndicator(
+    isOk: Boolean,
+    label: String,
+    hint: String,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+    ) {
+        GlowingDot(isOk)
+        Column {
+            Text(label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(
+                text = hint,
+                color = if (isOk) Green else Red,
+                fontSize = 11.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun RulesPaneContent(
+    rules: List<ProxyRule>,
+    ruleName: String,
+    onRuleNameChange: (String) -> Unit,
+    rulePattern: String,
+    onRulePatternChange: (String) -> Unit,
+    ruleMethod: String,
+    onRuleMethodChange: (String) -> Unit,
+    ruleStatus: String,
+    onRuleStatusChange: (String) -> Unit,
+    ruleSetHeaders: String,
+    onRuleSetHeadersChange: (String) -> Unit,
+    ruleRemoveHeaders: String,
+    onRuleRemoveHeadersChange: (String) -> Unit,
+    ruleBody: String,
+    onRuleBodyChange: (String) -> Unit,
+    onRulesChange: (List<ProxyRule>) -> Unit,
+    onAddOrSaveRule: () -> Unit,
+    editingRuleId: String?,
+    onEditRule: (String) -> Unit,
+    onCancelEdit: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isEditing = editingRuleId != null
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PanelCard {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(if (isEditing) "Edit rule" else "Rules", color = TextPrimary, fontWeight = FontWeight.Bold)
+                if (isEditing) {
+                    Text(
+                        "Cancel",
+                        color = Rust,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable { onCancelEdit() },
+                    )
+                }
+            }
+            LabeledField("Name", ruleName, onRuleNameChange, Modifier.fillMaxWidth(), placeholder = "Mock response")
+            LabeledField("URL pattern", rulePattern, onRulePatternChange, Modifier.fillMaxWidth(), placeholder = "https://api.example.com/v1/*/profile")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LabeledField("Method", ruleMethod, { onRuleMethodChange(it.uppercase().take(8)) }, Modifier.width(110.dp))
+                LabeledField("Status", ruleStatus, { onRuleStatusChange(it.filter(Char::isDigit).take(3)) }, Modifier.width(100.dp), placeholder = "200")
+            }
+            LabeledField("Set headers", ruleSetHeaders, onRuleSetHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 92.dp, placeholder = "content-type: application/json\nx-debug: true")
+            LabeledField("Remove headers", ruleRemoveHeaders, onRuleRemoveHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 76.dp, placeholder = "Server\netag\nx-powered-by")
+            TextField(
+                ruleBody,
+                onRuleBodyChange,
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                colors = fieldColors(),
+                placeholder = { Text("{\"andy\":true}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+            )
+            Button(onClick = onAddOrSaveRule, modifier = Modifier.fillMaxWidth()) { Text(if (isEditing) "Save rule" else "Add rule") }
+        }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
+                val isBeingEdited = editingRuleId == rule.id
+                PanelCard(
+                    modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.R3)) else Modifier
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Checkbox(rule.enabled, { checked ->
+                            onRulesChange(rules.mapIndexed { i, item -> if (i == index) item.copy(enabled = checked) else item })
+                        })
+                        Column(Modifier.weight(1f)) {
+                            Text(rule.name, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${rule.method ?: "*"} ${rule.urlPattern}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(listOfNotNull(rule.statusCode?.let { "status $it" }, rule.responseBody?.let { "body" }, rule.setHeaders.takeIf { it.isNotEmpty() }?.let { "${it.size} headers" }).joinToString(" · "), color = TextSecondary, fontSize = 11.sp)
                         }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { onEditRule(rule.id) }) { Text(if (isBeingEdited) "Editing" else "Edit") }
+                        OutlinedButton(onClick = { if (index > 0) onRulesChange(rules.swapItems(index, index - 1)) }, enabled = index > 0) { Text("Up") }
+                        OutlinedButton(onClick = { if (index < rules.lastIndex) onRulesChange(rules.swapItems(index, index + 1)) }, enabled = index < rules.lastIndex) { Text("Down") }
+                        OutlinedButton(onClick = { onRulesChange(rules.filterIndexed { i, _ -> i != index }) }) { Text("Remove") }
                     }
                 }
             }
         }
     }
 }
+
+private fun shouldAutoStartProxy(status: String, port: Int): Boolean {
+    val normalized = status.trim()
+    if (normalized == "Proxy stopped" || normalized == "mitmdump exited" || normalized.startsWith("Proxy failed")) {
+        return true
+    }
+    val listeningPort = Regex(""":(\d{1,5})(?:\D*)?$""")
+        .find(normalized)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toIntOrNull()
+    return normalized.contains("listening on") && listeningPort != null && listeningPort != port
+}
+
 
 private class MutableNetworkTrafficNode(
     val key: String,
@@ -2504,7 +3870,7 @@ private fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, onT
                         title = "Request",
                         headers = selected.requestHeaders,
                         body = selected.requestBodyPreview,
-                        formatJson = false,
+                        formatJson = true,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                     FlowPreviewScrollable(
@@ -2530,15 +3896,15 @@ private fun FlowPreviewScrollable(
 ) {
     val vertical = rememberScrollState()
     val horizontal = rememberScrollState()
-    val bodyText = remember(body, formatJson) {
-        if (formatJson) formatJsonBodyPreview(body) else body?.takeIf { it.isNotBlank() } ?: "No body preview"
+    val bodyValue = body?.takeIf { it.isNotBlank() }
+    val jsonBody = remember(body, formatJson) { if (formatJson) parseJsonBodyPreview(body) else null }
+    val expandedJsonKeys = remember(body) { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(jsonBody) {
+        expandedJsonKeys.clear()
+        jsonBody?.let { expandedJsonKeys[it.path] = true }
     }
-    val content = buildString {
-        appendLine("Headers")
-        appendLine(headers.entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifBlank { "No headers" })
-        appendLine()
-        appendLine("Body")
-        append(bodyText)
+    val headerText = remember(headers) {
+        headers.entries.joinToString("\n") { "${it.key}: ${it.value}" }.ifBlank { "No headers" }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -2550,68 +3916,282 @@ private fun FlowPreviewScrollable(
                 .horizontalScroll(horizontal)
                 .verticalScroll(vertical),
         ) {
-            Text(
-                content,
-                color = TextPrimary,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
+            SelectionContainer {
+                Column {
+                    Text("Headers", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp)
+                    Text(headerText, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text("Body", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp)
+                    if (jsonBody != null) {
+                        JsonTreeView(
+                            node = jsonBody,
+                            expandedKeys = expandedJsonKeys,
+                        )
+                    } else {
+                        Text(
+                            bodyValue ?: "No body preview",
+                            color = TextPrimary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JsonTreeView(
+    node: JsonPreviewNode,
+    expandedKeys: MutableMap<String, Boolean>,
+) {
+    val rows = remember(node, expandedKeys.toMap()) { flattenJsonPreview(node, expandedKeys) }
+    Column {
+        rows.forEach { row ->
+            JsonTreeRow(
+                row = row,
+                expanded = expandedKeys[row.node.path] == true,
+                onToggle = {
+                    if (row.node.isContainer) {
+                        expandedKeys[row.node.path] = expandedKeys[row.node.path] != true
+                    }
+                },
             )
         }
     }
 }
 
-private fun formatJsonBodyPreview(body: String?): String {
-    val value = body?.trim().orEmpty()
-    if (value.isBlank()) return "No body preview"
-    return prettyJson(value) ?: value
+@Composable
+private fun JsonTreeRow(row: JsonPreviewRow, expanded: Boolean, onToggle: () -> Unit) {
+    val node = row.node
+    Row(
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.clickable(enabled = node.isContainer) { onToggle() },
+    ) {
+        Text(
+            text = when {
+                node.isContainer && expanded -> "v"
+                node.isContainer -> ">"
+                else -> " "
+            },
+            color = TextSecondary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            modifier = Modifier.width(14.dp),
+        )
+        Text(
+            text = row.text,
+            color = TextPrimary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            modifier = Modifier.padding(start = (row.depth * 14).dp),
+        )
+    }
 }
 
-private fun prettyJson(value: String): String? {
-    val first = value.firstOrNull() ?: return null
-    if (first != '{' && first != '[') return null
-    val builder = StringBuilder()
-    var indent = 0
-    var inString = false
-    var escaped = false
-    value.forEach { char ->
-        when {
-            escaped -> {
-                builder.append(char)
-                escaped = false
+private sealed class JsonPreviewNode(
+    open val path: String,
+    open val label: String?,
+) {
+    val isContainer: Boolean
+        get() = this is ObjectNode || this is ArrayNode
+
+    data class ObjectNode(
+        override val path: String,
+        override val label: String?,
+        val children: List<JsonPreviewNode>,
+    ) : JsonPreviewNode(path, label)
+
+    data class ArrayNode(
+        override val path: String,
+        override val label: String?,
+        val children: List<JsonPreviewNode>,
+    ) : JsonPreviewNode(path, label)
+
+    data class ValueNode(
+        override val path: String,
+        override val label: String?,
+        val value: String,
+    ) : JsonPreviewNode(path, label)
+}
+
+private data class JsonPreviewRow(
+    val node: JsonPreviewNode,
+    val depth: Int,
+    val text: String,
+)
+
+private fun parseJsonBodyPreview(body: String?): JsonPreviewNode? {
+    val value = body?.trim().orEmpty()
+    if (value.isBlank()) return null
+    if (value.firstOrNull() !in setOf('{', '[')) return null
+    return runCatching { JsonPreviewParser(value).parse() }.getOrNull()
+}
+
+private fun flattenJsonPreview(root: JsonPreviewNode, expandedKeys: Map<String, Boolean>): List<JsonPreviewRow> {
+    val rows = mutableListOf<JsonPreviewRow>()
+    fun add(node: JsonPreviewNode, depth: Int) {
+        rows += JsonPreviewRow(node, depth, jsonPreviewRowText(node, expandedKeys[node.path] == true))
+        if (expandedKeys[node.path] == true) {
+            when (node) {
+                is JsonPreviewNode.ObjectNode -> node.children.forEach { add(it, depth + 1) }
+                is JsonPreviewNode.ArrayNode -> node.children.forEach { add(it, depth + 1) }
+                is JsonPreviewNode.ValueNode -> Unit
             }
-            char == '\\' && inString -> {
-                builder.append(char)
-                escaped = true
-            }
-            char == '"' -> {
-                builder.append(char)
-                inString = !inString
-            }
-            inString -> builder.append(char)
-            char == '{' || char == '[' -> {
-                builder.append(char)
-                builder.append('\n')
-                indent += 1
-                builder.append("  ".repeat(indent))
-            }
-            char == '}' || char == ']' -> {
-                builder.append('\n')
-                indent = (indent - 1).coerceAtLeast(0)
-                builder.append("  ".repeat(indent))
-                builder.append(char)
-            }
-            char == ',' -> {
-                builder.append(char)
-                builder.append('\n')
-                builder.append("  ".repeat(indent))
-            }
-            char == ':' -> builder.append(": ")
-            char.isWhitespace() -> Unit
-            else -> builder.append(char)
         }
     }
-    return builder.toString()
+    add(root, 0)
+    return rows
+}
+
+private fun jsonPreviewRowText(node: JsonPreviewNode, expanded: Boolean): String {
+    val label = node.label?.let { "$it: " }.orEmpty()
+    return when (node) {
+        is JsonPreviewNode.ObjectNode -> {
+            if (expanded) "$label{${node.children.size} keys}" else "$label{...}  ${node.children.size} keys"
+        }
+        is JsonPreviewNode.ArrayNode -> {
+            if (expanded) "$label[${node.children.size} items]" else "$label[...]  ${node.children.size} items"
+        }
+        is JsonPreviewNode.ValueNode -> "$label${node.value}"
+    }
+}
+
+private class JsonPreviewParser(private val source: String) {
+    private var index = 0
+
+    fun parse(): JsonPreviewNode {
+        val node = parseValue("$", null)
+        skipWhitespace()
+        require(index == source.length)
+        return node
+    }
+
+    private fun parseValue(path: String, label: String?): JsonPreviewNode {
+        skipWhitespace()
+        return when (peek()) {
+            '{' -> parseObject(path, label)
+            '[' -> parseArray(path, label)
+            '"' -> JsonPreviewNode.ValueNode(path, label, quoteJsonPreview(parseString()))
+            else -> JsonPreviewNode.ValueNode(path, label, parseLiteral())
+        }
+    }
+
+    private fun parseObject(path: String, label: String?): JsonPreviewNode.ObjectNode {
+        expect('{')
+        skipWhitespace()
+        val children = mutableListOf<JsonPreviewNode>()
+        if (consume('}')) return JsonPreviewNode.ObjectNode(path, label, children)
+        while (true) {
+            skipWhitespace()
+            val key = parseString()
+            skipWhitespace()
+            expect(':')
+            children += parseValue("$path.${escapePathSegment(key)}", quoteJsonPreview(key))
+            skipWhitespace()
+            if (consume('}')) break
+            expect(',')
+        }
+        return JsonPreviewNode.ObjectNode(path, label, children)
+    }
+
+    private fun parseArray(path: String, label: String?): JsonPreviewNode.ArrayNode {
+        expect('[')
+        skipWhitespace()
+        val children = mutableListOf<JsonPreviewNode>()
+        if (consume(']')) return JsonPreviewNode.ArrayNode(path, label, children)
+        var childIndex = 0
+        while (true) {
+            children += parseValue("$path[$childIndex]", "[$childIndex]")
+            childIndex += 1
+            skipWhitespace()
+            if (consume(']')) break
+            expect(',')
+        }
+        return JsonPreviewNode.ArrayNode(path, label, children)
+    }
+
+    private fun parseString(): String {
+        expect('"')
+        val builder = StringBuilder()
+        while (index < source.length) {
+            val char = source[index++]
+            when (char) {
+                '"' -> return builder.toString()
+                '\\' -> {
+                    require(index < source.length)
+                    val escaped = source[index++]
+                    builder.append('\\')
+                    builder.append(escaped)
+                    if (escaped == 'u') {
+                        repeat(4) {
+                            require(index < source.length)
+                            builder.append(source[index++])
+                        }
+                    }
+                }
+                else -> builder.append(char)
+            }
+        }
+        error("Unterminated string")
+    }
+
+    private fun parseLiteral(): String {
+        val start = index
+        while (index < source.length && source[index] !in charArrayOf(',', '}', ']', ' ', '\n', '\r', '\t')) {
+            index += 1
+        }
+        require(index > start)
+        return source.substring(start, index)
+    }
+
+    private fun skipWhitespace() {
+        while (index < source.length && source[index].isWhitespace()) {
+            index += 1
+        }
+    }
+
+    private fun peek(): Char {
+        require(index < source.length)
+        return source[index]
+    }
+
+    private fun consume(char: Char): Boolean {
+        if (index < source.length && source[index] == char) {
+            index += 1
+            return true
+        }
+        return false
+    }
+
+    private fun expect(char: Char) {
+        require(consume(char))
+    }
+}
+
+private fun escapePathSegment(value: String): String {
+    return value.replace("\\", "\\\\").replace(".", "\\.")
+}
+
+private fun quoteJsonPreview(value: String): String {
+    return buildString {
+        append('"')
+        value.forEach { char ->
+            when (char) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(char)
+            }
+        }
+        append('"')
+    }
 }
 
 @Composable
@@ -2734,8 +4314,8 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
     var grid by remember { mutableStateOf(true) }
     var ruler by remember { mutableStateOf(true) }
     var gridSize by remember { mutableStateOf("16") }
-    var rulerWidth by remember { mutableStateOf("260") }
-    var rulerHeight by remember { mutableStateOf("120") }
+    var rulerX by remember { mutableStateOf("540") }
+    var rulerY by remember { mutableStateOf("960") }
     var color by remember { mutableStateOf(Cyan) }
     var pickerEnabled by remember { mutableStateOf(true) }
     var pickedColor by remember { mutableStateOf("#------") }
@@ -2761,8 +4341,8 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
                 connectResult = connectResult,
                 modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight(),
                 showRuler = ruler,
-                rulerWidth = rulerWidth.toFloatOrNull()?.coerceIn(20f, 3000f) ?: 260f,
-                rulerHeight = rulerHeight.toFloatOrNull()?.coerceIn(20f, 3000f) ?: 120f,
+                rulerX = rulerX.toFloatOrNull()?.coerceIn(0f, 3000f) ?: 540f,
+                rulerY = rulerY.toFloatOrNull()?.coerceIn(0f, 3000f) ?: 960f,
                 gridSize = if (grid) gridSize.toFloatOrNull()?.coerceIn(2f, 120f) else null,
                 gridColor = color.copy(alpha = 0.38f),
                 pickerColor = color.takeIf { pickerEnabled },
@@ -2772,9 +4352,9 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
                     if (pickerEnabled) pickedColor = hex
                 },
                 passThroughInput = true,
-                onRulerResize = { width, height ->
-                    rulerWidth = width.toInt().toString()
-                    rulerHeight = height.toInt().toString()
+                onRulerResize = { x, y ->
+                    rulerX = x.toInt().toString()
+                    rulerY = y.toInt().toString()
                 },
                 onInput = sendMirrorInput,
                 onConnect = {
@@ -2799,10 +4379,10 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
             FormRow("Grid size") {
                 TextField(gridSize, { gridSize = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(120.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             }
-            FormRow("Ruler W/H") {
+            FormRow("Ruler X/Y") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextField(rulerWidth, { rulerWidth = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-                    TextField(rulerHeight, { rulerHeight = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(rulerX, { rulerX = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(rulerY, { rulerY = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
                 }
             }
             FormRow("Zoom") {
@@ -2853,6 +4433,7 @@ class AccessibilityState {
     var isLoading by mutableStateOf(false)
     var lastSerial by mutableStateOf<String?>(null)
     var layoutBounds by mutableStateOf(false)
+    var interestingOnly by mutableStateOf(false)
     val collapsedNodes = mutableStateMapOf<String, Boolean>()
 }
 
@@ -2870,7 +4451,10 @@ private fun AccessibilityScreen(
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
     val sendMirrorInput = rememberMirrorInputSender(services, serial, enabled = !state.interactionMode)
-    val flattenedNodes = remember(state.root, state.collapsedNodes.toMap()) { state.root?.flattenAccessibilityTree(state.collapsedNodes).orEmpty() }
+    val flattenedNodes = remember(state.root, state.collapsedNodes.toMap(), state.interestingOnly) {
+        val rows = state.root?.flattenAccessibilityTree(state.collapsedNodes).orEmpty()
+        if (state.interestingOnly) rows.filter { it.node.isInterestingAccessibilityNode() } else rows
+    }
     val treeListState = rememberLazyListState()
 
     LaunchedEffect(serial) {
@@ -2884,6 +4468,7 @@ private fun AccessibilityScreen(
             state.isLoading = false
             state.lastSerial = serial
             state.layoutBounds = false
+            state.interestingOnly = false
             state.collapsedNodes.clear()
         }
         if (serial != null) {
@@ -2935,6 +4520,7 @@ private fun AccessibilityScreen(
         Toolbar("Accessibility", state.status, onPrimary = { dump() }, primaryLabel = "Dump tree")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterPill("Inspect clicks", state.interactionMode, Rust) { state.interactionMode = !state.interactionMode }
+            FilterPill("Interesting", state.interestingOnly, Green) { state.interestingOnly = !state.interestingOnly }
             FilterPill("Layout bounds", state.layoutBounds, Yellow) {
                 val next = !state.layoutBounds
                 state.layoutBounds = next
@@ -3037,12 +4623,12 @@ private fun AccessibilityNodeRow(
             .background(if (active) Rust.copy(alpha = 0.22f) else Color.Transparent, RoundedCornerShape(4.dp))
             .pointerMoveFilter(onEnter = { onHover(node.bounds); false }, onExit = { onHover(null); false })
             .clickable { onSelect(node) }
-            .padding(start = (row.depth * 16).dp, top = 3.dp, bottom = 3.dp, end = 8.dp),
+            .padding(start = (row.depth * 12).dp, top = 2.dp, bottom = 2.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(24.dp)
+                .size(20.dp)
                 .clickable(
                     enabled = hasChildren,
                     onClick = onToggleCollapse
@@ -3054,16 +4640,16 @@ private fun AccessibilityNodeRow(
                     text = if (isCollapsed) ">" else "v",
                     color = TextSecondary,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
         Spacer(Modifier.width(4.dp))
         Column(Modifier.weight(1f)) {
-            Text("${node.className ?: "node"}  ${node.bounds ?: ""}", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
+            Text("${node.className?.substringAfterLast('.') ?: "node"}  ${node.bounds ?: ""}", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val label = listOfNotNull(node.resourceId, node.text, node.contentDescription).joinToString(" · ")
-            if (label.isNotBlank()) Text(label, color = TextSecondary, fontSize = 11.sp, maxLines = 1)
+            if (label.isNotBlank()) Text(label, color = TextSecondary, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -3084,6 +4670,13 @@ private fun AccessibilityNode.flattenAccessibilityTree(
 }
 
 private fun AccessibilityNode.countNodes(): Int = 1 + children.sumOf { it.countNodes() }
+
+private fun AccessibilityNode.isInterestingAccessibilityNode(): Boolean {
+    if (!visible || !enabled) return false
+    if (packageName.isNullOrBlank() || packageName.startsWith("com.android.systemui")) return false
+    val hasIdentity = !text.isNullOrBlank() || !contentDescription.isNullOrBlank() || !resourceId.isNullOrBlank()
+    return hasIdentity || clickable || scrollable
+}
 
 @Composable
 private fun AccessibilityDetails(node: AccessibilityNode?) {
@@ -3168,6 +4761,403 @@ private fun DetailRow(label: String, value: String?) {
 }
 
 @Composable
+private fun BugsScreen(bugs: BugService) {
+    val scope = rememberCoroutineScope()
+    var reports by remember { mutableStateOf<List<BugReport>>(emptyList()) }
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<BugReport?>(null) }
+    var logcat by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableStateOf("Details") }
+    var playbackFrame by remember { mutableStateOf<MirrorFrame?>(null) }
+    var playbackRunId by remember { mutableStateOf(0) }
+    var isReplaying by remember { mutableStateOf(false) }
+    var playbackFrameCount by remember { mutableStateOf(0) }
+    var playbackFrameIndex by remember { mutableStateOf(0) }
+    var playbackStartFrameIndex by remember { mutableStateOf(0) }
+    var isInspectingPlayback by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+    val stepsListState = rememberLazyListState()
+
+    fun refreshReports() {
+        scope.launch {
+            reports = bugs.listBugs()
+            if (selectedId == null || reports.none { it.id == selectedId }) {
+                selectedId = reports.firstOrNull()?.id
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { refreshReports() }
+    LaunchedEffect(selectedId, reports) {
+        val id = selectedId
+        selected = reports.firstOrNull { it.id == id } ?: id?.let { bugs.loadBug(it) }
+        logcat = id?.let { bugs.loadBugLog(it) }.orEmpty()
+        playbackFrame = null
+        playbackFrameIndex = 0
+        playbackStartFrameIndex = 0
+        isInspectingPlayback = false
+        playbackFrameCount = id?.let { bugs.bugVideoFrameCount(it) } ?: 0
+        isReplaying = false
+    }
+    LaunchedEffect(selectedId, playbackFrameCount, playbackFrameIndex, isReplaying) {
+        val id = selectedId ?: return@LaunchedEffect
+        if (isReplaying || playbackFrameCount <= 0) return@LaunchedEffect
+        bugs.loadBugVideoFrame(id, playbackFrameIndex)?.let { frame ->
+            playbackFrame = frame
+        }
+    }
+    LaunchedEffect(selectedId, playbackRunId, isReplaying) {
+        val id = selectedId ?: return@LaunchedEffect
+        if (!isReplaying || playbackRunId == 0) return@LaunchedEffect
+        val runId = playbackRunId
+        playbackFrame = null
+        try {
+            bugs.playbackFrames(id, playbackStartFrameIndex).collect { frame ->
+                playbackFrame = frame
+                playbackFrameIndex = frame.frameNumber.toInt().coerceAtLeast(1) - 1
+                isInspectingPlayback = true
+            }
+        } finally {
+            if (playbackRunId == runId) {
+                isReplaying = false
+            }
+        }
+    }
+
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        PanelCard(Modifier.width(270.dp).fillMaxHeight()) {
+            Toolbar("Bugs", "${reports.size} reports", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
+            if (reports.isEmpty()) {
+                EmptyState("No bug reports yet")
+            } else {
+                LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(reports) { report ->
+                        val active = report.id == selectedId
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .clickable { selectedId = report.id }
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(report.title, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${report.actions.size} actions · ${formatMillis(report.capturedAtMillis)}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
+                            Text(report.deviceSerial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+
+        val report = selected
+        if (report == null) {
+            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Text("Save a bug from Live to see its replay here.", color = TextSecondary)
+            }
+        } else {
+            val playbackMillis = bugPlaybackMillis(report, playbackFrameIndex, playbackFrameCount)
+            val showReplayAnnotations = isInspectingPlayback && playbackFrame != null
+            val activeActionIndex = if (showReplayAnnotations) activeBugActionIndex(report.actions, playbackMillis) else -1
+            val pointerEvent = if (showReplayAnnotations) activeBugPointerEvent(report.actions, playbackMillis) else null
+            fun toggleBugReplay() {
+                if (isReplaying) {
+                    isReplaying = false
+                } else {
+                    isInspectingPlayback = true
+                    playbackStartFrameIndex = playbackFrameIndex
+                    isReplaying = true
+                    playbackRunId++
+                }
+            }
+            LaunchedEffect(report.id, activeActionIndex) {
+                if (activeActionIndex >= 0) {
+                    val targetIndex = activeActionIndex + 1
+                    val isVisible = stepsListState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                    if (!isVisible) {
+                        stepsListState.scrollToItem(targetIndex)
+                    }
+                }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(report.title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            listOf(report.deviceModel, "API ${report.apiLevel ?: "-"}", report.abi, report.resolution, formatMillis(report.capturedAtMillis))
+                                .filterNotNull()
+                                .joinToString(" · "),
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Button(
+                        onClick = { toggleBugReplay() },
+                        colors = primaryButtonColors(),
+                        shape = RoundedCornerShape(10.dp),
+                    ) { Text(if (isReplaying) "Pause" else "Reproduce") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            status = bugs.exportBug(report.id)?.let { "Exported to $it" } ?: "Export failed"
+                        }
+                    }) { Text("Export") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                bugs.deleteBug(report.id)
+                                status = "Deleted ${report.title}"
+                                selectedId = null
+                                refreshReports()
+                            }
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
+                    ) { Text("Delete") }
+                }
+                if (status.isNotBlank()) Text(status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PanelCard(Modifier.width(380.dp).fillMaxHeight()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            Text("${report.actions.size} events", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        }
+                        LazyColumn(Modifier.fillMaxSize(), state = stepsListState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            item {
+                                Text("captured here", color = Rust, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                            itemsIndexed(report.actions) { index, action ->
+                                val active = index == activeActionIndex
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+                                        .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+                                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("${index + 1}", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(22.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(action.label, color = if (active) AndyColors.Neutral100 else TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        action.detail?.let { Text(it, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                    }
+                                    Text(relativeSeconds(action.timestampMillis, report.windowEndedAtMillis), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                    PanelCard(Modifier.weight(1f).fillMaxHeight()) {
+                        Text("VIDEO", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                Modifier.weight(1f).fillMaxWidth()
+                                    .background(Color.Black, RoundedCornerShape(AndyRadius.R3))
+                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                    .clickable(enabled = playbackFrameCount > 0) { toggleBugReplay() },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                val frame = playbackFrame
+                                if (frame != null) {
+                                    Box(Modifier.fillMaxSize()) {
+                                        MirrorVideoSurface(
+                                            frame = frame,
+                                            modifier = Modifier.fillMaxSize(),
+                                            onInput = {},
+                                            passThroughInput = false,
+                                            onDevicePointClick = { _, _ -> toggleBugReplay() },
+                                        )
+                                        pointerEvent?.let { event ->
+                                            BugPointerOverlay(frame, event)
+                                        }
+                                    }
+                                } else {
+                                    Text("Press Reproduce to play capture.mp4", color = TextSecondary, fontSize = 12.sp)
+                                }
+                            }
+                            if (playbackFrameCount > 0) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    val sliderMax = (playbackFrameCount - 1).coerceAtLeast(1).toFloat()
+                                    Slider(
+                                        value = playbackFrameIndex.toFloat().coerceIn(0f, sliderMax),
+                                        onValueChange = { value ->
+                                            val index = value.toInt().coerceIn(0, playbackFrameCount - 1)
+                                            isReplaying = false
+                                            isInspectingPlayback = true
+                                            playbackFrameIndex = index
+                                        },
+                                        valueRange = 0f..sliderMax,
+                                        enabled = playbackFrameCount > 1,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Text(
+                                        "${playbackFrameIndex + 1}/$playbackFrameCount",
+                                        color = TextSecondary,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.width(84.dp),
+                                    )
+                                }
+                            } else {
+                                Text("No video frames captured", color = TextSecondary, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                    PanelCard(Modifier.width(320.dp).fillMaxHeight()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterPill("Details", selectedTab == "Details", Rust) { selectedTab = "Details" }
+                            FilterPill("Logcat", selectedTab == "Logcat", Rust) { selectedTab = "Logcat" }
+                        }
+                        if (selectedTab == "Details") {
+                            DetailSection("DEVICE")
+                            DetailRow("Model", report.deviceModel)
+                            DetailRow("Serial", report.deviceSerial)
+                            DetailRow("API Level", report.apiLevel)
+                            DetailRow("ABI", report.abi)
+                            DetailRow("Resolution", report.resolution)
+                            DetailRow("Captured", formatMillis(report.capturedAtMillis))
+                            DetailSection("ARTIFACT FILES")
+                            report.artifacts.forEach { artifact ->
+                                DetailRow(artifact.name, artifact.sizeBytes?.let(::formatBytes) ?: artifact.kind)
+                            }
+                            DetailSection("NOTES")
+                            SelectionContainer {
+                                Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))
+                            }
+                        } else {
+                            SelectionContainer {
+                                Text(
+                                    logcat.ifBlank { "<no logcat captured>" },
+                                    color = TextPrimary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.fillMaxSize().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp).verticalScroll(rememberScrollState()),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatMillis(value: Long): String = if (value <= 0L) "-" else value.toString()
+
+private const val BugReplayFps = 15.0
+private const val BugActionHighlightWindowMillis = 1_200L
+private const val BugPointerHighlightMillis = 900L
+
+private data class BugPointerEvent(
+    val x: Int,
+    val y: Int,
+    val progress: Float,
+)
+
+private fun bugPlaybackMillis(report: BugReport, frameIndex: Int, frameCount: Int): Long {
+    val safeFrameCount = frameCount.coerceAtLeast(1)
+    val clampedFrameIndex = frameIndex.coerceIn(0, safeFrameCount - 1)
+    report.videoFrameTimestampsMillis.getOrNull(clampedFrameIndex)?.let { return it }
+    val videoStart = report.videoStartedAtMillis
+    val videoEnd = report.videoEndedAtMillis
+    if (videoStart != null && videoEnd != null && videoEnd >= videoStart) {
+        if (safeFrameCount == 1) return videoStart
+        val progress = clampedFrameIndex.toDouble() / (safeFrameCount - 1).coerceAtLeast(1)
+        return videoStart + ((videoEnd - videoStart) * progress).toLong()
+    }
+    val end = report.windowEndedAtMillis.takeIf { it > 0L } ?: report.capturedAtMillis
+    val frameRate = report.videoFrameRate?.takeIf { it > 0.0 } ?: BugReplayFps
+    val millisBeforeEnd = (((safeFrameCount - 1 - clampedFrameIndex) * 1000.0) / frameRate).toLong()
+    return end - millisBeforeEnd
+}
+
+private fun activeBugActionIndex(actions: List<BugAction>, playbackMillis: Long): Int {
+    return actions
+        .mapIndexed { index, action -> index to kotlin.math.abs(action.timestampMillis - playbackMillis) }
+        .filter { (_, distance) -> distance <= BugActionHighlightWindowMillis }
+        .minByOrNull { (_, distance) -> distance }
+        ?.first
+        ?: -1
+}
+
+private fun activeBugPointerEvent(actions: List<BugAction>, playbackMillis: Long): BugPointerEvent? {
+    val action = actions
+        .filter { parseBugActionPoint(it) != null }
+        .minByOrNull { kotlin.math.abs(it.timestampMillis - playbackMillis) }
+        ?.takeIf { kotlin.math.abs(it.timestampMillis - playbackMillis) <= BugPointerHighlightMillis }
+        ?: return null
+    val point = parseBugActionPoint(action) ?: return null
+    val age = kotlin.math.abs(playbackMillis - action.timestampMillis)
+    return BugPointerEvent(
+        x = point.first,
+        y = point.second,
+        progress = (age.toFloat() / BugPointerHighlightMillis).coerceIn(0f, 1f),
+    )
+}
+
+private fun parseBugActionPoint(action: BugAction): Pair<Int, Int>? {
+    if (action.kind != "input") return null
+    val match = Regex("""(\d+),(\d+)""").find(action.label) ?: return null
+    val x = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+    val y = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return null
+    return x to y
+}
+
+@Composable
+private fun BugPointerOverlay(frame: MirrorFrame, event: BugPointerEvent) {
+    Canvas(Modifier.fillMaxSize()) {
+        val rect = fittedRect(size.width, size.height, frame.width, frame.height)
+        val scaleX = rect.width / frame.width.coerceAtLeast(1)
+        val scaleY = rect.height / frame.height.coerceAtLeast(1)
+        val center = Offset(rect.left + event.x * scaleX, rect.top + event.y * scaleY)
+        val alpha = (1f - event.progress).coerceIn(0f, 1f)
+        val radius = 14.dp.toPx() + 20.dp.toPx() * event.progress
+        drawCircle(
+            color = Rust.copy(alpha = 0.20f * alpha),
+            radius = radius,
+            center = center,
+        )
+        drawCircle(
+            color = Rust.copy(alpha = 0.95f * alpha),
+            radius = radius,
+            center = center,
+            style = Stroke(width = 2.dp.toPx()),
+        )
+        drawCircle(
+            color = AndyColors.Neutral100.copy(alpha = 0.90f * alpha),
+            radius = 4.dp.toPx(),
+            center = center,
+        )
+        drawLine(
+            color = Rust.copy(alpha = 0.75f * alpha),
+            start = Offset(center.x - 18.dp.toPx(), center.y),
+            end = Offset(center.x + 18.dp.toPx(), center.y),
+            strokeWidth = 1.dp.toPx(),
+        )
+        drawLine(
+            color = Rust.copy(alpha = 0.75f * alpha),
+            start = Offset(center.x, center.y - 18.dp.toPx()),
+            end = Offset(center.x, center.y + 18.dp.toPx()),
+            strokeWidth = 1.dp.toPx(),
+        )
+    }
+}
+
+private fun relativeSeconds(timestampMillis: Long, endMillis: Long): String {
+    val seconds = ((timestampMillis - endMillis) / 1000.0)
+    return "%.1fs".format(seconds)
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return "%.1f KB".format(kb)
+    return "%.1f MB".format(kb / 1024.0)
+}
+
+@Composable
 private fun PlaceholderScreen(name: String) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text("$name subsystem is represented in navigation and service contracts for v1 expansion.", color = TextSecondary)
@@ -3178,20 +5168,21 @@ private fun PlaceholderScreen(name: String) {
 private fun Toolbar(title: String, subtitle: String, onPrimary: (() -> Unit)? = null, primaryLabel: String = "Run") {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = AndyColors.Neutral100, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 24.sp)
-            Text(subtitle, color = TextSecondary, fontSize = 12.sp)
+            Text(title.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 23.sp)
+            Text(subtitle.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
         }
-        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel.lowercase(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
 
 @Composable
 private fun PanelCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.R5)
+    val shape = RoundedCornerShape(AndyRadius.R3)
     Column(
         modifier
-            .background(Brush.verticalGradient(listOf(AndyColors.Neutral750, AndyColors.Neutral850)), shape)
+            .background(AndyColors.Neutral800.copy(alpha = 0.82f), shape)
             .border(1.dp, Border, shape)
+            .noiseGridOverlay(0.025f)
             .padding(AndySpace.S4),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         content = content,
@@ -3200,23 +5191,23 @@ private fun PanelCard(modifier: Modifier = Modifier, content: @Composable Column
 
 @Composable
 private fun EmptyState(text: String) {
-    Box(Modifier.fillMaxWidth().height(150.dp).background(Panel, RoundedCornerShape(AndyRadius.R5)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R5)), contentAlignment = Alignment.Center) {
-        Text(text, color = TextSecondary)
+    Box(Modifier.fillMaxWidth().height(150.dp).background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)), contentAlignment = Alignment.Center) {
+        Text(text.lowercase(), color = TextSecondary, fontFamily = MonoFont)
     }
 }
 
 @Composable
 private fun FilterPill(text: String, selected: Boolean, color: Color, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.Pill)
+    val shape = RoundedCornerShape(AndyRadius.R2)
     Box(
         Modifier.height(28.dp)
-            .background(if (selected) color else PanelSoft, shape)
-            .border(if (selected) 0.dp else 1.dp, if (selected) Color.Transparent else Color.White.copy(alpha = 0.05f), shape)
+            .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
+            .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = 0.3.sp)
+        Text(text.lowercase(), color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, lineHeight = 14.sp)
     }
 }
 
@@ -3224,7 +5215,7 @@ private fun FilterPill(text: String, selected: Boolean, color: Color, onClick: (
 private fun TableHeader(columns: List<Pair<String, androidx.compose.ui.unit.Dp>>) {
     Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         columns.forEach { (title, width) ->
-            Text(title, color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 10.sp, letterSpacing = 0.8.sp, modifier = if (width.value == 1f) Modifier.weight(1f) else Modifier.width(width))
+            Text(title.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, modifier = if (width.value == 1f) Modifier.weight(1f) else Modifier.width(width))
         }
     }
 }
@@ -3234,7 +5225,7 @@ private fun TableRow(modifier: Modifier = Modifier, content: @Composable RowScop
     Row(
         modifier.fillMaxWidth()
             .heightIn(min = 32.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.65f))
+            .background(AndyColors.Neutral900.copy(alpha = 0.72f))
             .border(1.dp, Color.White.copy(alpha = 0.05f))
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3244,28 +5235,39 @@ private fun TableRow(modifier: Modifier = Modifier, content: @Composable RowScop
 
 @Composable
 private fun MonoCell(text: String, width: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
-    Text(text, color = color, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (modifier != Modifier) modifier else Modifier.width(width))
+    Text(text, color = color, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (modifier != Modifier) modifier else Modifier.width(width))
 }
 
 @Composable
 private fun FormRow(label: String, field: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = TextSecondary, fontWeight = FontWeight.Bold, modifier = Modifier.width(110.dp))
+        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(110.dp))
         field()
     }
 }
 
 @Composable
-private fun LabeledField(label: String, value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun LabeledField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    singleLine: Boolean = true,
+    minHeight: androidx.compose.ui.unit.Dp = 54.dp,
+    placeholder: String? = null,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
         TextField(
             value = value,
             onValueChange = onValueChange,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+            singleLine = singleLine,
+            modifier = Modifier.fillMaxWidth().heightIn(min = minHeight),
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
             colors = fieldColors(),
+            placeholder = placeholder?.let { hint ->
+                { Text(hint.lowercase(), color = TextSecondary, fontFamily = MonoFont) }
+            },
         )
     }
 }
@@ -3273,16 +5275,16 @@ private fun LabeledField(label: String, value: String, onValueChange: (String) -
 @Composable
 private fun ControlRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = TextSecondary)
-        Text(value, color = TextPrimary, fontFamily = FontFamily.Monospace)
+        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont)
+        Text(value, color = TextPrimary, fontFamily = MonoFont)
     }
 }
 
 @Composable
 private fun MetricCard(label: String, value: String) {
     PanelCard(Modifier.width(170.dp).height(96.dp)) {
-        Text(label, color = TextSecondary, fontWeight = FontWeight.Bold)
-        Text(value, color = TextPrimary, fontSize = 26.sp, fontFamily = FontFamily.Monospace)
+        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold)
+        Text(value, color = TextPrimary, fontSize = 26.sp, fontFamily = MonoFont)
     }
 }
 
@@ -3300,24 +5302,28 @@ private fun levelColor(level: LogLevel): Color = when (level) {
 private fun fieldColors(): TextFieldColors = TextFieldDefaults.colors(
     focusedTextColor = TextPrimary,
     unfocusedTextColor = TextPrimary,
-    focusedContainerColor = AndyColors.Neutral800,
-    unfocusedContainerColor = AndyColors.Neutral800,
+    focusedContainerColor = AndyColors.Neutral900.copy(alpha = 0.72f),
+    unfocusedContainerColor = AndyColors.Neutral850,
+    disabledContainerColor = AndyColors.Neutral800,
     focusedIndicatorColor = AndyColors.OrangeBorder,
     unfocusedIndicatorColor = Border,
+    disabledIndicatorColor = Border.copy(alpha = 0.45f),
     cursorColor = Rust,
+    focusedPlaceholderColor = TextSecondary,
+    unfocusedPlaceholderColor = TextSecondary,
 )
 
 @Composable
 private fun primaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
-    containerColor = AndyColors.Orange,
-    contentColor = Color.White,
+    containerColor = AndyColors.OrangeSubtle,
+    contentColor = AndyColors.Neutral100,
     disabledContainerColor = AndyColors.Neutral600,
     disabledContentColor = AndyColors.Neutral400,
 )
 
 @Composable
 private fun secondaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
-    containerColor = AndyColors.Neutral800,
+    containerColor = AndyColors.Neutral850,
     contentColor = TextPrimary,
     disabledContainerColor = AndyColors.Neutral700,
     disabledContentColor = AndyColors.Neutral500,

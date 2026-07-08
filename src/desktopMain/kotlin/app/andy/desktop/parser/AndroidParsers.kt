@@ -99,7 +99,9 @@ object AndroidParsers {
     }
 
     fun parseAvdList(output: String): List<VirtualDevice> {
-        val blocks = output.split(Regex("""\n\s*\n"""))
+        val blocks = output
+            .replace(Regex("""(?m)^\s*-{3,}\s*$"""), "\n")
+            .split(Regex("""\n\s*\n"""))
         return blocks.mapNotNull { block ->
             val name = Regex("""Name:\s*(.+)""").find(block)?.groupValues?.getOrNull(1)?.trim() ?: return@mapNotNull null
             VirtualDevice(
@@ -108,6 +110,10 @@ object AndroidParsers {
                 target = Regex("""Target:\s*(.+)""").find(block)?.groupValues?.getOrNull(1)?.trim(),
                 abi = Regex("""ABI:\s*(.+)""").find(block)?.groupValues?.getOrNull(1)?.trim(),
                 running = false,
+                apiLevel = Regex("""API\s+level\s*:\s*(\d+)""").find(block)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: Regex("""android-(\d+)""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?: Regex("""Android\s+(\d+)""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.getOrNull(1)?.toIntOrNull(),
+                deviceType = classifyVirtualDevice(name, block),
             )
         }
     }
@@ -124,8 +130,63 @@ object AndroidParsers {
                 tag = null,
                 resolution = Regex("""Screen:\s*(.+)""").find(block)?.groupValues?.getOrNull(1)?.trim(),
                 density = Regex("""dpis\s*:\s*(.+)""").find(block)?.groupValues?.getOrNull(1)?.trim(),
+                category = classifyProfile(name, block),
             )
         }
+    }
+
+    fun classifyProfile(name: String, raw: String = ""): AvdProfileCategory {
+        val value = "$name $raw".replace('_', ' ').lowercase()
+        return when {
+            "automotive" in value || Regex("""\bcar\b""").containsMatchIn(value) -> AvdProfileCategory.Automotive
+            "desktop" in value -> AvdProfileCategory.Desktop
+            "tv" in value -> AvdProfileCategory.Tv
+            "wear" in value || "watch" in value -> AvdProfileCategory.Watch
+            "fold" in value || "foldable" in value -> AvdProfileCategory.Foldable
+            "tablet" in value || "pixel c" in value || "nexus 10" in value || "nexus 9" in value -> AvdProfileCategory.Tablet
+            "phone" in value || "pixel" in value || "nexus" in value -> AvdProfileCategory.Phone
+            else -> AvdProfileCategory.Other
+        }
+    }
+
+    fun classifyVirtualDevice(name: String, raw: String = "", config: Map<String, String> = emptyMap()): VirtualDeviceType {
+        val value = (listOf(name, raw) + config.values).joinToString(" ").replace('_', ' ').lowercase()
+        return when {
+            "automotive" in value || Regex("""\bcar\b""").containsMatchIn(value) -> VirtualDeviceType.Automotive
+            "desktop" in value -> VirtualDeviceType.Desktop
+            "tv" in value -> VirtualDeviceType.Tv
+            "wear" in value || "watch" in value -> VirtualDeviceType.Watch
+            "fold" in value || "foldable" in value -> VirtualDeviceType.Foldable
+            "tablet" in value || "pixel_c" in value || "nexus_10" in value || "nexus_9" in value -> VirtualDeviceType.Tablet
+            "phone" in value || "pixel" in value || "nexus" in value -> VirtualDeviceType.Phone
+            else -> VirtualDeviceType.Unknown
+        }
+    }
+
+    fun parseSnapshots(output: String, avdName: String): List<EmulatorSnapshot> {
+        return output.lineSequence()
+            .map { it.trim() }
+            .filter { line ->
+                line.isNotBlank() &&
+                    !line.startsWith("OK", ignoreCase = true) &&
+                    !line.startsWith("KO", ignoreCase = true) &&
+                    !line.startsWith("List of", ignoreCase = true) &&
+                    !line.startsWith("Snapshot", ignoreCase = true) &&
+                    !line.startsWith("ID ", ignoreCase = true) &&
+                    !line.startsWith("--")
+            }
+            .mapNotNull { line ->
+                val columns = line.split(Regex("\\s+")).filter(String::isNotBlank)
+                when {
+                    columns.isEmpty() -> null
+                    columns.size >= 2 && columns[0].all(Char::isDigit) -> columns[1]
+                    else -> columns[0]
+                }?.trim()
+            }
+            .filter { it.isNotBlank() && it != "Name" && it != "Tag" && it != "Snapshots:" }
+            .distinct()
+            .map { EmulatorSnapshot(name = it, avdName = avdName, source = "emulator") }
+            .toList()
     }
 
     fun parseFileListing(path: String, output: String): List<DeviceFile> {

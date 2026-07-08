@@ -36,6 +36,8 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.Properties
 import java.util.concurrent.TimeUnit
+import javax.swing.JFileChooser
+import javax.swing.SwingUtilities
 import kotlin.random.Random
 import app.andy.desktop.updates.DesktopAppUpdateService
 import kotlinx.coroutines.CoroutineScope
@@ -46,22 +48,68 @@ fun createDesktopServices(): AndyServices {
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     val devices = DesktopDeviceService(runner, locator, store)
+    val mirror = DesktopMirrorEngine(runner, devices)
+    val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     return AndyServices(
         devices = devices,
         avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath },
-        mirror = DesktopMirrorEngine(runner, devices),
-        logcat = DesktopLogcatService(runner, devices),
+        mirror = mirror,
+        logcat = logcat,
         intents = DesktopIntentService(runner, devices),
         apps = DesktopAppService(runner, devices),
         files = DesktopFileService(runner, devices),
         proxy = DesktopProxyService(runner, devices),
         metrics = DesktopMetricsService(runner, devices),
         accessibility = DesktopAccessibilityService(runner, devices),
+        bugs = DesktopBugService(mirror, logcat),
+        artifacts = DesktopArtifactService(runner, devices, mirror),
         workspaceStore = store,
         updates = updates,
     )
+}
+
+class DesktopArtifactService(
+    private val runner: CommandRunner,
+    private val devices: DesktopDeviceService,
+    private val mirror: MirrorEngine,
+) : ArtifactService {
+    override suspend fun saveScreenshot(serial: String, suggestedName: String): CommandResult = withContext(Dispatchers.IO) {
+        val target = chooseSaveFile(suggestedName) ?: return@withContext CommandResult.failure("Screenshot save canceled")
+        val bytes = mirror.screenshot(serial) ?: return@withContext CommandResult.failure("Screenshot failed")
+        runCatching {
+            target.parentFile?.mkdirs()
+            target.writeBytes(bytes)
+            CommandResult.success("Saved screenshot to ${target.absolutePath}")
+        }.getOrElse { CommandResult.failure(it.message ?: "Screenshot save failed") }
+    }
+
+    override suspend fun saveBugReport(serial: String, suggestedName: String): CommandResult = withContext(Dispatchers.IO) {
+        val target = chooseSaveFile(suggestedName) ?: return@withContext CommandResult.failure("Bug report save canceled")
+        val adb = devices.adbPath() ?: return@withContext CommandResult.failure("ADB not found")
+        target.parentFile?.mkdirs()
+        runner.run(listOf(adb, "-s", serial, "bugreport", target.absolutePath), 180)
+    }
+
+    private fun chooseSaveFile(suggestedName: String): File? {
+        var selected: File? = null
+        val task = Runnable {
+            val chooser = JFileChooser().apply {
+                selectedFile = File(suggestedName)
+                dialogTitle = "Save ${suggestedName.substringBeforeLast('.', suggestedName)}"
+            }
+            if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+                selected = chooser.selectedFile
+            }
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            task.run()
+        } else {
+            SwingUtilities.invokeAndWait(task)
+        }
+        return selected
+    }
 }
 
 class DesktopDeviceService(
@@ -133,8 +181,18 @@ class DesktopAvdService(
     override suspend fun listVirtualDevices(): List<VirtualDevice> {
         val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
         val avds = AndroidParsers.parseAvdList(runner.run(listOf(avdManager, "list", "avd"), 20).stdout)
-        val running = runningEmulatorNames()
-        return avds.map { it.copy(running = it.name in running) }
+        val running = runningEmulatorNames() + avds.filter { avd ->
+            avd.path?.let { File(it, "hardware-qemu.ini.lock").exists() } == true
+        }.map { it.name }
+        return avds.map { avd ->
+            val config = loadAvdConfig(avd).orEmpty()
+            avd.copy(
+                running = avd.name in running,
+                apiLevel = avd.apiLevel ?: Regex("""android-(\d+)""").find(config["image.sysdir.1"].orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(),
+                deviceType = AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config),
+                config = config,
+            )
+        }
     }
 
     override suspend fun createVirtualDevice(name: String, profileId: String, systemImagePackage: String): CommandResult {
@@ -142,21 +200,48 @@ class DesktopAvdService(
         return runner.run(listOf(avdManager, "create", "avd", "-n", name, "-k", systemImagePackage, "-d", profileId), 120)
     }
 
+    override suspend fun createVirtualDevice(config: AvdCreationConfig): CommandResult {
+        val created = createVirtualDevice(config.name, config.profileId, config.systemImagePackage)
+        if (!created.isSuccess) return created
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, config.name) }
+        val configFile = avd?.path?.let { File(it, "config.ini") }
+        val writeMessage = configFile?.let { writeAvdConfig(it, config) }.orEmpty()
+        if (config.startAfterCreate) {
+            val started = startVirtualDevice(config.name)
+            return if (started.isSuccess) {
+                CommandResult.success(listOf(created.stdout, writeMessage, started.stdout).filter { it.isNotBlank() }.joinToString("\n"))
+            } else {
+                CommandResult(created.exitCode, created.stdout + "\n" + writeMessage, started.stderr.ifBlank { started.stdout })
+            }
+        }
+        return CommandResult.success(listOf(created.stdout, writeMessage).filter { it.isNotBlank() }.joinToString("\n"))
+    }
+
     override suspend fun startVirtualDevice(name: String): CommandResult {
+        return launchVirtualDevice(name, extraArgs = listOf("-no-snapshot-load", "-no-snapshot-save"))
+    }
+
+    override suspend fun coldBootVirtualDevice(name: String): CommandResult {
+        val runningSerial = findRunningEmulatorSerial(name)
+        if (runningSerial != null) {
+            val adb = locator.discover(preferredSdkPath()).adbPath ?: return CommandResult.failure("ADB not found")
+            runner.run(listOf(adb, "-s", runningSerial, "emu", "kill"), 8)
+        }
+        return launchVirtualDevice(name, extraArgs = listOf("-no-snapshot-load", "-no-snapshot-save"))
+    }
+
+    override suspend fun wipeVirtualDevice(name: String): CommandResult {
+        findRunningEmulatorSerial(name)?.let {
+            val stop = stopVirtualDevice(name)
+            if (!stop.isSuccess) return stop
+        }
+        return launchVirtualDevice(name, extraArgs = listOf("-wipe-data", "-no-snapshot-load", "-no-snapshot-save"))
+    }
+
+    private suspend fun launchVirtualDevice(name: String, extraArgs: List<String> = emptyList()): CommandResult {
         val emulator = locator.discover(preferredSdkPath()).emulatorPath ?: return CommandResult.failure("emulator not found")
         return withContext(Dispatchers.IO) {
-            ProcessBuilder(
-                listOf(
-                    emulator,
-                    "-avd", name,
-                    "-no-window",
-                    "-no-snapshot-load",
-                    "-no-snapshot-save",
-                    "-no-boot-anim",
-                    "-gpu", "swiftshader_indirect",
-                    "-writable-system",
-                ),
-            ).start()
+            ProcessBuilder(listOf(emulator, "-avd", name, "-no-window") + extraArgs + listOf("-no-boot-anim", "-gpu", "swiftshader_indirect", "-writable-system")).start()
             CommandResult.success("Starting $name headless with writable system")
         }
     }
@@ -178,12 +263,176 @@ class DesktopAvdService(
         }
     }
 
+    override suspend fun deleteVirtualDevice(name: String): CommandResult {
+        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return CommandResult.failure("avdmanager not found")
+        return runner.run(listOf(avdManager, "delete", "avd", "-n", name), 60)
+    }
+
+    override suspend fun cloneVirtualDevice(sourceName: String, newName: String): CommandResult = withContext(Dispatchers.IO) {
+        if (newName.isBlank()) return@withContext CommandResult.failure("Enter a clone name")
+        val source = listVirtualDevices().firstOrNull { namesMatch(it.name, sourceName) }
+            ?: return@withContext CommandResult.failure("Source AVD not found: $sourceName")
+        val sourceDir = source.path?.let(::File)?.takeIf { it.isDirectory }
+            ?: return@withContext CommandResult.failure("Source AVD folder not found")
+        val sourceIni = resolveIniFile(source)
+            ?: return@withContext CommandResult.failure("Source AVD .ini not found")
+        val targetDir = File(sourceDir.parentFile, "$newName.avd")
+        val targetIni = File(sourceIni.parentFile, "$newName.ini")
+        if (targetDir.exists() || targetIni.exists()) return@withContext CommandResult.failure("AVD already exists: $newName")
+        runCatching {
+            sourceDir.copyRecursively(targetDir, overwrite = false)
+            sourceIni.copyTo(targetIni, overwrite = false)
+            rewriteAvdReferences(targetDir, sourceName, newName, sourceDir.absolutePath, targetDir.absolutePath)
+            rewriteAvdReferences(targetIni, sourceName, newName, sourceDir.absolutePath, targetDir.absolutePath)
+            CommandResult.success("Cloned $sourceName to $newName")
+        }.getOrElse { CommandResult.failure(it.message ?: "Clone failed") }
+    }
+
+    override suspend fun installSystemImage(packageId: String): CommandResult {
+        val sdkManager = locator.discover(preferredSdkPath()).sdkManagerPath ?: return CommandResult.failure("sdkmanager not found")
+        return runner.run(listOf(sdkManager, "--install", packageId), 600)
+    }
+
+    override suspend fun uninstallSystemImage(packageId: String): CommandResult {
+        val sdkManager = locator.discover(preferredSdkPath()).sdkManagerPath ?: return CommandResult.failure("sdkmanager not found")
+        return runner.run(listOf(sdkManager, "--uninstall", packageId), 600)
+    }
+
+    override suspend fun listSnapshots(avdName: String): List<EmulatorSnapshot> {
+        val serial = findRunningEmulatorSerial(avdName)
+        val snapshots = mutableListOf<EmulatorSnapshot>()
+        if (serial != null) {
+            val adb = locator.discover(preferredSdkPath()).adbPath ?: return emptyList()
+            val result = runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "list"), 12)
+            if (result.isSuccess) snapshots += AndroidParsers.parseSnapshots(result.stdout, avdName)
+        }
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return emptyList()
+        val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return emptyList()
+        snapshots += snapshotsDir.listFiles()
+            ?.filter { it.isDirectory || it.extension == "qcow2" || it.extension == "img" }
+            ?.map { EmulatorSnapshot(it.nameWithoutExtension, avd.name, "disk") }
+            .orEmpty()
+        return snapshots
+            .distinctBy { it.name }
+            .sortedBy { it.name }
+    }
+
+    override suspend fun saveSnapshot(avdName: String, snapshotName: String): CommandResult {
+        val serial = findRunningEmulatorSerial(avdName) ?: return CommandResult.failure("Start $avdName before saving a snapshot")
+        val adb = locator.discover(preferredSdkPath()).adbPath ?: return CommandResult.failure("ADB not found")
+        val result = runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "save", snapshotName), 180)
+        repeat(20) {
+            if (listSnapshots(avdName).any { it.name == snapshotName }) {
+                return CommandResult.success("Saved snapshot $snapshotName")
+            }
+            delay(500)
+        }
+        if (!result.isSuccess) return result
+        return CommandResult.success("Snapshot save command finished; $snapshotName may still be indexing. Refresh in a moment.")
+    }
+
+    override suspend fun restoreSnapshot(avdName: String, snapshotName: String): CommandResult {
+        val serial = findRunningEmulatorSerial(avdName)
+        if (serial != null) {
+            val adb = locator.discover(preferredSdkPath()).adbPath ?: return CommandResult.failure("ADB not found")
+            return runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "load", snapshotName), 60)
+        }
+        return launchVirtualDevice(avdName, extraArgs = listOf("-snapshot", snapshotName, "-no-snapshot-save"))
+    }
+
+    override suspend fun deleteSnapshot(avdName: String, snapshotName: String): CommandResult {
+        val serial = findRunningEmulatorSerial(avdName)
+        if (serial != null) {
+            val adb = locator.discover(preferredSdkPath()).adbPath ?: return CommandResult.failure("ADB not found")
+            return runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "delete", snapshotName), 60)
+        }
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return CommandResult.failure("AVD not found")
+        val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return CommandResult.failure("Snapshots folder not found")
+        val matches = snapshotsDir.listFiles()?.filter { it.nameWithoutExtension == snapshotName }.orEmpty()
+        if (matches.isEmpty()) return CommandResult.failure("Snapshot not found: $snapshotName")
+        matches.forEach { it.deleteRecursively() }
+        return CommandResult.success("Deleted snapshot $snapshotName")
+    }
+
     private suspend fun runningEmulatorNames(): Set<String> = withContext(Dispatchers.IO) {
         File(System.getProperty("user.home"), ".android/avd").listFiles()
             ?.filter { it.name.endsWith(".avd") && File(it, "hardware-qemu.ini.lock").exists() }
             ?.map { it.name.removeSuffix(".avd") }
             ?.toSet()
             ?: emptySet()
+    }
+
+    private suspend fun findRunningEmulatorSerial(name: String): String? {
+        val sdk = locator.discover(preferredSdkPath())
+        val adb = sdk.adbPath ?: return null
+        val devices = AndroidParsers.parseAdbDevices(runner.run(listOf(adb, "devices", "-l"), 8).stdout)
+        return devices.firstOrNull { device ->
+            device.kind == DeviceKind.Emulator &&
+                device.state == DeviceConnectionState.Online &&
+                namesMatch(resolveAvdName(adb, device.serial) ?: device.displayName, name)
+        }?.serial
+    }
+
+    private fun loadAvdConfig(avd: VirtualDevice): Map<String, String>? {
+        val configFile = avd.path?.let { File(it, "config.ini") }?.takeIf { it.exists() } ?: return null
+        return configFile.readLines()
+            .mapNotNull { line ->
+                val trimmed = line.trim()
+                if (trimmed.isBlank() || trimmed.startsWith("#") || "=" !in trimmed) null
+                else trimmed.substringBefore("=") to trimmed.substringAfter("=")
+            }
+            .toMap()
+    }
+
+    private fun writeAvdConfig(configFile: File, config: AvdCreationConfig): String {
+        val values = linkedMapOf(
+            "hw.initialOrientation" to config.orientation,
+            "hw.ramSize" to config.ramMb?.toString(),
+            "disk.dataPartition.size" to config.storageMb?.let { "${it}M" },
+            "hw.cpu.ncore" to config.cpuCores?.toString(),
+            "hw.gpu.mode" to config.gpuMode,
+            "hw.camera.back" to config.backCamera.configValue,
+            "hw.camera.front" to config.frontCamera.configValue,
+            "locale" to config.locale.takeIf { it.isNotBlank() },
+            "hw.keyboard" to config.hardwareKeyboard.toString(),
+        ).filterValues { it != null }.mapValues { it.value.orEmpty() }
+        configFile.parentFile?.mkdirs()
+        val existing = if (configFile.exists()) configFile.readLines().toMutableList() else mutableListOf()
+        val keys = values.keys
+        val seen = mutableSetOf<String>()
+        val updated = existing.map { line ->
+            val key = line.substringBefore("=", "")
+            if (key in keys) {
+                seen += key
+                "$key=${values.getValue(key)}"
+            } else {
+                line
+            }
+        }.toMutableList()
+        values.filterKeys { it !in seen }.forEach { (key, value) -> updated += "$key=$value" }
+        configFile.writeText(updated.joinToString("\n") + "\n")
+        return "Wrote ${values.size} config values"
+    }
+
+    private fun resolveIniFile(avd: VirtualDevice): File? {
+        val path = avd.path?.let(::File) ?: return null
+        return listOf(
+            File(path.parentFile, "${avd.name}.ini"),
+            File(File(System.getProperty("user.home"), ".android/avd"), "${avd.name}.ini"),
+        ).firstOrNull { it.exists() }
+    }
+
+    private fun rewriteAvdReferences(target: File, oldName: String, newName: String, oldPath: String, newPath: String) {
+        if (target.isDirectory) {
+            target.walkTopDown().filter { it.isFile && it.extension in setOf("ini", "txt", "cfg") }.forEach {
+                rewriteAvdReferences(it, oldName, newName, oldPath, newPath)
+            }
+            return
+        }
+        val text = target.readText()
+            .replace(oldPath, newPath)
+            .replace(oldName, newName)
+        target.writeText(text)
     }
 
     private suspend fun resolveAvdName(adb: String, serial: String): String? {
@@ -848,17 +1097,45 @@ class DesktopAppService(
             .lineSequence()
             .mapNotNull { it.substringAfter("package:", "").takeIf(String::isNotBlank)?.trim() }
             .toSet()
+        val appLabels = queryAppLabels(serial)
         return packages
             .map { (packageName, versionCode) ->
                 AndroidApp(
                     packageName = packageName,
-                    label = packageName.substringAfterLast('.'),
+                    label = appLabels[packageName] ?: packageName.substringAfterLast('.'),
                     system = packageName in systemPackages,
                     enabled = packageName !in disabledPackages,
                     versionCode = versionCode,
                 )
             }
             .sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
+    }
+
+    private suspend fun queryAppLabels(serial: String): Map<String, String> {
+        val output = devices.shell(serial, listOf("dumpsys", "package")).stdout
+        if (output.isBlank()) return emptyMap()
+
+        val labels = mutableMapOf<String, String>()
+        var currentPackage: String? = null
+        output.lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            Regex("""Package \[([^\]]+)]""").find(line)?.let { match ->
+                currentPackage = match.groupValues[1]
+                return@forEach
+            }
+
+            val packageName = currentPackage ?: return@forEach
+            val label = Regex("""application-label(?:-[^:]+)?:'([^']*)'""")
+                .find(line)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@forEach
+
+            labels.putIfAbsent(packageName, label)
+        }
+        return labels
     }
 
     override suspend fun launch(serial: String, packageName: String): CommandResult {
@@ -960,8 +1237,8 @@ class DesktopProxyService(
 
     override suspend fun start(port: Int, rules: List<ProxyRule>): CommandResult = withContext(Dispatchers.IO) {
         val executable = mitmdumpExecutable() ?: return@withContext CommandResult.failure("mitmdump not found. Install mitmproxy with `brew install mitmproxy`.")
+        stopCurrentProcess(updateStatus = false)
         killOrphanedProxies()
-        stop()
         proxyDir.mkdirs()
         writeAddon()
         writeRules(rules)
@@ -996,14 +1273,18 @@ class DesktopProxyService(
     }
 
     override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) {
+        stopCurrentProcess(updateStatus = true)
+        CommandResult.success("Proxy stopped")
+    }
+
+    private fun stopCurrentProcess(updateStatus: Boolean) {
         stdoutJob?.cancel()
         stderrJob?.cancel()
         stdoutJob = null
         stderrJob = null
         process?.destroy()
         process = null
-        status.value = "Proxy stopped"
-        CommandResult.success("Proxy stopped")
+        if (updateStatus) status.value = "Proxy stopped"
     }
 
     override suspend fun resolveDeviceProxyHost(serial: String): String {
@@ -1075,6 +1356,33 @@ class DesktopProxyService(
         val adb = devices.adbPath() ?: return@withContext CommandResult.failure("ADB not found")
         activatePersistedCertificateAuthority(adb, serial)
     }
+
+    override suspend fun isCertificateInstalled(serial: String): Boolean = withContext(Dispatchers.IO) {
+        val adb = devices.adbPath() ?: return@withContext false
+        val certificate = usableCertificateAuthority() ?: return@withContext false
+        val hash = certificateSubjectHash(certificate) ?: return@withContext false
+        val result = runner.run(
+            listOf(adb, "-s", serial, "shell", "test -f /system/etc/security/cacerts/$hash.0 || test -f /apex/com.android.conscrypt/cacerts/$hash.0"),
+            10
+        )
+        result.isSuccess
+    }
+
+    override suspend fun isDeviceProxyConfigured(serial: String, host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+        val adb = devices.adbPath() ?: return@withContext false
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "settings", "get", "global", "http_proxy"), 10)
+        if (!result.isSuccess) return@withContext false
+        val currentProxy = result.stdout.trim()
+        val parts = currentProxy.split(':')
+        if (parts.size == 2) {
+            val currentHost = parts[0].trim()
+            val currentPort = parts[1].trim().toIntOrNull()
+            currentHost == host && currentPort == port
+        } else {
+            false
+        }
+    }
+
 
     private suspend fun installPersistentCertificateAuthority(adb: String, serial: String, androidCert: File, originalCertificate: File): CommandResult {
         val remount = remountWritableSystem(adb, serial)
@@ -1342,13 +1650,13 @@ class DesktopProxyService(
                     }
                 }
             }
-            if (!proxyProcess.isAlive()) status.value = "mitmdump exited"
+            if (process === proxyProcess && !proxyProcess.isAlive()) status.value = "mitmdump exited"
         }
         stderrJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stderr.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
                     System.err.println("[Proxy stderr] $line")
-                    if (line.isNotBlank()) status.value = line.take(220)
+                    if (process === proxyProcess && line.isNotBlank() && !proxyProcess.isAlive()) status.value = line.take(220)
                 }
             }
         }
@@ -1687,6 +1995,12 @@ def _message_preview(message):
 def _headers(headers):
     return {key: value for key, value in headers.items()}
 
+def _remove_header(headers, target):
+    target_lower = target.lower()
+    for name in list(headers.keys()):
+        if name.lower() == target_lower:
+            headers.pop(name, None)
+
 def _match(rule, flow):
     if not rule.get("enabled", True):
         return False
@@ -1713,7 +2027,7 @@ def response(flow: http.HTTPFlow):
         for header, value in (rule.get("setHeaders") or {}).items():
             flow.response.headers[header] = value
         for header in rule.get("removeHeaders") or []:
-            flow.response.headers.pop(header, None)
+            _remove_header(flow.response.headers, header)
         if rule.get("responseBody") is not None:
             flow.response.headers.pop("content-encoding", None)
             flow.response.headers.pop("content-length", None)

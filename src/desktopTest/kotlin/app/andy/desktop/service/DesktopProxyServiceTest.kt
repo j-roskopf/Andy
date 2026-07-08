@@ -1,6 +1,7 @@
 package app.andy.desktop.service
 
 import app.andy.model.ProxyRule
+import app.andy.model.WorkspaceState
 import app.andy.model.matches
 import app.andy.service.CommandResult
 import kotlinx.coroutines.runBlocking
@@ -69,6 +70,42 @@ class DesktopProxyServiceTest {
         assertEquals(22, exchange.durationMillis)
         assertEquals("redacted", exchange.requestHeaders["authorization"])
         assertEquals("rule-1", exchange.matchedRuleId)
+    }
+
+    @Test
+    fun workspaceStoreRoundTripsProxyRuleStatusAndHeaders() = runBlocking {
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-workspace-test-home").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            val store = DesktopWorkspaceStore()
+            store.save(
+                WorkspaceState(
+                    proxyRules = listOf(
+                        ProxyRule(
+                            id = "rule-404",
+                            name = "Missing profile",
+                            enabled = true,
+                            urlPattern = "https://api.example.com/v1/*/profile",
+                            method = "GET",
+                            statusCode = 404,
+                            setHeaders = mapOf("x-andy" to "missing", "content-type" to "application/json"),
+                            removeHeaders = listOf("Server", "etag"),
+                            responseBody = """{"error":"missing"}""",
+                        ),
+                    ),
+                ),
+            )
+
+            val loadedRule = store.load().proxyRules.single()
+
+            assertEquals(404, loadedRule.statusCode)
+            assertEquals(mapOf("x-andy" to "missing", "content-type" to "application/json"), loadedRule.setHeaders)
+            assertEquals(listOf("Server", "etag"), loadedRule.removeHeaders)
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
     }
 
     @Test

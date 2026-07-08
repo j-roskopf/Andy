@@ -7,6 +7,9 @@ import app.andy.model.IntentDraft
 import app.andy.model.IntentExtra
 import app.andy.model.LogLevel
 import app.andy.model.ProxyRule
+import app.andy.model.AvdCameraOption
+import app.andy.model.AvdCreationConfig
+import app.andy.model.VirtualDeviceType
 import kotlinx.coroutines.flow.filter
 import app.andy.service.LogcatFilter
 import app.andy.service.MirrorInput
@@ -62,6 +65,27 @@ class DesktopServicesMockDeviceTest {
             profileId = "34",
             systemImagePackage = "system-images;android-36;google_apis;arm64-v8a",
         )
+        val advancedCreated = services.avd.createVirtualDevice(
+            AvdCreationConfig(
+                name = "Pixel_8_API_36",
+                profileId = "34",
+                systemImagePackage = "system-images;android-36;google_apis;arm64-v8a",
+                ramMb = 4096,
+                storageMb = 16384,
+                cpuCores = 6,
+                gpuMode = "swiftshader_indirect",
+                backCamera = AvdCameraOption.Webcam0,
+                startAfterCreate = false,
+            ),
+        )
+        val installedImage = services.avd.installSystemImage("system-images;android-35;google_apis_playstore;arm64-v8a")
+        val uninstalledImage = services.avd.uninstallSystemImage("system-images;android-36;google_apis;arm64-v8a")
+        val snapshots = services.avd.listSnapshots("Pixel_8_API_36")
+        val savedSnapshot = services.avd.saveSnapshot("Pixel_8_API_36", "manual")
+        val restoredSnapshot = services.avd.restoreSnapshot("Pixel_8_API_36", "manual")
+        val deletedSnapshot = services.avd.deleteSnapshot("Pixel_8_API_36", "manual")
+        val cloned = services.avd.cloneVirtualDevice("Pixel_8_API_36", "Pixel_8_API_36_Copy")
+        val deleted = services.avd.deleteVirtualDevice("Pixel_8_API_36")
         val started = services.avd.startVirtualDevice("Pixel_8_API_36")
         val stopped = services.avd.stopVirtualDevice("Pixel_8_API_36")
 
@@ -69,11 +93,28 @@ class DesktopServicesMockDeviceTest {
         assertTrue(images.first().installed)
         assertEquals("Pixel 8", profiles.single().name)
         assertEquals("Pixel_8_API_36", avds.single().name)
+        assertEquals(36, avds.single().apiLevel)
+        assertEquals(VirtualDeviceType.Phone, avds.single().deviceType)
         assertTrue(created.isSuccess)
+        assertTrue(advancedCreated.isSuccess)
+        assertTrue(installedImage.isSuccess)
+        assertTrue(uninstalledImage.isSuccess)
+        assertEquals(listOf("default_boot", "manual"), snapshots.map { it.name })
+        assertTrue(savedSnapshot.isSuccess)
+        assertTrue(restoredSnapshot.isSuccess)
+        assertTrue(deletedSnapshot.isSuccess)
+        assertTrue(cloned.isSuccess)
+        assertTrue(deleted.isSuccess)
         assertTrue(started.isSuccess)
         assertTrue(stopped.isSuccess)
         assertTrue(stopped.stdout.contains("emulator-5554"))
         assertTrue(env.ran("create", "avd", "-n", "Pixel_8_API_36"))
+        assertTrue(env.ran("--install", "system-images;android-35;google_apis_playstore;arm64-v8a"))
+        assertTrue(env.ran("--uninstall", "system-images;android-36;google_apis;arm64-v8a"))
+        assertTrue(env.ran("avd", "snapshot", "save", "manual"))
+        assertTrue(env.ran("avd", "snapshot", "load", "manual"))
+        assertTrue(env.ran("avd", "snapshot", "delete", "manual"))
+        assertTrue(env.ran("delete", "avd", "-n", "Pixel_8_API_36"))
         assertTrue(env.ran("-s", "emulator-5554", "emu", "kill"))
     }
 
@@ -180,6 +221,7 @@ class DesktopServicesMockDeviceTest {
         assertTrue(sentIntent.isSuccess)
 
         assertEquals(listOf("com.disabled.app", "com.example.app", "com.android.settings"), apps.map { it.packageName })
+        assertEquals("Example", apps.first { it.packageName == "com.example.app" }.label)
         assertEquals(false, apps.first { it.packageName == "com.example.app" }.system)
         assertEquals(false, apps.first { it.packageName == "com.disabled.app" }.enabled)
         assertTrue(apps.first { it.packageName == "com.android.settings" }.system)
