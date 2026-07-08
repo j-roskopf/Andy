@@ -12,6 +12,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -24,8 +27,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.CoroutineScope
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -677,11 +682,11 @@ private fun AndyShell(
                         }, onStopEmulator = { stopEmulator(it) }, stoppingEmulatorSerial = stoppingEmulatorSerial, stopStatus = emulatorStopStatus)
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
-                            services,
-                            selectedSerial,
-                            devices.firstOrNull { it.serial == selectedSerial },
-                            workspaceState.liveDevicePaneWidth,
-                            workspaceState.liveControlsPaneHeight,
+                            services = services,
+                            serial = selectedSerial,
+                            device = devices.firstOrNull { it.serial == selectedSerial },
+                            devicePaneWidth = workspaceState.liveDevicePaneWidth,
+                            controlsPaneHeight = workspaceState.liveControlsPaneHeight,
                             onStopEmulator = { stopEmulator(it) },
                             stoppingEmulatorSerial = stoppingEmulatorSerial,
                             stopStatus = emulatorStopStatus,
@@ -693,6 +698,8 @@ private fun AndyShell(
                                 val selectedDevice = devices.firstOrNull { it.serial == selectedSerial }
                                 onPopOutMirror(selectedSerial, selectedDevice?.displayName ?: selectedSerial)
                             },
+                            selectedPackage = workspaceState.selectedPackage,
+                            onSelectedPackageChange = { pkg -> updateWorkspace { it.copy(selectedPackage = pkg) } }
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -701,7 +708,14 @@ private fun AndyShell(
                             workspaceState.appsDetailsPaneHeight,
                             onPaneChange = { listWidth, detailsHeight -> updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneHeight = detailsHeight) } },
                         )
-                        AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial, logcatState)
+                        AndyDestination.Logcat -> LogcatScreen(
+                            logcat = services.logcat,
+                            appsService = services.apps,
+                            serial = selectedSerial,
+                            state = logcatState,
+                            selectedPackage = workspaceState.selectedPackage,
+                            onSelectedPackageChange = { pkg -> updateWorkspace { it.copy(selectedPackage = pkg) } }
+                        )
                         AndyDestination.Intents -> IntentsScreen(services, selectedSerial)
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
                         AndyDestination.ComputerFiles -> HostFilesScreen(
@@ -1647,10 +1661,15 @@ private fun CatalogScreen(avd: AvdService) {
     var images by remember { mutableStateOf<List<SystemImage>>(emptyList()) }
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     var profiles by remember { mutableStateOf<List<AvdProfile>>(emptyList()) }
-    var query by remember { mutableStateOf("api:36 variant:google") }
+    var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+
+    var selectedVariants by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedAbis by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedStates by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var apiRange by remember { mutableStateOf<ClosedFloatingPointRange<Float>?>(null) }
 
     fun refresh() {
         scope.launch {
@@ -1662,61 +1681,101 @@ private fun CatalogScreen(avd: AvdService) {
         }
     }
     LaunchedEffect(Unit) { refresh() }
+
+    val apiBounds = remember(images) {
+        val levels = images.map { it.apiLevel }
+        (levels.minOrNull() ?: 10)..(levels.maxOrNull() ?: 36)
+    }
+    val availableVariants = remember(images) { images.map { it.variant }.distinct().sorted() }
+    val availableAbis = remember(images) { images.map { it.abi }.distinct().sorted() }
+    val activeRange = apiRange ?: apiBounds.first.toFloat()..apiBounds.last.toFloat()
+
     val filtered = images.filter { image ->
-        query.split(" ").filter { it.isNotBlank() }.all { term ->
-            image.packageId.contains(term.removePrefix("api:"), ignoreCase = true) ||
-                image.variant.contains(term.removePrefix("variant:"), ignoreCase = true) ||
-                image.api.contains(term.removePrefix("api:"), ignoreCase = true)
-        }
+        val inRange = image.apiLevel.toFloat() in activeRange
+        val variantOk = selectedVariants.isEmpty() || image.variant in selectedVariants
+        val abiOk = selectedAbis.isEmpty() || image.abi in selectedAbis
+        val stateOk = selectedStates.isEmpty() || (if (image.installed) "Installed" in selectedStates else "Available" in selectedStates)
+        val queryOk = query.isBlank() || image.packageId.contains(query, true) || image.variant.contains(query, true) || image.api.contains(query, true)
+        inRange && variantOk && abiOk && stateOk && queryOk
+    }
+
+    fun resetFilters() {
+        selectedVariants = emptySet()
+        selectedAbis = emptySet()
+        selectedStates = emptySet()
+        apiRange = null
+        query = ""
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Toolbar("System images", "${images.count { it.installed }} installed · ${avds.size} AVDs · ${profiles.size} profiles", onPrimary = { refresh() }, primaryLabel = if (loading) "Loading" else "Refresh catalog")
         if (status.isNotBlank()) Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        TextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-        TableHeader(listOf("API" to 90.dp, "Variant" to 300.dp, "ABI" to 150.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
-        LazyColumn {
-            items(filtered.take(240)) { image ->
-                TableRow {
-                    MonoCell(image.api, 90.dp, TextPrimary)
-                    MonoCell(image.variant, 300.dp, TextPrimary)
-                    MonoCell(image.abi, 150.dp, TextSecondary)
-                    MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
-                    Box(Modifier.width(100.dp)) {
-                        if (image.installed) {
-                            OutlinedButton(
-                                onClick = {
-                                    val refs = avds.filter { it.referencesImage(image) }
-                                    if (refs.isNotEmpty()) {
-                                        status = "Blocked: used by ${refs.joinToString { it.name }}"
-                                    } else {
-                                        pendingConfirmation = PendingConfirmation("Delete system image?", image.packageId) {
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CatalogFilterSidebar(
+                apiBounds = apiBounds,
+                activeRange = activeRange,
+                onRangeChange = { apiRange = it },
+                availableVariants = availableVariants,
+                selectedVariants = selectedVariants,
+                onVariantsChange = { selectedVariants = it },
+                availableAbis = availableAbis,
+                selectedAbis = selectedAbis,
+                onAbisChange = { selectedAbis = it },
+                selectedStates = selectedStates,
+                onStatesChange = { selectedStates = it },
+                onReset = { resetFilters() },
+            )
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search package, variant, api", color = TextSecondary) }, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                Text("${filtered.size} of ${images.size} images", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                TableHeader(listOf("API" to 70.dp, "Variant" to 340.dp, "ABI" to 130.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
+                LazyColumn {
+                    items(filtered.take(240)) { image ->
+                        TableRow {
+                            MonoCell(image.api, 70.dp, TextPrimary)
+                            Row(Modifier.width(340.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(image.variant, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                image.badges.forEach { badge -> SystemImageBadgeChip(badge) }
+                            }
+                            MonoCell(image.abi, 130.dp, TextSecondary)
+                            MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
+                            Box(Modifier.width(100.dp)) {
+                                if (image.installed) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val refs = avds.filter { it.referencesImage(image) }
+                                            if (refs.isNotEmpty()) {
+                                                status = "Blocked: used by ${refs.joinToString { it.name }}"
+                                            } else {
+                                                pendingConfirmation = PendingConfirmation("Delete system image?", image.packageId) {
+                                                    scope.launch {
+                                                        val result = avd.uninstallSystemImage(image.packageId)
+                                                        status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                                        refresh()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    ) { Text("Delete", fontSize = 11.sp) }
+                                } else {
+                                    Button(
+                                        onClick = {
                                             scope.launch {
-                                                val result = avd.uninstallSystemImage(image.packageId)
-                                                status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                                status = "Downloading ${image.packageId}..."
+                                                val result = avd.installSystemImage(image.packageId)
+                                                status = if (result.isSuccess) result.stdout.ifBlank { "Installed ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
                                                 refresh()
                                             }
-                                        }
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text("Delete", fontSize = 11.sp) }
-                        } else {
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        status = "Downloading ${image.packageId}..."
-                                        val result = avd.installSystemImage(image.packageId)
-                                        status = if (result.isSuccess) result.stdout.ifBlank { "Installed ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
-                                        refresh()
-                                    }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                colors = primaryButtonColors(),
-                            ) { Text("Download", fontSize = 11.sp) }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        colors = primaryButtonColors(),
+                                    ) { Text("Download", fontSize = 11.sp) }
+                                }
+                            }
+                            MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
                         }
                     }
-                    MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
                 }
             }
         }
@@ -1725,6 +1784,92 @@ private fun CatalogScreen(avd: AvdService) {
                 pendingConfirmation = null
                 confirmation.onConfirm()
             })
+        }
+    }
+}
+
+@Composable
+private fun SystemImageBadgeChip(badge: SystemImageBadge) {
+    val color = when (badge) {
+        SystemImageBadge.PlayStore, SystemImageBadge.Tv -> AndyColors.Blue
+        SystemImageBadge.Wear, SystemImageBadge.Automotive -> AndyColors.Orange
+    }
+    Box(
+        Modifier.height(18.dp)
+            .background(color.copy(alpha = 0.22f), RoundedCornerShape(AndyRadius.Pill))
+            .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.Pill))
+            .padding(horizontal = 7.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(badge.label, color = color, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 9.sp, lineHeight = 12.sp)
+    }
+}
+
+@Composable
+private fun CatalogFilterSidebar(
+    apiBounds: IntRange,
+    activeRange: ClosedFloatingPointRange<Float>,
+    onRangeChange: (ClosedFloatingPointRange<Float>) -> Unit,
+    availableVariants: List<String>,
+    selectedVariants: Set<String>,
+    onVariantsChange: (Set<String>) -> Unit,
+    availableAbis: List<String>,
+    selectedAbis: Set<String>,
+    onAbisChange: (Set<String>) -> Unit,
+    selectedStates: Set<String>,
+    onStatesChange: (Set<String>) -> Unit,
+    onReset: () -> Unit,
+) {
+    Column(
+        Modifier.width(240.dp).fillMaxHeight()
+            .background(Panel, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            val isAll = activeRange.start <= apiBounds.first && activeRange.endInclusive >= apiBounds.last
+            Text("API LEVEL${if (isAll) "  (all)" else "  (${activeRange.start.toInt()} – ${activeRange.endInclusive.toInt()})"}", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+            if (apiBounds.first < apiBounds.last) {
+                RangeSlider(
+                    value = activeRange,
+                    onValueChange = onRangeChange,
+                    valueRange = apiBounds.first.toFloat()..apiBounds.last.toFloat(),
+                    steps = (apiBounds.last - apiBounds.first - 1).coerceAtLeast(0),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("${apiBounds.first}", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                    Text("${apiBounds.last}", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                }
+            }
+        }
+        FilterCheckboxGroup("VARIANT", availableVariants, selectedVariants, onVariantsChange)
+        FilterCheckboxGroup("ABI", availableAbis, selectedAbis, onAbisChange)
+        FilterCheckboxGroup("STATE", listOf("Installed", "Available"), selectedStates, onStatesChange)
+        TextButton(onClick = onReset) { Text("Reset filters", color = AndyColors.Orange, fontFamily = MonoFont, fontSize = 12.sp) }
+    }
+}
+
+@Composable
+private fun FilterCheckboxGroup(
+    title: String,
+    options: List<String>,
+    selected: Set<String>,
+    onChange: (Set<String>) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+        options.forEach { option ->
+            Row(
+                Modifier.fillMaxWidth().height(26.dp).clickable {
+                    onChange(if (option in selected) selected - option else selected + option)
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = option in selected, onCheckedChange = { checked -> onChange(if (checked) selected + option else selected - option) }, modifier = Modifier.size(28.dp))
+                Text(option, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp))
+            }
         }
     }
 }
@@ -1741,10 +1886,12 @@ private fun SnapshotsScreen(avd: AvdService) {
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     var selectedAvd by remember { mutableStateOf<VirtualDevice?>(null) }
     var snapshots by remember { mutableStateOf<List<EmulatorSnapshot>>(emptyList()) }
-    var snapshotName by remember { mutableStateOf("manual") }
     var status by remember { mutableStateOf("Select an AVD") }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var savingSnapshot by remember { mutableStateOf(false) }
+
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var renameSnapshotTarget by remember { mutableStateOf<EmulatorSnapshot?>(null) }
 
     fun refresh() {
         scope.launch {
@@ -1768,7 +1915,14 @@ private fun SnapshotsScreen(avd: AvdService) {
     LaunchedEffect(Unit) { refresh() }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Toolbar("Snapshots", status, onPrimary = { refresh() }, primaryLabel = "Refresh")
+        val target = selectedAvd
+        val isRunning = target?.running == true
+        Toolbar(
+            title = "Snapshots",
+            subtitle = status,
+            onPrimary = if (isRunning && !savingSnapshot) { { showSaveDialog = true } } else null,
+            primaryLabel = "+ Save snapshot"
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             avds.forEach { row ->
                 FilterPill(row.name, selectedAvd?.name == row.name, if (row.running) Green else Rust) {
@@ -1777,78 +1931,348 @@ private fun SnapshotsScreen(avd: AvdService) {
                 }
             }
         }
-        PanelCard {
-            val avdRow = selectedAvd
-            Text(avdRow?.name ?: "No AVD", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextField(snapshotName, { snapshotName = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }, singleLine = true, modifier = Modifier.width(180.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-                Button(
-                    onClick = {
-                        val target = avdRow ?: return@Button
-                        scope.launch {
-                            savingSnapshot = true
-                            val name = snapshotName
-                            status = "Saving snapshot $name..."
-                            try {
-                                val result = avd.saveSnapshot(target.name, name)
-                                snapshots = avd.listSnapshots(target.name)
-                                status = if (result.isSuccess) {
-                                    result.stdout.ifBlank { "Saved $name" }
-                                } else {
-                                    result.stderr.ifBlank { result.stdout.ifBlank { "Failed to save $name" } }
-                                }
-                            } finally {
-                                savingSnapshot = false
+
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 220.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth().weight(1f)
+        ) {
+            items(snapshots) { snapshot ->
+                SnapshotCard(
+                    snapshot = snapshot,
+                    selectedAvd = selectedAvd,
+                    avd = avd,
+                    scope = scope,
+                    onStatusChange = { status = it },
+                    onRefresh = { refresh() },
+                    onDeleteClick = { snap ->
+                        val targetAvd = selectedAvd ?: return@SnapshotCard
+                        pendingConfirmation = PendingConfirmation("Delete snapshot?", "${targetAvd.name} / ${snap.name}") {
+                            scope.launch {
+                                val result = avd.deleteSnapshot(targetAvd.name, snap.name)
+                                status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${snap.name}" } else result.stderr.ifBlank { result.stdout }
+                                refreshSnapshots(targetAvd)
                             }
                         }
                     },
-                    enabled = avdRow?.running == true && snapshotName.isNotBlank() && !savingSnapshot,
-                    colors = primaryButtonColors(),
-                ) { Text(if (savingSnapshot) "Saving..." else "Save current state") }
-            }
-        }
-        TableHeader(listOf("NAME" to 1.dp, "SOURCE" to 120.dp, "ACTIONS" to 220.dp))
-        LazyColumn {
-            items(snapshots) { snapshot ->
-                TableRow {
-                    MonoCell(snapshot.name, 1.dp, TextPrimary, Modifier.weight(1f))
-                    MonoCell(snapshot.source, 120.dp, TextSecondary)
-                    Row(Modifier.width(220.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                val target = selectedAvd ?: return@OutlinedButton
-                                scope.launch {
-                                    val result = avd.restoreSnapshot(target.name, snapshot.name)
-                                    status = if (result.isSuccess) result.stdout.ifBlank { "Restored ${snapshot.name}" } else result.stderr.ifBlank { result.stdout }
-                                    refresh()
-                                }
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        ) { Text("Restore", fontSize = 11.sp) }
-                        OutlinedButton(
-                            onClick = {
-                                val target = selectedAvd ?: return@OutlinedButton
-                                pendingConfirmation = PendingConfirmation("Delete snapshot?", "${target.name} / ${snapshot.name}") {
-                                    scope.launch {
-                                        val result = avd.deleteSnapshot(target.name, snapshot.name)
-                                        status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${snapshot.name}" } else result.stderr.ifBlank { result.stdout }
-                                        refreshSnapshots(target)
-                                    }
-                                }
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        ) { Text("Delete", fontSize = 11.sp) }
+                    onRenameClick = { snap ->
+                        renameSnapshotTarget = snap
                     }
-                }
+                )
             }
+
         }
+
         pendingConfirmation?.let { confirmation ->
             ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
                 pendingConfirmation = null
                 confirmation.onConfirm()
             })
         }
+
+        if (showSaveDialog) {
+            SaveSnapshotDialog(
+                onDismiss = { showSaveDialog = false },
+                onSave = { name ->
+                    showSaveDialog = false
+                    val activeAvd = selectedAvd ?: return@SaveSnapshotDialog
+                    scope.launch {
+                        savingSnapshot = true
+                        status = "Saving snapshot $name..."
+                        try {
+                            val result = avd.saveSnapshot(activeAvd.name, name)
+                            snapshots = avd.listSnapshots(activeAvd.name)
+                            status = if (result.isSuccess) {
+                                result.stdout.ifBlank { "Saved $name" }
+                            } else {
+                                result.stderr.ifBlank { result.stdout.ifBlank { "Failed to save $name" } }
+                            }
+                        } finally {
+                            savingSnapshot = false
+                        }
+                    }
+                }
+            )
+        }
+
+        renameSnapshotTarget?.let { snapshot ->
+            RenameSnapshotDialog(
+                snapshotName = snapshot.name,
+                onDismiss = { renameSnapshotTarget = null },
+                onRename = { newName ->
+                    renameSnapshotTarget = null
+                    val activeAvd = selectedAvd ?: return@RenameSnapshotDialog
+                    scope.launch {
+                        status = "Renaming snapshot ${snapshot.name} to $newName..."
+                        val result = avd.renameSnapshot(activeAvd.name, snapshot.name, newName)
+                        status = if (result.isSuccess) result.stdout.ifBlank { "Renamed ${snapshot.name} to $newName" } else result.stderr.ifBlank { result.stdout }
+                        refreshSnapshots(activeAvd)
+                    }
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun SnapshotCard(
+    snapshot: EmulatorSnapshot,
+    selectedAvd: VirtualDevice?,
+    avd: AvdService,
+    scope: CoroutineScope,
+    onStatusChange: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onDeleteClick: (EmulatorSnapshot) -> Unit,
+    onRenameClick: (EmulatorSnapshot) -> Unit,
+) {
+    val bitmap = remember(snapshot.screenshotPath) {
+        snapshot.screenshotPath?.let { loadImageBitmap(it) }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(AndyRadius.R3))
+            .background(Panel, RoundedCornerShape(AndyRadius.R3))
+            .clip(RoundedCornerShape(AndyRadius.R3))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(160.dp)
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = snapshot.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Image(
+                    painter = painterResource(Res.drawable.hardware_capture),
+                    contentDescription = "No screenshot",
+                    modifier = Modifier.size(28.dp),
+                    colorFilter = ColorFilter.tint(TextSecondary.copy(alpha = 0.4f))
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = snapshot.name,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clickable { onRenameClick(snapshot) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.size(12.dp)) {
+                        drawLine(
+                            color = TextSecondary,
+                            start = Offset(2.dp.toPx(), 10.dp.toPx()),
+                            end = Offset(10.dp.toPx(), 2.dp.toPx()),
+                            strokeWidth = 2.dp.toPx()
+                        )
+                        drawCircle(
+                            color = TextSecondary,
+                            center = Offset(10.dp.toPx(), 2.dp.toPx()),
+                            radius = 1.5.dp.toPx()
+                        )
+                    }
+                }
+            }
+
+            val detailsText = listOfNotNull(snapshot.size, snapshot.createdTime).joinToString("  ·  ")
+            Text(
+                text = detailsText.ifBlank { "--" },
+                color = TextSecondary,
+                fontSize = 11.sp,
+                fontFamily = MonoFont
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (snapshot.compatible) {
+                    Text(
+                        text = "Restore",
+                        color = Cyan,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable {
+                            val target = selectedAvd ?: return@clickable
+                            scope.launch {
+                                onStatusChange("Restoring ${snapshot.name}...")
+                                val result = avd.restoreSnapshot(target.name, snapshot.name)
+                                onStatusChange(if (result.isSuccess) result.stdout.ifBlank { "Restored ${snapshot.name}" } else result.stderr.ifBlank { result.stdout })
+                                onRefresh()
+                            }
+                        }
+                    )
+                } else {
+                    Text(
+                        text = "Incompatible",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Text(
+                    text = "Delete",
+                    color = Red,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable {
+                        onDeleteClick(snapshot)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SaveStateCard(
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(262.dp)
+            .border(
+                BorderStroke(1.dp, SolidColor(Color.White.copy(alpha = 0.08f))),
+                shape = RoundedCornerShape(AndyRadius.R3)
+            )
+            .background(if (enabled) Panel else Panel.copy(alpha = 0.5f), RoundedCornerShape(AndyRadius.R3))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Canvas(modifier = Modifier.size(24.dp)) {
+                val sizePx = size.width
+                val strokePx = 2.dp.toPx()
+                drawLine(
+                    color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                    start = Offset(0f, sizePx / 2f),
+                    end = Offset(sizePx, sizePx / 2f),
+                    strokeWidth = strokePx
+                )
+                drawLine(
+                    color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                    start = Offset(sizePx / 2f, 0f),
+                    end = Offset(sizePx / 2f, sizePx),
+                    strokeWidth = strokePx
+                )
+            }
+            Text(
+                text = "Save current state",
+                color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun SaveSnapshotDialog(
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by remember { mutableStateOf("manual") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Save snapshot", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Enter a name for the new snapshot:", color = TextSecondary, fontSize = 12.sp)
+                TextField(
+                    text,
+                    { text = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+                    colors = fieldColors(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(text) },
+                enabled = text.isNotBlank(),
+                colors = primaryButtonColors()
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun RenameSnapshotDialog(
+    snapshotName: String,
+    onDismiss: () -> Unit,
+    onRename: (String) -> Unit
+) {
+    var text by remember { mutableStateOf(snapshotName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Rename snapshot", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Enter a new name for the snapshot:", color = TextSecondary, fontSize = 12.sp)
+                TextField(
+                    text,
+                    { text = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+                    colors = fieldColors(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onRename(text) },
+                enabled = text.isNotBlank() && text != snapshotName,
+                colors = primaryButtonColors()
+            ) { Text("Rename") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
@@ -1866,6 +2290,8 @@ private fun LiveScreen(
     onBugSaved: () -> Unit,
     logcatState: LogcatState,
     onPopOutMirror: () -> Unit,
+    selectedPackage: String?,
+    onSelectedPackageChange: (String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -1955,17 +2381,19 @@ private fun LiveScreen(
         Column(Modifier.fillMaxSize().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             PanelCard(Modifier.fillMaxWidth().height(localControlsPaneHeight.dp)) {
                 Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterPill("SD", maxSize == "480", Cyan) { applyPreset("480", "2") }
                     FilterPill("HD", maxSize == "720", Green) { applyPreset("720", "4") }
                     FilterPill("FHD", maxSize == "1080", Yellow) { applyPreset("1080", "8") }
                     FilterPill("Max", maxSize == "1440", Rust) { applyPreset("1440", "16") }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     LabeledField("Max px", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
                     LabeledField("Mbps", bitRateMbps, { bitRateMbps = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.width(88.dp))
                     LabeledField("FPS", maxFps, { maxFps = it.filter(Char::isDigit) }, Modifier.width(78.dp))
-                    Box(Modifier.padding(bottom = 2.dp)) {
+                    Box(Modifier.align(Alignment.Bottom).padding(bottom = 2.dp)) {
                         Button(onClick = {
                             if (serial != null) scope.launch {
                                 val result = services.mirror.connect(serial, mirrorConfig())
@@ -2008,7 +2436,16 @@ private fun LiveScreen(
                 onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(170f, 520f) },
                 onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
             )
-            LogcatPanel(services.logcat, serial, Modifier.fillMaxWidth().weight(0.55f), compact = true, state = logcatState)
+            LogcatPanel(
+                logcat = services.logcat,
+                appsService = services.apps,
+                serial = serial,
+                selectedPackage = selectedPackage,
+                onSelectedPackageChange = onSelectedPackageChange,
+                modifier = Modifier.fillMaxWidth().weight(0.55f),
+                compact = true,
+                state = logcatState
+            )
         }
     }
     if (clipDialogVisible) {
@@ -2646,17 +3083,37 @@ class LogcatState {
     var lastSearch by mutableStateOf<String?>(null)
     var lastLevels by mutableStateOf<Set<LogLevel>?>(null)
     var lastLive by mutableStateOf(true)
+    var lastPackage by mutableStateOf<String?>(null)
 }
 
 @Composable
-private fun LogcatScreen(logcat: LogcatService, serial: String?, state: LogcatState) {
-    LogcatPanel(logcat, serial, Modifier.fillMaxSize(), compact = false, state = state)
+private fun LogcatScreen(
+    logcat: LogcatService,
+    appsService: AppService,
+    serial: String?,
+    state: LogcatState,
+    selectedPackage: String?,
+    onSelectedPackageChange: (String?) -> Unit
+) {
+    LogcatPanel(
+        logcat = logcat,
+        appsService = appsService,
+        serial = serial,
+        selectedPackage = selectedPackage,
+        onSelectedPackageChange = onSelectedPackageChange,
+        modifier = Modifier.fillMaxSize(),
+        compact = false,
+        state = state
+    )
 }
 
 @Composable
 private fun LogcatPanel(
     logcat: LogcatService,
+    appsService: AppService,
     serial: String?,
+    selectedPackage: String?,
+    onSelectedPackageChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean,
     state: LogcatState = remember { LogcatState() }
@@ -2669,14 +3126,16 @@ private fun LogcatPanel(
         val parametersChanged = serial != state.lastSerial ||
                 state.search != state.lastSearch ||
                 currentLevels != state.lastLevels ||
-                state.live != state.lastLive
+                state.live != state.lastLive ||
+                selectedPackage != state.lastPackage
 
         if (parametersChanged) {
             streamJob?.cancel()
             streamJob = null
             val filtersChanged = serial != state.lastSerial ||
                     state.search != state.lastSearch ||
-                    currentLevels != state.lastLevels
+                    currentLevels != state.lastLevels ||
+                    selectedPackage != state.lastPackage
             if (filtersChanged) {
                 state.entries = emptyList()
             }
@@ -2684,10 +3143,11 @@ private fun LogcatPanel(
             state.lastSearch = state.search
             state.lastLevels = currentLevels
             state.lastLive = state.live
+            state.lastPackage = selectedPackage
 
             if (serial == null || !state.live) return
             streamJob = scope.launch {
-                logcat.stream(serial, LogcatFilter(state.search, currentLevels)).collect { batch ->
+                logcat.stream(serial, LogcatFilter(state.search, currentLevels, packageName = selectedPackage)).collect { batch ->
                     state.entries = (state.entries + batch).takeLast(1200)
                 }
             }
@@ -2697,38 +3157,293 @@ private fun LogcatPanel(
                 state.lastSearch = state.search
                 state.lastLevels = currentLevels
                 state.lastLive = state.live
+                state.lastPackage = selectedPackage
                 streamJob = scope.launch {
-                    logcat.stream(serial, LogcatFilter(state.search, currentLevels)).collect { batch ->
+                    logcat.stream(serial, LogcatFilter(state.search, currentLevels, packageName = selectedPackage)).collect { batch ->
                         state.entries = (state.entries + batch).takeLast(1200)
                     }
                 }
             }
         }
     }
-    LaunchedEffect(serial, state.live, state.search, state.levels.values.toList()) { restart() }
+    LaunchedEffect(serial, state.live, state.search, state.levels.values.toList(), selectedPackage) { restart() }
 
     PanelCard(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            if (!compact) {
-                Text("Logcat", color = TextPrimary, fontWeight = FontWeight.Bold)
-            }
-            TextField(value = state.search, onValueChange = { state.search = it }, placeholder = { Text("filter or package:com.example", color = TextSecondary) }, singleLine = true, modifier = Modifier.weight(1f).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-            LogLevel.entries.filter { it != LogLevel.Silent }.forEach { level ->
-                FilterPill(level.name.take(1), state.levels[level] == true, levelColor(level)) { state.levels[level] = !(state.levels[level] ?: false) }
-            }
-            Button(onClick = { state.live = !state.live }, colors = ButtonDefaults.buttonColors(containerColor = if (state.live) Rust else PanelSoft)) { Text(if (state.live) "Live" else "Paused") }
-            OutlinedButton(onClick = {
-                state.entries = emptyList()
-                if (serial != null) {
-                    scope.launch {
-                        logcat.clear(serial)
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val toolbarWidth = maxWidth
+            var overflowExpanded by remember { mutableStateOf(false) }
+
+            val showLevelsOnToolbar = toolbarWidth >= 720.dp
+            val showActionsOnToolbar = toolbarWidth >= 520.dp
+            val showPackageOnToolbar = toolbarWidth >= 380.dp
+            val showOverflowButton = !showLevelsOnToolbar || !showActionsOnToolbar || !showPackageOnToolbar
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (!compact && toolbarWidth >= 800.dp) {
+                    Text("Logcat", color = TextPrimary, fontWeight = FontWeight.Bold)
+                }
+                TextField(
+                    value = state.search,
+                    onValueChange = { state.search = it },
+                    placeholder = { Text("filter or package:com.example", color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).height(54.dp),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
+                    colors = fieldColors()
+                )
+
+                if (showPackageOnToolbar) {
+                    PackageSelector(
+                        appsService = appsService,
+                        serial = serial,
+                        selectedPackage = selectedPackage,
+                        onSelectedPackageChange = onSelectedPackageChange,
+                        modifier = if (compact) Modifier.widthIn(max = 180.dp) else Modifier.widthIn(max = 300.dp)
+                    )
+                }
+
+                if (showLevelsOnToolbar) {
+                    LogLevel.entries.filter { it != LogLevel.Silent }.forEach { level ->
+                        FilterPill(
+                            text = level.name.take(1),
+                            selected = state.levels[level] == true,
+                            color = levelColor(level)
+                        ) {
+                            state.levels[level] = !(state.levels[level] ?: false)
+                        }
                     }
                 }
-            }) {
-                Text("Clear")
+
+                if (showActionsOnToolbar) {
+                    Button(
+                        onClick = { state.live = !state.live },
+                        colors = ButtonDefaults.buttonColors(containerColor = if (state.live) Rust else PanelSoft)
+                    ) {
+                        Text(if (state.live) "Live" else "Paused")
+                    }
+                    OutlinedButton(onClick = {
+                        state.entries = emptyList()
+                        if (serial != null) {
+                            scope.launch {
+                                logcat.clear(serial)
+                            }
+                        }
+                    }) {
+                        Text("Clear")
+                    }
+                }
+
+                if (showOverflowButton) {
+                    Box {
+                        OutlinedButton(
+                            onClick = { overflowExpanded = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                            shape = RoundedCornerShape(AndyRadius.R2),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text("More ▼", fontSize = 12.sp)
+                        }
+
+                        DropdownMenu(
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false },
+                            containerColor = AndyColors.Neutral750,
+                            modifier = Modifier.width(if (!showPackageOnToolbar) 260.dp else 220.dp)
+                        ) {
+                            if (!showPackageOnToolbar) {
+                                Text("Package Filter", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                                PackageSelector(
+                                    appsService = appsService,
+                                    serial = serial,
+                                    selectedPackage = selectedPackage,
+                                    onSelectedPackageChange = onSelectedPackageChange,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+                                Spacer(Modifier.height(4.dp))
+                            }
+
+                            if (!showLevelsOnToolbar) {
+                                Text("Log Levels", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    LogLevel.entries.filter { it != LogLevel.Silent }.forEach { level ->
+                                        FilterPill(
+                                            text = level.name.take(1),
+                                            selected = state.levels[level] == true,
+                                            color = levelColor(level)
+                                        ) {
+                                            state.levels[level] = !(state.levels[level] ?: false)
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+                                Spacer(Modifier.height(4.dp))
+                            }
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Box(Modifier.size(8.dp).background(if (state.live) Green else Rust, RoundedCornerShape(4.dp)))
+                                        Text(if (state.live) "Pause Stream" else "Resume Stream", color = TextPrimary, fontSize = 13.sp)
+                                    }
+                                },
+                                onClick = {
+                                    state.live = !state.live
+                                    overflowExpanded = false
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text("Clear Logs", color = TextPrimary, fontSize = 13.sp)
+                                    }
+                                },
+                                onClick = {
+                                    state.entries = emptyList()
+                                    if (serial != null) {
+                                        scope.launch {
+                                            logcat.clear(serial)
+                                        }
+                                    }
+                                    overflowExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
         LogcatEntryList(state.entries, compact, Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun PackageSelector(
+    appsService: AppService,
+    serial: String?,
+    selectedPackage: String?,
+    onSelectedPackageChange: (String?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var installedApps by remember(serial) { mutableStateOf<List<AndroidApp>>(emptyList()) }
+    var searchAppQuery by remember { mutableStateOf("") }
+
+    LaunchedEffect(serial, expanded) {
+        if (expanded && serial != null) {
+            runCatching { appsService.listApps(serial) }
+                .onSuccess { apps ->
+                    installedApps = apps.sortedWith(compareBy({ it.label?.lowercase() ?: "" }, { it.packageName }))
+                }
+        }
+    }
+
+    Box(modifier = modifier) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = TextPrimary
+            ),
+            shape = RoundedCornerShape(AndyRadius.R2),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            val selectedApp = installedApps.firstOrNull { it.packageName == selectedPackage }
+            val label = selectedApp?.label ?: selectedPackage ?: "All"
+            Text("Pkg: $label", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(4.dp))
+            Text("▼", color = TextSecondary, fontSize = 10.sp)
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = AndyColors.Neutral750,
+            modifier = Modifier.width(320.dp)
+        ) {
+            TextField(
+                value = searchAppQuery,
+                onValueChange = { searchAppQuery = it },
+                placeholder = { Text("Search packages...", color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .height(48.dp),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
+                colors = fieldColors()
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            val filteredApps = installedApps.filter {
+                searchAppQuery.isBlank() ||
+                it.packageName.contains(searchAppQuery, true) ||
+                it.label?.contains(searchAppQuery, true) == true
+            }
+
+            Box(
+                modifier = Modifier
+                    .heightIn(max = 300.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Column {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                "All Packages",
+                                color = if (selectedPackage == null) Green else TextPrimary,
+                                fontWeight = if (selectedPackage == null) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        onClick = {
+                            onSelectedPackageChange(null)
+                            expanded = false
+                            searchAppQuery = ""
+                        }
+                    )
+
+                    filteredApps.forEach { app ->
+                        val isSelected = app.packageName == selectedPackage
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        app.label ?: app.packageName,
+                                        color = if (isSelected) Green else TextPrimary,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 13.sp
+                                    )
+                                    if (app.label != null) {
+                                        Text(
+                                            app.packageName,
+                                            color = TextSecondary,
+                                            fontSize = 10.sp,
+                                            fontFamily = MonoFont
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                onSelectedPackageChange(app.packageName)
+                                expanded = false
+                                searchAppQuery = ""
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2960,6 +3675,7 @@ private fun AppsScreen(
     var localListPaneWidth by remember(listPaneWidth) { mutableStateOf(listPaneWidth) }
     var localDetailsPaneHeight by remember(detailsPaneHeight) { mutableStateOf(detailsPaneHeight) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    val iconCache = remember(serial) { mutableStateMapOf<String, ByteArray?>() }
 
     fun refresh() {
         if (serial == null) {
@@ -2990,7 +3706,7 @@ private fun AppsScreen(
         Column(Modifier.width(localListPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Toolbar("Apps", status, onPrimary = { refresh() }, primaryLabel = "Refresh")
             TextField(query, { query = it }, placeholder = { Text("Filter packages", color = TextSecondary) }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-            TableHeader(listOf("TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
+            TableHeader(listOf("" to 56.dp, "TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
             LazyColumn {
                 items(filtered) { app ->
                     TableRow(Modifier.clickable {
@@ -3000,6 +3716,9 @@ private fun AppsScreen(
                             activities = apps.listActivities(serial, app.packageName)
                         }
                     }) {
+                        Box(Modifier.width(56.dp)) {
+                            if (serial != null) AppIconCell(serial, app.packageName, apps, iconCache)
+                        }
                         MonoCell(if (app.system) "system" else "user", 70.dp, if (app.system) TextSecondary else Green)
                         MonoCell(if (app.enabled) "enabled" else "disabled", 80.dp, if (app.enabled) TextPrimary else Rust)
                         MonoCell(app.versionCode ?: "-", 90.dp, TextSecondary)
@@ -3097,7 +3816,8 @@ private fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial:
         Toolbar("Controls", status)
         PanelCard {
             Text("Radios and display", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { run("Airplane on", listOf("cmd", "connectivity", "airplane-mode", "enable")) }) { Text("Airplane on") }
                 OutlinedButton(onClick = { run("Airplane off", listOf("cmd", "connectivity", "airplane-mode", "disable")) }) { Text("Airplane off") }
                 Button(onClick = { run("WiFi on", listOf("svc", "wifi", "enable")) }) { Text("WiFi on") }
@@ -3105,7 +3825,8 @@ private fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial:
                 Button(onClick = { run("Data on", listOf("svc", "data", "enable")) }) { Text("Data on") }
                 OutlinedButton(onClick = { run("Data off", listOf("svc", "data", "disable")) }) { Text("Data off") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { run("Bluetooth on", listOf("cmd", "bluetooth_manager", "enable")) }) { Text("Bluetooth on") }
                 OutlinedButton(onClick = { run("Bluetooth off", listOf("cmd", "bluetooth_manager", "disable")) }) { Text("Bluetooth off") }
                 Button(onClick = { run("Dark mode on", listOf("cmd", "uimode", "night", "yes")) }) { Text("Dark on") }
@@ -3120,7 +3841,8 @@ private fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial:
         }
         PanelCard {
             Text("Debug values", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { run("Show taps on", listOf("settings", "put", "system", "show_touches", "1")) }) { Text("Taps on") }
                 OutlinedButton(onClick = { run("Show taps off", listOf("settings", "put", "system", "show_touches", "0")) }) { Text("Taps off") }
                 Button(onClick = { run("Pointer on", listOf("settings", "put", "system", "pointer_location", "1")) }) { Text("Pointer on") }
@@ -3128,7 +3850,8 @@ private fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial:
                 Button(onClick = { run("Bounds on", listOf("setprop", "debug.layout", "true")) }) { Text("Bounds on") }
                 OutlinedButton(onClick = { run("Bounds off", listOf("setprop", "debug.layout", "false")) }) { Text("Bounds off") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 Button(onClick = { run("Do not keep on", listOf("settings", "put", "global", "always_finish_activities", "1")) }) { Text("No keep on") }
                 OutlinedButton(onClick = { run("Do not keep off", listOf("settings", "put", "global", "always_finish_activities", "0")) }) { Text("No keep off") }
                 TextField(animationScale, { animationScale = it }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
@@ -3139,7 +3862,8 @@ private fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial:
         }
         PanelCard {
             Text("Hardware buttons", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { key("Power", MirrorInput.Power) }) { Text("Power") }
                 Button(onClick = { key("Vol up", MirrorInput.Key(24)) }) { Text("Vol +") }
                 Button(onClick = { key("Vol down", MirrorInput.Key(25)) }) { Text("Vol -") }
@@ -6415,6 +7139,27 @@ private fun TableRow(modifier: Modifier = Modifier, content: @Composable RowScop
 @Composable
 private fun MonoCell(text: String, width: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
     Text(text, color = color, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (modifier != Modifier) modifier else Modifier.width(width))
+}
+
+@Composable
+private fun AppIconCell(serial: String, packageName: String, apps: AppService, cache: MutableMap<String, ByteArray?>) {
+    var icon by remember(serial, packageName) { mutableStateOf(cache[packageName]) }
+    LaunchedEffect(serial, packageName) {
+        if (!cache.containsKey(packageName)) {
+            val bytes = runCatching { apps.getIcon(serial, packageName) }.getOrNull()
+            cache[packageName] = bytes
+            icon = bytes
+        }
+    }
+    val bitmap = remember(icon) { icon?.let { loadImageBitmap(it) } }
+    Box(
+        Modifier.padding(vertical = 4.dp).size(48.dp).clip(RoundedCornerShape(AndyRadius.R4)).background(AndyColors.Neutral750),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (bitmap != null) {
+            Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.fillMaxSize())
+        }
+    }
 }
 
 @Composable

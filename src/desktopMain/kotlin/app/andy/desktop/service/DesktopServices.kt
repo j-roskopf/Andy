@@ -41,6 +41,7 @@ import java.util.concurrent.TimeUnit
 import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 import kotlin.random.Random
+import kotlin.math.roundToInt
 import app.andy.desktop.updates.DesktopAppUpdateService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -194,13 +195,52 @@ class DesktopAvdService(
     private val locator: SdkLocator,
     private val preferredSdkPath: suspend () -> String? = { null },
 ) : AvdService {
+    private fun getDirectorySize(dir: File): Long {
+        var size = 0L
+        try {
+            if (dir.exists() && dir.isDirectory) {
+                dir.walkTopDown().forEach { file ->
+                    if (file.isFile) {
+                        size += file.length()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // ignore
+        }
+        return size
+    }
+
+    private fun estimateSize(packageId: String): Long {
+        val id = packageId.lowercase()
+        return when {
+            "automotive-playstore" in id || "auto-playstore" in id -> 1_503_238_553L // ~1.4 GB
+            "automotive" in id || "auto" in id -> 1_395_864_371L // ~1.3 GB
+            "desktop" in id -> 873_809_510L // ~833.7 MB
+            "wear-signed" in id || "wear" in id -> 1_288_490_188L // ~1.2 GB
+            "google-tv" in id || "android-tv" in id || "tv-ps16k" in id -> 995_500_000L // ~925 - 949 MB
+            "aosp_std" in id || "aosp_atd" in id -> 712_000_000L // ~679 MB
+            "default" in id -> 810_800_000L // ~773.2 MB
+            "google_apis_playstore" in id || "playstore" in id -> 1_932_735_283L // ~1.8 - 2.1 GB
+            "google_apis" in id -> 1_825_361_100L // ~1.7 - 2.0 GB
+            else -> 1_500_000_000L // ~1.4 GB
+        }
+    }
+
     override suspend fun listSystemImages(): List<SystemImage> {
         val sdk = locator.discover(preferredSdkPath())
         val sdkManager = sdk.sdkManagerPath ?: return emptyList()
         val installed = runner.run(listOf(sdkManager, "--list_installed"), 30).stdout
         val available = runner.run(listOf(sdkManager, "--list"), 45).stdout
-        return (AndroidParsers.parseSystemImages(installed).map { it.copy(installed = true) } + AndroidParsers.parseSystemImages(available))
-            .distinctBy { it.packageId }
+        val parsedInstalled = AndroidParsers.parseSystemImages(installed).map { img ->
+            val dir = File(sdk.sdkPath, img.packageId.replace(';', File.separatorChar))
+            val size = if (dir.exists()) getDirectorySize(dir) else 0L
+            img.copy(installed = true, sizeOnDisk = size)
+        }
+        val parsedAvailable = AndroidParsers.parseSystemImages(available).map { img ->
+            img.copy(sizeOnDisk = estimateSize(img.packageId))
+        }
+        return (parsedInstalled + parsedAvailable).distinctBy { it.packageId }
     }
 
     override suspend fun listProfiles(): List<AvdProfile> {
@@ -331,10 +371,15 @@ class DesktopAvdService(
     override suspend fun listSnapshots(avdName: String): List<EmulatorSnapshot> {
         val serial = findRunningEmulatorSerial(avdName)
         val snapshots = mutableListOf<EmulatorSnapshot>()
+        val compatibleNames = mutableSetOf<String>()
         if (serial != null) {
             val adb = locator.discover(preferredSdkPath()).adbPath ?: return emptyList()
             val result = runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "list"), 12)
-            if (result.isSuccess) snapshots += AndroidParsers.parseSnapshots(result.stdout, avdName)
+            if (result.isSuccess) {
+                val parsed = AndroidParsers.parseSnapshots(result.stdout, avdName)
+                snapshots += parsed
+                compatibleNames += parsed.map { it.name }
+            }
         }
         val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return emptyList()
         val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return emptyList()
@@ -342,9 +387,98 @@ class DesktopAvdService(
             ?.filter { it.isDirectory || it.extension == "qcow2" || it.extension == "img" }
             ?.map { EmulatorSnapshot(it.nameWithoutExtension, avd.name, "disk") }
             .orEmpty()
+
         return snapshots
             .distinctBy { it.name }
+            .map { populateSnapshotMetadata(avd, it, snapshotsDir, compatibleNames, serial) }
             .sortedBy { it.name }
+    }
+
+    private fun populateSnapshotMetadata(
+        avd: VirtualDevice,
+        snapshot: EmulatorSnapshot,
+        snapshotsDir: File,
+        compatibleNames: Set<String>,
+        serial: String?
+    ): EmulatorSnapshot {
+        val folder = snapshotsDir.resolve(snapshot.name)
+        val isFolder = folder.exists() && folder.isDirectory
+
+        val totalSize: Long
+        val lastModified: Long
+        val screenshotPath: String?
+
+        if (isFolder) {
+            val files = folder.listFiles().orEmpty()
+            totalSize = files.sumOf { it.length() }
+            val latestFile = files.maxOfOrNull { it.lastModified() } ?: folder.lastModified()
+            lastModified = latestFile
+            val screenshotFile = folder.resolve("screenshot.png")
+            screenshotPath = if (screenshotFile.exists() && screenshotFile.isFile) screenshotFile.absolutePath else null
+        } else {
+            val file = listOf(
+                snapshotsDir.resolve("${snapshot.name}.qcow2"),
+                snapshotsDir.resolve("${snapshot.name}.img")
+            ).firstOrNull { it.exists() && it.isFile }
+
+            if (file != null) {
+                totalSize = file.length()
+                lastModified = file.lastModified()
+                screenshotPath = null
+            } else {
+                totalSize = 0L
+                lastModified = System.currentTimeMillis()
+                screenshotPath = null
+            }
+        }
+
+        val isCompatible = if (serial != null) {
+            snapshot.name in compatibleNames
+        } else {
+            if (isFolder) {
+                folder.resolve("compatible.pb").exists()
+            } else {
+                true
+            }
+        }
+
+        return snapshot.copy(
+            size = formatSize(totalSize),
+            createdTime = formatRelativeTime(lastModified),
+            screenshotPath = screenshotPath,
+            compatible = isCompatible
+        )
+    }
+
+    private fun formatSize(bytes: Long): String {
+        if (bytes <= 0) return "0 B"
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+        val value = bytes / Math.pow(1024.0, digitGroups.toDouble())
+        return if (digitGroups == 0) {
+            "$bytes B"
+        } else {
+            val formatted = ((value * 10).roundToInt() / 10.0).toString()
+            "$formatted ${units[digitGroups]}"
+        }
+    }
+
+    private fun formatRelativeTime(timestamp: Long): String {
+        val diff = System.currentTimeMillis() - timestamp
+        val seconds = diff / 1000
+        val minutes = seconds / 60
+        val hours = minutes / 60
+        val days = hours / 24
+
+        return when {
+            days > 0 -> "${days}d ago"
+            hours > 0 -> {
+                val remMinutes = minutes % 60
+                if (remMinutes > 0) "${hours}h${remMinutes}m ago" else "${hours}h ago"
+            }
+            minutes > 0 -> "${minutes}m ago"
+            else -> "just now"
+        }
     }
 
     override suspend fun saveSnapshot(avdName: String, snapshotName: String): CommandResult {
@@ -382,6 +516,23 @@ class DesktopAvdService(
         if (matches.isEmpty()) return CommandResult.failure("Snapshot not found: $snapshotName")
         matches.forEach { it.deleteRecursively() }
         return CommandResult.success("Deleted snapshot $snapshotName")
+    }
+
+    override suspend fun renameSnapshot(avdName: String, oldName: String, newName: String): CommandResult = withContext(Dispatchers.IO) {
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return@withContext CommandResult.failure("AVD not found")
+        val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return@withContext CommandResult.failure("Snapshots folder not found")
+        val matches = snapshotsDir.listFiles()?.filter { it.nameWithoutExtension == oldName }.orEmpty()
+        if (matches.isEmpty()) return@withContext CommandResult.failure("Snapshot not found: $oldName")
+        matches.forEach { file ->
+            val ext = file.extension
+            val newFile = if (ext.isEmpty()) {
+                File(file.parentFile, newName)
+            } else {
+                File(file.parentFile, "$newName.$ext")
+            }
+            file.renameTo(newFile)
+        }
+        CommandResult.success("Renamed snapshot $oldName to $newName")
     }
 
     private suspend fun runningEmulatorNames(): Set<String> = withContext(Dispatchers.IO) {
@@ -1160,7 +1311,44 @@ class DesktopAppService(
             .sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
     }
 
+    private fun getHelperFile(): File? {
+        val target = File(System.getProperty("user.home"), ".andy/helper/andy-helper.jar")
+        val resource = javaClass.classLoader.getResourceAsStream("andy-helper.jar") ?: return null
+        target.parentFile.mkdirs()
+        try {
+            resource.use { input ->
+                Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            target.setReadable(true, false)
+        } catch (_: Exception) {
+            if (!target.isFile || target.length() == 0L) return null
+        }
+        return target.takeIf { it.isFile && it.length() > 0 }
+    }
+
     private suspend fun queryAppLabels(serial: String): Map<String, String> {
+        val helperFile = getHelperFile()
+        if (helperFile != null) {
+            val adb = devices.adbPath()
+            if (adb != null) {
+                val remoteHelper = "/data/local/tmp/andy-helper.jar"
+                val pushResult = runner.run(listOf(adb, "-s", serial, "push", helperFile.absolutePath, remoteHelper))
+                if (pushResult.isSuccess) {
+                    val result = devices.shell(serial, listOf("CLASSPATH=$remoteHelper", "app_process", "/", "app.andy.helper.Helper", "list"))
+                    if (result.isSuccess && result.stdout.isNotBlank()) {
+                        val labels = mutableMapOf<String, String>()
+                        result.stdout.lineSequence().forEach { line ->
+                            val parts = line.split('\t')
+                            if (parts.size >= 2) {
+                                labels[parts[0]] = parts[1]
+                            }
+                        }
+                        return labels
+                    }
+                }
+            }
+        }
+
         val output = devices.shell(serial, listOf("dumpsys", "package")).stdout
         if (output.isBlank()) return emptyMap()
 
@@ -1216,6 +1404,26 @@ class DesktopAppService(
     override suspend fun listActivities(serial: String, packageName: String): List<AndroidActivity> {
         val output = devices.shell(serial, listOf("dumpsys", "package", packageName)).stdout
         return AndroidParsers.parsePackageActivities(packageName, output)
+    }
+
+    override suspend fun getIcon(serial: String, packageName: String): ByteArray? {
+        val helperFile = getHelperFile() ?: return null
+        val adb = devices.adbPath() ?: return null
+        val remoteHelper = "/data/local/tmp/andy-helper.jar"
+        runner.run(listOf(adb, "-s", serial, "push", helperFile.absolutePath, remoteHelper))
+
+        val result = devices.shell(serial, listOf("CLASSPATH=$remoteHelper", "app_process", "/", "app.andy.helper.Helper", "icon", packageName))
+        if (result.isSuccess) {
+            val base64 = result.stdout.trim()
+            if (base64.isNotEmpty()) {
+                return try {
+                    java.util.Base64.getDecoder().decode(base64)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+        return null
     }
 }
 
@@ -2217,6 +2425,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             recentHostFiles = props.getProperty("recentHostFiles").orEmpty().lines().filter { it.isNotBlank() },
             hostFileTreePaneWidth = props.getProperty("hostFileTreePaneWidth")?.toFloatOrNull() ?: 320f,
             hostFileSearchPaneWidth = props.getProperty("hostFileSearchPaneWidth")?.toFloatOrNull() ?: 430f,
+            selectedPackage = props.getProperty("selectedPackage")?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -2254,6 +2463,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("recentHostFiles", state.recentHostFiles.joinToString("\n"))
             setProperty("hostFileTreePaneWidth", state.hostFileTreePaneWidth.toString())
             setProperty("hostFileSearchPaneWidth", state.hostFileSearchPaneWidth.toString())
+            setProperty("selectedPackage", state.selectedPackage.orEmpty())
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
     }

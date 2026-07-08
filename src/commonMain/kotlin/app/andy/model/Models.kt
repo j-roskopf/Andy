@@ -29,6 +29,8 @@ data class SdkDiscovery(
     val hasEmulatorTools: Boolean get() = emulatorPath != null && avdManagerPath != null
 }
 
+enum class SystemImageBadge(val label: String) { PlayStore("Play"), Wear("Wear"), Tv("TV"), Automotive("Auto") }
+
 data class SystemImage(
     val packageId: String,
     val api: String,
@@ -36,7 +38,20 @@ data class SystemImage(
     val abi: String,
     val displayName: String,
     val installed: Boolean,
-)
+    val sizeOnDisk: Long = 0L,
+) {
+    val apiLevel: Int get() = api.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+
+    val badges: List<SystemImageBadge> get() {
+        val v = variant.lowercase()
+        return buildList {
+            if (v.contains("playstore")) add(SystemImageBadge.PlayStore)
+            if (v.contains("wear")) add(SystemImageBadge.Wear)
+            if (v.contains("tv")) add(SystemImageBadge.Tv)
+            if (v.contains("automotive")) add(SystemImageBadge.Automotive)
+        }
+    }
+}
 
 enum class AvdProfileCategory { Phone, Foldable, Tablet, Watch, Tv, Automotive, Desktop, Other }
 
@@ -89,6 +104,10 @@ data class EmulatorSnapshot(
     val name: String,
     val avdName: String,
     val source: String = "",
+    val size: String? = null,
+    val createdTime: String? = null,
+    val screenshotPath: String? = null,
+    val compatible: Boolean = true,
 )
 
 enum class LogLevel { Verbose, Debug, Info, Warn, Error, Fatal, Silent }
@@ -311,4 +330,5 @@ data class WorkspaceState(
     val recentHostFiles: List<String> = emptyList(),
     val hostFileTreePaneWidth: Float = 320f,
     val hostFileSearchPaneWidth: Float = 430f,
+    val selectedPackage: String? = null,
 )

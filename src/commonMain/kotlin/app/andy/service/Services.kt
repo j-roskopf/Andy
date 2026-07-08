@@ -28,6 +28,7 @@ interface AvdService {
     suspend fun saveSnapshot(avdName: String, snapshotName: String): CommandResult
     suspend fun restoreSnapshot(avdName: String, snapshotName: String): CommandResult
     suspend fun deleteSnapshot(avdName: String, snapshotName: String): CommandResult
+    suspend fun renameSnapshot(avdName: String, oldName: String, newName: String): CommandResult
 }
 
 interface MirrorEngine {
@@ -59,6 +60,7 @@ interface AppService {
     suspend fun uninstall(serial: String, packageName: String): CommandResult
     suspend fun listPermissions(serial: String, packageName: String): List<AndroidPermission>
     suspend fun listActivities(serial: String, packageName: String): List<AndroidActivity>
+    suspend fun getIcon(serial: String, packageName: String): ByteArray?
 }
 
 interface FileService {
@@ -201,6 +203,7 @@ interface McpServerService {
     fun getClients(): List<String>
     fun isAutoWriteSupported(clientName: String): Boolean
     fun writeConfig(clientName: String, port: Int): Boolean
+    fun getToolNames(): List<String>
 }
 
 enum class MirrorTouchAction { Down, Move, Up }
