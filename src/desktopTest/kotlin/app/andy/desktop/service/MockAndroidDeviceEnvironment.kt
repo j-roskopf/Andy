@@ -10,10 +10,10 @@ import java.nio.file.Files
 
 internal class MockAndroidDeviceEnvironment {
     private val sdkRoot = Files.createTempDirectory("andy-mock-sdk").toFile()
-    private val adb = executable("platform-tools/adb")
-    private val emulator = executable("emulator/emulator")
-    private val sdkManager = executable("cmdline-tools/latest/bin/sdkmanager")
-    private val avdManager = executable("cmdline-tools/latest/bin/avdmanager")
+    private val adb = executable("platform-tools/${toolName("adb", windowsExtension = "exe")}")
+    private val emulator = executable("emulator/${toolName("emulator", windowsExtension = "bat")}")
+    private val sdkManager = executable("cmdline-tools/latest/bin/${toolName("sdkmanager", windowsExtension = "bat")}")
+    private val avdManager = executable("cmdline-tools/latest/bin/${toolName("avdmanager", windowsExtension = "bat")}")
     private val avdHome = File(sdkRoot, "avd")
 
     val store = InMemoryWorkspaceStore(WorkspaceState(selectedSdkPath = sdkRoot.absolutePath))
@@ -80,10 +80,19 @@ internal class MockAndroidDeviceEnvironment {
         return commands.any { command -> command.windowed(tokens.size).any { it == tokens.toList() } }
     }
 
+    private fun toolName(name: String, windowsExtension: String): String {
+        val os = System.getProperty("os.name")
+        return if (os.startsWith("Windows", ignoreCase = true)) "$name.$windowsExtension" else name
+    }
+
     private fun executable(relativePath: String): File {
         val file = File(sdkRoot, relativePath)
         file.parentFile.mkdirs()
-        file.writeText("#!/bin/sh\nexit 0\n")
+        if (file.extension.equals("bat", ignoreCase = true)) {
+            file.writeText("@echo off\r\nexit /b 0\r\n")
+        } else {
+            file.writeText("#!/bin/sh\nexit 0\n")
+        }
         file.setExecutable(true)
         return file
     }
