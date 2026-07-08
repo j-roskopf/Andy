@@ -30,6 +30,7 @@ interface MirrorEngine {
 interface LogcatService {
     fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>>
     suspend fun snapshot(serial: String, filter: LogcatFilter, limit: Int): List<LogcatEntry>
+    suspend fun clear(serial: String)
 }
 
 interface IntentService {

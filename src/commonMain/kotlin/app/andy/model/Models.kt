@@ -210,7 +210,7 @@ data class WorkspaceState(
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 230f,
     val appsListPaneWidth: Float = 520f,
-    val appsDetailsPaneWidth: Float = 420f,
+    val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,
     val designDevicePaneWidth: Float = 820f,
     val accessibilityTreePaneWidth: Float = 560f,

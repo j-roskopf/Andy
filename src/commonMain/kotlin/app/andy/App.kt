@@ -209,6 +209,8 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
     var networkLiveVisible by remember { mutableStateOf(false) }
     var stoppingEmulatorSerial by remember { mutableStateOf<String?>(null) }
     var emulatorStopStatus by remember { mutableStateOf("") }
+    val logcatState = remember { LogcatState() }
+    val accessibilityState = remember { AccessibilityState() }
 
     suspend fun refreshDevicesNow(): List<AndroidDevice> {
         sdk = services.devices.discoverSdk()
@@ -334,10 +336,10 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             services.apps,
                             selectedSerial,
                             workspaceState.appsListPaneWidth,
-                            workspaceState.appsDetailsPaneWidth,
-                            onPaneChange = { listWidth, detailsWidth -> updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneWidth = detailsWidth) } },
+                            workspaceState.appsDetailsPaneHeight,
+                            onPaneChange = { listWidth, detailsHeight -> updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneHeight = detailsHeight) } },
                         )
-                        AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial)
+                        AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial, logcatState)
                         AndyDestination.Intents -> IntentsScreen(services.intents, selectedSerial)
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
                         AndyDestination.Network -> NetworkScreen(
@@ -372,6 +374,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                             devices.firstOrNull { it.serial == selectedSerial },
                             workspaceState.accessibilityTreePaneWidth,
                             onTreePaneWidthChange = { width -> updateWorkspace { it.copy(accessibilityTreePaneWidth = width) } },
+                            state = accessibilityState
                         )
                         else -> PlaceholderScreen(destination.label)
                     }
@@ -1241,42 +1244,96 @@ private fun HorizontalPaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit
     }
 }
 
-@Composable
-private fun LogcatScreen(logcat: LogcatService, serial: String?) {
-    LogcatPanel(logcat, serial, Modifier.fillMaxSize(), compact = false)
+class LogcatState {
+    var entries by mutableStateOf<List<LogcatEntry>>(emptyList())
+    var search by mutableStateOf("")
+    var live by mutableStateOf(true)
+    val levels = mutableStateMapOf<LogLevel, Boolean>().also { map -> LogLevel.entries.forEach { map[it] = it != LogLevel.Verbose && it != LogLevel.Silent } }
+    var lastSerial by mutableStateOf<String?>(null)
+    var lastSearch by mutableStateOf<String?>(null)
+    var lastLevels by mutableStateOf<Set<LogLevel>?>(null)
+    var lastLive by mutableStateOf(true)
 }
 
 @Composable
-private fun LogcatPanel(logcat: LogcatService, serial: String?, modifier: Modifier = Modifier, compact: Boolean) {
-    var entries by remember { mutableStateOf<List<LogcatEntry>>(emptyList()) }
-    var search by remember { mutableStateOf("") }
-    var live by remember { mutableStateOf(true) }
-    val levels = remember { mutableStateMapOf<LogLevel, Boolean>().also { map -> LogLevel.entries.forEach { map[it] = it != LogLevel.Verbose && it != LogLevel.Silent } } }
+private fun LogcatScreen(logcat: LogcatService, serial: String?, state: LogcatState) {
+    LogcatPanel(logcat, serial, Modifier.fillMaxSize(), compact = false, state = state)
+}
+
+@Composable
+private fun LogcatPanel(
+    logcat: LogcatService,
+    serial: String?,
+    modifier: Modifier = Modifier,
+    compact: Boolean,
+    state: LogcatState = remember { LogcatState() }
+) {
     var streamJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
     fun restart() {
-        streamJob?.cancel()
-        entries = emptyList()
-        if (serial == null || !live) return
-        streamJob = scope.launch {
-            logcat.stream(serial, LogcatFilter(search, levels.filterValues { it }.keys)).collect { batch ->
-                entries = (entries + batch).takeLast(1200)
+        val currentLevels = state.levels.filterValues { it }.keys.toSet()
+        val parametersChanged = serial != state.lastSerial ||
+                state.search != state.lastSearch ||
+                currentLevels != state.lastLevels ||
+                state.live != state.lastLive
+
+        if (parametersChanged) {
+            streamJob?.cancel()
+            streamJob = null
+            val filtersChanged = serial != state.lastSerial ||
+                    state.search != state.lastSearch ||
+                    currentLevels != state.lastLevels
+            if (filtersChanged) {
+                state.entries = emptyList()
+            }
+            state.lastSerial = serial
+            state.lastSearch = state.search
+            state.lastLevels = currentLevels
+            state.lastLive = state.live
+
+            if (serial == null || !state.live) return
+            streamJob = scope.launch {
+                logcat.stream(serial, LogcatFilter(state.search, currentLevels)).collect { batch ->
+                    state.entries = (state.entries + batch).takeLast(1200)
+                }
+            }
+        } else {
+            if (streamJob == null && serial != null && state.live) {
+                state.lastSerial = serial
+                state.lastSearch = state.search
+                state.lastLevels = currentLevels
+                state.lastLive = state.live
+                streamJob = scope.launch {
+                    logcat.stream(serial, LogcatFilter(state.search, currentLevels)).collect { batch ->
+                        state.entries = (state.entries + batch).takeLast(1200)
+                    }
+                }
             }
         }
     }
-    LaunchedEffect(serial, live, search, levels.values.toList()) { restart() }
+    LaunchedEffect(serial, state.live, state.search, state.levels.values.toList()) { restart() }
 
     PanelCard(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Text(if (compact) "Logcat" else "Logcat", color = TextPrimary, fontWeight = FontWeight.Bold)
-            TextField(value = search, onValueChange = { search = it }, placeholder = { Text("filter or package:com.example", color = TextSecondary) }, singleLine = true, modifier = Modifier.weight(1f).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+            TextField(value = state.search, onValueChange = { state.search = it }, placeholder = { Text("filter or package:com.example", color = TextSecondary) }, singleLine = true, modifier = Modifier.weight(1f).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             LogLevel.entries.filter { it != LogLevel.Silent }.forEach { level ->
-                FilterPill(level.name.take(1), levels[level] == true, levelColor(level)) { levels[level] = !(levels[level] ?: false) }
+                FilterPill(level.name.take(1), state.levels[level] == true, levelColor(level)) { state.levels[level] = !(state.levels[level] ?: false) }
             }
-            Button(onClick = { live = !live }, colors = ButtonDefaults.buttonColors(containerColor = if (live) Rust else PanelSoft)) { Text(if (live) "Live" else "Paused") }
+            Button(onClick = { state.live = !state.live }, colors = ButtonDefaults.buttonColors(containerColor = if (state.live) Rust else PanelSoft)) { Text(if (state.live) "Live" else "Paused") }
+            OutlinedButton(onClick = {
+                state.entries = emptyList()
+                if (serial != null) {
+                    scope.launch {
+                        logcat.clear(serial)
+                    }
+                }
+            }) {
+                Text("Clear")
+            }
         }
-        LogcatEntryList(entries, compact, Modifier.fillMaxSize())
+        LogcatEntryList(state.entries, compact, Modifier.fillMaxSize())
     }
 }
 
@@ -1487,7 +1544,7 @@ private fun AppsScreen(
     apps: AppService,
     serial: String?,
     listPaneWidth: Float,
-    detailsPaneWidth: Float,
+    detailsPaneHeight: Float,
     onPaneChange: (Float, Float) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -1498,7 +1555,7 @@ private fun AppsScreen(
     var activities by remember { mutableStateOf<List<AndroidActivity>>(emptyList()) }
     var status by remember { mutableStateOf("Select a device") }
     var localListPaneWidth by remember(listPaneWidth) { mutableStateOf(listPaneWidth) }
-    var localDetailsPaneWidth by remember(detailsPaneWidth) { mutableStateOf(detailsPaneWidth) }
+    var localDetailsPaneHeight by remember(detailsPaneHeight) { mutableStateOf(detailsPaneHeight) }
 
     fun refresh() {
         if (serial == null) {
@@ -1548,41 +1605,43 @@ private fun AppsScreen(
         }
         PaneDivider(
             onDrag = { dragX -> localListPaneWidth = (localListPaneWidth + dragX).coerceIn(320f, 1100f) },
-            onDragEnd = { onPaneChange(localListPaneWidth, localDetailsPaneWidth) },
+            onDragEnd = { onPaneChange(localListPaneWidth, localDetailsPaneHeight) },
         )
-        PanelCard(Modifier.width(localDetailsPaneWidth.dp).fillMaxHeight().padding(start = 6.dp)) {
-            val app = selected
-            Text(app?.packageName ?: "No app selected", color = TextPrimary, fontWeight = FontWeight.Bold)
-            if (app != null && serial != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { runAppAction("Launch") { apps.launch(serial, app.packageName) } }) { Text("Launch") }
-                    OutlinedButton(onClick = { runAppAction("Stop") { apps.stop(serial, app.packageName) } }) { Text("Stop") }
-                    OutlinedButton(onClick = { runAppAction("Clear data") { apps.clearData(serial, app.packageName) } }) { Text("Clear") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = { runAppAction("Reset permissions") { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
-                    OutlinedButton(onClick = { runAppAction("Uninstall") { apps.uninstall(serial, app.packageName) } }, enabled = !app.system) { Text("Uninstall") }
-                }
-                Text("Permissions", color = TextPrimary, fontWeight = FontWeight.Bold)
-                LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                    items(permissions) { permission ->
-                        Text("${permission.granted?.let { if (it) "granted" else "denied" } ?: "declared"}  ${permission.name}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.fillMaxSize().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PanelCard(Modifier.fillMaxWidth().height(localDetailsPaneHeight.dp)) {
+                val app = selected
+                Text(app?.packageName ?: "No app selected", color = TextPrimary, fontWeight = FontWeight.Bold)
+                if (app != null && serial != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { runAppAction("Launch") { apps.launch(serial, app.packageName) } }) { Text("Launch") }
+                        OutlinedButton(onClick = { runAppAction("Stop") { apps.stop(serial, app.packageName) } }) { Text("Stop") }
+                        OutlinedButton(onClick = { runAppAction("Clear data") { apps.clearData(serial, app.packageName) } }) { Text("Clear") }
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { runAppAction("Reset permissions") { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
+                        OutlinedButton(onClick = { runAppAction("Uninstall") { apps.uninstall(serial, app.packageName) } }, enabled = !app.system) { Text("Uninstall") }
+                    }
+                    Text("Permissions", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                        items(permissions) { permission ->
+                            Text("${permission.granted?.let { if (it) "granted" else "denied" } ?: "declared"}  ${permission.name}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                } else {
+                    Text("Choose an app to launch, stop, clear data, reset permissions, uninstall, or inspect permissions and activities.", color = TextSecondary)
                 }
-            } else {
-                Text("Choose an app to launch, stop, clear data, reset permissions, uninstall, or inspect permissions and activities.", color = TextSecondary)
             }
-        }
-        PaneDivider(
-            onDrag = { dragX -> localDetailsPaneWidth = (localDetailsPaneWidth + dragX).coerceIn(280f, 900f) },
-            onDragEnd = { onPaneChange(localListPaneWidth, localDetailsPaneWidth) },
-        )
-        PanelCard(Modifier.fillMaxSize().padding(start = 6.dp)) {
-            Text("Activities", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(selected?.packageName ?: "Select an app", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(activities) { activity ->
-                    Text(activity.name, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            HorizontalPaneDivider(
+                onDrag = { dragY -> localDetailsPaneHeight = (localDetailsPaneHeight + dragY).coerceIn(200f, 800f) },
+                onDragEnd = { onPaneChange(localListPaneWidth, localDetailsPaneHeight) },
+            )
+            PanelCard(Modifier.fillMaxWidth().weight(1f)) {
+                Text("Activities", color = TextPrimary, fontWeight = FontWeight.Bold)
+                Text(selected?.packageName ?: "Select an app", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(activities) { activity ->
+                        Text(activity.name, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -2722,6 +2781,19 @@ private fun Color.toHex(): String {
     return "#%02X%02X%02X".format(r, g, b)
 }
 
+class AccessibilityState {
+    var root by mutableStateOf<AccessibilityNode?>(null)
+    var status by mutableStateOf("No dump loaded")
+    var hoveredBounds by mutableStateOf<String?>(null)
+    var selectedNode by mutableStateOf<AccessibilityNode?>(null)
+    var interactionMode by mutableStateOf(false)
+    var isInitialDumpDone by mutableStateOf(false)
+    var isLoading by mutableStateOf(false)
+    var lastSerial by mutableStateOf<String?>(null)
+    var layoutBounds by mutableStateOf(false)
+    val collapsedNodes = mutableStateMapOf<String, Boolean>()
+}
+
 @Composable
 private fun AccessibilityScreen(
     services: AndyServices,
@@ -2729,65 +2801,118 @@ private fun AccessibilityScreen(
     device: AndroidDevice?,
     treePaneWidth: Float,
     onTreePaneWidthChange: (Float) -> Unit,
+    state: AccessibilityState = remember { AccessibilityState() }
 ) {
     val scope = rememberCoroutineScope()
-    var root by remember { mutableStateOf<AccessibilityNode?>(null) }
-    var status by remember { mutableStateOf("No dump loaded") }
-    var hoveredBounds by remember { mutableStateOf<String?>(null) }
-    var selectedNode by remember { mutableStateOf<AccessibilityNode?>(null) }
-    var interactionMode by remember { mutableStateOf(false) }
     var localTreePaneWidth by remember(treePaneWidth) { mutableStateOf(treePaneWidth.coerceIn(420f, 760f)) }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
-    val sendMirrorInput = rememberMirrorInputSender(services, serial, enabled = !interactionMode)
-    val flattenedNodes = remember(root) { root?.flattenAccessibilityTree().orEmpty() }
+    val sendMirrorInput = rememberMirrorInputSender(services, serial, enabled = !state.interactionMode)
+    val flattenedNodes = remember(state.root, state.collapsedNodes.toMap()) { state.root?.flattenAccessibilityTree(state.collapsedNodes).orEmpty() }
     val treeListState = rememberLazyListState()
+
+    LaunchedEffect(serial) {
+        if (serial != state.lastSerial) {
+            state.root = null
+            state.status = "No dump loaded"
+            state.hoveredBounds = null
+            state.selectedNode = null
+            state.interactionMode = false
+            state.isInitialDumpDone = false
+            state.isLoading = false
+            state.lastSerial = serial
+            state.layoutBounds = false
+            state.collapsedNodes.clear()
+        }
+        if (serial != null) {
+            val result = services.devices.shell(serial, listOf("getprop", "debug.layout"))
+            if (result.isSuccess) {
+                state.layoutBounds = result.stdout.trim() == "true"
+            }
+        }
+    }
+
     fun dump() {
         if (serial == null) return
         scope.launch {
-            root = services.accessibility.dump(serial)
-            selectedNode = root
-            status = if (root == null) "No hierarchy returned" else "Hierarchy loaded · ${root?.countNodes() ?: 0} nodes"
+            state.isLoading = true
+            state.status = "Dumping tree..."
+            val result = services.accessibility.dump(serial)
+            state.root = result
+            state.selectedNode = result
+            state.status = if (result == null) "No hierarchy returned" else "Hierarchy loaded · ${result.countNodes()} nodes"
+            state.isLoading = false
+            state.isInitialDumpDone = true
         }
     }
-    LaunchedEffect(selectedNode?.id, flattenedNodes.size) {
-        val selectedId = selectedNode?.id ?: return@LaunchedEffect
+
+    LaunchedEffect(serial, state.isInitialDumpDone) {
+        if (serial != null && !state.isInitialDumpDone && !state.isLoading) {
+            dump()
+        }
+    }
+
+    LaunchedEffect(state.selectedNode?.id, flattenedNodes.size) {
+        val selectedId = state.selectedNode?.id ?: return@LaunchedEffect
         val index = flattenedNodes.indexOfFirst { it.node.id == selectedId }
         if (index >= 0) treeListState.animateScrollToItem(index)
     }
+
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
+
     LaunchedEffect(serial) {
         if (serial != null) {
             val result = services.mirror.connect(serial)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
     }
+
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Toolbar("Accessibility", status, onPrimary = { dump() }, primaryLabel = "Dump tree")
+        Toolbar("Accessibility", state.status, onPrimary = { dump() }, primaryLabel = "Dump tree")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterPill("Inspect clicks", interactionMode, Rust) { interactionMode = !interactionMode }
+            FilterPill("Inspect clicks", state.interactionMode, Rust) { state.interactionMode = !state.interactionMode }
+            FilterPill("Layout bounds", state.layoutBounds, Yellow) {
+                val next = !state.layoutBounds
+                state.layoutBounds = next
+                if (serial != null) {
+                    scope.launch {
+                        services.devices.shell(serial, listOf("setprop", "debug.layout", next.toString()))
+                        services.devices.shell(serial, listOf("service", "call", "activity", "1599295570"))
+                    }
+                }
+            }
         }
         Row(modifier = Modifier.fillMaxSize()) {
             Column(Modifier.width(localTreePaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(
                     Modifier.fillMaxWidth().weight(1f).background(PanelSoft, RoundedCornerShape(8.dp)).padding(10.dp)
-                        .horizontalScroll(rememberScrollState()),
                 ) {
-                    if (flattenedNodes.isNotEmpty()) {
-                        LazyColumn(state = treeListState, modifier = Modifier.widthIn(min = 980.dp).fillMaxHeight()) {
-                            itemsIndexed(flattenedNodes, key = { _, row -> row.node.id }) { _, row ->
-                                AccessibilityNodeRow(
-                                    row = row,
-                                    hoveredBounds = hoveredBounds,
-                                    selectedId = selectedNode?.id,
-                                    onHover = { hoveredBounds = it },
-                                    onSelect = {
-                                        selectedNode = it
-                                        hoveredBounds = it.bounds
-                                    },
-                                )
+                    if (state.isLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Rust)
+                        }
+                    } else if (flattenedNodes.isNotEmpty()) {
+                        Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
+                            LazyColumn(state = treeListState, modifier = Modifier.widthIn(min = 980.dp).fillMaxHeight()) {
+                                itemsIndexed(flattenedNodes, key = { _, row -> row.node.id }) { _, row ->
+                                    AccessibilityNodeRow(
+                                        row = row,
+                                        hoveredBounds = state.hoveredBounds,
+                                        selectedId = state.selectedNode?.id,
+                                        isCollapsed = state.collapsedNodes[row.node.id] == true,
+                                        onHover = { state.hoveredBounds = it },
+                                        onSelect = {
+                                            state.selectedNode = it
+                                            state.hoveredBounds = it.bounds
+                                        },
+                                        onToggleCollapse = {
+                                            val collapsed = state.collapsedNodes[row.node.id] == true
+                                            state.collapsedNodes[row.node.id] = !collapsed
+                                        }
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -2795,7 +2920,7 @@ private fun AccessibilityScreen(
                     }
                 }
                 PanelCard(Modifier.fillMaxWidth().height(300.dp)) {
-                    AccessibilityDetails(selectedNode)
+                    AccessibilityDetails(state.selectedNode)
                 }
             }
             PaneDivider(
@@ -2810,12 +2935,12 @@ private fun AccessibilityScreen(
                     mirrorStatus = mirrorStatus,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize().padding(start = 6.dp),
-                    highlightBounds = hoveredBounds,
-                    passThroughInput = !interactionMode,
+                    highlightBounds = state.hoveredBounds,
+                    passThroughInput = !state.interactionMode,
                     onDevicePointClick = { x, y ->
-                        root?.findBestNodeAt(x, y)?.let {
-                            selectedNode = it
-                            hoveredBounds = it.bounds
+                        state.root?.findBestNodeAt(x, y)?.let {
+                            state.selectedNode = it
+                            state.hoveredBounds = it.bounds
                         }
                     },
                     onInput = sendMirrorInput,
@@ -2837,28 +2962,63 @@ private fun AccessibilityNodeRow(
     row: AccessibilityTreeRow,
     hoveredBounds: String?,
     selectedId: String?,
+    isCollapsed: Boolean,
     onHover: (String?) -> Unit,
     onSelect: (AccessibilityNode) -> Unit,
+    onToggleCollapse: () -> Unit,
 ) {
     val node = row.node
     val active = node.bounds == hoveredBounds || node.id == selectedId
-    Column(
+    val hasChildren = node.children.isNotEmpty()
+    Row(
         Modifier.widthIn(min = 900.dp)
             .background(if (active) Rust.copy(alpha = 0.22f) else Color.Transparent, RoundedCornerShape(4.dp))
             .pointerMoveFilter(onEnter = { onHover(node.bounds); false }, onExit = { onHover(null); false })
             .clickable { onSelect(node) }
             .padding(start = (row.depth * 16).dp, top = 3.dp, bottom = 3.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("${node.className ?: "node"}  ${node.bounds ?: ""}", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
-        val label = listOfNotNull(node.resourceId, node.text, node.contentDescription).joinToString(" · ")
-        if (label.isNotBlank()) Text(label, color = TextSecondary, fontSize = 11.sp, maxLines = 1)
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clickable(
+                    enabled = hasChildren,
+                    onClick = onToggleCollapse
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (hasChildren) {
+                Text(
+                    text = if (isCollapsed) ">" else "v",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+        Column(Modifier.weight(1f)) {
+            Text("${node.className ?: "node"}  ${node.bounds ?: ""}", color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
+            val label = listOfNotNull(node.resourceId, node.text, node.contentDescription).joinToString(" · ")
+            if (label.isNotBlank()) Text(label, color = TextSecondary, fontSize = 11.sp, maxLines = 1)
+        }
     }
 }
 
 private data class AccessibilityTreeRow(val node: AccessibilityNode, val depth: Int)
 
-private fun AccessibilityNode.flattenAccessibilityTree(depth: Int = 0): List<AccessibilityTreeRow> {
-    return listOf(AccessibilityTreeRow(this, depth)) + children.flatMap { it.flattenAccessibilityTree(depth + 1) }
+private fun AccessibilityNode.flattenAccessibilityTree(
+    collapsedNodes: Map<String, Boolean>,
+    depth: Int = 0
+): List<AccessibilityTreeRow> {
+    val row = AccessibilityTreeRow(this, depth)
+    val isCollapsed = collapsedNodes[this.id] == true
+    return if (isCollapsed) {
+        listOf(row)
+    } else {
+        listOf(row) + children.flatMap { it.flattenAccessibilityTree(collapsedNodes, depth + 1) }
+    }
 }
 
 private fun AccessibilityNode.countNodes(): Int = 1 + children.sumOf { it.countNodes() }

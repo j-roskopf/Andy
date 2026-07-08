@@ -751,6 +751,11 @@ class DesktopLogcatService(
             .toList()
     }
 
+    override suspend fun clear(serial: String) {
+        val adb = devices.adbPath() ?: return
+        runner.run(listOf(adb, "-s", serial, "logcat", "-c"), 10)
+    }
+
     private suspend fun resolveLogcatFilter(serial: String, filter: LogcatFilter): ResolvedLogcatFilter {
         val (packageName, search) = AndroidParsers.extractPackageFilter(filter.search)
         val explicitPackage = filter.packageName ?: packageName
@@ -1319,7 +1324,15 @@ class DesktopProxyService(
                 lines.forEach { line ->
                     println("[Proxy stdout] $line")
                     parseMitmproxyFlowLine(line)?.let { exchange ->
-                        exchanges.value = (exchanges.value + exchange).takeLast(MaxNetworkExchanges)
+                        val current = exchanges.value
+                        val index = current.indexOfFirst { it.id == exchange.id }
+                        if (index >= 0) {
+                            val mutable = current.toMutableList()
+                            mutable[index] = exchange
+                            exchanges.value = mutable
+                        } else {
+                            exchanges.value = (current + exchange).takeLast(MaxNetworkExchanges)
+                        }
                     }
                 }
             }
@@ -1681,6 +1694,7 @@ def _match(rule, flow):
 
 def request(flow: http.HTTPFlow):
     flow.metadata["andy_started_at"] = int(time.time() * 1000)
+    _emit(flow, is_request=True)
 
 def response(flow: http.HTTPFlow):
     matched_rule_id = None
@@ -1704,16 +1718,26 @@ def response(flow: http.HTTPFlow):
 def error(flow: http.HTTPFlow):
     _emit(flow, None, str(flow.error) if flow.error else "proxy error")
 
-def _emit(flow, matched_rule_id, error):
-    response = flow.response
-    completed = int(time.time() * 1000)
-    started = flow.metadata.get("andy_started_at", completed)
+def _emit(flow, matched_rule_id=None, error=None, is_request=False):
+    response = flow.response if (hasattr(flow, 'response') and flow.response) else None
+    started = flow.metadata.get("andy_started_at")
+    if started is None:
+        started = int(time.time() * 1000)
+        flow.metadata["andy_started_at"] = started
+
+    if is_request:
+        completed = None
+        duration = None
+    else:
+        completed = int(time.time() * 1000)
+        duration = max(0, completed - started)
+
     payload = {
         "type": "flow",
         "id": flow.id,
         "startedAtMillis": started,
         "completedAtMillis": completed,
-        "durationMillis": max(0, completed - started),
+        "durationMillis": duration,
         "method": flow.request.method,
         "url": flow.request.pretty_url,
         "statusCode": response.status_code if response else None,
@@ -1793,7 +1817,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 230f,
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
-            appsDetailsPaneWidth = props.getProperty("appsDetailsPaneWidth")?.toFloatOrNull() ?: 420f,
+            appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
             accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
@@ -1823,7 +1847,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("liveDevicePaneWidth", state.liveDevicePaneWidth.toString())
             setProperty("liveControlsPaneHeight", state.liveControlsPaneHeight.toString())
             setProperty("appsListPaneWidth", state.appsListPaneWidth.toString())
-            setProperty("appsDetailsPaneWidth", state.appsDetailsPaneWidth.toString())
+            setProperty("appsDetailsPaneHeight", state.appsDetailsPaneHeight.toString())
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
             setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
