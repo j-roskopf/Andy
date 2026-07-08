@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -151,6 +152,14 @@ private val Green = AndyColors.Green
 private val Cyan = AndyColors.Blue
 private val Yellow = AndyColors.Warning
 private val Red = AndyColors.Error
+
+private data class SetupRequirement(
+    val label: String,
+    val ok: Boolean,
+    val readyText: String,
+    val missingText: String,
+    val installCommand: String? = null,
+)
 
 private fun Modifier.rightBorder(color: Color): Modifier = drawBehind {
     val strokeWidth = 1.dp.toPx()
@@ -336,7 +345,7 @@ fun AndyApp(
     services: AndyServices,
     requestedDestination: AndyDestination? = null,
     onDestinationConsumed: () -> Unit = {},
-    onPopOutMirror: (String?) -> Unit = {},
+    onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
 ) {
     MaterialTheme(
@@ -367,7 +376,12 @@ fun AndyApp(
 }
 
 @Composable
-fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
+fun AndyMirrorPopOut(
+    services: AndyServices,
+    serial: String?,
+    deviceName: String? = null,
+    controlsVisible: Boolean = false,
+) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Ink,
@@ -386,6 +400,7 @@ fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }
         val sendInput = rememberMirrorInputSender(services, serial)
+        val popOutPadding = if (controlsVisible) 12.dp else 0.dp
         LaunchedEffect(Unit) {
             services.mirror.status.collectLatest { mirrorStatus = it }
         }
@@ -395,15 +410,21 @@ fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
                 connectResult = if (result.isSuccess) result.stdout else result.stderr
             }
         }
-        Box(Modifier.fillMaxSize().background(Ink).noiseGridOverlay(0.04f).padding(12.dp)) {
+        Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
             MirrorFrameContent(services.mirror, serial) { frame ->
                 LiveDevicePane(
                     serial = serial,
                     device = null,
+                    displayName = deviceName,
                     frame = frame,
                     mirrorStatus = mirrorStatus,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize(),
+                    showDeviceHeader = controlsVisible,
+                    showChromeControls = controlsVisible,
+                    showContainerChrome = controlsVisible,
+                    deviceBorderWidth = if (controlsVisible) 5.dp else 0.dp,
+                    deviceCornerRadius = if (controlsVisible) 10.dp else 0.dp,
                     onPower = { sendInput(MirrorInput.Power) },
                     onVolumeUp = { sendInput(MirrorInput.Key(24)) },
                     onVolumeDown = { sendInput(MirrorInput.Key(25)) },
@@ -436,7 +457,7 @@ private fun AndyShell(
     services: AndyServices,
     requestedDestination: AndyDestination?,
     onDestinationConsumed: () -> Unit,
-    onPopOutMirror: (String?) -> Unit,
+    onPopOutMirror: (String?, String?) -> Unit,
     contentTopPadding: androidx.compose.ui.unit.Dp,
 ) {
     val scope = rememberCoroutineScope()
@@ -591,7 +612,6 @@ private fun AndyShell(
                         services.actionRuns.stop(run.runId)
                         activeRunId = run.runId
                     },
-                    onOpenActions = { destination = AndyDestination.Actions },
                     actions = {
                         if (destination == AndyDestination.Network) {
                             FilterPill("Rules", networkRulesVisible, Rust) { networkRulesVisible = !networkRulesVisible }
@@ -628,7 +648,10 @@ private fun AndyShell(
                             onControlsPaneHeightChange = { height -> updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
                             onBugSaved = { destination = AndyDestination.Bugs },
                             logcatState = liveLogcatState,
-                            onPopOutMirror = { onPopOutMirror(selectedSerial) },
+                            onPopOutMirror = {
+                                val selectedDevice = devices.firstOrNull { it.serial == selectedSerial }
+                                onPopOutMirror(selectedSerial, selectedDevice?.displayName ?: selectedSerial)
+                            },
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -642,6 +665,7 @@ private fun AndyShell(
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
+                            sdk = sdk,
                             serial = selectedSerial,
                             device = devices.firstOrNull { it.serial == selectedSerial },
                             port = workspaceState.proxyPort,
@@ -907,9 +931,10 @@ private fun TopChrome(
     runningActions: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     onStopAction: (RunningAction) -> Unit,
-    onOpenActions: () -> Unit,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
+
     Row(
         Modifier.fillMaxWidth().height(62.dp)
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
@@ -923,14 +948,15 @@ private fun TopChrome(
         }
         Spacer(Modifier.weight(1f))
         actions()
-        ActionRunnerSelector(
-            config = actionConfig,
-            running = runningActions,
-            onRunAction = onRunAction,
-            onStopAction = onStopAction,
-            onOpenActions = onOpenActions,
-        )
-        Spacer(Modifier.width(10.dp))
+        if (hasActionRunnerControls) {
+            ActionRunnerSelector(
+                config = actionConfig,
+                running = runningActions,
+                onRunAction = onRunAction,
+                onStopAction = onStopAction,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
         if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
@@ -956,7 +982,6 @@ private fun ActionRunnerSelector(
     running: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     onStopAction: (RunningAction) -> Unit,
-    onOpenActions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var projectExpanded by remember { mutableStateOf(false) }
@@ -979,17 +1004,6 @@ private fun ActionRunnerSelector(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (config.projects.isEmpty()) {
-            OutlinedButton(
-                onClick = onOpenActions,
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text("actions setup", color = TextPrimary, fontSize = 12.sp)
-            }
-            return@Row
-        }
-
         Box {
             Button(
                 onClick = { projectExpanded = true },
@@ -2053,6 +2067,7 @@ private fun NavIconRecents(color: Color, modifier: Modifier = Modifier) {
 private fun LiveDevicePane(
     serial: String?,
     device: AndroidDevice?,
+    displayName: String? = device?.displayName,
     frame: MirrorFrame?,
     mirrorStatus: String,
     connectResult: String,
@@ -2068,6 +2083,11 @@ private fun LiveDevicePane(
     pickerColor: Color? = null,
     pickerHex: String? = null,
     zoom: Float = 1f,
+    showDeviceHeader: Boolean = true,
+    showChromeControls: Boolean = true,
+    showContainerChrome: Boolean = true,
+    deviceBorderWidth: Dp = 5.dp,
+    deviceCornerRadius: Dp = 10.dp,
     onHoverColor: (String) -> Unit = {},
     passThroughInput: Boolean = true,
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
@@ -2083,94 +2103,166 @@ private fun LiveDevicePane(
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
-    Row(modifier.background(PanelSoft, RoundedCornerShape(8.dp)).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        LiveHardwareToolbar(
-            enabled = serial != null,
-            onPower = onPower,
-            onVolumeUp = onVolumeUp,
-            onVolumeDown = onVolumeDown,
-            onRotate = onRotate,
-            onCaptureScreenshot = onCaptureScreenshot,
-            onBugReport = onBugReport,
-            onClipText = onClipText,
-            onPopOut = onPopOut,
-        )
-    Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(device?.serial ?: serial ?: "No device", color = TextPrimary, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
-                color = TextSecondary,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
+    val containerShape = RoundedCornerShape(if (showContainerChrome) 8.dp else 0.dp)
+    val containerModifier = if (showContainerChrome) {
+        modifier.background(PanelSoft, containerShape).padding(14.dp)
+    } else {
+        modifier.background(Color.Black)
+    }
+    Row(
+        containerModifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (showChromeControls) {
+            LiveHardwareToolbar(
+                enabled = serial != null,
+                onPower = onPower,
+                onVolumeUp = onVolumeUp,
+                onVolumeDown = onVolumeDown,
+                onRotate = onRotate,
+                onCaptureScreenshot = onCaptureScreenshot,
+                onBugReport = onBugReport,
+                onClipText = onClipText,
+                onPopOut = onPopOut,
             )
         }
-        Spacer(Modifier.height(18.dp))
-        BoxWithConstraints(
-            Modifier.weight(1f).fillMaxWidth(),
-            contentAlignment = Alignment.Center,
-        ) {
-            val viewportWidth = maxWidth
-            val viewportHeight = maxHeight
-            val zoomFactor = zoom.coerceIn(0.5f, 4f)
-            val sourceWidth = (device?.screenSize?.substringBefore("x")?.toIntOrNull() ?: frame?.width ?: 1080).coerceAtLeast(1)
-            val sourceHeight = (device?.screenSize?.substringAfter("x")?.toIntOrNull() ?: frame?.height ?: 2340).coerceAtLeast(1)
-            val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
-            Box(
-                Modifier.fillMaxSize()
-                    .horizontalScroll(rememberScrollState())
-                    .verticalScroll(rememberScrollState()),
+
+        Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (showDeviceHeader) {
+                Box(Modifier.fillMaxWidth()) {
+                    Text(
+                        displayName ?: device?.serial ?: serial ?: "No device",
+                        color = TextPrimary,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.Center),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+            }
+
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
+                val viewportWidth = maxWidth
+                val zoomFactor = zoom.coerceIn(0.5f, 4f)
+                val sourceWidth = (device?.screenSize?.substringBefore("x")?.toIntOrNull() ?: frame?.width ?: 1080).coerceAtLeast(1)
+                val sourceHeight = (device?.screenSize?.substringAfter("x")?.toIntOrNull() ?: frame?.height ?: 2340).coerceAtLeast(1)
+                val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
+                val navHeight = if (showChromeControls) 60.dp else 0.dp
+                val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)
                 val baseWidth = minOf(viewportWidth, viewportHeight * aspect)
                 Box(
-                    Modifier
-                        .width(baseWidth * zoomFactor)
-                        .aspectRatio(aspect)
-                        .background(Color.Black, RoundedCornerShape(10.dp))
-                        .border(5.dp, Color(0xFF111111), RoundedCornerShape(10.dp)),
+                    Modifier.fillMaxSize()
+                        .horizontalScroll(rememberScrollState())
+                        .verticalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (frame != null) {
-                        MirrorVideoSurface(
-                            frame = frame,
-                            modifier = Modifier.fillMaxSize(),
-                            onInput = onInput,
-                            onHoverColor = onHoverColor,
-                            passThroughInput = passThroughInput,
-                            onDevicePointClick = onDevicePointClick,
-                            onRulerResize = onRulerResize,
-                            overlay = MirrorOverlay(
-                                highlightBounds = highlightBounds,
-                                sourceWidth = sourceWidth,
-                                sourceHeight = sourceHeight,
-                                showGrid = gridSize != null,
-                                gridSize = gridSize ?: 16f,
-                                gridColor = gridColor,
-                                showRuler = showRuler,
-                                rulerColor = Rust,
-                                rulerWidth = rulerWidth,
-                                rulerHeight = rulerHeight,
-                                rulerX = rulerX,
-                                rulerY = rulerY,
-                                pickerColor = pickerColor,
-                                pickerHex = pickerHex,
-                            ),
-                        )
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
-                            Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
-                            if (serial != null) {
-                                Spacer(Modifier.height(12.dp))
-                                Button(
-                                    onClick = onConnect,
-                                    colors = primaryButtonColors(),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    Column(
+                        Modifier.width(baseWidth * zoomFactor),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(aspect)
+                                .background(Color.Black, RoundedCornerShape(deviceCornerRadius))
+                                .then(
+                                    if (deviceBorderWidth > 0.dp) {
+                                        Modifier.border(deviceBorderWidth, Color(0xFF111111), RoundedCornerShape(deviceCornerRadius))
+                                    } else {
+                                        Modifier
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (frame != null) {
+                                MirrorVideoSurface(
+                                    frame = frame,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onInput = onInput,
+                                    onHoverColor = onHoverColor,
+                                    passThroughInput = passThroughInput,
+                                    onDevicePointClick = onDevicePointClick,
+                                    onRulerResize = onRulerResize,
+                                    overlay = MirrorOverlay(
+                                        highlightBounds = highlightBounds,
+                                        sourceWidth = sourceWidth,
+                                        sourceHeight = sourceHeight,
+                                        showGrid = gridSize != null,
+                                        gridSize = gridSize ?: 16f,
+                                        gridColor = gridColor,
+                                        showRuler = showRuler,
+                                        rulerColor = Rust,
+                                        rulerWidth = rulerWidth,
+                                        rulerHeight = rulerHeight,
+                                        rulerX = rulerX,
+                                        rulerY = rulerY,
+                                        pickerColor = pickerColor,
+                                        pickerHex = pickerHex,
+                                    ),
+                                )
+                            } else {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                                    Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                    Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                    Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
+                                    if (serial != null) {
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(
+                                            onClick = onConnect,
+                                            colors = primaryButtonColors(),
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                        ) {
+                                            Text("Connect", color = TextPrimary, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (showChromeControls) {
+                            Spacer(Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Back) },
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Text("Connect", color = TextPrimary, fontSize = 12.sp)
+                                    NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Home) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Recents) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
                                 }
                             }
                         }
@@ -2178,32 +2270,6 @@ private fun LiveDevicePane(
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            horizontalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { onInput(MirrorInput.Back) },
-                enabled = serial != null
-            ) {
-                NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-            IconButton(
-                onClick = { onInput(MirrorInput.Home) },
-                enabled = serial != null
-            ) {
-                NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-            IconButton(
-                onClick = { onInput(MirrorInput.Recents) },
-                enabled = serial != null
-            ) {
-                NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-        }
-    }
     }
 }
 
@@ -3114,9 +3180,23 @@ private fun manualCertificateSteps(caPath: String, proxyHost: String, port: Int)
     "Disable Private DNS and retry over HTTP/1.1 if a request is missing; pinned apps and QUIC/HTTP3 will not decrypt.",
 )
 
+private fun hostSetupSteps(engineReady: Boolean): List<String> {
+    val mitmproxyStep = if (engineReady) {
+        "mitmproxy is installed; Andy will start mitmdump automatically for Network."
+    } else {
+        "Install mitmproxy on the host: brew install mitmproxy. Andy uses mitmdump from that package."
+    }
+    return listOf(
+        "Install Android Studio or Android command-line tools so Andy can find adb, emulator, sdkmanager, and avdmanager.",
+        "Embedded mirroring uses Andy's bundled scrcpy-server. For local development only, SCRCPY_SERVER_PATH can point at another scrcpy-server file.",
+        mitmproxyStep,
+    )
+}
+
 @Composable
 private fun NetworkScreen(
     services: AndyServices,
+    sdk: SdkDiscovery,
     serial: String?,
     device: AndroidDevice?,
     port: Int,
@@ -3139,6 +3219,8 @@ private fun NetworkScreen(
     var exchanges by remember { mutableStateOf<List<NetworkExchange>>(emptyList()) }
     var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var setupExpanded by remember { mutableStateOf(false) }
+    var setupManuallyToggled by remember { mutableStateOf(false) }
+    var setupDefaultApplied by remember { mutableStateOf(false) }
     var selectedExpanded by remember { mutableStateOf(true) }
     var seenFlowIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val expandedTrafficKeys = remember { mutableStateMapOf<String, Boolean>() }
@@ -3158,6 +3240,8 @@ private fun NetworkScreen(
     var sizeWidth by remember { mutableStateOf(80f) }
     var msWidth by remember { mutableStateOf(70f) }
     var focusedPath by remember { mutableStateOf<String?>(null) }
+    var engineChecked by remember { mutableStateOf(false) }
+    var deviceReadinessChecked by remember { mutableStateOf(false) }
 
     val currentPort = portText.toIntOrNull()?.coerceIn(1, 65535) ?: port
     val filteredExchanges = remember(exchanges, focusedPath) {
@@ -3190,6 +3274,7 @@ private fun NetworkScreen(
         } else {
             engine.stderr
         }
+        engineChecked = true
     }
     LaunchedEffect(engineReady, currentPort) {
         if (!engineReady) return@LaunchedEffect
@@ -3233,16 +3318,42 @@ private fun NetworkScreen(
         if (serial == null) {
             caInstalled = false
             proxyConfigured = false
+            deviceReadinessChecked = true
             return@LaunchedEffect
         }
+        deviceReadinessChecked = false
         while (true) {
             val isCaOk = proxy.isCertificateInstalled(serial)
             val host = proxy.resolveDeviceProxyHost(serial)
             val isProxyOk = proxy.isDeviceProxyConfigured(serial, host, currentPort)
             caInstalled = isCaOk
             proxyConfigured = isProxyOk
+            deviceReadinessChecked = true
             delay(3000)
         }
+    }
+    LaunchedEffect(
+        engineChecked,
+        deviceReadinessChecked,
+        sdk.hasAdb,
+        engineReady,
+        proxyStatus,
+        serial,
+        caInstalled,
+        proxyTrafficObservedForDevice,
+        proxyConfigured,
+    ) {
+        if (setupDefaultApplied || setupManuallyToggled || !engineChecked || !deviceReadinessChecked) return@LaunchedEffect
+        val redCount = listOf(
+            sdk.hasAdb,
+            true,
+            engineReady,
+            proxyStatus.contains("listening on"),
+            serial != null && (caInstalled || proxyTrafficObservedForDevice),
+            serial != null && proxyConfigured,
+        ).count { !it }
+        setupExpanded = redCount > 2
+        setupDefaultApplied = true
     }
     LaunchedEffect(serial) {
         proxyHost = serial?.let { selectedSerial ->
@@ -3331,9 +3442,23 @@ private fun NetworkScreen(
         onRulesVisibleChange(true)
     }
 
+    val networkPageScrollState = rememberScrollState()
+
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column(Modifier.weight(1.45f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PanelCard(Modifier.animateContentSize()) {
+        Column(
+            Modifier
+                .weight(1.45f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(networkPageScrollState),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PanelCard(Modifier.animateContentSize()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TextField(
@@ -3364,67 +3489,16 @@ private fun NetworkScreen(
                             proxyStatus = result.stdout
                         }
                     }) { Text("Stop") }
-                    Text(
-                        if (setupExpanded) "Hide setup" else "Show setup",
-                        color = Rust,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable { setupExpanded = !setupExpanded },
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val host = proxy.resolveDeviceProxyHost(serial)
-                                proxyHost = host
-                                val result = proxy.configureDeviceProxy(serial, host, currentPort)
-                                status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
-                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                            }
-                        },
-                    ) { Text("Configure device proxy") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val result = proxy.clearDeviceProxy(serial)
-                                status = if (result.isSuccess) "Device proxy cleared" else result.stderr
-                                val host = proxy.resolveDeviceProxyHost(serial)
-                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                            }
-                        },
-                    ) { Text("Clear proxy") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val result = proxy.installSystemCertificateAuthority(serial)
-                                status = if (result.isSuccess) result.stdout else result.stderr
-                                caInstalled = proxy.isCertificateInstalled(serial)
-                            }
-                        },
-                    ) { Text("System CA (root)") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                proxy.ensureCertificateAuthority()
-                                val result = proxy.prepareUserCertificateInstall(serial)
-                                status = if (result.isSuccess) result.stdout else result.stderr
-                            }
-                        },
-                    ) { Text("Prepare phone CA") }
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            val result = proxy.clearTraffic()
-                            selectedFlowId = null
-                            seenFlowIds = emptySet()
-                            flashingTrafficKeys.clear()
-                            status = if (result.isSuccess) result.stdout else result.stderr
-                        }
-                    }) { Text("Clear traffic") }
+	                    Text(
+	                        if (setupExpanded) "Hide setup" else "Show setup",
+	                        color = Rust,
+	                        fontSize = 12.sp,
+	                        fontWeight = FontWeight.Medium,
+	                        modifier = Modifier.clickable {
+	                            setupManuallyToggled = true
+	                            setupExpanded = !setupExpanded
+	                        },
+	                    )
                 }
                 val proxyStarted = proxyStatus.contains("listening on")
                 val caText = when {
@@ -3439,53 +3513,133 @@ private fun NetworkScreen(
                     proxyConfigured -> "Device is routed"
                     else -> "Click 'Configure' to route"
                 }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    StatusIndicator(
-                        isOk = proxyStarted,
+                val setupRequirements = listOf(
+                    SetupRequirement(
+                        label = "Android SDK platform-tools",
+                        ok = sdk.hasAdb,
+                        readyText = "ADB is available through Andy's SDK selection",
+                        missingText = "Install Android Studio or command-line tools",
+                    ),
+                    SetupRequirement(
+                        label = "scrcpy-server",
+                        ok = true,
+                        readyText = "Bundled with Andy for embedded mirroring",
+                        missingText = "Packaged builds include scrcpy-server",
+                    ),
+                    SetupRequirement(
+                        label = "mitmproxy",
+                        ok = engineReady,
+                        readyText = engineStatus,
+                        missingText = "Required for Network capture and rewrite rules",
+                        installCommand = "brew install mitmproxy",
+                    ),
+                )
+                val networkStatusRequirements = listOf(
+                    SetupRequirement(
                         label = "Proxy Status",
-                        hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
-                    )
-                    StatusIndicator(
-                        isOk = serial != null && (caInstalled || proxyTrafficObservedForDevice),
+                        ok = proxyStarted,
+                        readyText = "Listening on port $currentPort",
+                        missingText = "Click Start to start",
+                    ),
+                    SetupRequirement(
                         label = "CA Trust",
-                        hint = caText
-                    )
-                    StatusIndicator(
-                        isOk = serial != null && proxyConfigured,
+                        ok = serial != null && (caInstalled || proxyTrafficObservedForDevice),
+                        readyText = caText,
+                        missingText = caText,
+                    ),
+                    SetupRequirement(
                         label = "Device Proxy Routing",
-                        hint = configText
-                    )
-                }
-                Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusTag(if (engineReady) "mitmdump ready" else "mitmdump missing", if (engineReady) Green else Red)
-                    Text(
-                        text = buildString {
-                            append(engineStatus)
-                            append("  ·  ")
-                            append("Endpoint: ")
-                            append(proxyHost.ifBlank { "select device" })
-                            append(":")
-                            append(currentPort)
-                        },
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                        ok = serial != null && proxyConfigured,
+                        readyText = configText,
+                        missingText = configText,
+                    ),
+                )
                 AnimatedVisibility(setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        ) {
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val host = proxy.resolveDeviceProxyHost(serial)
+                                        proxyHost = host
+                                        val result = proxy.configureDeviceProxy(serial, host, currentPort)
+                                        status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
+                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                    }
+                                },
+                            ) { Text("Configure device proxy") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val result = proxy.clearDeviceProxy(serial)
+                                        status = if (result.isSuccess) "Device proxy cleared" else result.stderr
+                                        val host = proxy.resolveDeviceProxyHost(serial)
+                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                    }
+                                },
+                            ) { Text("Clear proxy") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val result = proxy.installSystemCertificateAuthority(serial)
+                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                        caInstalled = proxy.isCertificateInstalled(serial)
+                                    }
+                                },
+                            ) { Text("System CA (root)") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        proxy.ensureCertificateAuthority()
+                                        val result = proxy.prepareUserCertificateInstall(serial)
+                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                    }
+                                },
+                            ) { Text("Prepare phone CA") }
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    val result = proxy.clearTraffic()
+                                    selectedFlowId = null
+                                    seenFlowIds = emptySet()
+                                    flashingTrafficKeys.clear()
+                                    status = if (result.isSuccess) result.stdout else result.stderr
+                                }
+                            }) { Text("Clear traffic") }
+                        }
+                        SetupChecklist(setupRequirements)
+                        SetupChecklist(networkStatusRequirements)
+                        Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            StatusTag(if (engineReady) "mitmproxy ready" else "mitmproxy missing", if (engineReady) Green else Red)
+                            Text(
+                                text = buildString {
+                                    append(engineStatus)
+                                    append("  ·  ")
+                                    append("Endpoint: ")
+                                    append(proxyHost.ifBlank { "select device" })
+                                    append(":")
+                                    append(currentPort)
+                                },
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        InstallStepsCard(
+                            title = "Host prerequisites",
+                            steps = hostSetupSteps(engineReady),
+                        )
                         Text("CA: ${caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         ManualCertificateSetupCard(
                             steps = manualCertificateSteps(caPath, proxyHost, currentPort),
@@ -3555,7 +3709,7 @@ private fun NetworkScreen(
                 HeaderCell("MS", msWidth.dp) { msWidth = it.coerceIn(50f, 150f) }
                 Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
             }
-            LazyColumn(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 520.dp)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
                     NetworkTrafficRow(
                         row = row,
@@ -3610,6 +3764,7 @@ private fun NetworkScreen(
                         EmptyState("No traffic yet. Start the proxy, configure a device, then make a request.")
                     }
                 }
+            }
             }
             SelectedFlowPanel(
                 selected = selected,
@@ -3755,25 +3910,58 @@ private fun ManualCertificateSetupCard(steps: List<String>, modifier: Modifier =
 }
 
 @Composable
-private fun StatusIndicator(
-    isOk: Boolean,
-    label: String,
-    hint: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier
+private fun InstallStepsCard(title: String, steps: List<String>, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        GlowingDot(isOk)
-        Column {
-            Text(label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Text(
-                text = hint,
-                color = if (isOk) Green else Red,
-                fontSize = 11.sp
-            )
+        Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        steps.forEachIndexed { index, step ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                Text("${index + 1}.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text(step, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupChecklist(requirements: List<SetupRequirement>, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        requirements.forEach { requirement ->
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                GlowingDot(requirement.ok, Modifier.padding(top = 2.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(requirement.label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (requirement.ok) requirement.readyText else requirement.missingText,
+                        color = if (requirement.ok) Green else Red,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!requirement.ok && requirement.installCommand != null) {
+                        Text(requirement.installCommand, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
         }
     }
 }

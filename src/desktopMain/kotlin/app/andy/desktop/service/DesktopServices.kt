@@ -30,6 +30,8 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.net.Socket
 import java.net.ServerSocket
 import java.net.Inet4Address
@@ -505,8 +507,8 @@ class DesktopMirrorEngine(
         connectedSerial = serial
         connectedConfig = config
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
-        val scrcpyServer = findScrcpyServer()
-            ?: return CommandResult.failure("scrcpy-server not found. Install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
+        val scrcpyServer = ScrcpyServerLocator.find()
+            ?: return CommandResult.failure("scrcpy-server not found. Andy bundles it for packaged builds; for development, install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
         status.value = "Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)"
         videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
@@ -839,19 +841,6 @@ class DesktopMirrorEngine(
         return maxOf(minimum, value and -2)
     }
 
-    private fun findScrcpyServer(): File? {
-        val envPath = System.getenv("SCRCPY_SERVER_PATH")?.takeIf { it.isNotBlank() }?.let(::File)
-        if (envPath != null && envPath.isFile) return envPath
-
-        val candidates = listOf(
-            "/opt/homebrew/Cellar/scrcpy/4.0/share/scrcpy/scrcpy-server",
-            "/opt/homebrew/share/scrcpy/scrcpy-server",
-            "/usr/local/share/scrcpy/scrcpy-server",
-            "/Applications/scrcpy/scrcpy-server",
-        ).map(::File)
-        return candidates.firstOrNull { it.isFile }
-    }
-
     private fun allocateLocalPort(): Int {
         return ServerSocket(0).use { it.localPort }
     }
@@ -872,6 +861,34 @@ class DesktopMirrorEngine(
     }
 
     private data class CaptureSize(val width: Int, val height: Int)
+}
+
+internal object ScrcpyServerLocator {
+    fun find(): File? {
+        val envPath = System.getenv("SCRCPY_SERVER_PATH")?.takeIf { it.isNotBlank() }?.let(::File)
+        if (envPath != null && envPath.isFile) return envPath
+
+        bundledServer()?.let { return it }
+
+        val candidates = listOf(
+            "/opt/homebrew/Cellar/scrcpy/4.0/share/scrcpy/scrcpy-server",
+            "/opt/homebrew/share/scrcpy/scrcpy-server",
+            "/usr/local/share/scrcpy/scrcpy-server",
+            "/Applications/scrcpy/scrcpy-server",
+        ).map(::File)
+        return candidates.firstOrNull { it.isFile }
+    }
+
+    private fun bundledServer(): File? {
+        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server") ?: return null
+        val target = File(System.getProperty("user.home"), ".andy/scrcpy/scrcpy-server")
+        target.parentFile.mkdirs()
+        resource.use { input ->
+            Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+        target.setReadable(true, false)
+        return target.takeIf { it.isFile && it.length() > 0 }
+    }
 }
 
 private object ScrcpyControlMessage {

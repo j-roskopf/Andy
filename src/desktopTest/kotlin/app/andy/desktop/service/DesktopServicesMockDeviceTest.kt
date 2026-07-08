@@ -16,12 +16,33 @@ import app.andy.service.MirrorInput
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DesktopServicesMockDeviceTest {
+    @Test
+    fun scrcpyServerLocatorUsesBundledResource() {
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-scrcpy-test-home").toFile()
+        val serverInfo = try {
+            System.setProperty("user.home", testHome.absolutePath)
+            ScrcpyServerLocator.find()?.let { server ->
+                Triple(server.absolutePath, server.isFile, server.length())
+            }
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+
+        assertNotNull(serverInfo)
+        assertTrue(serverInfo.second)
+        assertTrue(serverInfo.third > 100_000)
+        assertEquals(File(testHome, ".andy/scrcpy/scrcpy-server").absolutePath, serverInfo.first)
+    }
+
     @Test
     fun deviceDiscoveryListsAndEnrichesMockDevices() = runBlocking {
         val env = MockAndroidDeviceEnvironment()

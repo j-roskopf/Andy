@@ -144,6 +144,7 @@ compose.desktop {
             isEnabled.set(false)
         }
         nativeDistributions {
+            modules("java.instrument", "java.management", "java.net.http", "jdk.unsupported")
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,

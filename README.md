@@ -6,6 +6,12 @@ Andy is a desktop companion for Android developers.
 
 [Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
 
+### Runtime Requirements
+
+- Android SDK platform tools for device and emulator access.
+- mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
+- scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
+
 ## Features
 
 ### Devices

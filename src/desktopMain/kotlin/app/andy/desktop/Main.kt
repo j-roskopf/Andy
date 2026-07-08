@@ -6,7 +6,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -36,6 +39,9 @@ fun main() {
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
         var popOutSerial by remember { mutableStateOf<String?>(null) }
+        var popOutDeviceName by remember { mutableStateOf<String?>(null) }
+        var popOutControlsVisible by remember { mutableStateOf(false) }
+        val popOutToggleShortcut = KeyShortcut(Key.D, ctrl = !isMacOs(), meta = isMacOs(), shift = true)
         val appIcon = painterResource(Res.drawable.andy_robot)
         fun open(destination: AndyDestination) {
             requestedDestination = destination
@@ -70,11 +76,16 @@ fun main() {
             LaunchedEffect(window) {
                 configureMacTitleBar(window)
             }
+            MenuBar {}
             AndyApp(
                 services = services,
                 requestedDestination = requestedDestination,
                 onDestinationConsumed = { requestedDestination = null },
-                onPopOutMirror = { popOutSerial = it },
+                onPopOutMirror = { serial, name ->
+                    popOutSerial = serial
+                    popOutDeviceName = name
+                    popOutControlsVisible = false
+                },
                 contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
             )
         }
@@ -85,7 +96,22 @@ fun main() {
                 title = "Andy mirror - $serial",
                 icon = appIcon,
             ) {
-                AndyMirrorPopOut(services, serial)
+                MenuBar {
+                    Menu("View") {
+                        CheckboxItem(
+                            text = "Show controls",
+                            checked = popOutControlsVisible,
+                            onCheckedChange = { popOutControlsVisible = it },
+                            shortcut = popOutToggleShortcut,
+                        )
+                    }
+                }
+                AndyMirrorPopOut(
+                    services = services,
+                    serial = serial,
+                    deviceName = popOutDeviceName,
+                    controlsVisible = popOutControlsVisible,
+                )
             }
         }
     }
