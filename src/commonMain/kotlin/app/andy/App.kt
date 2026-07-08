@@ -42,6 +42,16 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerMoveFilter
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -61,6 +71,35 @@ import app.andy.andy.generated.resources.hardware_record
 import app.andy.andy.generated.resources.hardware_rotate
 import app.andy.andy.generated.resources.hardware_volume_down
 import app.andy.andy.generated.resources.hardware_volume_up
+import app.andy.andy.generated.resources.intellij_filetype_anyType_dark
+import app.andy.andy.generated.resources.intellij_filetype_c_dark
+import app.andy.andy.generated.resources.intellij_filetype_config_dark
+import app.andy.andy.generated.resources.intellij_filetype_cpp_dark
+import app.andy.andy.generated.resources.intellij_filetype_css_dark
+import app.andy.andy.generated.resources.intellij_filetype_csv_dark
+import app.andy.andy.generated.resources.intellij_filetype_docker_dark
+import app.andy.andy.generated.resources.intellij_filetype_gitignore
+import app.andy.andy.generated.resources.intellij_filetype_gradle_dark
+import app.andy.andy.generated.resources.intellij_filetype_groovy_dark
+import app.andy.andy.generated.resources.intellij_filetype_h_dark
+import app.andy.andy.generated.resources.intellij_filetype_html_dark
+import app.andy.andy.generated.resources.intellij_filetype_image_dark
+import app.andy.andy.generated.resources.intellij_filetype_javaScript_dark
+import app.andy.andy.generated.resources.intellij_filetype_java_dark
+import app.andy.andy.generated.resources.intellij_filetype_json_dark
+import app.andy.andy.generated.resources.intellij_filetype_kotlinScript_dark
+import app.andy.andy.generated.resources.intellij_filetype_kotlin_dark
+import app.andy.andy.generated.resources.intellij_filetype_markdown_dark
+import app.andy.andy.generated.resources.intellij_filetype_modified_dark
+import app.andy.andy.generated.resources.intellij_filetype_properties_dark
+import app.andy.andy.generated.resources.intellij_filetype_shell_dark
+import app.andy.andy.generated.resources.intellij_filetype_sql_dark
+import app.andy.andy.generated.resources.intellij_filetype_text_dark
+import app.andy.andy.generated.resources.intellij_filetype_toml_dark
+import app.andy.andy.generated.resources.intellij_filetype_unknown_dark
+import app.andy.andy.generated.resources.intellij_filetype_xml_dark
+import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
+import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
 import kotlinx.coroutines.Job
@@ -77,6 +116,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import org.jetbrains.compose.resources.painterResource
+import org.jetbrains.compose.resources.DrawableResource
 
 enum class AndyDestination(val label: String) {
     Devices("Devices"),
@@ -86,6 +126,7 @@ enum class AndyDestination(val label: String) {
     Logcat("Logcat"),
     Intents("Intents"),
     Files("Files & data"),
+    ComputerFiles("Computer Files"),
     Network("Network"),
     Actions("Actions"),
     Snapshots("Snapshots"),
@@ -663,6 +704,11 @@ private fun AndyShell(
                         AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial, logcatState)
                         AndyDestination.Intents -> IntentsScreen(services, selectedSerial)
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
+                        AndyDestination.ComputerFiles -> HostFilesScreen(
+                            service = services.hostFiles,
+                            workspaceState = workspaceState,
+                            onUpdateWorkspace = { updateWorkspace(it) },
+                        )
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
                             sdk = sdk,
@@ -868,6 +914,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.Logcat -> "##"
     AndyDestination.Intents -> "->"
     AndyDestination.Files -> "/_"
+    AndyDestination.ComputerFiles -> "//"
     AndyDestination.Network -> "~~"
     AndyDestination.Actions -> "|>"
     AndyDestination.Snapshots -> "[]"
@@ -3156,6 +3203,660 @@ private fun parentPath(path: String): String {
     if (trimmed == "/") return "/"
     return trimmed.substringBeforeLast('/', "").ifBlank { "/" }
 }
+
+private data class HostEditorTab(
+    val path: String,
+    val content: String,
+    val savedContent: String,
+    val modifiedMillis: Long,
+    val sizeBytes: Long,
+    val languageHint: String,
+    val message: String = "",
+) {
+    val dirty: Boolean get() = content != savedContent
+}
+
+private data class HostTreeRow(val entry: HostFileEntry, val depth: Int)
+
+@Composable
+private fun HostFilesScreen(
+    service: HostFileService,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var selectedRoot by remember(workspaceState.hostFileRoots, workspaceState.lastHostFilePath) {
+        mutableStateOf(resolveHostRootForPath(workspaceState.lastHostFilePath, workspaceState.hostFileRoots) ?: workspaceState.hostFileRoots.firstOrNull())
+    }
+    var selectedPath by remember(workspaceState.lastHostFilePath, selectedRoot) {
+        val saved = workspaceState.lastHostFilePath
+        val selected = selectedRoot
+        mutableStateOf(if (saved != null && selected != null && hostPathStartsWith(saved, selected)) saved else selected.orEmpty())
+    }
+    var message by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchMode by remember { mutableStateOf(HostSearchMode.Combined) }
+    var searchResults by remember { mutableStateOf<List<HostSearchResult>>(emptyList()) }
+    var tabs by remember { mutableStateOf<List<HostEditorTab>>(emptyList()) }
+    var activePath by remember { mutableStateOf<String?>(null) }
+    var conflictTab by remember { mutableStateOf<HostEditorTab?>(null) }
+    val statuses = remember { mutableStateMapOf<String, HostIndexStatus>() }
+    val treeChildren = remember { mutableStateMapOf<String, List<HostFileEntry>>() }
+    val expandedPaths = remember { mutableStateMapOf<String, Boolean>() }
+    val searchFocusRequester = remember { FocusRequester() }
+    val treeListState = rememberLazyListState()
+    var pendingTreeScrollPath by remember { mutableStateOf<String?>(null) }
+    var localHostFileTreePaneWidth by remember(workspaceState.hostFileTreePaneWidth) {
+        mutableStateOf(workspaceState.hostFileTreePaneWidth.coerceIn(220f, 620f))
+    }
+    var localHostFileSearchPaneWidth by remember(workspaceState.hostFileSearchPaneWidth) {
+        mutableStateOf(workspaceState.hostFileSearchPaneWidth.coerceIn(500f, 980f))
+    }
+    val activeTab = activePath?.let { path -> tabs.firstOrNull { it.path == path } }
+    val dirtyPaths = remember(tabs) { tabs.filter { it.dirty }.map { it.path }.toSet() }
+    val treeRows = remember(selectedRoot, treeChildren.toMap(), expandedPaths.toMap()) {
+        selectedRoot?.let { root -> hostTreeRows(root, treeChildren, expandedPaths) }.orEmpty()
+    }
+
+    fun updateRecent(path: String) {
+        onUpdateWorkspace {
+            it.copy(
+                lastHostFilePath = path,
+                recentHostFiles = (listOf(path) + it.recentHostFiles.filterNot { recent -> recent == path }).take(10),
+            )
+        }
+    }
+
+    fun loadPath(path: String = selectedPath) {
+        if (path.isBlank()) return
+        scope.launch {
+            runCatching { service.list(path) }
+                .onSuccess {
+                    selectedPath = path
+                    treeChildren[path] = it
+                    if (message.endsWith("entries")) message = ""
+                    onUpdateWorkspace { state -> state.copy(lastHostFilePath = path) }
+                }
+                .onFailure { message = it.message ?: "Browse failed" }
+        }
+    }
+
+    fun openFile(path: String) {
+        scope.launch {
+            runCatching { service.read(path) }
+                .onSuccess { doc ->
+                    val next = HostEditorTab(doc.path, doc.content, doc.content, doc.modifiedMillis, doc.sizeBytes, doc.languageHint)
+                    tabs = (tabs.filterNot { it.path == doc.path } + next)
+                    activePath = doc.path
+                    updateRecent(doc.path)
+                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                }
+                .onFailure { message = it.message ?: "Open failed" }
+        }
+    }
+
+    fun revealFileInTree(path: String) {
+        val root = resolveHostRootForPath(path, workspaceState.hostFileRoots) ?: return
+        val parent = hostParentPath(path)
+        selectedRoot = root
+        selectedPath = parent
+        searchQuery = ""
+        pendingTreeScrollPath = path
+        hostAncestorDirectories(path, root).forEach { directory ->
+            expandedPaths[directory] = true
+            loadPath(directory)
+        }
+    }
+
+    fun saveTab(tab: HostEditorTab, overwrite: Boolean = false, visiblePath: String? = activePath) {
+        if (visiblePath != tab.path) {
+            val visibleName = visiblePath?.let(::hostFileName) ?: "no active file"
+            message = "Save blocked: ${hostFileName(tab.path)} is not the visible editor file ($visibleName)."
+            tabs = tabs.map { if (it.path == tab.path) it.copy(message = "Save blocked: not the visible editor file") else it }
+            return
+        }
+        scope.launch {
+            val currentTab = tabs.firstOrNull { it.path == tab.path }
+            if (currentTab == null || activePath != tab.path) {
+                message = "Save blocked: active editor changed before save."
+                return@launch
+            }
+            when (val result = service.save(currentTab.path, currentTab.content, if (overwrite) 0L else currentTab.modifiedMillis)) {
+                is HostFileSaveResult.Saved -> {
+                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(savedContent = currentTab.content, modifiedMillis = result.modifiedMillis, message = "") else it }
+                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                }
+                is HostFileSaveResult.Conflict -> {
+                    conflictTab = currentTab.copy(message = "Changed outside Andy at ${result.currentModifiedMillis}")
+                }
+                is HostFileSaveResult.Failed -> {
+                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(message = result.message) else it }
+                    message = result.message
+                }
+            }
+        }
+    }
+
+    fun updateEditorTextForPath(path: String, value: String) {
+        if (path != activePath) {
+            message = "Edit ignored: editor event did not match the visible file."
+            return
+        }
+        if (tabs.none { it.path == path }) {
+            message = "Edit ignored: file tab is no longer open."
+            return
+        }
+        tabs = tabs.map { if (it.path == path) it.copy(content = value) else it }
+    }
+
+    fun saveEditorContentForPath(path: String, value: String) {
+        if (path != activePath) {
+            message = "Save blocked: editor event did not match the visible file."
+            return
+        }
+        val currentTab = tabs.firstOrNull { it.path == path }
+        if (currentTab == null) {
+            message = "Save blocked: file tab is no longer open."
+            return
+        }
+        val updated = currentTab.copy(content = value)
+        tabs = tabs.map { if (it.path == path) updated else it }
+        saveTab(updated, visiblePath = path)
+    }
+
+    fun closeActiveTab() {
+        val path = activePath ?: return
+        val nextTabs = tabs.filterNot { it.path == path }
+        tabs = nextTabs
+        activePath = nextTabs.lastOrNull()?.path
+    }
+
+    fun setSearchModeAndFocus(mode: HostSearchMode) {
+        searchMode = mode
+        scope.launch {
+            delay(30)
+            searchFocusRequester.requestFocus()
+        }
+    }
+
+    fun toggleTreeDirectory(path: String) {
+        val expanded = expandedPaths[path] == true
+        if (expanded) {
+            expandedPaths[path] = false
+            return
+        }
+        expandedPaths[path] = true
+        loadPath(path)
+    }
+
+    LaunchedEffect(workspaceState.hostFileRoots) {
+        workspaceState.hostFileRoots.forEach { root ->
+            expandedPaths[root] = true
+            launch { service.indexRoot(root).collect { statuses[root] = it } }
+        }
+        selectedRoot?.let { root ->
+            if (selectedPath.isBlank() || !hostPathStartsWith(selectedPath, root)) selectedPath = root
+            loadPath(root)
+            if (selectedPath != root) loadPath(selectedPath)
+        }
+    }
+
+    LaunchedEffect(searchQuery, searchMode, selectedRoot) {
+        delay(180)
+        val root = selectedRoot
+        searchResults = if (searchQuery.isBlank() || root.isNullOrBlank()) {
+            emptyList()
+        } else {
+            service.search(searchQuery, searchMode, listOf(root), 200)
+        }
+    }
+
+    LaunchedEffect(pendingTreeScrollPath, treeRows) {
+        val target = pendingTreeScrollPath ?: return@LaunchedEffect
+        val index = treeRows.indexOfFirst { it.entry.path == target }
+        if (index >= 0) {
+            delay(50)
+            treeListState.animateScrollToItem(index)
+            pendingTreeScrollPath = null
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val command = event.isMetaPressed || event.isCtrlPressed
+                if (!command) return@onPreviewKeyEvent false
+                when {
+                    event.key == Key.S && activeTab != null -> {
+                        tabs.firstOrNull { it.path == activeTab.path }?.let { saveTab(it) }
+                        true
+                    }
+                    event.key == Key.W -> {
+                        closeActiveTab()
+                        true
+                    }
+                    event.key == Key.O -> {
+                        scope.launch {
+                            pickDirectory(selectedRoot)?.let { picked ->
+                                onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
+                                selectedRoot = picked
+                                selectedPath = picked
+                                expandedPaths[picked] = true
+                                loadPath(picked)
+                            }
+                        }
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.A -> {
+                        setSearchModeAndFocus(HostSearchMode.Combined)
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.N -> {
+                        setSearchModeAndFocus(HostSearchMode.FileName)
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.F -> {
+                        setSearchModeAndFocus(HostSearchMode.Content)
+                        true
+                    }
+                    else -> false
+                }
+            },
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Toolbar("Computer Files", "${workspaceState.hostFileRoots.size} roots · ${statuses.values.sumOf { it.indexedFiles }} indexed", onPrimary = {
+            scope.launch {
+                pickDirectory(selectedRoot)?.let { picked ->
+                    onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
+                    selectedRoot = picked
+                    selectedPath = picked
+                    expandedPaths[picked] = true
+                    loadPath(picked)
+                }
+            }
+        }, primaryLabel = "Add root")
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PanelCard(Modifier.width(localHostFileTreePaneWidth.dp).fillMaxHeight()) {
+                Text("Roots", color = TextPrimary, fontWeight = FontWeight.Bold)
+                if (workspaceState.hostFileRoots.isEmpty()) {
+                    Text("Add a folder to start indexing files on this computer.", color = TextSecondary, fontSize = 12.sp)
+                }
+                workspaceState.hostFileRoots.forEach { root ->
+                    val status = statuses[root]
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.R2))
+                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.R2))
+                            .clickable {
+                                selectedRoot = root
+                                selectedPath = root
+                                expandedPaths[root] = true
+                                loadPath(root)
+                            }
+                            .padding(8.dp),
+                    ) {
+                        Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Divider(color = Border)
+                Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                workspaceState.recentHostFiles.forEach { recent ->
+                    val recentRoot = resolveHostRootForPath(recent, workspaceState.hostFileRoots)
+                    val relativePath = recentRoot?.let { hostDisplayPath(recent, it) } ?: recent
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable {
+                                revealFileInTree(recent)
+                                openFile(recent)
+                            }
+                            .padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HostFileIcon(hostFileIconForPath(recent, isDirectory = false))
+                        Column(Modifier.weight(1f)) {
+                            Text(recentRoot?.let(::hostFileName) ?: "outside roots", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(relativePath, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            PaneDivider(
+                onDrag = { dragX ->
+                    localHostFileTreePaneWidth = (localHostFileTreePaneWidth + dragX).coerceIn(220f, 620f)
+                },
+                onDragEnd = {
+                    onUpdateWorkspace { state -> state.copy(hostFileTreePaneWidth = localHostFileTreePaneWidth) }
+                },
+            )
+            PanelCard(Modifier.width(localHostFileSearchPaneWidth.dp).fillMaxHeight()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextField(
+                        selectedPath,
+                        { selectedPath = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Go") }
+                        OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Up") }
+                        Spacer(Modifier.weight(1f))
+                        OutlinedButton(onClick = {
+                            selectedRoot?.let { root ->
+                                scope.launch {
+                                    service.indexRoot(root).first { status ->
+                                        statuses[root] = status
+                                        !status.indexing
+                                    }
+                                }
+                            }
+                        }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+                            Text("Refresh index")
+                        }
+                    }
+                }
+                TextField(
+                    searchQuery,
+                    { searchQuery = it },
+                    placeholder = { Text("Search indexed files", color = TextSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().height(48.dp).focusRequester(searchFocusRequester),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SearchModePill("All", "ctrl shift A", searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
+                    SearchModePill("Names", "ctrl shift N", searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
+                    SearchModePill("Contents", "ctrl shift F", searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
+                }
+                if (message.isNotBlank()) Text(message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (searchQuery.isNotBlank()) {
+                    LazyColumn(Modifier.weight(1f)) {
+                        items(searchResults) { result ->
+                            val icon = hostFileIconForPath(result.path, isDirectory = false)
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .clickable {
+                                        revealFileInTree(result.path)
+                                        openFile(result.path)
+                                    }
+                                    .padding(vertical = 7.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    HostFileIcon(icon)
+                                    Text(hostDisplayPath(result.path, result.root), color = if (result.kind == HostSearchMatchKind.FileName) Cyan else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    if (dirtyPaths.contains(result.path)) {
+                                        Image(
+                                            painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                                            contentDescription = "Unsaved",
+                                            modifier = Modifier.size(13.dp),
+                                        )
+                                    }
+                                }
+                                Text(listOfNotNull(result.kind.name.lowercase(), result.lineNumber?.let { "line $it" }, result.preview.takeIf { it.isNotBlank() }).joinToString(" · "), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(Modifier.weight(1f), state = treeListState) {
+                        items(treeRows) { row ->
+                            HostTreeRowView(
+                                row = row,
+                                expanded = expandedPaths[row.entry.path] == true,
+                                selected = !row.entry.isDirectory && activePath == row.entry.path,
+                                dirty = dirtyPaths.contains(row.entry.path),
+                                onClick = {
+                                    if (row.entry.isDirectory) toggleTreeDirectory(row.entry.path) else openFile(row.entry.path)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            PaneDivider(
+                onDrag = { dragX ->
+                    localHostFileSearchPaneWidth = (localHostFileSearchPaneWidth + dragX).coerceIn(500f, 980f)
+                },
+                onDragEnd = {
+                    onUpdateWorkspace { state -> state.copy(hostFileSearchPaneWidth = localHostFileSearchPaneWidth) }
+                },
+            )
+            PanelCard(Modifier.weight(1f).fillMaxHeight()) {
+                val tab = activeTab
+                if (tab == null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Open a file from the browser or indexed results.", color = TextSecondary, fontFamily = MonoFont)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HostFileIcon(hostFileIconForPath(tab.path, isDirectory = false))
+                        Text(tab.path, color = if (tab.dirty) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        if (tab.dirty) {
+                            Image(
+                                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                                contentDescription = "Unsaved",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
+                    if (tab.message.isNotBlank()) Text(tab.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    HostCodeEditor(
+                        path = tab.path,
+                        text = tab.content,
+                        languageHint = tab.languageHint,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        onTextChange = ::updateEditorTextForPath,
+                        onSave = ::saveEditorContentForPath,
+                        onClose = { closeActiveTab() },
+                        onSearchAll = { setSearchModeAndFocus(HostSearchMode.Combined) },
+                        onSearchNames = { setSearchModeAndFocus(HostSearchMode.FileName) },
+                        onSearchContents = { setSearchModeAndFocus(HostSearchMode.Content) },
+                    )
+                }
+            }
+        }
+    }
+
+    conflictTab?.let { tab ->
+        ConfirmationDialog(
+            confirmation = PendingConfirmation("Overwrite external changes?", "${tab.path}\nThe file changed since Andy opened it.") {
+                saveTab(tab, overwrite = true)
+                conflictTab = null
+            },
+            onDismiss = { conflictTab = null },
+            onConfirm = {
+                saveTab(tab, overwrite = true)
+                conflictTab = null
+            },
+        )
+    }
+}
+
+private fun hostFileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifBlank { path }
+
+private fun hostTreeRows(root: String, children: Map<String, List<HostFileEntry>>, expanded: Map<String, Boolean>): List<HostTreeRow> {
+    val rootEntry = HostFileEntry(
+        path = root,
+        name = hostFileName(root).ifBlank { root },
+        isDirectory = true,
+        sizeBytes = 0L,
+        modifiedMillis = 0L,
+    )
+    val rows = mutableListOf(HostTreeRow(rootEntry, 0))
+    fun append(parent: HostFileEntry, depth: Int) {
+        if (expanded[parent.path] != true) return
+        children[parent.path].orEmpty().forEach { child ->
+            rows += HostTreeRow(child, depth)
+            if (child.isDirectory) append(child, depth + 1)
+        }
+    }
+    append(rootEntry, 1)
+    return rows
+}
+
+private data class HostFileIconSpec(val resource: DrawableResource?)
+
+@Composable
+private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boolean, dirty: Boolean, onClick: () -> Unit) {
+    val entry = row.entry
+    val icon = hostFileIconForPath(entry.path, entry.isDirectory)
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 24.dp)
+            .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+            .then(if (selected) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(start = (row.depth * 16).dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (entry.isDirectory) {
+                if (expanded) "v" else ">"
+            } else {
+                " "
+            },
+            color = if (entry.isDirectory) Cyan else TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            modifier = Modifier.width(16.dp),
+        )
+        HostFileIcon(icon)
+        Spacer(Modifier.width(7.dp))
+        Text(
+            entry.name,
+            color = when {
+                dirty -> Rust
+                selected -> Rust
+                entry.isDirectory -> Cyan
+                else -> TextPrimary
+            },
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (dirty) {
+            Image(
+                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                contentDescription = "Unsaved",
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        if (!entry.isDirectory) {
+            Text(entry.extension.takeIf { it.isNotBlank() } ?: entry.sizeBytes.toString(), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun HostFileIcon(spec: HostFileIconSpec) {
+    if (spec.resource == null) {
+        Spacer(Modifier.size(18.dp))
+    } else {
+        Image(
+            painter = painterResource(spec.resource),
+            contentDescription = "File type",
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+private fun hostFileIconForPath(path: String, isDirectory: Boolean): HostFileIconSpec {
+    if (isDirectory) return HostFileIconSpec(Res.drawable.intellij_node_folder_dark)
+    val name = hostFileName(path).lowercase()
+    val ext = name.substringAfterLast('.', "")
+    return when {
+        name == ".gitignore" -> HostFileIconSpec(Res.drawable.intellij_filetype_gitignore)
+        name == "build.gradle" || name == "settings.gradle" || name.endsWith(".gradle.kts") || name.endsWith(".gradle") -> HostFileIconSpec(Res.drawable.intellij_filetype_gradle_dark)
+        name == "dockerfile" || name == "containerfile" -> HostFileIconSpec(Res.drawable.intellij_filetype_docker_dark)
+        name == "makefile" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
+        ext == "kt" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlin_dark)
+        ext == "kts" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlinScript_dark)
+        ext == "java" -> HostFileIconSpec(Res.drawable.intellij_filetype_java_dark)
+        ext == "groovy" -> HostFileIconSpec(Res.drawable.intellij_filetype_groovy_dark)
+        ext == "json" -> HostFileIconSpec(Res.drawable.intellij_filetype_json_dark)
+        ext == "xml" -> HostFileIconSpec(Res.drawable.intellij_filetype_xml_dark)
+        ext == "html" || ext == "htm" -> HostFileIconSpec(Res.drawable.intellij_filetype_html_dark)
+        ext == "css" || ext == "scss" || ext == "sass" -> HostFileIconSpec(Res.drawable.intellij_filetype_css_dark)
+        ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
+        ext == "ts" || ext == "tsx" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
+        ext == "md" || ext == "markdown" -> HostFileIconSpec(Res.drawable.intellij_filetype_markdown_dark)
+        ext == "c" -> HostFileIconSpec(Res.drawable.intellij_filetype_c_dark)
+        ext == "cpp" || ext == "cc" || ext == "cxx" -> HostFileIconSpec(Res.drawable.intellij_filetype_cpp_dark)
+        ext == "h" || ext == "hpp" -> HostFileIconSpec(Res.drawable.intellij_filetype_h_dark)
+        ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "svg" -> HostFileIconSpec(Res.drawable.intellij_filetype_image_dark)
+        ext == "yml" || ext == "yaml" -> HostFileIconSpec(Res.drawable.intellij_filetype_yaml_dark)
+        ext == "toml" -> HostFileIconSpec(Res.drawable.intellij_filetype_toml_dark)
+        ext == "sh" || ext == "bash" || ext == "zsh" -> HostFileIconSpec(Res.drawable.intellij_filetype_shell_dark)
+        ext == "sql" -> HostFileIconSpec(Res.drawable.intellij_filetype_sql_dark)
+        ext == "csv" -> HostFileIconSpec(Res.drawable.intellij_filetype_csv_dark)
+        ext == "properties" -> HostFileIconSpec(Res.drawable.intellij_filetype_properties_dark)
+        ext == "conf" || ext == "cfg" || ext == "ini" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
+        ext == "txt" -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
+        ext.isBlank() -> HostFileIconSpec(Res.drawable.intellij_filetype_unknown_dark)
+        else -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
+    }
+}
+
+@Composable
+private fun SearchModePill(text: String, shortcut: String, selected: Boolean, color: Color, onClick: () -> Unit) {
+    Row(
+        Modifier.height(32.dp)
+            .background(if (selected) color.copy(alpha = 0.16f) else AndyColors.Neutral900.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.Pill))
+            .border(1.dp, color.copy(alpha = if (selected) 0.52f else 0.22f), RoundedCornerShape(AndyRadius.Pill))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(text, color = if (selected) color else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        if (shortcut.isNotBlank()) {
+            Text(shortcut, color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
+        }
+    }
+}
+
+private fun hostParentPath(path: String): String {
+    val trimmed = path.trimEnd('/').ifBlank { "/" }
+    if (trimmed == "/") return "/"
+    return trimmed.substringBeforeLast('/', "").ifBlank { "/" }
+}
+
+private fun resolveHostRootForPath(path: String?, roots: List<String>): String? {
+    val normalizedPath = path?.let(::normalizeHostPath) ?: return null
+    return roots.sortedByDescending { normalizeHostPath(it).length }.firstOrNull { root ->
+        hostPathStartsWith(normalizedPath, root)
+    }
+}
+
+private fun hostPathStartsWith(path: String, root: String): Boolean {
+    val normalizedPath = normalizeHostPath(path)
+    val normalizedRoot = normalizeHostPath(root)
+    return normalizedPath == normalizedRoot || normalizedPath.startsWith("$normalizedRoot/")
+}
+
+private fun normalizeHostPath(path: String): String = path.trimEnd('/').ifBlank { "/" }
+
+private fun hostAncestorDirectories(path: String, root: String): List<String> {
+    val normalizedRoot = normalizeHostPath(root)
+    val parent = hostParentPath(path)
+    if (!hostPathStartsWith(parent, normalizedRoot)) return listOf(normalizedRoot)
+    val relativeParent = parent.removePrefix(normalizedRoot).trim('/')
+    if (relativeParent.isBlank()) return listOf(normalizedRoot)
+    val ancestors = mutableListOf(normalizedRoot)
+    var current = normalizedRoot
+    relativeParent.split('/').filter { it.isNotBlank() }.forEach { segment ->
+        current = if (current == "/") "/$segment" else "$current/$segment"
+        ancestors += current
+    }
+    return ancestors
+}
+
+private fun hostDisplayPath(path: String, root: String): String = path.removePrefix(root).trimStart('/').ifBlank { hostFileName(path) }
 
 private val DebugNetworkSecurityConfigSnippet = """
 res/xml/network_security_config.xml

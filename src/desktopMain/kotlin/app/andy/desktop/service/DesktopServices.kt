@@ -61,6 +61,7 @@ fun createDesktopServices(): AndyServices {
     val intents = DesktopIntentService(runner, devices)
     val apps = DesktopAppService(runner, devices)
     val files = DesktopFileService(runner, devices)
+    val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
 
@@ -85,6 +86,7 @@ fun createDesktopServices(): AndyServices {
         intents = intents,
         apps = apps,
         files = files,
+        hostFiles = hostFiles,
         proxy = proxy,
         metrics = DesktopMetricsService(runner, devices),
         accessibility = accessibility,
@@ -2206,6 +2208,11 @@ class DesktopWorkspaceStore : WorkspaceStore {
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
             accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
+            hostFileRoots = props.getProperty("hostFileRoots").orEmpty().lines().filter { it.isNotBlank() },
+            lastHostFilePath = props.getProperty("lastHostFilePath")?.takeIf { it.isNotBlank() },
+            recentHostFiles = props.getProperty("recentHostFiles").orEmpty().lines().filter { it.isNotBlank() },
+            hostFileTreePaneWidth = props.getProperty("hostFileTreePaneWidth")?.toFloatOrNull() ?: 320f,
+            hostFileSearchPaneWidth = props.getProperty("hostFileSearchPaneWidth")?.toFloatOrNull() ?: 430f,
         )
     }
 
@@ -2238,6 +2245,11 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
             setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
+            setProperty("hostFileRoots", state.hostFileRoots.joinToString("\n"))
+            setProperty("lastHostFilePath", state.lastHostFilePath.orEmpty())
+            setProperty("recentHostFiles", state.recentHostFiles.joinToString("\n"))
+            setProperty("hostFileTreePaneWidth", state.hostFileTreePaneWidth.toString())
+            setProperty("hostFileSearchPaneWidth", state.hostFileSearchPaneWidth.toString())
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
     }

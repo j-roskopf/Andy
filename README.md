@@ -86,6 +86,10 @@ Capture reproducible bug reports from Live. Andy saves recent actions, live vide
 
 Check for desktop app updates and confirm installation from inside Andy. Version metadata is generated at build time and the app can surface a close-and-install prompt when an update is ready.
 
+### Computer File Browsing
+
+Very rudimentary file browsing / editing.
+
 ## Screenshots
 
 | Create AVD | Live Mirror | Devices |
