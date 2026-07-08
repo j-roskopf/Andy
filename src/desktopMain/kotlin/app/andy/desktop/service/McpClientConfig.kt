@@ -67,7 +67,16 @@ object McpClientConfig {
             ClientType.ClaudeCode -> File(home, ".claude.json")
             ClientType.Cursor -> File(home, ".cursor/mcp.json")
             ClientType.Codex -> File(home, ".codex/config.toml")
-            ClientType.ClaudeDesktop -> File(home, "Library/Application Support/Claude/claude_desktop_config.json")
+            ClientType.ClaudeDesktop -> {
+                val osName = System.getProperty("os.name")?.lowercase().orEmpty()
+                if (osName.contains("win")) {
+                    val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
+                        ?: File(home, "AppData/Roaming").absolutePath
+                    File(appData, "Claude/claude_desktop_config.json")
+                } else {
+                    File(home, "Library/Application Support/Claude/claude_desktop_config.json")
+                }
+            }
             else -> null
         }
     }
@@ -104,7 +113,7 @@ object McpClientConfig {
 
     private fun mergeJson(client: ClientType, content: String, port: Int): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
-        val mcpServers = json["mcpServers"]?.jsonObject?.toMutableMap() ?: mutableMapOf()
+        val mcpServers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         val usesLegacySse = client == ClientType.ClaudeDesktop
         mcpServers["andy"] = buildJsonObject {
             put("type", if (usesLegacySse) "sse" else "http")
