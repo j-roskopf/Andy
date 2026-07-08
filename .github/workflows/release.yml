@@ -16,6 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  id-token: write
   contents: write
 
 env:
@@ -155,6 +156,12 @@ jobs:
       - version
     runs-on: windows-latest
     timeout-minutes: 60
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_SIGNING_ACCOUNT_NAME }}
+      AZURE_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
     steps:
       - name: Checkout
@@ -175,6 +182,20 @@ jobs:
         shell: pwsh
         run: choco install wixtoolset --yes --no-progress
 
+      - name: Validate Azure Artifact Signing settings
+        shell: pwsh
+        run: |
+          $missing = @()
+          if (-not $env:AZURE_CLIENT_ID) { $missing += "AZURE_CLIENT_ID" }
+          if (-not $env:AZURE_TENANT_ID) { $missing += "AZURE_TENANT_ID" }
+          if (-not $env:AZURE_SIGNING_ENDPOINT) { $missing += "AZURE_SIGNING_ENDPOINT" }
+          if (-not $env:AZURE_SIGNING_ACCOUNT_NAME) { $missing += "AZURE_SIGNING_ACCOUNT_NAME" }
+          if (-not $env:AZURE_SIGNING_CERTIFICATE_PROFILE_NAME) { $missing += "AZURE_SIGNING_CERTIFICATE_PROFILE_NAME" }
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing required Windows release secrets: $($missing -join ', ')"
+            exit 1
+          }
+
       - name: Build Windows MSI
         shell: pwsh
         run: ./gradlew.bat packageReleaseMsi "-Pandy.versionName=${{ needs.version.outputs.version }}"
@@ -191,6 +212,49 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
 
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Ensure PowerShell Gallery is registered
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            try {
+              $repository = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+              if (-not $repository) {
+                Register-PSRepository -Default
+              }
+              Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+              Get-PSRepository -Name PSGallery
+              break
+            } catch {
+              if ($attempt -eq $maxAttempts) {
+                throw
+              }
+              Write-Warning "Failed to configure PSGallery on attempt $attempt of $maxAttempts. Retrying in 10 seconds. $($_.Exception.Message)"
+              Start-Sleep -Seconds 10
+            }
+          }
+
+      - name: Sign Windows installer
+        uses: azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\release-artifacts
+          files-folder-filter: msi
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -204,6 +268,14 @@ jobs:
       - version
     runs-on: macos-latest
     timeout-minutes: 60
+    env:
+      MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_DEVELOPER_IDENTITY: ${{ secrets.MACOS_DEVELOPER_IDENTITY }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - name: Checkout
@@ -219,6 +291,52 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate macOS signing secrets
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "${MACOS_CERTIFICATE_BASE64}" ]] || missing+=("MACOS_CERTIFICATE_BASE64")
+          [[ -n "${MACOS_CERTIFICATE_PASSWORD}" ]] || missing+=("MACOS_CERTIFICATE_PASSWORD")
+          [[ -n "${MACOS_DEVELOPER_IDENTITY}" ]] || missing+=("MACOS_DEVELOPER_IDENTITY")
+          [[ -n "${MACOS_KEYCHAIN_PASSWORD}" ]] || missing+=("MACOS_KEYCHAIN_PASSWORD")
+          [[ -n "${APPLE_ID}" ]] || missing+=("APPLE_ID")
+          [[ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ]] || missing+=("APPLE_APP_SPECIFIC_PASSWORD")
+          [[ -n "${APPLE_TEAM_ID}" ]] || missing+=("APPLE_TEAM_ID")
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required macOS release secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Import macOS signing certificate
+        shell: bash
+        run: |
+          cert_path="${RUNNER_TEMP}/developer-id.p12"
+          keychain_path="${RUNNER_TEMP}/app-signing.keychain-db"
+          echo "${MACOS_CERTIFICATE_BASE64}" | base64 --decode > "${cert_path}"
+
+          security create-keychain -p "${MACOS_KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${MACOS_KEYCHAIN_PASSWORD}" "${keychain_path}"
+          security import "${cert_path}" -P "${MACOS_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}" login.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${MACOS_KEYCHAIN_PASSWORD}" "${keychain_path}"
+
+          jpackage_signing_identity="${MACOS_DEVELOPER_IDENTITY#Developer ID Application: }"
+          jpackage_signing_identity="${jpackage_signing_identity#Developer ID Installer: }"
+          jpackage_signing_identity="${jpackage_signing_identity#3rd Party Mac Developer Application: }"
+          jpackage_signing_identity="${jpackage_signing_identity#3rd Party Mac Developer Installer: }"
+          identity_list="$(security find-identity -v "${keychain_path}")"
+          if ! grep -Fq "Developer ID Application: ${jpackage_signing_identity}" <<< "${identity_list}"; then
+            echo "::error::MACOS_CERTIFICATE_BASE64 must include the Developer ID Application identity named by MACOS_DEVELOPER_IDENTITY"
+            exit 1
+          fi
+
+          {
+            echo "compose.desktop.mac.sign=true"
+            echo "compose.desktop.mac.signing.identity=${jpackage_signing_identity}"
+            echo "compose.desktop.mac.signing.keychain=${keychain_path}"
+          } >> "${HOME}/.gradle/gradle.properties"
 
       - name: Build macOS DMG
         run: ./gradlew packageReleaseDmg -Pandy.versionName=${{ needs.version.outputs.version }}
@@ -252,6 +370,68 @@ jobs:
           cp "${dmg}" "release-artifacts/Andy-${VERSION}.dmg"
         env:
           VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Notarize macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mac_artifacts=()
+          while IFS= read -r artifact; do
+            mac_artifacts+=("${artifact}")
+          done < <(find release-artifacts \( -name '*.dmg' -o -name '*.pkg' \) -print | sort)
+          if (( ${#mac_artifacts[@]} == 0 )); then
+            echo "::error::Could not find macOS artifacts to notarize"
+            exit 1
+          fi
+          notary_credentials=(
+            --apple-id "${APPLE_ID}"
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}"
+            --team-id "${APPLE_TEAM_ID}"
+          )
+          max_notary_attempts=2
+          for artifact in "${mac_artifacts[@]}"; do
+            artifact_name="$(basename "${artifact}")"
+            for attempt in $(seq 1 "${max_notary_attempts}"); do
+              submit_log="${RUNNER_TEMP}/notarytool-submit-${artifact_name}-${attempt}.json"
+              echo "Submitting ${artifact_name} for notarization (attempt ${attempt}/${max_notary_attempts})"
+              if ! xcrun notarytool submit "${artifact}" \
+                "${notary_credentials[@]}" \
+                --wait \
+                --output-format json > "${submit_log}"; then
+                cat "${submit_log}" || true
+                submission_id="$(plutil -extract id raw "${submit_log}" 2>/dev/null || true)"
+                if [[ -n "${submission_id}" ]]; then
+                  echo "::group::Notary log for ${artifact_name} attempt ${attempt}"
+                  xcrun notarytool log "${submission_id}" "${notary_credentials[@]}" || true
+                  echo "::endgroup::"
+                fi
+                if (( attempt < max_notary_attempts )); then
+                  echo "::warning::Notarization command failed for ${artifact_name}; retrying in 30 seconds"
+                  sleep 30
+                  continue
+                fi
+                echo "::error::Notarization command failed for ${artifact_name}"
+                exit 1
+              fi
+              cat "${submit_log}"
+              submission_id="$(plutil -extract id raw "${submit_log}")"
+              status="$(plutil -extract status raw "${submit_log}")"
+              if [[ "${status}" == "Accepted" ]]; then
+                xcrun stapler staple "${artifact}"
+                continue 2
+              fi
+              echo "::group::Notary log for ${artifact_name} attempt ${attempt}"
+              xcrun notarytool log "${submission_id}" "${notary_credentials[@]}" || true
+              echo "::endgroup::"
+              if (( attempt < max_notary_attempts )); then
+                echo "::warning::Notarization failed for ${artifact_name} with status ${status}; retrying in 30 seconds"
+                sleep 30
+                continue
+              fi
+              echo "::error::Notarization failed for ${artifact_name} with status ${status}"
+              exit 1
+            done
+          done
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4

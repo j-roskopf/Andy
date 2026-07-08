@@ -43,6 +43,27 @@ val hostPlatform: String = run {
     }
 }
 
+val generateAndyBuildInfo = tasks.register("generateAndyBuildInfo") {
+    val version = andyVersionName
+    val outputDir = layout.buildDirectory.dir("generated/andyBuildInfo")
+    outputs.dir(outputDir)
+    doLast {
+        val file = outputDir.get().file("app/andy/updates/AndyBuildInfo.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            package app.andy.updates
+
+            object AndyBuildInfo {
+                const val versionName = "$version"
+                const val githubOwner = "j-roskopf"
+                const val githubRepo = "Andy"
+            }
+            """.trimIndent()
+        )
+    }
+}
+
 group = "app.andy"
 version = andyVersionName
 
@@ -51,6 +72,7 @@ kotlin {
 
     sourceSets {
         val commonMain by getting {
+            kotlin.srcDir(generateAndyBuildInfo)
             dependencies {
                 implementation(compose.runtime)
                 implementation(compose.foundation)
@@ -113,6 +135,15 @@ compose.desktop {
             vendor = "Andy"
             macOS {
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.icns"))
+                signing {
+                    identity.set(
+                        providers.gradleProperty("compose.desktop.mac.signing.identity")
+                            .map { it.removePrefix("Developer ID Application: ")
+                                     .removePrefix("Developer ID Installer: ")
+                                     .removePrefix("3rd Party Mac Developer Application: ")
+                                     .removePrefix("3rd Party Mac Developer Installer: ") }
+                    )
+                }
             }
             windows {
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.ico"))

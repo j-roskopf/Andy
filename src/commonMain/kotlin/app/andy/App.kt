@@ -211,6 +211,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
     var emulatorStopStatus by remember { mutableStateOf("") }
     val logcatState = remember { LogcatState() }
     val accessibilityState = remember { AccessibilityState() }
+    val pendingUpdateInstallConfirmation by services.updates.pendingInstallConfirmation.collectAsState()
 
     suspend fun refreshDevicesNow(): List<AndroidDevice> {
         sdk = services.devices.discoverSdk()
@@ -292,7 +293,7 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
 
     Box(Modifier.fillMaxSize().background(Panel)) {
         Row(Modifier.fillMaxSize().padding(top = 24.dp)) {
-            Sidebar(destination, devices.size, onSelect = { destination = it }, sdk = sdk)
+            Sidebar(destination, devices.size, onSelect = { destination = it }, sdk = sdk, updates = services.updates)
             Column(Modifier.fillMaxSize()) {
                 TopChrome(
                     destination = destination,
@@ -381,11 +382,27 @@ private fun AndyShell(services: AndyServices, requestedDestination: AndyDestinat
                 }
             }
         }
+        pendingUpdateInstallConfirmation?.let { update ->
+            UpdateInstallConfirmationDialog(
+                update = update,
+                onDismiss = { services.updates.respondToInstallConfirmation(false) },
+                onConfirm = { services.updates.respondToInstallConfirmation(true) }
+            )
+        }
     }
 }
 
 @Composable
-private fun Sidebar(current: AndyDestination, deviceCount: Int, onSelect: (AndyDestination) -> Unit, sdk: SdkDiscovery) {
+private fun Sidebar(
+    current: AndyDestination,
+    deviceCount: Int,
+    onSelect: (AndyDestination) -> Unit,
+    sdk: SdkDiscovery,
+    updates: AppUpdateService
+) {
+    val updateState by updates.state.collectAsState()
+    val scope = rememberCoroutineScope()
+
     Column(
         Modifier.width(238.dp).fillMaxHeight().background(Panel).rightBorder(Border).padding(AndySpace.S3),
         verticalArrangement = Arrangement.SpaceBetween,
@@ -428,10 +445,55 @@ private fun Sidebar(current: AndyDestination, deviceCount: Int, onSelect: (AndyD
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("v0.1  H.264 embedded", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            Text("v${app.andy.updates.AndyBuildInfo.versionName}  H.264 embedded", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
             StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
             StatusRow("Proxy CA", "local", true)
+
+            Divider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+            val updateText = when (updateState) {
+                AppUpdateState.Idle -> "Check for updates"
+                AppUpdateState.Checking -> "Checking for updates..."
+                AppUpdateState.Current -> "Andy is up to date"
+                is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
+                is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
+                    val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
+                    "${it.message}$pct"
+                }
+                is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
+            }
+
+            val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
+            val updateColor = when (updateState) {
+                is AppUpdateState.Available -> Rust
+                is AppUpdateState.Failed -> Red
+                else -> TextSecondary
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (isActionable) Modifier.clickable {
+                        scope.launch {
+                            if (updateState is AppUpdateState.Available) {
+                                updates.installAvailableUpdate()
+                            } else {
+                                updates.checkForUpdates()
+                            }
+                        }
+                    } else Modifier)
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = updateText,
+                    color = updateColor,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
+                )
+            }
         }
     }
 }
@@ -3260,3 +3322,56 @@ private fun secondaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
     disabledContainerColor = AndyColors.Neutral700,
     disabledContentColor = AndyColors.Neutral500,
 )
+
+@Composable
+private fun UpdateInstallConfirmationDialog(
+    update: AvailableUpdate,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "Install Andy ${update.versionName}?",
+                color = AndyColors.Neutral100,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The update has been downloaded and verified.",
+                    color = AndyColors.Neutral200,
+                    fontSize = 14.sp
+                )
+                Text(
+                    "Andy will close and open the installer. After the installation is complete, you can relaunch the application.",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                colors = ButtonDefaults.textButtonColors(contentColor = Rust)
+            ) {
+                Text("Close and install", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = TextSecondary)
+            ) {
+                Text("Later")
+            }
+        },
+        containerColor = PanelSoft,
+        titleContentColor = AndyColors.Neutral100,
+        textContentColor = AndyColors.Neutral300
+    )
+}

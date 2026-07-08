@@ -37,12 +37,17 @@ import java.net.NetworkInterface
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
+import app.andy.desktop.updates.DesktopAppUpdateService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 
 fun createDesktopServices(): AndyServices {
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     val devices = DesktopDeviceService(runner, locator, store)
+    val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val updates = DesktopAppUpdateService(updatesScope)
     return AndyServices(
         devices = devices,
         avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath },
@@ -55,6 +60,7 @@ fun createDesktopServices(): AndyServices {
         metrics = DesktopMetricsService(runner, devices),
         accessibility = DesktopAccessibilityService(runner, devices),
         workspaceStore = store,
+        updates = updates,
     )
 }
 

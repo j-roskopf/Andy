@@ -147,4 +147,5 @@ data class AndyServices(
     val metrics: MetricsService,
     val accessibility: AccessibilityService,
     val workspaceStore: WorkspaceStore,
+    val updates: AppUpdateService,
 )
