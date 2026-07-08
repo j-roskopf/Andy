@@ -58,8 +58,7 @@ class DesktopActionRunService(
         _running.update { it + snapshot }
 
         runCatching {
-            val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/sh"
-            ProcessBuilder(shell, "-lc", action.command)
+            ProcessBuilder(shellCommand(action.command))
                 .directory(File(cwd))
                 .redirectErrorStream(true)
                 .apply {
@@ -70,8 +69,8 @@ class DesktopActionRunService(
         }.fold(
             onSuccess = { process ->
                 val job = scope.launch(Dispatchers.IO) {
-                    readProcessOutput(process, output)
-                    val exitCode = process.waitFor()
+                    runCatching { readProcessOutput(process, output) }
+                    val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
                     markComplete(runId, if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed, exitCode)
                     handles[runId] = handles[runId]?.copy(readerJob = null) ?: RunHandle(process, null, output)
                 }
@@ -128,8 +127,23 @@ class DesktopActionRunService(
     private fun markComplete(runId: String, status: ActionRunStatus, exitCode: Int?) {
         _running.update { runs ->
             runs.map { run ->
-                if (run.runId == runId) run.copy(status = status, exitCode = exitCode) else run
+                if (run.runId == runId && run.status == ActionRunStatus.Running) {
+                    run.copy(status = status, exitCode = exitCode)
+                } else {
+                    run
+                }
             }
+        }
+    }
+
+    private fun shellCommand(command: String): List<String> {
+        val osName = System.getProperty("os.name").lowercase()
+        return if (osName.contains("win")) {
+            val shell = System.getenv("COMSPEC")?.takeIf { it.isNotBlank() } ?: "cmd.exe"
+            listOf(shell, "/c", command)
+        } else {
+            val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/sh"
+            listOf(shell, "-lc", command)
         }
     }
 

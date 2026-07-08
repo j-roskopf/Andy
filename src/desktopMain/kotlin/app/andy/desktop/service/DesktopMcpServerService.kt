@@ -37,10 +37,14 @@ class DesktopMcpServerService(
     override val running = MutableStateFlow(false)
 
     private var serverEngine: EmbeddedServer<*, *>? = null
+    private var runningPort: Int? = null
 
     override suspend fun start(port: Int): CommandResult = withContext(Dispatchers.IO) {
         if (serverEngine != null) {
-            return@withContext CommandResult.success("Already running")
+            if (runningPort == port) {
+                return@withContext CommandResult.success("Already running")
+            }
+            stop()
         }
 
         if (!isPortAvailable(port)) {
@@ -66,6 +70,7 @@ class DesktopMcpServerService(
 
             serverEngine = engine
             engine.start(wait = false)
+            runningPort = port
 
             status.value = "running on 127.0.0.1:$port"
             running.value = true
@@ -75,6 +80,7 @@ class DesktopMcpServerService(
             status.value = "error: ${e.message ?: "start failed"}"
             running.value = false
             serverEngine = null
+            runningPort = null
             CommandResult.failure("Failed to start server: ${e.message}")
         }
     }
@@ -89,6 +95,7 @@ class DesktopMcpServerService(
             }
             serverEngine = null
         }
+        runningPort = null
         status.value = "stopped"
         running.value = false
         CommandResult.success("Server stopped")
