@@ -102,6 +102,7 @@ kotlin {
                 implementation(compose.desktop.currentOs)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
+                implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
 
                 // MCP and Ktor Server Dependencies
                 implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")
@@ -144,6 +145,7 @@ compose.desktop {
             isEnabled.set(false)
         }
         nativeDistributions {
+            modules("java.instrument", "java.management", "java.net.http", "jdk.unsupported")
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,

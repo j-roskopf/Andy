@@ -1,0 +1,7 @@
+File type icons in this resource set are from JetBrains/intellij-community:
+https://github.com/JetBrains/intellij-community/tree/master/platform/icons/src/expui/fileTypes
+https://github.com/JetBrains/intellij-community/tree/master/platform/icons/src/expui/nodes
+https://github.com/JetBrains/intellij-community/tree/master/plugins/kotlin/base/resources/resources/org/jetbrains/kotlin/idea/icons/expui
+
+Original copyright: JetBrains s.r.o.
+See the upstream repository for current licensing and notices.

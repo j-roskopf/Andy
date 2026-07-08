@@ -68,6 +68,15 @@ interface FileService {
     suspend fun delete(serial: String, remotePath: String): CommandResult
 }
 
+interface HostFileService {
+    suspend fun list(path: String): List<HostFileEntry>
+    suspend fun read(path: String): HostFileDocument
+    suspend fun save(path: String, content: String, expectedModifiedMillis: Long): HostFileSaveResult
+    suspend fun indexStatus(root: String): HostIndexStatus
+    fun indexRoot(root: String): Flow<HostIndexStatus>
+    suspend fun search(query: String, mode: HostSearchMode, roots: List<String>, limit: Int = 200): List<HostSearchResult>
+}
+
 interface ProxyService {
     val exchanges: Flow<List<NetworkExchange>>
     val status: Flow<String>
@@ -204,6 +213,7 @@ data class AndyServices(
     val intents: IntentService,
     val apps: AppService,
     val files: FileService,
+    val hostFiles: HostFileService,
     val proxy: ProxyService,
     val metrics: MetricsService,
     val accessibility: AccessibilityService,

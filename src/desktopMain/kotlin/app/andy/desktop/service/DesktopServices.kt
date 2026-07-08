@@ -30,6 +30,8 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.net.Socket
 import java.net.ServerSocket
 import java.net.Inet4Address
@@ -59,6 +61,7 @@ fun createDesktopServices(): AndyServices {
     val intents = DesktopIntentService(runner, devices)
     val apps = DesktopAppService(runner, devices)
     val files = DesktopFileService(runner, devices)
+    val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
 
@@ -83,6 +86,7 @@ fun createDesktopServices(): AndyServices {
         intents = intents,
         apps = apps,
         files = files,
+        hostFiles = hostFiles,
         proxy = proxy,
         metrics = DesktopMetricsService(runner, devices),
         accessibility = accessibility,
@@ -505,8 +509,8 @@ class DesktopMirrorEngine(
         connectedSerial = serial
         connectedConfig = config
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
-        val scrcpyServer = findScrcpyServer()
-            ?: return CommandResult.failure("scrcpy-server not found. Install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
+        val scrcpyServer = ScrcpyServerLocator.find()
+            ?: return CommandResult.failure("scrcpy-server not found. Andy bundles it for packaged builds; for development, install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
         status.value = "Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)"
         videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
@@ -839,19 +843,6 @@ class DesktopMirrorEngine(
         return maxOf(minimum, value and -2)
     }
 
-    private fun findScrcpyServer(): File? {
-        val envPath = System.getenv("SCRCPY_SERVER_PATH")?.takeIf { it.isNotBlank() }?.let(::File)
-        if (envPath != null && envPath.isFile) return envPath
-
-        val candidates = listOf(
-            "/opt/homebrew/Cellar/scrcpy/4.0/share/scrcpy/scrcpy-server",
-            "/opt/homebrew/share/scrcpy/scrcpy-server",
-            "/usr/local/share/scrcpy/scrcpy-server",
-            "/Applications/scrcpy/scrcpy-server",
-        ).map(::File)
-        return candidates.firstOrNull { it.isFile }
-    }
-
     private fun allocateLocalPort(): Int {
         return ServerSocket(0).use { it.localPort }
     }
@@ -872,6 +863,38 @@ class DesktopMirrorEngine(
     }
 
     private data class CaptureSize(val width: Int, val height: Int)
+}
+
+internal object ScrcpyServerLocator {
+    fun find(): File? {
+        val envPath = System.getenv("SCRCPY_SERVER_PATH")?.takeIf { it.isNotBlank() }?.let(::File)
+        if (envPath != null && envPath.isFile) return envPath
+
+        bundledServer()?.let { return it }
+
+        val candidates = listOf(
+            "/opt/homebrew/Cellar/scrcpy/4.0/share/scrcpy/scrcpy-server",
+            "/opt/homebrew/share/scrcpy/scrcpy-server",
+            "/usr/local/share/scrcpy/scrcpy-server",
+            "/Applications/scrcpy/scrcpy-server",
+        ).map(::File)
+        return candidates.firstOrNull { it.isFile }
+    }
+
+    private fun bundledServer(): File? {
+        val target = File(System.getProperty("user.home"), ".andy/scrcpy/scrcpy-server")
+        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server") ?: return null
+        target.parentFile.mkdirs()
+        try {
+            resource.use { input ->
+                Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            target.setReadable(true, false)
+        } catch (_: Exception) {
+            if (!target.isFile || target.length() == 0L) return null
+        }
+        return target.takeIf { it.isFile && it.length() > 0 }
+    }
 }
 
 private object ScrcpyControlMessage {
@@ -2189,6 +2212,11 @@ class DesktopWorkspaceStore : WorkspaceStore {
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
             accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
+            hostFileRoots = props.getProperty("hostFileRoots").orEmpty().lines().filter { it.isNotBlank() },
+            lastHostFilePath = props.getProperty("lastHostFilePath")?.takeIf { it.isNotBlank() },
+            recentHostFiles = props.getProperty("recentHostFiles").orEmpty().lines().filter { it.isNotBlank() },
+            hostFileTreePaneWidth = props.getProperty("hostFileTreePaneWidth")?.toFloatOrNull() ?: 320f,
+            hostFileSearchPaneWidth = props.getProperty("hostFileSearchPaneWidth")?.toFloatOrNull() ?: 430f,
         )
     }
 
@@ -2221,6 +2249,11 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
             setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
+            setProperty("hostFileRoots", state.hostFileRoots.joinToString("\n"))
+            setProperty("lastHostFilePath", state.lastHostFilePath.orEmpty())
+            setProperty("recentHostFiles", state.recentHostFiles.joinToString("\n"))
+            setProperty("hostFileTreePaneWidth", state.hostFileTreePaneWidth.toString())
+            setProperty("hostFileSearchPaneWidth", state.hostFileSearchPaneWidth.toString())
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
     }

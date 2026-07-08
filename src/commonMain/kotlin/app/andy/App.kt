@@ -42,10 +42,21 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerMoveFilter
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -60,6 +71,35 @@ import app.andy.andy.generated.resources.hardware_record
 import app.andy.andy.generated.resources.hardware_rotate
 import app.andy.andy.generated.resources.hardware_volume_down
 import app.andy.andy.generated.resources.hardware_volume_up
+import app.andy.andy.generated.resources.intellij_filetype_anyType_dark
+import app.andy.andy.generated.resources.intellij_filetype_c_dark
+import app.andy.andy.generated.resources.intellij_filetype_config_dark
+import app.andy.andy.generated.resources.intellij_filetype_cpp_dark
+import app.andy.andy.generated.resources.intellij_filetype_css_dark
+import app.andy.andy.generated.resources.intellij_filetype_csv_dark
+import app.andy.andy.generated.resources.intellij_filetype_docker_dark
+import app.andy.andy.generated.resources.intellij_filetype_gitignore
+import app.andy.andy.generated.resources.intellij_filetype_gradle_dark
+import app.andy.andy.generated.resources.intellij_filetype_groovy_dark
+import app.andy.andy.generated.resources.intellij_filetype_h_dark
+import app.andy.andy.generated.resources.intellij_filetype_html_dark
+import app.andy.andy.generated.resources.intellij_filetype_image_dark
+import app.andy.andy.generated.resources.intellij_filetype_javaScript_dark
+import app.andy.andy.generated.resources.intellij_filetype_java_dark
+import app.andy.andy.generated.resources.intellij_filetype_json_dark
+import app.andy.andy.generated.resources.intellij_filetype_kotlinScript_dark
+import app.andy.andy.generated.resources.intellij_filetype_kotlin_dark
+import app.andy.andy.generated.resources.intellij_filetype_markdown_dark
+import app.andy.andy.generated.resources.intellij_filetype_modified_dark
+import app.andy.andy.generated.resources.intellij_filetype_properties_dark
+import app.andy.andy.generated.resources.intellij_filetype_shell_dark
+import app.andy.andy.generated.resources.intellij_filetype_sql_dark
+import app.andy.andy.generated.resources.intellij_filetype_text_dark
+import app.andy.andy.generated.resources.intellij_filetype_toml_dark
+import app.andy.andy.generated.resources.intellij_filetype_unknown_dark
+import app.andy.andy.generated.resources.intellij_filetype_xml_dark
+import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
+import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
 import kotlinx.coroutines.Job
@@ -76,6 +116,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import org.jetbrains.compose.resources.painterResource
+import org.jetbrains.compose.resources.DrawableResource
 
 enum class AndyDestination(val label: String) {
     Devices("Devices"),
@@ -85,6 +126,7 @@ enum class AndyDestination(val label: String) {
     Logcat("Logcat"),
     Intents("Intents"),
     Files("Files & data"),
+    ComputerFiles("Computer Files"),
     Network("Network"),
     Actions("Actions"),
     Snapshots("Snapshots"),
@@ -151,6 +193,14 @@ private val Green = AndyColors.Green
 private val Cyan = AndyColors.Blue
 private val Yellow = AndyColors.Warning
 private val Red = AndyColors.Error
+
+private data class SetupRequirement(
+    val label: String,
+    val ok: Boolean,
+    val readyText: String,
+    val missingText: String,
+    val installCommand: String? = null,
+)
 
 private fun Modifier.rightBorder(color: Color): Modifier = drawBehind {
     val strokeWidth = 1.dp.toPx()
@@ -336,7 +386,7 @@ fun AndyApp(
     services: AndyServices,
     requestedDestination: AndyDestination? = null,
     onDestinationConsumed: () -> Unit = {},
-    onPopOutMirror: (String?) -> Unit = {},
+    onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
 ) {
     MaterialTheme(
@@ -367,7 +417,12 @@ fun AndyApp(
 }
 
 @Composable
-fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
+fun AndyMirrorPopOut(
+    services: AndyServices,
+    serial: String?,
+    deviceName: String? = null,
+    controlsVisible: Boolean = false,
+) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Ink,
@@ -386,6 +441,7 @@ fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }
         val sendInput = rememberMirrorInputSender(services, serial)
+        val popOutPadding = if (controlsVisible) 12.dp else 0.dp
         LaunchedEffect(Unit) {
             services.mirror.status.collectLatest { mirrorStatus = it }
         }
@@ -395,15 +451,21 @@ fun AndyMirrorPopOut(services: AndyServices, serial: String?) {
                 connectResult = if (result.isSuccess) result.stdout else result.stderr
             }
         }
-        Box(Modifier.fillMaxSize().background(Ink).noiseGridOverlay(0.04f).padding(12.dp)) {
+        Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
             MirrorFrameContent(services.mirror, serial) { frame ->
                 LiveDevicePane(
                     serial = serial,
                     device = null,
+                    displayName = deviceName,
                     frame = frame,
                     mirrorStatus = mirrorStatus,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize(),
+                    showDeviceHeader = controlsVisible,
+                    showChromeControls = controlsVisible,
+                    showContainerChrome = controlsVisible,
+                    deviceBorderWidth = if (controlsVisible) 5.dp else 0.dp,
+                    deviceCornerRadius = if (controlsVisible) 10.dp else 0.dp,
                     onPower = { sendInput(MirrorInput.Power) },
                     onVolumeUp = { sendInput(MirrorInput.Key(24)) },
                     onVolumeDown = { sendInput(MirrorInput.Key(25)) },
@@ -436,7 +498,7 @@ private fun AndyShell(
     services: AndyServices,
     requestedDestination: AndyDestination?,
     onDestinationConsumed: () -> Unit,
-    onPopOutMirror: (String?) -> Unit,
+    onPopOutMirror: (String?, String?) -> Unit,
     contentTopPadding: androidx.compose.ui.unit.Dp,
 ) {
     val scope = rememberCoroutineScope()
@@ -591,7 +653,6 @@ private fun AndyShell(
                         services.actionRuns.stop(run.runId)
                         activeRunId = run.runId
                     },
-                    onOpenActions = { destination = AndyDestination.Actions },
                     actions = {
                         if (destination == AndyDestination.Network) {
                             FilterPill("Rules", networkRulesVisible, Rust) { networkRulesVisible = !networkRulesVisible }
@@ -628,7 +689,10 @@ private fun AndyShell(
                             onControlsPaneHeightChange = { height -> updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
                             onBugSaved = { destination = AndyDestination.Bugs },
                             logcatState = liveLogcatState,
-                            onPopOutMirror = { onPopOutMirror(selectedSerial) },
+                            onPopOutMirror = {
+                                val selectedDevice = devices.firstOrNull { it.serial == selectedSerial }
+                                onPopOutMirror(selectedSerial, selectedDevice?.displayName ?: selectedSerial)
+                            },
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -640,8 +704,14 @@ private fun AndyShell(
                         AndyDestination.Logcat -> LogcatScreen(services.logcat, selectedSerial, logcatState)
                         AndyDestination.Intents -> IntentsScreen(services, selectedSerial)
                         AndyDestination.Files -> FilesScreen(services.files, selectedSerial)
+                        AndyDestination.ComputerFiles -> HostFilesScreen(
+                            service = services.hostFiles,
+                            workspaceState = workspaceState,
+                            onUpdateWorkspace = { updateWorkspace(it) },
+                        )
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
+                            sdk = sdk,
                             serial = selectedSerial,
                             device = devices.firstOrNull { it.serial == selectedSerial },
                             port = workspaceState.proxyPort,
@@ -844,6 +914,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.Logcat -> "##"
     AndyDestination.Intents -> "->"
     AndyDestination.Files -> "/_"
+    AndyDestination.ComputerFiles -> "//"
     AndyDestination.Network -> "~~"
     AndyDestination.Actions -> "|>"
     AndyDestination.Snapshots -> "[]"
@@ -907,9 +978,10 @@ private fun TopChrome(
     runningActions: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     onStopAction: (RunningAction) -> Unit,
-    onOpenActions: () -> Unit,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
+
     Row(
         Modifier.fillMaxWidth().height(62.dp)
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
@@ -923,14 +995,15 @@ private fun TopChrome(
         }
         Spacer(Modifier.weight(1f))
         actions()
-        ActionRunnerSelector(
-            config = actionConfig,
-            running = runningActions,
-            onRunAction = onRunAction,
-            onStopAction = onStopAction,
-            onOpenActions = onOpenActions,
-        )
-        Spacer(Modifier.width(10.dp))
+        if (hasActionRunnerControls) {
+            ActionRunnerSelector(
+                config = actionConfig,
+                running = runningActions,
+                onRunAction = onRunAction,
+                onStopAction = onStopAction,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
         if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
@@ -956,7 +1029,6 @@ private fun ActionRunnerSelector(
     running: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     onStopAction: (RunningAction) -> Unit,
-    onOpenActions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var projectExpanded by remember { mutableStateOf(false) }
@@ -979,17 +1051,6 @@ private fun ActionRunnerSelector(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (config.projects.isEmpty()) {
-            OutlinedButton(
-                onClick = onOpenActions,
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text("actions setup", color = TextPrimary, fontSize = 12.sp)
-            }
-            return@Row
-        }
-
         Box {
             Button(
                 onClick = { projectExpanded = true },
@@ -2053,6 +2114,7 @@ private fun NavIconRecents(color: Color, modifier: Modifier = Modifier) {
 private fun LiveDevicePane(
     serial: String?,
     device: AndroidDevice?,
+    displayName: String? = device?.displayName,
     frame: MirrorFrame?,
     mirrorStatus: String,
     connectResult: String,
@@ -2068,6 +2130,11 @@ private fun LiveDevicePane(
     pickerColor: Color? = null,
     pickerHex: String? = null,
     zoom: Float = 1f,
+    showDeviceHeader: Boolean = true,
+    showChromeControls: Boolean = true,
+    showContainerChrome: Boolean = true,
+    deviceBorderWidth: Dp = 5.dp,
+    deviceCornerRadius: Dp = 10.dp,
     onHoverColor: (String) -> Unit = {},
     passThroughInput: Boolean = true,
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
@@ -2083,94 +2150,166 @@ private fun LiveDevicePane(
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
-    Row(modifier.background(PanelSoft, RoundedCornerShape(8.dp)).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        LiveHardwareToolbar(
-            enabled = serial != null,
-            onPower = onPower,
-            onVolumeUp = onVolumeUp,
-            onVolumeDown = onVolumeDown,
-            onRotate = onRotate,
-            onCaptureScreenshot = onCaptureScreenshot,
-            onBugReport = onBugReport,
-            onClipText = onClipText,
-            onPopOut = onPopOut,
-        )
-    Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(device?.serial ?: serial ?: "No device", color = TextPrimary, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
-                color = TextSecondary,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
+    val containerShape = RoundedCornerShape(if (showContainerChrome) 8.dp else 0.dp)
+    val containerModifier = if (showContainerChrome) {
+        modifier.background(PanelSoft, containerShape).padding(14.dp)
+    } else {
+        modifier.background(Color.Black)
+    }
+    Row(
+        containerModifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (showChromeControls) {
+            LiveHardwareToolbar(
+                enabled = serial != null,
+                onPower = onPower,
+                onVolumeUp = onVolumeUp,
+                onVolumeDown = onVolumeDown,
+                onRotate = onRotate,
+                onCaptureScreenshot = onCaptureScreenshot,
+                onBugReport = onBugReport,
+                onClipText = onClipText,
+                onPopOut = onPopOut,
             )
         }
-        Spacer(Modifier.height(18.dp))
-        BoxWithConstraints(
-            Modifier.weight(1f).fillMaxWidth(),
-            contentAlignment = Alignment.Center,
-        ) {
-            val viewportWidth = maxWidth
-            val viewportHeight = maxHeight
-            val zoomFactor = zoom.coerceIn(0.5f, 4f)
-            val sourceWidth = (device?.screenSize?.substringBefore("x")?.toIntOrNull() ?: frame?.width ?: 1080).coerceAtLeast(1)
-            val sourceHeight = (device?.screenSize?.substringAfter("x")?.toIntOrNull() ?: frame?.height ?: 2340).coerceAtLeast(1)
-            val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
-            Box(
-                Modifier.fillMaxSize()
-                    .horizontalScroll(rememberScrollState())
-                    .verticalScroll(rememberScrollState()),
+
+        Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (showDeviceHeader) {
+                Box(Modifier.fillMaxWidth()) {
+                    Text(
+                        displayName ?: device?.serial ?: serial ?: "No device",
+                        color = TextPrimary,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.Center),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+            }
+
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
+                val viewportWidth = maxWidth
+                val zoomFactor = zoom.coerceIn(0.5f, 4f)
+                val sourceWidth = (device?.screenSize?.substringBefore("x")?.toIntOrNull() ?: frame?.width ?: 1080).coerceAtLeast(1)
+                val sourceHeight = (device?.screenSize?.substringAfter("x")?.toIntOrNull() ?: frame?.height ?: 2340).coerceAtLeast(1)
+                val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
+                val navHeight = if (showChromeControls) 60.dp else 0.dp
+                val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)
                 val baseWidth = minOf(viewportWidth, viewportHeight * aspect)
                 Box(
-                    Modifier
-                        .width(baseWidth * zoomFactor)
-                        .aspectRatio(aspect)
-                        .background(Color.Black, RoundedCornerShape(10.dp))
-                        .border(5.dp, Color(0xFF111111), RoundedCornerShape(10.dp)),
+                    Modifier.fillMaxSize()
+                        .horizontalScroll(rememberScrollState())
+                        .verticalScroll(rememberScrollState()),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (frame != null) {
-                        MirrorVideoSurface(
-                            frame = frame,
-                            modifier = Modifier.fillMaxSize(),
-                            onInput = onInput,
-                            onHoverColor = onHoverColor,
-                            passThroughInput = passThroughInput,
-                            onDevicePointClick = onDevicePointClick,
-                            onRulerResize = onRulerResize,
-                            overlay = MirrorOverlay(
-                                highlightBounds = highlightBounds,
-                                sourceWidth = sourceWidth,
-                                sourceHeight = sourceHeight,
-                                showGrid = gridSize != null,
-                                gridSize = gridSize ?: 16f,
-                                gridColor = gridColor,
-                                showRuler = showRuler,
-                                rulerColor = Rust,
-                                rulerWidth = rulerWidth,
-                                rulerHeight = rulerHeight,
-                                rulerX = rulerX,
-                                rulerY = rulerY,
-                                pickerColor = pickerColor,
-                                pickerHex = pickerHex,
-                            ),
-                        )
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
-                            Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
-                            if (serial != null) {
-                                Spacer(Modifier.height(12.dp))
-                                Button(
-                                    onClick = onConnect,
-                                    colors = primaryButtonColors(),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    Column(
+                        Modifier.width(baseWidth * zoomFactor),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(aspect)
+                                .background(Color.Black, RoundedCornerShape(deviceCornerRadius))
+                                .then(
+                                    if (deviceBorderWidth > 0.dp) {
+                                        Modifier.border(deviceBorderWidth, Color(0xFF111111), RoundedCornerShape(deviceCornerRadius))
+                                    } else {
+                                        Modifier
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (frame != null) {
+                                MirrorVideoSurface(
+                                    frame = frame,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onInput = onInput,
+                                    onHoverColor = onHoverColor,
+                                    passThroughInput = passThroughInput,
+                                    onDevicePointClick = onDevicePointClick,
+                                    onRulerResize = onRulerResize,
+                                    overlay = MirrorOverlay(
+                                        highlightBounds = highlightBounds,
+                                        sourceWidth = sourceWidth,
+                                        sourceHeight = sourceHeight,
+                                        showGrid = gridSize != null,
+                                        gridSize = gridSize ?: 16f,
+                                        gridColor = gridColor,
+                                        showRuler = showRuler,
+                                        rulerColor = Rust,
+                                        rulerWidth = rulerWidth,
+                                        rulerHeight = rulerHeight,
+                                        rulerX = rulerX,
+                                        rulerY = rulerY,
+                                        pickerColor = pickerColor,
+                                        pickerHex = pickerHex,
+                                    ),
+                                )
+                            } else {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+                                    Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                    Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                    Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
+                                    if (serial != null) {
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(
+                                            onClick = onConnect,
+                                            colors = primaryButtonColors(),
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                        ) {
+                                            Text("Connect", color = TextPrimary, fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (showChromeControls) {
+                            Spacer(Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Back) },
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Text("Connect", color = TextPrimary, fontSize = 12.sp)
+                                    NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Home) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Recents) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
                                 }
                             }
                         }
@@ -2178,32 +2317,6 @@ private fun LiveDevicePane(
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            horizontalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { onInput(MirrorInput.Back) },
-                enabled = serial != null
-            ) {
-                NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-            IconButton(
-                onClick = { onInput(MirrorInput.Home) },
-                enabled = serial != null
-            ) {
-                NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-            IconButton(
-                onClick = { onInput(MirrorInput.Recents) },
-                enabled = serial != null
-            ) {
-                NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
-            }
-        }
-    }
     }
 }
 
@@ -3091,6 +3204,691 @@ private fun parentPath(path: String): String {
     return trimmed.substringBeforeLast('/', "").ifBlank { "/" }
 }
 
+private data class HostEditorTab(
+    val path: String,
+    val content: String,
+    val savedContent: String,
+    val modifiedMillis: Long,
+    val sizeBytes: Long,
+    val languageHint: String,
+    val message: String = "",
+) {
+    val dirty: Boolean get() = content != savedContent
+}
+
+private data class HostTreeRow(val entry: HostFileEntry, val depth: Int)
+
+@Composable
+private fun HostFilesScreen(
+    service: HostFileService,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var selectedRoot by remember(workspaceState.hostFileRoots, workspaceState.lastHostFilePath) {
+        mutableStateOf(resolveHostRootForPath(workspaceState.lastHostFilePath, workspaceState.hostFileRoots) ?: workspaceState.hostFileRoots.firstOrNull())
+    }
+    var selectedPath by remember(workspaceState.lastHostFilePath, selectedRoot) {
+        val saved = workspaceState.lastHostFilePath
+        val selected = selectedRoot
+        mutableStateOf(if (saved != null && selected != null && hostPathStartsWith(saved, selected)) saved else selected.orEmpty())
+    }
+    var message by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchMode by remember { mutableStateOf(HostSearchMode.Combined) }
+    var searchResults by remember { mutableStateOf<List<HostSearchResult>>(emptyList()) }
+    var tabs by remember { mutableStateOf<List<HostEditorTab>>(emptyList()) }
+    var activePath by remember { mutableStateOf<String?>(null) }
+    var conflictTab by remember { mutableStateOf<HostEditorTab?>(null) }
+    val statuses = remember { mutableStateMapOf<String, HostIndexStatus>() }
+    val treeChildren = remember { mutableStateMapOf<String, List<HostFileEntry>>() }
+    val expandedPaths = remember { mutableStateMapOf<String, Boolean>() }
+    val searchFocusRequester = remember { FocusRequester() }
+    val treeListState = rememberLazyListState()
+    var pendingTreeScrollPath by remember { mutableStateOf<String?>(null) }
+    var localHostFileTreePaneWidth by remember(workspaceState.hostFileTreePaneWidth) {
+        mutableStateOf(workspaceState.hostFileTreePaneWidth.coerceIn(220f, 620f))
+    }
+    var localHostFileSearchPaneWidth by remember(workspaceState.hostFileSearchPaneWidth) {
+        mutableStateOf(workspaceState.hostFileSearchPaneWidth.coerceIn(500f, 980f))
+    }
+    val activeTab = activePath?.let { path -> tabs.firstOrNull { it.path == path } }
+    val dirtyPaths = remember(tabs) { tabs.filter { it.dirty }.map { it.path }.toSet() }
+    val treeRows = remember(selectedRoot, treeChildren.toMap(), expandedPaths.toMap()) {
+        selectedRoot?.let { root -> hostTreeRows(root, treeChildren, expandedPaths) }.orEmpty()
+    }
+
+    fun updateRecent(path: String) {
+        onUpdateWorkspace {
+            it.copy(
+                lastHostFilePath = path,
+                recentHostFiles = (listOf(path) + it.recentHostFiles.filterNot { recent -> recent == path }).take(10),
+            )
+        }
+    }
+
+    fun loadPath(path: String = selectedPath) {
+        if (path.isBlank()) return
+        scope.launch {
+            runCatching { service.list(path) }
+                .onSuccess {
+                    selectedPath = path
+                    treeChildren[path] = it
+                    if (message.endsWith("entries")) message = ""
+                    onUpdateWorkspace { state -> state.copy(lastHostFilePath = path) }
+                }
+                .onFailure { message = it.message ?: "Browse failed" }
+        }
+    }
+
+    fun openFile(path: String) {
+        scope.launch {
+            runCatching { service.read(path) }
+                .onSuccess { doc ->
+                    val next = HostEditorTab(doc.path, doc.content, doc.content, doc.modifiedMillis, doc.sizeBytes, doc.languageHint)
+                    tabs = (tabs.filterNot { it.path == doc.path } + next)
+                    activePath = doc.path
+                    updateRecent(doc.path)
+                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                }
+                .onFailure { message = it.message ?: "Open failed" }
+        }
+    }
+
+    fun revealFileInTree(path: String) {
+        val root = resolveHostRootForPath(path, workspaceState.hostFileRoots) ?: return
+        val parent = hostParentPath(path)
+        selectedRoot = root
+        selectedPath = parent
+        searchQuery = ""
+        pendingTreeScrollPath = path
+        hostAncestorDirectories(path, root).forEach { directory ->
+            expandedPaths[directory] = true
+            loadPath(directory)
+        }
+    }
+
+    fun saveTab(tab: HostEditorTab, overwrite: Boolean = false, visiblePath: String? = activePath) {
+        if (visiblePath != tab.path) {
+            val visibleName = visiblePath?.let(::hostFileName) ?: "no active file"
+            message = "Save blocked: ${hostFileName(tab.path)} is not the visible editor file ($visibleName)."
+            tabs = tabs.map { if (it.path == tab.path) it.copy(message = "Save blocked: not the visible editor file") else it }
+            return
+        }
+        scope.launch {
+            val currentTab = tabs.firstOrNull { it.path == tab.path }
+            if (currentTab == null || activePath != tab.path) {
+                message = "Save blocked: active editor changed before save."
+                return@launch
+            }
+            when (val result = service.save(currentTab.path, currentTab.content, if (overwrite) 0L else currentTab.modifiedMillis)) {
+                is HostFileSaveResult.Saved -> {
+                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(savedContent = currentTab.content, modifiedMillis = result.modifiedMillis, message = "") else it }
+                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                }
+                is HostFileSaveResult.Conflict -> {
+                    conflictTab = currentTab.copy(message = "Changed outside Andy at ${result.currentModifiedMillis}")
+                }
+                is HostFileSaveResult.Failed -> {
+                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(message = result.message) else it }
+                    message = result.message
+                }
+            }
+        }
+    }
+
+    fun updateEditorTextForPath(path: String, value: String) {
+        if (path != activePath) {
+            message = "Edit ignored: editor event did not match the visible file."
+            return
+        }
+        if (tabs.none { it.path == path }) {
+            message = "Edit ignored: file tab is no longer open."
+            return
+        }
+        tabs = tabs.map { if (it.path == path) it.copy(content = value) else it }
+    }
+
+    fun saveEditorContentForPath(path: String, value: String) {
+        if (path != activePath) {
+            message = "Save blocked: editor event did not match the visible file."
+            return
+        }
+        val currentTab = tabs.firstOrNull { it.path == path }
+        if (currentTab == null) {
+            message = "Save blocked: file tab is no longer open."
+            return
+        }
+        val updated = currentTab.copy(content = value)
+        tabs = tabs.map { if (it.path == path) updated else it }
+        saveTab(updated, visiblePath = path)
+    }
+
+    fun closeActiveTab() {
+        val path = activePath ?: return
+        val nextTabs = tabs.filterNot { it.path == path }
+        tabs = nextTabs
+        activePath = nextTabs.lastOrNull()?.path
+    }
+
+    fun setSearchModeAndFocus(mode: HostSearchMode) {
+        searchMode = mode
+        scope.launch {
+            delay(30)
+            searchFocusRequester.requestFocus()
+        }
+    }
+
+    fun toggleTreeDirectory(path: String) {
+        val expanded = expandedPaths[path] == true
+        if (expanded) {
+            expandedPaths[path] = false
+            return
+        }
+        expandedPaths[path] = true
+        loadPath(path)
+    }
+
+    LaunchedEffect(workspaceState.hostFileRoots) {
+        workspaceState.hostFileRoots.forEach { root ->
+            expandedPaths[root] = true
+            launch { service.indexRoot(root).collect { statuses[root] = it } }
+        }
+        selectedRoot?.let { root ->
+            if (selectedPath.isBlank() || !hostPathStartsWith(selectedPath, root)) selectedPath = root
+            loadPath(root)
+            if (selectedPath != root) loadPath(selectedPath)
+        }
+    }
+
+    LaunchedEffect(searchQuery, searchMode, selectedRoot) {
+        delay(180)
+        val root = selectedRoot
+        searchResults = if (searchQuery.isBlank() || root.isNullOrBlank()) {
+            emptyList()
+        } else {
+            service.search(searchQuery, searchMode, listOf(root), 200)
+        }
+    }
+
+    LaunchedEffect(pendingTreeScrollPath, treeRows) {
+        val target = pendingTreeScrollPath ?: return@LaunchedEffect
+        val index = treeRows.indexOfFirst { it.entry.path == target }
+        if (index >= 0) {
+            delay(50)
+            treeListState.animateScrollToItem(index)
+            pendingTreeScrollPath = null
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val command = event.isMetaPressed || event.isCtrlPressed
+                if (!command) return@onPreviewKeyEvent false
+                when {
+                    event.key == Key.S && activeTab != null -> {
+                        tabs.firstOrNull { it.path == activeTab.path }?.let { saveTab(it) }
+                        true
+                    }
+                    event.key == Key.W -> {
+                        closeActiveTab()
+                        true
+                    }
+                    event.key == Key.O -> {
+                        scope.launch {
+                            pickDirectory(selectedRoot)?.let { picked ->
+                                onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
+                                selectedRoot = picked
+                                selectedPath = picked
+                                expandedPaths[picked] = true
+                                loadPath(picked)
+                            }
+                        }
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.A -> {
+                        setSearchModeAndFocus(HostSearchMode.Combined)
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.N -> {
+                        setSearchModeAndFocus(HostSearchMode.FileName)
+                        true
+                    }
+                    event.isShiftPressed && event.key == Key.F -> {
+                        setSearchModeAndFocus(HostSearchMode.Content)
+                        true
+                    }
+                    else -> false
+                }
+            },
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Toolbar("Computer Files", "${workspaceState.hostFileRoots.size} roots · ${statuses.values.sumOf { it.indexedFiles }} indexed", onPrimary = {
+            scope.launch {
+                pickDirectory(selectedRoot)?.let { picked ->
+                    onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
+                    selectedRoot = picked
+                    selectedPath = picked
+                    expandedPaths[picked] = true
+                    loadPath(picked)
+                }
+            }
+        }, primaryLabel = "Add root")
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PanelCard(Modifier.width(localHostFileTreePaneWidth.dp).fillMaxHeight()) {
+                Text("Roots", color = TextPrimary, fontWeight = FontWeight.Bold)
+                if (workspaceState.hostFileRoots.isEmpty()) {
+                    Text("Add a folder to start indexing files on this computer.", color = TextSecondary, fontSize = 12.sp)
+                }
+                workspaceState.hostFileRoots.forEach { root ->
+                    val status = statuses[root]
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.R2))
+                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.R2))
+                            .clickable {
+                                selectedRoot = root
+                                selectedPath = root
+                                expandedPaths[root] = true
+                                loadPath(root)
+                            }
+                            .padding(8.dp),
+                    ) {
+                        Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Divider(color = Border)
+                Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                workspaceState.recentHostFiles.forEach { recent ->
+                    val recentRoot = resolveHostRootForPath(recent, workspaceState.hostFileRoots)
+                    val relativePath = recentRoot?.let { hostDisplayPath(recent, it) } ?: recent
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable {
+                                revealFileInTree(recent)
+                                openFile(recent)
+                            }
+                            .padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        HostFileIcon(hostFileIconForPath(recent, isDirectory = false))
+                        Column(Modifier.weight(1f)) {
+                            Text(recentRoot?.let(::hostFileName) ?: "outside roots", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(relativePath, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            PaneDivider(
+                onDrag = { dragX ->
+                    localHostFileTreePaneWidth = (localHostFileTreePaneWidth + dragX).coerceIn(220f, 620f)
+                },
+                onDragEnd = {
+                    onUpdateWorkspace { state -> state.copy(hostFileTreePaneWidth = localHostFileTreePaneWidth) }
+                },
+            )
+            PanelCard(Modifier.width(localHostFileSearchPaneWidth.dp).fillMaxHeight()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextField(
+                        selectedPath,
+                        { selectedPath = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Go") }
+                        OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Up") }
+                        Spacer(Modifier.weight(1f))
+                        OutlinedButton(onClick = {
+                            selectedRoot?.let { root ->
+                                scope.launch {
+                                    var sawIndexing = false
+                                    service.indexRoot(root).first { status ->
+                                        statuses[root] = status
+                                        if (status.indexing) sawIndexing = true
+                                        sawIndexing && !status.indexing
+                                    }
+                                }
+                            }
+                        }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+                            Text("Refresh index")
+                        }
+                    }
+                }
+                TextField(
+                    searchQuery,
+                    { searchQuery = it },
+                    placeholder = { Text("Search indexed files", color = TextSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().height(48.dp).focusRequester(searchFocusRequester),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SearchModePill("All", "ctrl shift A", searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
+                    SearchModePill("Names", "ctrl shift N", searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
+                    SearchModePill("Contents", "ctrl shift F", searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
+                }
+                if (message.isNotBlank()) Text(message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (searchQuery.isNotBlank()) {
+                    LazyColumn(Modifier.weight(1f)) {
+                        items(searchResults) { result ->
+                            val icon = hostFileIconForPath(result.path, isDirectory = false)
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .clickable {
+                                        revealFileInTree(result.path)
+                                        openFile(result.path)
+                                    }
+                                    .padding(vertical = 7.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    HostFileIcon(icon)
+                                    Text(hostDisplayPath(result.path, result.root), color = if (result.kind == HostSearchMatchKind.FileName) Cyan else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    if (dirtyPaths.contains(result.path)) {
+                                        Image(
+                                            painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                                            contentDescription = "Unsaved",
+                                            modifier = Modifier.size(13.dp),
+                                        )
+                                    }
+                                }
+                                Text(listOfNotNull(result.kind.name.lowercase(), result.lineNumber?.let { "line $it" }, result.preview.takeIf { it.isNotBlank() }).joinToString(" · "), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(Modifier.weight(1f), state = treeListState) {
+                        items(treeRows, key = { it.entry.path }) { row ->
+                            HostTreeRowView(
+                                row = row,
+                                expanded = expandedPaths[row.entry.path] == true,
+                                selected = !row.entry.isDirectory && activePath == row.entry.path,
+                                dirty = dirtyPaths.contains(row.entry.path),
+                                onClick = {
+                                    if (row.entry.isDirectory) toggleTreeDirectory(row.entry.path) else openFile(row.entry.path)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            PaneDivider(
+                onDrag = { dragX ->
+                    localHostFileSearchPaneWidth = (localHostFileSearchPaneWidth + dragX).coerceIn(500f, 980f)
+                },
+                onDragEnd = {
+                    onUpdateWorkspace { state -> state.copy(hostFileSearchPaneWidth = localHostFileSearchPaneWidth) }
+                },
+            )
+            PanelCard(Modifier.weight(1f).fillMaxHeight()) {
+                val tab = activeTab
+                if (tab == null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Open a file from the browser or indexed results.", color = TextSecondary, fontFamily = MonoFont)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HostFileIcon(hostFileIconForPath(tab.path, isDirectory = false))
+                        Text(tab.path, color = if (tab.dirty) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        if (tab.dirty) {
+                            Image(
+                                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                                contentDescription = "Unsaved",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
+                    if (tab.message.isNotBlank()) Text(tab.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    HostCodeEditor(
+                        path = tab.path,
+                        text = tab.content,
+                        languageHint = tab.languageHint,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        onTextChange = ::updateEditorTextForPath,
+                        onSave = ::saveEditorContentForPath,
+                        onClose = { closeActiveTab() },
+                        onSearchAll = { setSearchModeAndFocus(HostSearchMode.Combined) },
+                        onSearchNames = { setSearchModeAndFocus(HostSearchMode.FileName) },
+                        onSearchContents = { setSearchModeAndFocus(HostSearchMode.Content) },
+                    )
+                }
+            }
+        }
+    }
+
+    conflictTab?.let { tab ->
+        ConfirmationDialog(
+            confirmation = PendingConfirmation("Overwrite external changes?", "${tab.path}\nThe file changed since Andy opened it.") {
+                saveTab(tab, overwrite = true)
+                conflictTab = null
+            },
+            onDismiss = { conflictTab = null },
+            onConfirm = {
+                saveTab(tab, overwrite = true)
+                conflictTab = null
+            },
+        )
+    }
+}
+
+private fun hostFileName(path: String): String {
+    val trimmed = trimHostTrailingSeparators(path)
+    val index = maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+    return if (index >= 0 && index < trimmed.lastIndex) trimmed.substring(index + 1) else trimmed.ifBlank { path }
+}
+
+private fun hostTreeRows(root: String, children: Map<String, List<HostFileEntry>>, expanded: Map<String, Boolean>): List<HostTreeRow> {
+    val rootEntry = HostFileEntry(
+        path = root,
+        name = hostFileName(root).ifBlank { root },
+        isDirectory = true,
+        sizeBytes = 0L,
+        modifiedMillis = 0L,
+    )
+    val rows = mutableListOf(HostTreeRow(rootEntry, 0))
+    fun append(parent: HostFileEntry, depth: Int) {
+        if (expanded[parent.path] != true) return
+        children[parent.path].orEmpty().forEach { child ->
+            rows += HostTreeRow(child, depth)
+            if (child.isDirectory) append(child, depth + 1)
+        }
+    }
+    append(rootEntry, 1)
+    return rows
+}
+
+private data class HostFileIconSpec(val resource: DrawableResource?)
+
+@Composable
+private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boolean, dirty: Boolean, onClick: () -> Unit) {
+    val entry = row.entry
+    val icon = hostFileIconForPath(entry.path, entry.isDirectory)
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 24.dp)
+            .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+            .then(if (selected) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(start = (row.depth * 16).dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (entry.isDirectory) {
+                if (expanded) "v" else ">"
+            } else {
+                " "
+            },
+            color = if (entry.isDirectory) Cyan else TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            modifier = Modifier.width(16.dp),
+        )
+        HostFileIcon(icon)
+        Spacer(Modifier.width(7.dp))
+        Text(
+            entry.name,
+            color = when {
+                dirty -> Rust
+                selected -> Rust
+                entry.isDirectory -> Cyan
+                else -> TextPrimary
+            },
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (dirty) {
+            Image(
+                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                contentDescription = "Unsaved",
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        if (!entry.isDirectory) {
+            Text(entry.extension.takeIf { it.isNotBlank() } ?: entry.sizeBytes.toString(), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun HostFileIcon(spec: HostFileIconSpec) {
+    if (spec.resource == null) {
+        Spacer(Modifier.size(18.dp))
+    } else {
+        Image(
+            painter = painterResource(spec.resource),
+            contentDescription = "File type",
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+private fun hostFileIconForPath(path: String, isDirectory: Boolean): HostFileIconSpec {
+    if (isDirectory) return HostFileIconSpec(Res.drawable.intellij_node_folder_dark)
+    val name = hostFileName(path).lowercase()
+    val ext = name.substringAfterLast('.', "")
+    return when {
+        name == ".gitignore" -> HostFileIconSpec(Res.drawable.intellij_filetype_gitignore)
+        name == "build.gradle" || name == "settings.gradle" || name.endsWith(".gradle.kts") || name.endsWith(".gradle") -> HostFileIconSpec(Res.drawable.intellij_filetype_gradle_dark)
+        name == "dockerfile" || name == "containerfile" -> HostFileIconSpec(Res.drawable.intellij_filetype_docker_dark)
+        name == "makefile" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
+        ext == "kt" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlin_dark)
+        ext == "kts" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlinScript_dark)
+        ext == "java" -> HostFileIconSpec(Res.drawable.intellij_filetype_java_dark)
+        ext == "groovy" -> HostFileIconSpec(Res.drawable.intellij_filetype_groovy_dark)
+        ext == "json" -> HostFileIconSpec(Res.drawable.intellij_filetype_json_dark)
+        ext == "xml" -> HostFileIconSpec(Res.drawable.intellij_filetype_xml_dark)
+        ext == "html" || ext == "htm" -> HostFileIconSpec(Res.drawable.intellij_filetype_html_dark)
+        ext == "css" || ext == "scss" || ext == "sass" -> HostFileIconSpec(Res.drawable.intellij_filetype_css_dark)
+        ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
+        ext == "ts" || ext == "tsx" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
+        ext == "md" || ext == "markdown" -> HostFileIconSpec(Res.drawable.intellij_filetype_markdown_dark)
+        ext == "c" -> HostFileIconSpec(Res.drawable.intellij_filetype_c_dark)
+        ext == "cpp" || ext == "cc" || ext == "cxx" -> HostFileIconSpec(Res.drawable.intellij_filetype_cpp_dark)
+        ext == "h" || ext == "hpp" -> HostFileIconSpec(Res.drawable.intellij_filetype_h_dark)
+        ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "svg" -> HostFileIconSpec(Res.drawable.intellij_filetype_image_dark)
+        ext == "yml" || ext == "yaml" -> HostFileIconSpec(Res.drawable.intellij_filetype_yaml_dark)
+        ext == "toml" -> HostFileIconSpec(Res.drawable.intellij_filetype_toml_dark)
+        ext == "sh" || ext == "bash" || ext == "zsh" -> HostFileIconSpec(Res.drawable.intellij_filetype_shell_dark)
+        ext == "sql" -> HostFileIconSpec(Res.drawable.intellij_filetype_sql_dark)
+        ext == "csv" -> HostFileIconSpec(Res.drawable.intellij_filetype_csv_dark)
+        ext == "properties" -> HostFileIconSpec(Res.drawable.intellij_filetype_properties_dark)
+        ext == "conf" || ext == "cfg" || ext == "ini" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
+        ext == "txt" -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
+        ext.isBlank() -> HostFileIconSpec(Res.drawable.intellij_filetype_unknown_dark)
+        else -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
+    }
+}
+
+@Composable
+private fun SearchModePill(text: String, shortcut: String, selected: Boolean, color: Color, onClick: () -> Unit) {
+    Row(
+        Modifier.height(32.dp)
+            .background(if (selected) color.copy(alpha = 0.16f) else AndyColors.Neutral900.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.Pill))
+            .border(1.dp, color.copy(alpha = if (selected) 0.52f else 0.22f), RoundedCornerShape(AndyRadius.Pill))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(text, color = if (selected) color else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        if (shortcut.isNotBlank()) {
+            Text(shortcut, color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
+        }
+    }
+}
+
+private fun hostParentPath(path: String): String {
+    val trimmed = trimHostTrailingSeparators(path)
+    if (trimmed == "/" || trimmed.matches(Regex("^[A-Za-z]:$"))) return trimmed
+    val index = maxOf(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+    return when {
+        index < 0 -> trimmed.ifBlank { "/" }
+        index == 0 -> trimmed.substring(0, 1)
+        index == 2 && trimmed.getOrNull(1) == ':' -> trimmed.substring(0, 3)
+        else -> trimmed.substring(0, index).ifBlank { "/" }
+    }
+}
+
+private fun resolveHostRootForPath(path: String?, roots: List<String>): String? {
+    val normalizedPath = path?.let(::normalizeHostPath) ?: return null
+    return roots.sortedByDescending { normalizeHostPath(it).length }.firstOrNull { root ->
+        hostPathStartsWith(normalizedPath, root)
+    }
+}
+
+private fun hostPathStartsWith(path: String, root: String): Boolean {
+    val normalizedPath = normalizeHostPath(path)
+    val normalizedRoot = normalizeHostPath(root)
+    return normalizedPath == normalizedRoot || normalizedPath.startsWith("$normalizedRoot/")
+}
+
+private fun normalizeHostPath(path: String): String = trimHostTrailingSeparators(path).replace('\\', '/').ifBlank { "/" }
+
+private fun trimHostTrailingSeparators(path: String): String {
+    var value = path.trim()
+    while (value.length > 1 && (value.endsWith('/') || value.endsWith('\\'))) {
+        if (value.length == 3 && value[1] == ':') break
+        value = value.dropLast(1)
+    }
+    return value.ifBlank { "/" }
+}
+
+private fun hostAncestorDirectories(path: String, root: String): List<String> {
+    val normalizedRoot = normalizeHostPath(root)
+    val displayRoot = trimHostTrailingSeparators(root)
+    val parent = hostParentPath(path)
+    if (!hostPathStartsWith(parent, normalizedRoot)) return listOf(displayRoot)
+    val relativeParent = normalizeHostPath(parent).removePrefix(normalizedRoot).trim('/')
+    if (relativeParent.isBlank()) return listOf(displayRoot)
+    val separator = if (root.contains('\\') && !root.contains('/')) "\\" else "/"
+    val ancestors = mutableListOf(displayRoot)
+    var current = displayRoot
+    relativeParent.split('/').filter { it.isNotBlank() }.forEach { segment ->
+        current = when {
+            current == "/" -> "/$segment"
+            current.matches(Regex("^[A-Za-z]:$")) -> "$current$separator$segment"
+            else -> "$current$separator$segment"
+        }
+        ancestors += current
+    }
+    return ancestors
+}
+
+private fun hostDisplayPath(path: String, root: String): String {
+    val normalizedPath = normalizeHostPath(path)
+    val normalizedRoot = normalizeHostPath(root)
+    return normalizedPath.removePrefix(normalizedRoot).trimStart('/').ifBlank { hostFileName(path) }
+}
+
 private val DebugNetworkSecurityConfigSnippet = """
 res/xml/network_security_config.xml
 <network-security-config>
@@ -3114,9 +3912,23 @@ private fun manualCertificateSteps(caPath: String, proxyHost: String, port: Int)
     "Disable Private DNS and retry over HTTP/1.1 if a request is missing; pinned apps and QUIC/HTTP3 will not decrypt.",
 )
 
+private fun hostSetupSteps(engineReady: Boolean): List<String> {
+    val mitmproxyStep = if (engineReady) {
+        "mitmproxy is installed; Andy will start mitmdump automatically for Network."
+    } else {
+        "Install mitmproxy on the host: brew install mitmproxy. Andy uses mitmdump from that package."
+    }
+    return listOf(
+        "Install Android Studio or Android command-line tools so Andy can find adb, emulator, sdkmanager, and avdmanager.",
+        "Embedded mirroring uses Andy's bundled scrcpy-server. For local development only, SCRCPY_SERVER_PATH can point at another scrcpy-server file.",
+        mitmproxyStep,
+    )
+}
+
 @Composable
 private fun NetworkScreen(
     services: AndyServices,
+    sdk: SdkDiscovery,
     serial: String?,
     device: AndroidDevice?,
     port: Int,
@@ -3139,6 +3951,8 @@ private fun NetworkScreen(
     var exchanges by remember { mutableStateOf<List<NetworkExchange>>(emptyList()) }
     var selectedFlowId by remember { mutableStateOf<String?>(null) }
     var setupExpanded by remember { mutableStateOf(false) }
+    var setupManuallyToggled by remember { mutableStateOf(false) }
+    var setupDefaultApplied by remember { mutableStateOf(false) }
     var selectedExpanded by remember { mutableStateOf(true) }
     var seenFlowIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val expandedTrafficKeys = remember { mutableStateMapOf<String, Boolean>() }
@@ -3158,6 +3972,8 @@ private fun NetworkScreen(
     var sizeWidth by remember { mutableStateOf(80f) }
     var msWidth by remember { mutableStateOf(70f) }
     var focusedPath by remember { mutableStateOf<String?>(null) }
+    var engineChecked by remember { mutableStateOf(false) }
+    var deviceReadinessChecked by remember { mutableStateOf(false) }
 
     val currentPort = portText.toIntOrNull()?.coerceIn(1, 65535) ?: port
     val filteredExchanges = remember(exchanges, focusedPath) {
@@ -3190,6 +4006,7 @@ private fun NetworkScreen(
         } else {
             engine.stderr
         }
+        engineChecked = true
     }
     LaunchedEffect(engineReady, currentPort) {
         if (!engineReady) return@LaunchedEffect
@@ -3233,16 +4050,42 @@ private fun NetworkScreen(
         if (serial == null) {
             caInstalled = false
             proxyConfigured = false
+            deviceReadinessChecked = true
             return@LaunchedEffect
         }
+        deviceReadinessChecked = false
         while (true) {
             val isCaOk = proxy.isCertificateInstalled(serial)
             val host = proxy.resolveDeviceProxyHost(serial)
             val isProxyOk = proxy.isDeviceProxyConfigured(serial, host, currentPort)
             caInstalled = isCaOk
             proxyConfigured = isProxyOk
+            deviceReadinessChecked = true
             delay(3000)
         }
+    }
+    LaunchedEffect(
+        engineChecked,
+        deviceReadinessChecked,
+        sdk.hasAdb,
+        engineReady,
+        proxyStatus,
+        serial,
+        caInstalled,
+        proxyTrafficObservedForDevice,
+        proxyConfigured,
+    ) {
+        if (setupDefaultApplied || setupManuallyToggled || !engineChecked || !deviceReadinessChecked) return@LaunchedEffect
+        val redCount = listOf(
+            sdk.hasAdb,
+            true,
+            engineReady,
+            proxyStatus.contains("listening on"),
+            serial != null && (caInstalled || proxyTrafficObservedForDevice),
+            serial != null && proxyConfigured,
+        ).count { !it }
+        setupExpanded = redCount > 2
+        setupDefaultApplied = true
     }
     LaunchedEffect(serial) {
         proxyHost = serial?.let { selectedSerial ->
@@ -3331,9 +4174,23 @@ private fun NetworkScreen(
         onRulesVisibleChange(true)
     }
 
+    val networkPageScrollState = rememberScrollState()
+
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column(Modifier.weight(1.45f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PanelCard(Modifier.animateContentSize()) {
+        Column(
+            Modifier
+                .weight(1.45f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(networkPageScrollState),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PanelCard(Modifier.animateContentSize()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TextField(
@@ -3364,67 +4221,16 @@ private fun NetworkScreen(
                             proxyStatus = result.stdout
                         }
                     }) { Text("Stop") }
-                    Text(
-                        if (setupExpanded) "Hide setup" else "Show setup",
-                        color = Rust,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable { setupExpanded = !setupExpanded },
-                    )
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val host = proxy.resolveDeviceProxyHost(serial)
-                                proxyHost = host
-                                val result = proxy.configureDeviceProxy(serial, host, currentPort)
-                                status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
-                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                            }
-                        },
-                    ) { Text("Configure device proxy") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val result = proxy.clearDeviceProxy(serial)
-                                status = if (result.isSuccess) "Device proxy cleared" else result.stderr
-                                val host = proxy.resolveDeviceProxyHost(serial)
-                                proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                            }
-                        },
-                    ) { Text("Clear proxy") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                val result = proxy.installSystemCertificateAuthority(serial)
-                                status = if (result.isSuccess) result.stdout else result.stderr
-                                caInstalled = proxy.isCertificateInstalled(serial)
-                            }
-                        },
-                    ) { Text("System CA (root)") }
-                    OutlinedButton(
-                        enabled = serial != null,
-                        onClick = {
-                            if (serial != null) scope.launch {
-                                proxy.ensureCertificateAuthority()
-                                val result = proxy.prepareUserCertificateInstall(serial)
-                                status = if (result.isSuccess) result.stdout else result.stderr
-                            }
-                        },
-                    ) { Text("Prepare phone CA") }
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            val result = proxy.clearTraffic()
-                            selectedFlowId = null
-                            seenFlowIds = emptySet()
-                            flashingTrafficKeys.clear()
-                            status = if (result.isSuccess) result.stdout else result.stderr
-                        }
-                    }) { Text("Clear traffic") }
+	                    Text(
+	                        if (setupExpanded) "Hide setup" else "Show setup",
+	                        color = Rust,
+	                        fontSize = 12.sp,
+	                        fontWeight = FontWeight.Medium,
+	                        modifier = Modifier.clickable {
+	                            setupManuallyToggled = true
+	                            setupExpanded = !setupExpanded
+	                        },
+	                    )
                 }
                 val proxyStarted = proxyStatus.contains("listening on")
                 val caText = when {
@@ -3439,53 +4245,133 @@ private fun NetworkScreen(
                     proxyConfigured -> "Device is routed"
                     else -> "Click 'Configure' to route"
                 }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    StatusIndicator(
-                        isOk = proxyStarted,
+                val setupRequirements = listOf(
+                    SetupRequirement(
+                        label = "Android SDK platform-tools",
+                        ok = sdk.hasAdb,
+                        readyText = "ADB is available through Andy's SDK selection",
+                        missingText = "Install Android Studio or command-line tools",
+                    ),
+                    SetupRequirement(
+                        label = "scrcpy-server",
+                        ok = true,
+                        readyText = "Bundled with Andy for embedded mirroring",
+                        missingText = "Packaged builds include scrcpy-server",
+                    ),
+                    SetupRequirement(
+                        label = "mitmproxy",
+                        ok = engineReady,
+                        readyText = engineStatus,
+                        missingText = "Required for Network capture and rewrite rules",
+                        installCommand = "brew install mitmproxy",
+                    ),
+                )
+                val networkStatusRequirements = listOf(
+                    SetupRequirement(
                         label = "Proxy Status",
-                        hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
-                    )
-                    StatusIndicator(
-                        isOk = serial != null && (caInstalled || proxyTrafficObservedForDevice),
+                        ok = proxyStarted,
+                        readyText = "Listening on port $currentPort",
+                        missingText = "Click Start to start",
+                    ),
+                    SetupRequirement(
                         label = "CA Trust",
-                        hint = caText
-                    )
-                    StatusIndicator(
-                        isOk = serial != null && proxyConfigured,
+                        ok = serial != null && (caInstalled || proxyTrafficObservedForDevice),
+                        readyText = caText,
+                        missingText = caText,
+                    ),
+                    SetupRequirement(
                         label = "Device Proxy Routing",
-                        hint = configText
-                    )
-                }
-                Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusTag(if (engineReady) "mitmdump ready" else "mitmdump missing", if (engineReady) Green else Red)
-                    Text(
-                        text = buildString {
-                            append(engineStatus)
-                            append("  ·  ")
-                            append("Endpoint: ")
-                            append(proxyHost.ifBlank { "select device" })
-                            append(":")
-                            append(currentPort)
-                        },
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                        ok = serial != null && proxyConfigured,
+                        readyText = configText,
+                        missingText = configText,
+                    ),
+                )
                 AnimatedVisibility(setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        ) {
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val host = proxy.resolveDeviceProxyHost(serial)
+                                        proxyHost = host
+                                        val result = proxy.configureDeviceProxy(serial, host, currentPort)
+                                        status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
+                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                    }
+                                },
+                            ) { Text("Configure device proxy") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val result = proxy.clearDeviceProxy(serial)
+                                        status = if (result.isSuccess) "Device proxy cleared" else result.stderr
+                                        val host = proxy.resolveDeviceProxyHost(serial)
+                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                    }
+                                },
+                            ) { Text("Clear proxy") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val result = proxy.installSystemCertificateAuthority(serial)
+                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                        caInstalled = proxy.isCertificateInstalled(serial)
+                                    }
+                                },
+                            ) { Text("System CA (root)") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        proxy.ensureCertificateAuthority()
+                                        val result = proxy.prepareUserCertificateInstall(serial)
+                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                    }
+                                },
+                            ) { Text("Prepare phone CA") }
+                            OutlinedButton(onClick = {
+                                scope.launch {
+                                    val result = proxy.clearTraffic()
+                                    selectedFlowId = null
+                                    seenFlowIds = emptySet()
+                                    flashingTrafficKeys.clear()
+                                    status = if (result.isSuccess) result.stdout else result.stderr
+                                }
+                            }) { Text("Clear traffic") }
+                        }
+                        SetupChecklist(setupRequirements)
+                        SetupChecklist(networkStatusRequirements)
+                        Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            StatusTag(if (engineReady) "mitmproxy ready" else "mitmproxy missing", if (engineReady) Green else Red)
+                            Text(
+                                text = buildString {
+                                    append(engineStatus)
+                                    append("  ·  ")
+                                    append("Endpoint: ")
+                                    append(proxyHost.ifBlank { "select device" })
+                                    append(":")
+                                    append(currentPort)
+                                },
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        InstallStepsCard(
+                            title = "Host prerequisites",
+                            steps = hostSetupSteps(engineReady),
+                        )
                         Text("CA: ${caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         ManualCertificateSetupCard(
                             steps = manualCertificateSteps(caPath, proxyHost, currentPort),
@@ -3555,7 +4441,7 @@ private fun NetworkScreen(
                 HeaderCell("MS", msWidth.dp) { msWidth = it.coerceIn(50f, 150f) }
                 Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
             }
-            LazyColumn(Modifier.weight(1f)) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 520.dp)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
                     NetworkTrafficRow(
                         row = row,
@@ -3610,6 +4496,7 @@ private fun NetworkScreen(
                         EmptyState("No traffic yet. Start the proxy, configure a device, then make a request.")
                     }
                 }
+            }
             }
             SelectedFlowPanel(
                 selected = selected,
@@ -3755,25 +4642,58 @@ private fun ManualCertificateSetupCard(steps: List<String>, modifier: Modifier =
 }
 
 @Composable
-private fun StatusIndicator(
-    isOk: Boolean,
-    label: String,
-    hint: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier
+private fun InstallStepsCard(title: String, steps: List<String>, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        GlowingDot(isOk)
-        Column {
-            Text(label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Text(
-                text = hint,
-                color = if (isOk) Green else Red,
-                fontSize = 11.sp
-            )
+        Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        steps.forEachIndexed { index, step ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                Text("${index + 1}.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text(step, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetupChecklist(requirements: List<SetupRequirement>, modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        requirements.forEach { requirement ->
+            Row(
+                Modifier.weight(1f),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                GlowingDot(requirement.ok, Modifier.padding(top = 2.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(requirement.label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (requirement.ok) requirement.readyText else requirement.missingText,
+                        color = if (requirement.ok) Green else Red,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!requirement.ok && requirement.installCommand != null) {
+                        Text(requirement.installCommand, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
         }
     }
 }
