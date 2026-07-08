@@ -52,21 +52,47 @@ fun createDesktopServices(): AndyServices {
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
-    return AndyServices(
+    val actionConfig = DesktopActionConfigStore()
+    val actionRuns = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+
+    val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
+    val intents = DesktopIntentService(runner, devices)
+    val apps = DesktopAppService(runner, devices)
+    val files = DesktopFileService(runner, devices)
+    val proxy = DesktopProxyService(runner, devices)
+    val accessibility = DesktopAccessibilityService(runner, devices)
+
+    val mcp = DesktopMcpServerService(
         devices = devices,
-        avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath },
+        avd = avd,
         mirror = mirror,
         logcat = logcat,
-        intents = DesktopIntentService(runner, devices),
-        apps = DesktopAppService(runner, devices),
-        files = DesktopFileService(runner, devices),
-        proxy = DesktopProxyService(runner, devices),
+        intents = intents,
+        apps = apps,
+        files = files,
+        proxy = proxy,
+        accessibility = accessibility,
+        workspaceStore = store
+    )
+
+    return AndyServices(
+        devices = devices,
+        avd = avd,
+        mirror = mirror,
+        logcat = logcat,
+        intents = intents,
+        apps = apps,
+        files = files,
+        proxy = proxy,
         metrics = DesktopMetricsService(runner, devices),
-        accessibility = DesktopAccessibilityService(runner, devices),
+        accessibility = accessibility,
         bugs = DesktopBugService(mirror, logcat),
         artifacts = DesktopArtifactService(runner, devices, mirror),
         workspaceStore = store,
         updates = updates,
+        mcp = mcp,
+        actionConfig = actionConfig,
+        actionRuns = actionRuns,
     )
 }
 
@@ -2153,6 +2179,8 @@ class DesktopWorkspaceStore : WorkspaceStore {
             selectedDeviceSerial = props.getProperty("selectedDeviceSerial")?.takeIf { it.isNotBlank() },
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
+            mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
+            mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             proxyRules = loadProxyRules(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 230f,
@@ -2171,6 +2199,8 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
+            setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
+            setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
             state.proxyRules.forEachIndexed { index, rule ->
                 val prefix = "proxyRule.$index."

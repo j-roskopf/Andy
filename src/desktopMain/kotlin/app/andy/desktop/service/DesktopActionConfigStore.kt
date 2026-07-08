@@ -1,0 +1,109 @@
+package app.andy.desktop.service
+
+import app.andy.model.ActionProject
+import app.andy.model.ActionsConfig
+import app.andy.model.ProjectAction
+import app.andy.service.ActionConfigStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.Toml
+import net.peanuuutz.tomlkt.TomlInline
+import java.io.File
+
+class DesktopActionConfigStore(
+    private val file: File = File(System.getProperty("user.home"), ".andy/actions.toml"),
+) : ActionConfigStore {
+    override suspend fun load(): ActionsConfig = withContext(Dispatchers.IO) {
+        if (!file.exists()) return@withContext ActionsConfig()
+        runCatching {
+            Toml { ignoreUnknownKeys = true }.decodeFromString(ActionsFileDto.serializer(), file.readText()).toModel()
+        }.getOrElse {
+            file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
+            ActionsConfig()
+        }
+    }
+
+    override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
+        file.parentFile?.mkdirs()
+        if (file.exists()) {
+            file.copyTo(File(file.absolutePath + ".bak"), overwrite = true)
+        }
+        val content = Toml.encodeToString(ActionsFileDto.serializer(), config.toFileDto())
+        file.writeText(content.trimEnd() + "\n")
+    }
+}
+
+@Serializable
+private data class ActionsFileDto(
+    val version: Int = 1,
+    val projects: List<ProjectDto> = emptyList(),
+    val actions: List<ActionDto> = emptyList(),
+)
+
+@Serializable
+private data class ProjectDto(
+    val id: String,
+    val name: String,
+    val contextDir: String,
+    @TomlInline val env: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+private data class ActionDto(
+    val id: String,
+    val projectId: String,
+    val name: String,
+    val icon: String = "run",
+    val command: String,
+    val cwd: String = "",
+    @TomlInline val env: Map<String, String> = emptyMap(),
+)
+
+private fun ActionsFileDto.toModel(): ActionsConfig {
+    val actionsByProject = actions.groupBy { it.projectId }
+    return ActionsConfig(
+        projects = projects.map { project ->
+            ActionProject(
+                id = project.id,
+                name = project.name,
+                contextDir = project.contextDir,
+                env = project.env,
+                actions = actionsByProject[project.id].orEmpty().map { action ->
+                    ProjectAction(
+                        id = action.id,
+                        name = action.name,
+                        icon = action.icon,
+                        command = action.command,
+                        cwd = action.cwd.takeIf { it.isNotBlank() },
+                        env = action.env,
+                    )
+                },
+            )
+        },
+    )
+}
+
+private fun ActionsConfig.toFileDto(): ActionsFileDto = ActionsFileDto(
+    projects = projects.map { project ->
+        ProjectDto(
+            id = project.id,
+            name = project.name,
+            contextDir = project.contextDir,
+            env = project.env,
+        )
+    },
+    actions = projects.flatMap { project ->
+        project.actions.map { action ->
+            ActionDto(
+                id = action.id,
+                projectId = project.id,
+                name = action.name,
+                icon = action.icon,
+                command = action.command,
+                cwd = action.cwd.orEmpty(),
+                env = action.env,
+            )
+        }
+    },
+)
