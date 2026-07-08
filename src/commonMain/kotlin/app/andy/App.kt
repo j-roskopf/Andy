@@ -2974,15 +2974,12 @@ private fun NetworkScreen(
     val visibleTrafficRows = remember(trafficTree, expandedTrafficKeys.toMap()) {
         flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
     }
-    val userCaVerifiedByTraffic = remember(exchanges) {
-        exchanges.any { it.tlsStatus == "tls" && it.error == null }
-    }
-    val proxyTrafficObserved = exchanges.isNotEmpty()
-
     var caInstalled by remember { mutableStateOf(false) }
     var proxyConfigured by remember { mutableStateOf(false) }
     var userCaVerifiedByTrafficForDevice by remember { mutableStateOf(false) }
     var proxyTrafficObservedForDevice by remember { mutableStateOf(false) }
+    var trafficEvidenceSerial by remember { mutableStateOf<String?>(null) }
+    var flowIdsAtSerialChange by remember { mutableStateOf(emptySet<String>()) }
     val latestRules by rememberUpdatedState(rules)
 
     LaunchedEffect(Unit) {
@@ -3019,9 +3016,19 @@ private fun NetworkScreen(
             status = it
         }
     }
-    LaunchedEffect(userCaVerifiedByTraffic, proxyTrafficObserved) {
-        if (userCaVerifiedByTraffic) userCaVerifiedByTrafficForDevice = true
-        if (proxyTrafficObserved) proxyTrafficObservedForDevice = true
+    LaunchedEffect(serial, exchanges) {
+        if (serial != trafficEvidenceSerial) {
+            trafficEvidenceSerial = serial
+            flowIdsAtSerialChange = exchanges.map { it.flowId }.toSet()
+            userCaVerifiedByTrafficForDevice = false
+            proxyTrafficObservedForDevice = false
+        } else {
+            val newExchanges = exchanges.filter { it.flowId !in flowIdsAtSerialChange }
+            if (newExchanges.isNotEmpty()) proxyTrafficObservedForDevice = true
+            if (newExchanges.any { it.tlsStatus == "tls" && it.error == null }) {
+                userCaVerifiedByTrafficForDevice = true
+            }
+        }
     }
     LaunchedEffect(serial, currentPort) {
         if (serial == null) {
@@ -3039,8 +3046,6 @@ private fun NetworkScreen(
         }
     }
     LaunchedEffect(serial) {
-        userCaVerifiedByTrafficForDevice = false
-        proxyTrafficObservedForDevice = false
         proxyHost = serial?.let { selectedSerial ->
             val activation = proxy.activatePersistedCertificateAuthority(selectedSerial)
             if (activation.isSuccess && activation.stdout.isNotBlank()) {
