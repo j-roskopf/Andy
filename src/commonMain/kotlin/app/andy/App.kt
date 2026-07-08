@@ -523,7 +523,8 @@ private fun AndyShell(
         refreshDevices()
     }
 
-    LaunchedEffect(runningActions.map { it.runId }) {
+    val runningActionIds = remember(runningActions) { runningActions.map { it.runId } }
+    LaunchedEffect(runningActionIds) {
         if (activeRunId == null || runningActions.none { it.runId == activeRunId }) {
             activeRunId = runningActions.lastOrNull()?.runId
         }
@@ -971,13 +972,6 @@ private fun ActionRunnerSelector(
     }
     val liveRun = running.firstOrNull { run ->
         project?.id == run.projectId && action?.id == run.actionId && run.status == ActionRunStatus.Running
-    }
-
-    LaunchedEffect(project?.id) {
-        if (project?.id != selectedProjectId) selectedProjectId = project?.id
-    }
-    LaunchedEffect(project?.id, action?.id) {
-        if (action?.id != selectedActionId) selectedActionId = action?.id
     }
 
     Row(
@@ -5611,7 +5605,8 @@ private fun ActionsScreen(
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var catalogPaneWidth by remember { mutableStateOf(560f) }
 
-    LaunchedEffect(running.map { it.runId }) {
+    val runningIds = remember(running) { running.map { it.runId } }
+    LaunchedEffect(runningIds) {
         if (activeRunId == null || running.none { it.runId == activeRunId }) {
             onActiveRunIdChange(running.lastOrNull()?.runId)
         }
