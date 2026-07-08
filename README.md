@@ -82,9 +82,9 @@ Check for desktop app updates and confirm installation from inside Andy. Version
 
 ## Screenshots
 
-| Workspace | Live Mirror | Devices |
+| Create AVD | Live Mirror | Devices |
 | --- | --- | --- |
-| <img src="docs/readme/andy-workspace-bug-replay.png" alt="Andy workspace showing a bug replay alongside IDE and emulator windows" width="320"> | <img src="docs/readme/live.png" alt="Andy live mirror with device controls and logcat" width="320"> | <img src="docs/readme/devices.png" alt="Andy devices screen listing connected devices and emulators" width="320"> |
+| <img src="docs/readme/create-virtual-device.png" alt="Andy create virtual device dialog selecting an Android device profile" width="320"> | <img src="docs/readme/live.png" alt="Andy live mirror with device controls and logcat" width="320"> | <img src="docs/readme/devices.png" alt="Andy devices screen listing connected devices and emulators" width="320"> |
 | Catalog | Apps | Logcat |
 | <img src="docs/readme/catalog.png" alt="Andy system image catalog screen" width="320"> | <img src="docs/readme/apps.png" alt="Andy apps screen listing installed packages" width="320"> | <img src="docs/readme/logcat.png" alt="Andy logcat screen with level filters" width="320"> |
 | Intents | Files & Data | Network |

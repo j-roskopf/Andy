@@ -6,6 +6,11 @@ plugins {
 
 val andyVersionName = providers.gradleProperty("andy.versionName").orElse("0.1.0").get()
 val andyVersionCode = providers.gradleProperty("andy.versionCode").orElse("1").map { it.toInt() }.get()
+val andyDebugDistribution = providers.gradleProperty("andy.debugDistribution")
+    .orElse(providers.environmentVariable("ANDY_DEBUG_DISTRIBUTION"))
+    .map(String::toBoolean)
+    .orElse(false)
+val andyPackageId = if (andyDebugDistribution.get()) "com.joetr.andy.debug" else "com.joetr.andy"
 
 val andyJpackagePackageVersion = run {
     val parts = andyVersionName.split(".")
@@ -129,11 +134,12 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
             )
-            packageName = "Andy"
+            packageName = andyPackageId
             packageVersion = andyJpackagePackageVersion
             description = "Android emulator and device companion"
             vendor = "Andy"
             macOS {
+                bundleID = andyPackageId
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.icns"))
                 signing {
                     identity.set(
