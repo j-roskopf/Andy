@@ -31,6 +31,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -2026,8 +2028,10 @@ private fun SnapshotCard(
     onDeleteClick: (EmulatorSnapshot) -> Unit,
     onRenameClick: (EmulatorSnapshot) -> Unit,
 ) {
-    val bitmap = remember(snapshot.screenshotPath) {
-        snapshot.screenshotPath?.let { loadImageBitmap(it) }
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, snapshot.screenshotPath) {
+        value = withContext(Dispatchers.IO) {
+            snapshot.screenshotPath?.let { loadImageBitmap(it) }
+        }
     }
 
     Column(
@@ -2044,14 +2048,14 @@ private fun SnapshotCard(
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (bitmap != null) {
+            bitmap?.let { screenshot ->
                 Image(
-                    bitmap = bitmap,
+                    bitmap = screenshot,
                     contentDescription = snapshot.name,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit
                 )
-            } else {
+            } ?: run {
                 Image(
                     painter = painterResource(Res.drawable.hardware_capture),
                     contentDescription = "No screenshot",
@@ -7143,12 +7147,11 @@ private fun MonoCell(text: String, width: androidx.compose.ui.unit.Dp, color: Co
 
 @Composable
 private fun AppIconCell(serial: String, packageName: String, apps: AppService, cache: MutableMap<String, ByteArray?>) {
-    var icon by remember(serial, packageName) { mutableStateOf(cache[packageName]) }
+    val icon = cache[packageName]
     LaunchedEffect(serial, packageName) {
         if (!cache.containsKey(packageName)) {
             val bytes = runCatching { apps.getIcon(serial, packageName) }.getOrNull()
             cache[packageName] = bytes
-            icon = bytes
         }
     }
     val bitmap = remember(icon) { icon?.let { loadImageBitmap(it) } }

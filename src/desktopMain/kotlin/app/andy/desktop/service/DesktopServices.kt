@@ -227,9 +227,9 @@ class DesktopAvdService(
         }
     }
 
-    override suspend fun listSystemImages(): List<SystemImage> {
+    override suspend fun listSystemImages(): List<SystemImage> = withContext(Dispatchers.IO) {
         val sdk = locator.discover(preferredSdkPath())
-        val sdkManager = sdk.sdkManagerPath ?: return emptyList()
+        val sdkManager = sdk.sdkManagerPath ?: return@withContext emptyList()
         val installed = runner.run(listOf(sdkManager, "--list_installed"), 30).stdout
         val available = runner.run(listOf(sdkManager, "--list"), 45).stdout
         val parsedInstalled = AndroidParsers.parseSystemImages(installed).map { img ->
@@ -240,7 +240,7 @@ class DesktopAvdService(
         val parsedAvailable = AndroidParsers.parseSystemImages(available).map { img ->
             img.copy(sizeOnDisk = estimateSize(img.packageId))
         }
-        return (parsedInstalled + parsedAvailable).distinctBy { it.packageId }
+        (parsedInstalled + parsedAvailable).distinctBy { it.packageId }
     }
 
     override suspend fun listProfiles(): List<AvdProfile> {
@@ -368,12 +368,12 @@ class DesktopAvdService(
         return runner.run(listOf(sdkManager, "--uninstall", packageId), 600)
     }
 
-    override suspend fun listSnapshots(avdName: String): List<EmulatorSnapshot> {
+    override suspend fun listSnapshots(avdName: String): List<EmulatorSnapshot> = withContext(Dispatchers.IO) {
         val serial = findRunningEmulatorSerial(avdName)
         val snapshots = mutableListOf<EmulatorSnapshot>()
         val compatibleNames = mutableSetOf<String>()
         if (serial != null) {
-            val adb = locator.discover(preferredSdkPath()).adbPath ?: return emptyList()
+            val adb = locator.discover(preferredSdkPath()).adbPath ?: return@withContext emptyList()
             val result = runner.run(listOf(adb, "-s", serial, "emu", "avd", "snapshot", "list"), 12)
             if (result.isSuccess) {
                 val parsed = AndroidParsers.parseSnapshots(result.stdout, avdName)
@@ -381,14 +381,14 @@ class DesktopAvdService(
                 compatibleNames += parsed.map { it.name }
             }
         }
-        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return emptyList()
-        val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return emptyList()
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, avdName) } ?: return@withContext emptyList()
+        val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return@withContext emptyList()
         snapshots += snapshotsDir.listFiles()
             ?.filter { it.isDirectory || it.extension == "qcow2" || it.extension == "img" }
             ?.map { EmulatorSnapshot(it.nameWithoutExtension, avd.name, "disk") }
             .orEmpty()
 
-        return snapshots
+        snapshots
             .distinctBy { it.name }
             .map { populateSnapshotMetadata(avd, it, snapshotsDir, compatibleNames, serial) }
             .sortedBy { it.name }
@@ -453,7 +453,7 @@ class DesktopAvdService(
     private fun formatSize(bytes: Long): String {
         if (bytes <= 0) return "0 B"
         val units = arrayOf("B", "KB", "MB", "GB", "TB")
-        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.lastIndex)
         val value = bytes / Math.pow(1024.0, digitGroups.toDouble())
         return if (digitGroups == 0) {
             "$bytes B"
@@ -523,6 +523,7 @@ class DesktopAvdService(
         val snapshotsDir = avd.path?.let(::File)?.resolve("snapshots") ?: return@withContext CommandResult.failure("Snapshots folder not found")
         val matches = snapshotsDir.listFiles()?.filter { it.nameWithoutExtension == oldName }.orEmpty()
         if (matches.isEmpty()) return@withContext CommandResult.failure("Snapshot not found: $oldName")
+        var allSuccess = true
         matches.forEach { file ->
             val ext = file.extension
             val newFile = if (ext.isEmpty()) {
@@ -530,9 +531,15 @@ class DesktopAvdService(
             } else {
                 File(file.parentFile, "$newName.$ext")
             }
-            file.renameTo(newFile)
+            if (!file.renameTo(newFile)) {
+                allSuccess = false
+            }
         }
-        CommandResult.success("Renamed snapshot $oldName to $newName")
+        if (allSuccess) {
+            CommandResult.success("Renamed snapshot $oldName to $newName")
+        } else {
+            CommandResult.failure("Failed to rename some or all snapshot files")
+        }
     }
 
     private suspend fun runningEmulatorNames(): Set<String> = withContext(Dispatchers.IO) {
@@ -1313,6 +1320,9 @@ class DesktopAppService(
 
     private fun getHelperFile(): File? {
         val target = File(System.getProperty("user.home"), ".andy/helper/andy-helper.jar")
+        if (System.getProperty("andy.helper.extracted") == "true" && target.isFile && target.length() > 0) {
+            return target
+        }
         val resource = javaClass.classLoader.getResourceAsStream("andy-helper.jar") ?: return null
         target.parentFile.mkdirs()
         try {
@@ -1320,31 +1330,40 @@ class DesktopAppService(
                 Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             target.setReadable(true, false)
+            System.setProperty("andy.helper.extracted", "true")
         } catch (_: Exception) {
             if (!target.isFile || target.length() == 0L) return null
         }
         return target.takeIf { it.isFile && it.length() > 0 }
     }
 
+    private suspend fun ensureHelperPushed(serial: String, helperFile: File): Boolean {
+        val adb = devices.adbPath() ?: return false
+        val pushedKey = "andy.helper.pushed.$serial"
+        if (System.getProperty(pushedKey) == "true") return true
+        val remoteHelper = "/data/local/tmp/andy-helper.jar"
+        val pushed = runner.run(listOf(adb, "-s", serial, "push", helperFile.absolutePath, remoteHelper)).isSuccess
+        if (pushed) {
+            System.setProperty(pushedKey, "true")
+        }
+        return pushed
+    }
+
     private suspend fun queryAppLabels(serial: String): Map<String, String> {
         val helperFile = getHelperFile()
         if (helperFile != null) {
-            val adb = devices.adbPath()
-            if (adb != null) {
-                val remoteHelper = "/data/local/tmp/andy-helper.jar"
-                val pushResult = runner.run(listOf(adb, "-s", serial, "push", helperFile.absolutePath, remoteHelper))
-                if (pushResult.isSuccess) {
-                    val result = devices.shell(serial, listOf("CLASSPATH=$remoteHelper", "app_process", "/", "app.andy.helper.Helper", "list"))
-                    if (result.isSuccess && result.stdout.isNotBlank()) {
-                        val labels = mutableMapOf<String, String>()
-                        result.stdout.lineSequence().forEach { line ->
-                            val parts = line.split('\t')
-                            if (parts.size >= 2) {
-                                labels[parts[0]] = parts[1]
-                            }
+            val remoteHelper = "/data/local/tmp/andy-helper.jar"
+            if (ensureHelperPushed(serial, helperFile)) {
+                val result = devices.shell(serial, listOf("CLASSPATH=$remoteHelper", "app_process", "/", "app.andy.helper.Helper", "list"))
+                if (result.isSuccess && result.stdout.isNotBlank()) {
+                    val labels = mutableMapOf<String, String>()
+                    result.stdout.lineSequence().forEach { line ->
+                        val parts = line.split('\t')
+                        if (parts.size >= 2) {
+                            labels[parts[0]] = parts[1]
                         }
-                        return labels
                     }
+                    return labels
                 }
             }
         }
@@ -1408,9 +1427,8 @@ class DesktopAppService(
 
     override suspend fun getIcon(serial: String, packageName: String): ByteArray? {
         val helperFile = getHelperFile() ?: return null
-        val adb = devices.adbPath() ?: return null
         val remoteHelper = "/data/local/tmp/andy-helper.jar"
-        runner.run(listOf(adb, "-s", serial, "push", helperFile.absolutePath, remoteHelper))
+        if (!ensureHelperPushed(serial, helperFile)) return null
 
         val result = devices.shell(serial, listOf("CLASSPATH=$remoteHelper", "app_process", "/", "app.andy.helper.Helper", "icon", packageName))
         if (result.isSuccess) {
