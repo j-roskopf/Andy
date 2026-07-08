@@ -2974,13 +2974,12 @@ private fun NetworkScreen(
     val visibleTrafficRows = remember(trafficTree, expandedTrafficKeys.toMap()) {
         flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
     }
-    val userCaVerifiedByTraffic = remember(exchanges) {
-        exchanges.any { it.tlsStatus == "tls" && it.error == null }
-    }
-    val proxyTrafficObserved = exchanges.isNotEmpty()
-
     var caInstalled by remember { mutableStateOf(false) }
     var proxyConfigured by remember { mutableStateOf(false) }
+    var userCaVerifiedByTrafficForDevice by remember { mutableStateOf(false) }
+    var proxyTrafficObservedForDevice by remember { mutableStateOf(false) }
+    var trafficEvidenceSerial by remember { mutableStateOf<String?>(null) }
+    var flowIdsAtSerialChange by remember { mutableStateOf(emptySet<String>()) }
     val latestRules by rememberUpdatedState(rules)
 
     LaunchedEffect(Unit) {
@@ -3015,6 +3014,20 @@ private fun NetworkScreen(
         proxy.status.collectLatest {
             proxyStatus = it
             status = it
+        }
+    }
+    LaunchedEffect(serial, exchanges) {
+        if (serial != trafficEvidenceSerial) {
+            trafficEvidenceSerial = serial
+            flowIdsAtSerialChange = exchanges.map { it.flowId }.toSet()
+            userCaVerifiedByTrafficForDevice = false
+            proxyTrafficObservedForDevice = false
+        } else {
+            val newExchanges = exchanges.filter { it.flowId !in flowIdsAtSerialChange }
+            if (newExchanges.isNotEmpty()) proxyTrafficObservedForDevice = true
+            if (newExchanges.any { it.tlsStatus == "tls" && it.error == null }) {
+                userCaVerifiedByTrafficForDevice = true
+            }
         }
     }
     LaunchedEffect(serial, currentPort) {
@@ -3218,8 +3231,8 @@ private fun NetworkScreen(
                 val caText = when {
                     serial == null -> "Select a device first"
                     caInstalled -> "System CA installed"
-                    userCaVerifiedByTraffic -> "User CA verified by HTTPS traffic"
-                    proxyTrafficObserved -> "Traffic observed"
+                    userCaVerifiedByTrafficForDevice -> "User CA verified by HTTPS traffic"
+                    proxyTrafficObservedForDevice -> "Traffic observed"
                     else -> "Use System CA or Prepare phone CA"
                 }
                 val configText = when {
@@ -3242,7 +3255,7 @@ private fun NetworkScreen(
                         hint = if (proxyStarted) "Listening on port $currentPort" else "Click 'Start' to start"
                     )
                     StatusIndicator(
-                        isOk = serial != null && (caInstalled || proxyTrafficObserved),
+                        isOk = serial != null && (caInstalled || proxyTrafficObservedForDevice),
                         label = "CA Trust",
                         hint = caText
                     )
