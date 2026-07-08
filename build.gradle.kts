@@ -14,7 +14,9 @@ val andyDebugDistribution = providers.gradleProperty("andy.debugDistribution")
     .orElse(providers.environmentVariable("ANDY_DEBUG_DISTRIBUTION"))
     .map(String::toBoolean)
     .orElse(false)
+val andyAppName = "Andy"
 val andyPackageId = if (andyDebugDistribution.get()) "com.joetr.andy.debug" else "com.joetr.andy"
+val andyMacEntitlementsFile = layout.projectDirectory.file("packaging/macos/entitlements.plist")
 
 val andyJpackagePackageVersion = run {
     val parts = andyVersionName.split(".")
@@ -138,13 +140,14 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
             )
-            packageName = andyPackageId
+            packageName = andyAppName
             packageVersion = andyJpackagePackageVersion
             description = "Android emulator and device companion"
             vendor = "Andy"
             macOS {
                 bundleID = andyPackageId
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.icns"))
+                entitlementsFile.set(andyMacEntitlementsFile)
                 signing {
                     identity.set(
                         providers.gradleProperty("compose.desktop.mac.signing.identity")
@@ -159,6 +162,7 @@ compose.desktop {
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.ico"))
             }
             linux {
+                packageName = andyPackageId
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.png"))
             }
         }
@@ -252,6 +256,8 @@ val resignMacReleaseApp by tasks.registering {
                     "--deep",
                     "--options",
                     "runtime",
+                    "--entitlements",
+                    andyMacEntitlementsFile.asFile.absolutePath,
                     "--timestamp",
                     "--sign",
                     identity,
