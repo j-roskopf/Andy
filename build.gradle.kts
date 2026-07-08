@@ -4,6 +4,7 @@ import java.util.zip.ZipOutputStream
 
 plugins {
     kotlin("multiplatform") version "2.4.0"
+    kotlin("plugin.serialization") version "2.4.0"
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.0"
     id("org.jetbrains.compose") version "1.11.1"
 }
@@ -15,6 +16,7 @@ val andyDebugDistribution = providers.gradleProperty("andy.debugDistribution")
     .map(String::toBoolean)
     .orElse(false)
 val andyPackageId = if (andyDebugDistribution.get()) "com.joetr.andy.debug" else "com.joetr.andy"
+val andyPackageName = if (andyDebugDistribution.get()) "Andy Debug" else "Andy"
 
 val andyJpackagePackageVersion = run {
     val parts = andyVersionName.split(".")
@@ -99,13 +101,22 @@ kotlin {
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
-                
+                implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
+
+                // MCP and Ktor Server Dependencies
+                implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")
+                implementation("io.ktor:ktor-server-core:3.0.1")
+                implementation("io.ktor:ktor-server-cio:3.0.1")
+                implementation("io.ktor:ktor-server-netty:3.0.1")
+                implementation("io.ktor:ktor-server-sse:3.0.1")
+                implementation("io.ktor:ktor-server-double-receive:3.0.1")
+
                 // Add the base JavaCV library
                 implementation("org.bytedeco:javacv:1.5.11")
-                
+
                 // Add base library for FFmpeg
                 implementation("org.bytedeco:ffmpeg:7.1-1.5.11")
-                
+
                 // Add platform-specific native binaries for FFmpeg
                 if (hostPlatform == "all") {
                     implementation("org.bytedeco:ffmpeg:7.1-1.5.11:macosx-arm64")
@@ -138,7 +149,7 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
             )
-            packageName = andyPackageId
+            packageName = andyPackageName
             packageVersion = andyJpackagePackageVersion
             description = "Android emulator and device companion"
             vendor = "Andy"
@@ -234,6 +245,24 @@ val resignMacReleaseApp by tasks.registering {
             ?.let { listOf("--keychain", it) }
             .orEmpty()
 
+        val entitlementsFile = temporaryDir.resolve("entitlements.plist")
+        entitlementsFile.writeText(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>com.apple.security.cs.allow-jit</key>
+                <true/>
+                <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+                <true/>
+                <key>com.apple.security.cs.disable-library-validation</key>
+                <true/>
+            </dict>
+            </plist>
+            """.trimIndent()
+        )
+
         fun runCommand(command: List<String>) {
             val exitCode = ProcessBuilder(command)
                 .inheritIO()
@@ -252,6 +281,8 @@ val resignMacReleaseApp by tasks.registering {
                     "--deep",
                     "--options",
                     "runtime",
+                    "--entitlements",
+                    entitlementsFile.absolutePath,
                     "--timestamp",
                     "--sign",
                     identity,

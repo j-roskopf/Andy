@@ -250,6 +250,8 @@ data class WorkspaceState(
     val enabledLogLevels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
     val proxyRules: List<ProxyRule> = emptyList(),
     val proxyPort: Int = 9099,
+    val mcpServerEnabled: Boolean = false,
+    val mcpServerPort: Int = 8565,
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 230f,
     val appsListPaneWidth: Float = 520f,

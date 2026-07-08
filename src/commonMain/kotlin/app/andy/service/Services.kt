@@ -2,6 +2,7 @@ package app.andy.service
 
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
@@ -121,6 +122,19 @@ interface WorkspaceStore {
     suspend fun save(state: WorkspaceState)
 }
 
+interface ActionConfigStore {
+    suspend fun load(): ActionsConfig
+    suspend fun save(config: ActionsConfig)
+}
+
+interface ActionRunService {
+    val running: StateFlow<List<RunningAction>>
+    fun run(project: ActionProject, action: ProjectAction): String
+    fun stop(runId: String)
+    fun clear(runId: String)
+    fun output(runId: String): StateFlow<List<String>>
+}
+
 data class CommandResult(
     val exitCode: Int,
     val stdout: String,
@@ -168,6 +182,18 @@ sealed interface MirrorInput {
     data object Power : MirrorInput
 }
 
+interface McpServerService {
+    val status: Flow<String>            // "stopped" | "running on 127.0.0.1:8565" | "error: ..."
+    val running: Flow<Boolean>
+    suspend fun start(port: Int): CommandResult
+    suspend fun stop(): CommandResult
+
+    fun getSnippet(clientName: String, port: Int): String
+    fun getClients(): List<String>
+    fun isAutoWriteSupported(clientName: String): Boolean
+    fun writeConfig(clientName: String, port: Int): Boolean
+}
+
 enum class MirrorTouchAction { Down, Move, Up }
 
 data class AndyServices(
@@ -185,4 +211,7 @@ data class AndyServices(
     val artifacts: ArtifactService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
+    val mcp: McpServerService,
+    val actionConfig: ActionConfigStore,
+    val actionRuns: ActionRunService,
 )
