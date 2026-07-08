@@ -2,6 +2,7 @@ package app.andy.desktop
 
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -16,8 +17,11 @@ import app.andy.AndyDestination
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import app.andy.desktop.service.createDesktopServices
+import java.awt.Desktop
 import java.awt.Taskbar
 import java.awt.Color
+import java.awt.desktop.AppReopenedListener
+import java.awt.desktop.SystemEventListener
 import javax.swing.JFrame
 import java.io.File
 import javax.imageio.ImageIO
@@ -36,6 +40,10 @@ fun main() {
         fun open(destination: AndyDestination) {
             requestedDestination = destination
             visible = true
+        }
+        DisposableEffect(Unit) {
+            val listener = installDockReopenHandler { visible = true }
+            onDispose { removeDockReopenHandler(listener) }
         }
         Tray(
             icon = appIcon,
@@ -106,6 +114,22 @@ private fun configureMacTitleBar(window: JFrame) {
         window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         window.rootPane.putClientProperty("apple.awt.noTitleBarSeparator", true)
         window.background = Color(0x14, 0x14, 0x16)
+    }
+}
+
+private fun installDockReopenHandler(onReopen: () -> Unit): SystemEventListener? {
+    if (!isMacOs() || !Desktop.isDesktopSupported()) return null
+    val listener = AppReopenedListener { onReopen() }
+    return runCatching {
+        Desktop.getDesktop().addAppEventListener(listener)
+        listener
+    }.getOrNull()
+}
+
+private fun removeDockReopenHandler(listener: SystemEventListener?) {
+    if (listener == null || !Desktop.isDesktopSupported()) return
+    runCatching {
+        Desktop.getDesktop().removeAppEventListener(listener)
     }
 }
 

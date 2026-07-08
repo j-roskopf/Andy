@@ -449,6 +449,9 @@ private fun AndyShell(
     var networkLiveVisible by remember { mutableStateOf(false) }
     var stoppingEmulatorSerial by remember { mutableStateOf<String?>(null) }
     var emulatorStopStatus by remember { mutableStateOf("") }
+    var actionsConfig by remember { mutableStateOf(ActionsConfig()) }
+    var activeRunId by remember { mutableStateOf<String?>(null) }
+    val runningActions by services.actionRuns.running.collectAsState()
     val logcatState = remember { LogcatState() }
     val liveLogcatState = remember { LogcatState() }
     val accessibilityState = remember { AccessibilityState() }
@@ -516,7 +519,14 @@ private fun AndyShell(
         val saved = services.workspaceStore.load()
         workspaceState = saved
         selectedSerial = saved.selectedDeviceSerial
+        actionsConfig = services.actionConfig.load()
         refreshDevices()
+    }
+
+    LaunchedEffect(runningActions.map { it.runId }) {
+        if (activeRunId == null || runningActions.none { it.runId == activeRunId }) {
+            activeRunId = runningActions.lastOrNull()?.runId
+        }
     }
 
     LaunchedEffect(requestedDestination) {
@@ -538,6 +548,11 @@ private fun AndyShell(
         val updated = transform(workspaceState).copy(selectedDeviceSerial = selectedSerial)
         workspaceState = updated
         scope.launch { services.workspaceStore.save(updated) }
+    }
+
+    fun persistActionsConfig(next: ActionsConfig) {
+        actionsConfig = next
+        scope.launch { services.actionConfig.save(next) }
     }
 
     val mcpRunning by services.mcp.running.collectAsState(false)
@@ -566,6 +581,16 @@ private fun AndyShell(
                     onRefresh = { refreshDevices() },
                     onStopEmulator = { stopEmulator(it) },
                     stoppingEmulatorSerial = stoppingEmulatorSerial,
+                    actionConfig = actionsConfig,
+                    runningActions = runningActions,
+                    onRunAction = { project, action ->
+                        activeRunId = services.actionRuns.run(project, action)
+                    },
+                    onStopAction = { run ->
+                        services.actionRuns.stop(run.runId)
+                        activeRunId = run.runId
+                    },
+                    onOpenActions = { destination = AndyDestination.Actions },
                     actions = {
                         if (destination == AndyDestination.Network) {
                             FilterPill("Rules", networkRulesVisible, Rust) { networkRulesVisible = !networkRulesVisible }
@@ -626,7 +651,14 @@ private fun AndyShell(
                             onRulesChange = { value -> updateWorkspace { it.copy(proxyRules = value) } },
                             onRulesVisibleChange = { networkRulesVisible = it },
                         )
-                        AndyDestination.Actions -> ActionsScreen(services)
+                        AndyDestination.Actions -> ActionsScreen(
+                            services = services,
+                            config = actionsConfig,
+                            running = runningActions,
+                            activeRunId = activeRunId,
+                            onActiveRunIdChange = { activeRunId = it },
+                            onConfigChange = { persistActionsConfig(it) },
+                        )
                         AndyDestination.Snapshots -> SnapshotsScreen(services.avd)
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
@@ -824,12 +856,12 @@ private fun navMark(item: AndyDestination): String = when (item) {
 
 private fun actionIconMarker(icon: String): String = when (icon.trim().lowercase()) {
     "run" -> "|>"
-    "test" -> "tt"
-    "debug" -> "db"
-    "build" -> "bd"
-    "server" -> ">>"
-    "deploy" -> "^^"
-    else -> icon.trim().take(2).padEnd(2, '.').ifBlank { ".." }
+    "test" -> "|="
+    "debug" -> "|!"
+    "build" -> "|#"
+    "server" -> "|~"
+    "deploy" -> "|^"
+    else -> "|*"
 }
 
 @Composable
@@ -870,6 +902,11 @@ private fun TopChrome(
     onRefresh: () -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
+    actionConfig: ActionsConfig,
+    runningActions: List<RunningAction>,
+    onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onStopAction: (RunningAction) -> Unit,
+    onOpenActions: () -> Unit,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -885,6 +922,14 @@ private fun TopChrome(
         }
         Spacer(Modifier.weight(1f))
         actions()
+        ActionRunnerSelector(
+            config = actionConfig,
+            running = runningActions,
+            onRunAction = onRunAction,
+            onStopAction = onStopAction,
+            onOpenActions = onOpenActions,
+        )
+        Spacer(Modifier.width(10.dp))
         if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
@@ -901,6 +946,125 @@ private fun TopChrome(
         }
         Spacer(Modifier.width(10.dp))
         DevicePicker(devices, selectedDevice?.serial, onSelectDevice)
+    }
+}
+
+@Composable
+private fun ActionRunnerSelector(
+    config: ActionsConfig,
+    running: List<RunningAction>,
+    onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onStopAction: (RunningAction) -> Unit,
+    onOpenActions: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var projectExpanded by remember { mutableStateOf(false) }
+    var actionExpanded by remember { mutableStateOf(false) }
+    var selectedProjectId by remember { mutableStateOf<String?>(null) }
+    var selectedActionId by remember { mutableStateOf<String?>(null) }
+
+    val project = remember(config.projects, selectedProjectId) {
+        config.projects.firstOrNull { it.id == selectedProjectId } ?: config.projects.firstOrNull()
+    }
+    val action = remember(project?.actions, selectedActionId) {
+        project?.actions?.firstOrNull { it.id == selectedActionId } ?: project?.actions?.firstOrNull()
+    }
+    val liveRun = running.firstOrNull { run ->
+        project?.id == run.projectId && action?.id == run.actionId && run.status == ActionRunStatus.Running
+    }
+
+    LaunchedEffect(project?.id) {
+        if (project?.id != selectedProjectId) selectedProjectId = project?.id
+    }
+    LaunchedEffect(project?.id, action?.id) {
+        if (action?.id != selectedActionId) selectedActionId = action?.id
+    }
+
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (config.projects.isEmpty()) {
+            OutlinedButton(
+                onClick = onOpenActions,
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text("actions setup", color = TextPrimary, fontSize = 12.sp)
+            }
+            return@Row
+        }
+
+        Box {
+            Button(
+                onClick = { projectExpanded = true },
+                colors = secondaryButtonColors(),
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
+            ) {
+                Text("prj", color = Rust, fontFamily = MonoFont, fontSize = 10.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(project?.name ?: "project", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = projectExpanded, onDismissRequest = { projectExpanded = false }, containerColor = AndyColors.Neutral750) {
+                config.projects.forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text(item.name, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            selectedProjectId = item.id
+                            selectedActionId = item.actions.firstOrNull()?.id
+                            projectExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+
+        Box {
+            Button(
+                onClick = { actionExpanded = true },
+                enabled = project?.actions?.isNotEmpty() == true,
+                colors = secondaryButtonColors(),
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
+            ) {
+                Text(action?.let { actionIconMarker(it.icon) } ?: "--", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(action?.name ?: "no actions", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = actionExpanded, onDismissRequest = { actionExpanded = false }, containerColor = AndyColors.Neutral750) {
+                project?.actions.orEmpty().forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            selectedActionId = item.id
+                            actionExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = {
+                val selectedProject = project
+                val selectedAction = action
+                if (liveRun != null) {
+                    onStopAction(liveRun)
+                } else if (selectedProject != null && selectedAction != null) {
+                    onRunAction(selectedProject, selectedAction)
+                }
+            },
+            enabled = liveRun != null || (project != null && action != null),
+            colors = if (liveRun != null) ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100) else primaryButtonColors(),
+            shape = RoundedCornerShape(AndyRadius.R2),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(if (liveRun != null) "stop" else "run", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
@@ -5434,35 +5598,32 @@ private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
 
 @Composable
-private fun ActionsScreen(services: AndyServices) {
-    val scope = rememberCoroutineScope()
-    var config by remember { mutableStateOf(ActionsConfig()) }
-    val running by services.actionRuns.running.collectAsState()
-    var activeRunId by remember { mutableStateOf<String?>(null) }
+private fun ActionsScreen(
+    services: AndyServices,
+    config: ActionsConfig,
+    running: List<RunningAction>,
+    activeRunId: String?,
+    onActiveRunIdChange: (String?) -> Unit,
+    onConfigChange: (ActionsConfig) -> Unit,
+) {
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var catalogPaneWidth by remember { mutableStateOf(560f) }
 
-    LaunchedEffect(Unit) { config = services.actionConfig.load() }
     LaunchedEffect(running.map { it.runId }) {
         if (activeRunId == null || running.none { it.runId == activeRunId }) {
-            activeRunId = running.lastOrNull()?.runId
+            onActiveRunIdChange(running.lastOrNull()?.runId)
         }
-    }
-
-    fun persist(next: ActionsConfig) {
-        config = next
-        scope.launch { services.actionConfig.save(next) }
     }
 
     fun upsertProject(project: ActionProject) {
         val exists = config.projects.any { it.id == project.id }
-        persist(config.copy(projects = if (exists) config.projects.map { if (it.id == project.id) project.copy(actions = it.actions) else it } else config.projects + project))
+        onConfigChange(config.copy(projects = if (exists) config.projects.map { if (it.id == project.id) project.copy(actions = it.actions) else it } else config.projects + project))
     }
 
     fun upsertAction(projectId: String, previousProjectId: String?, action: ProjectAction) {
-        persist(
+        onConfigChange(
             config.copy(
                 projects = config.projects.map { project ->
                     when {
@@ -5493,7 +5654,7 @@ private fun ActionsScreen(services: AndyServices) {
                                 OutlinedButton(onClick = { editingAction = EditingAction(project.id, null) }) { Text("+ action") }
                                 OutlinedButton(onClick = {
                                     pendingConfirmation = PendingConfirmation("Delete project?", "${project.name} and ${project.actions.size} actions") {
-                                        persist(config.copy(projects = config.projects.filterNot { it.id == project.id }))
+                                        onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
                                     }
                                 }) { Text("del") }
                             }
@@ -5518,16 +5679,16 @@ private fun ActionsScreen(services: AndyServices) {
                                             OutlinedButton(onClick = { editingAction = EditingAction(project.id, action) }, modifier = Modifier.height(30.dp), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)) { Text("edit", fontSize = 11.sp) }
                                             OutlinedButton(onClick = {
                                                 pendingConfirmation = PendingConfirmation("Delete action?", action.name) {
-                                                    persist(config.copy(projects = config.projects.map { if (it.id == project.id) it.copy(actions = it.actions.filterNot { row -> row.id == action.id }) else it }))
+                                                    onConfigChange(config.copy(projects = config.projects.map { if (it.id == project.id) it.copy(actions = it.actions.filterNot { row -> row.id == action.id }) else it }))
                                                 }
                                             }, modifier = Modifier.height(30.dp), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)) { Text("del", fontSize = 11.sp) }
                                             Button(
                                                 onClick = {
                                                     if (liveRun != null) {
                                                         services.actionRuns.stop(liveRun.runId)
-                                                        activeRunId = liveRun.runId
+                                                        onActiveRunIdChange(liveRun.runId)
                                                     } else {
-                                                        activeRunId = services.actionRuns.run(project, action)
+                                                        onActiveRunIdChange(services.actionRuns.run(project, action))
                                                     }
                                                 },
                                                 colors = if (liveRun != null) ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100) else primaryButtonColors(),
@@ -5551,7 +5712,7 @@ private fun ActionsScreen(services: AndyServices) {
                     Text("no running actions", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
                 } else {
                     running.forEach { run ->
-                        FilterPill("${actionIconMarker(run.icon)} ${run.actionName}", run.runId == activeRunId, actionStatusColor(run.status)) { activeRunId = run.runId }
+                        FilterPill("${actionIconMarker(run.icon)} ${run.actionName}", run.runId == activeRunId, actionStatusColor(run.status)) { onActiveRunIdChange(run.runId) }
                     }
                 }
             }
@@ -5571,7 +5732,7 @@ private fun ActionsScreen(services: AndyServices) {
                         }
                         OutlinedButton(onClick = {
                             services.actionRuns.clear(activeRun.runId)
-                            activeRunId = running.firstOrNull { it.runId != activeRun.runId }?.runId
+                            onActiveRunIdChange(running.firstOrNull { it.runId != activeRun.runId }?.runId)
                         }) { Text("Clear") }
                     }
                     ActionConsole(lines, Modifier.fillMaxSize())
