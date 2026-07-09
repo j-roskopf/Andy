@@ -44,9 +44,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.ConfirmationDialog
-import app.andy.DraggableScrollbar
-import app.andy.PendingConfirmation
+import app.andy.ui.components.ConfirmationDialog
+import app.andy.ui.components.DraggableScrollbar
+import app.andy.ui.components.PendingConfirmation
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig

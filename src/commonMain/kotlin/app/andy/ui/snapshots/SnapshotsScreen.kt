@@ -44,8 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.ConfirmationDialog
-import app.andy.PendingConfirmation
+import app.andy.ui.components.ConfirmationDialog
+import app.andy.ui.components.PendingConfirmation
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.hardware_capture
 import app.andy.loadImageBitmap

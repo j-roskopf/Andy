@@ -51,7 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.HeaderCell
+import app.andy.ui.components.HeaderCell
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
 import app.andy.model.NetworkExchange

@@ -1,0 +1,254 @@
+package app.andy.ui.shell
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.andy.AndyDestination
+import app.andy.model.ActionProject
+import app.andy.model.ActionRunStatus
+import app.andy.model.ActionsConfig
+import app.andy.model.AndroidDevice
+import app.andy.model.DeviceConnectionState
+import app.andy.model.DeviceKind
+import app.andy.model.ProjectAction
+import app.andy.model.RunningAction
+import app.andy.ui.actions.actionIconMarker
+import app.andy.ui.components.Button
+import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.components.secondaryButtonColors
+import app.andy.ui.network.GlowingDot
+import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.Border
+import app.andy.ui.theme.Green
+import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.Rust
+import app.andy.ui.theme.TextPrimary
+import app.andy.ui.theme.TextSecondary
+
+@Composable
+internal fun TopChrome(
+    destination: AndyDestination,
+    selectedDevice: AndroidDevice?,
+    devices: List<AndroidDevice>,
+    onSelectDevice: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onStopEmulator: (AndroidDevice) -> Unit,
+    stoppingEmulatorSerial: String?,
+    actionConfig: ActionsConfig,
+    runningActions: List<RunningAction>,
+    onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onStopAction: (RunningAction) -> Unit,
+    proxyRunning: Boolean,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
+
+    Row(
+        Modifier.fillMaxWidth().height(62.dp)
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.width(260.dp)) {
+            Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
+            Text(selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        }
+        Spacer(Modifier.weight(1f))
+        actions()
+        if (destination != AndyDestination.Network && proxyRunning) {
+            ProxyToolbarIndicator()
+            Spacer(Modifier.width(10.dp))
+        }
+        if (hasActionRunnerControls) {
+            ActionRunnerSelector(
+                config = actionConfig,
+                running = runningActions,
+                onRunAction = onRunAction,
+                onStopAction = onStopAction,
+            )
+            Spacer(Modifier.width(10.dp))
+        }
+        if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
+            OutlinedButton(
+                onClick = { onStopEmulator(selectedDevice) },
+                enabled = stoppingEmulatorSerial != selectedDevice.serial,
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop emulator", fontSize = 12.sp)
+            }
+            Spacer(Modifier.width(10.dp))
+        }
+        Button(onClick = onRefresh, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("Refresh", color = TextPrimary, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        DevicePicker(devices, selectedDevice?.serial, onSelectDevice)
+    }
+}
+
+@Composable
+private fun ProxyToolbarIndicator() {
+    Row(
+        Modifier.height(30.dp)
+            .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.Pill))
+            .border(1.dp, Green.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.Pill))
+            .padding(horizontal = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        GlowingDot(isGreen = true, modifier = Modifier.size(14.dp))
+        Text("proxy", color = AndyColors.GreenSoft, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun ActionRunnerSelector(
+    config: ActionsConfig,
+    running: List<RunningAction>,
+    onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onStopAction: (RunningAction) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var projectExpanded by remember { mutableStateOf(false) }
+    var actionExpanded by remember { mutableStateOf(false) }
+    var selectedProjectId by remember { mutableStateOf<String?>(null) }
+    var selectedActionId by remember { mutableStateOf<String?>(null) }
+
+    val project = remember(config.projects, selectedProjectId) {
+        config.projects.firstOrNull { it.id == selectedProjectId } ?: config.projects.firstOrNull()
+    }
+    val action = remember(project?.actions, selectedActionId) {
+        project?.actions?.firstOrNull { it.id == selectedActionId } ?: project?.actions?.firstOrNull()
+    }
+    val liveRun = running.firstOrNull { run ->
+        project?.id == run.projectId && action?.id == run.actionId && run.status == ActionRunStatus.Running
+    }
+
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box {
+            Button(
+                onClick = { projectExpanded = true },
+                colors = secondaryButtonColors(),
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
+            ) {
+                Text("prj", color = Rust, fontFamily = MonoFont, fontSize = 10.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(project?.name ?: "project", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = projectExpanded, onDismissRequest = { projectExpanded = false }, containerColor = AndyColors.Neutral750) {
+                config.projects.forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text(item.name, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            selectedProjectId = item.id
+                            selectedActionId = item.actions.firstOrNull()?.id
+                            projectExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+
+        Box {
+            Button(
+                onClick = { actionExpanded = true },
+                enabled = project?.actions?.isNotEmpty() == true,
+                colors = secondaryButtonColors(),
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
+            ) {
+                Text(action?.let { actionIconMarker(it.icon) } ?: "--", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(action?.name ?: "no actions", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = actionExpanded, onDismissRequest = { actionExpanded = false }, containerColor = AndyColors.Neutral750) {
+                project?.actions.orEmpty().forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = {
+                            selectedActionId = item.id
+                            actionExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = {
+                val selectedProject = project
+                val selectedAction = action
+                if (liveRun != null) {
+                    onStopAction(liveRun)
+                } else if (selectedProject != null && selectedAction != null) {
+                    onRunAction(selectedProject, selectedAction)
+                }
+            },
+            enabled = liveRun != null || (project != null && action != null),
+            colors = if (liveRun != null) ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100) else primaryButtonColors(),
+            shape = RoundedCornerShape(AndyRadius.R2),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(if (liveRun != null) "stop" else "run", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun DevicePicker(devices: List<AndroidDevice>, selectedSerial: String?, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Button(onClick = { expanded = true }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+            Text("•", color = Green, fontSize = 18.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(selectedSerial ?: "no device", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = AndyColors.Neutral750) {
+            devices.forEach { device ->
+                DropdownMenuItem(text = { Text("${device.serial}  ${device.displayName}", color = TextPrimary) }, onClick = {
+                    onSelect(device.serial)
+                    expanded = false
+                })
+            }
+        }
+    }
+}

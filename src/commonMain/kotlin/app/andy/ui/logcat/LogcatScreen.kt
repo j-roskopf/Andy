@@ -40,8 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.DraggableScrollbar
-import app.andy.HeaderCell
+import app.andy.ui.components.DraggableScrollbar
+import app.andy.ui.components.HeaderCell
 import app.andy.model.AndroidApp
 import app.andy.model.LogLevel
 import app.andy.model.LogcatEntry
