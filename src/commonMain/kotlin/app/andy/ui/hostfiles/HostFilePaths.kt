@@ -53,7 +53,8 @@ internal fun resolveHostRootForPath(path: String?, roots: List<String>): String?
 internal fun hostPathStartsWith(path: String, root: String): Boolean {
     val normalizedPath = normalizeHostPath(path)
     val normalizedRoot = normalizeHostPath(root)
-    return normalizedPath == normalizedRoot || normalizedPath.startsWith("$normalizedRoot/")
+    val childPrefix = if (normalizedRoot.endsWith('/')) normalizedRoot else "$normalizedRoot/"
+    return normalizedPath == normalizedRoot || normalizedPath.startsWith(childPrefix)
 }
 
 internal fun normalizeHostPath(path: String): String = trimHostTrailingSeparators(path).replace('\\', '/').ifBlank { "/" }
@@ -80,7 +81,7 @@ internal fun hostAncestorDirectories(path: String, root: String): List<String> {
     relativeParent.split('/').filter { it.isNotBlank() }.forEach { segment ->
         current = when {
             current == "/" -> "/$segment"
-            current.matches(Regex("^[A-Za-z]:$")) -> "$current$separator$segment"
+            current.endsWith('/') || current.endsWith('\\') -> "$current$segment"
             else -> "$current$separator$segment"
         }
         ancestors += current
@@ -93,4 +94,3 @@ internal fun hostDisplayPath(path: String, root: String): String {
     val normalizedRoot = normalizeHostPath(root)
     return normalizedPath.removePrefix(normalizedRoot).trimStart('/').ifBlank { hostFileName(path) }
 }
-

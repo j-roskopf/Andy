@@ -149,7 +149,7 @@ internal class JsonPreviewParser(private val source: String) {
 
     private fun parseLiteral(): String {
         val start = index
-        while (index < source.length && source[index] !in charArrayOf(',', '}', ']', ' ', '\n', '\r', '\t')) {
+        while (index < source.length && !source[index].isJsonLiteralTerminator()) {
             index += 1
         }
         require(index > start)
@@ -182,6 +182,10 @@ internal class JsonPreviewParser(private val source: String) {
 
 internal fun escapePathSegment(value: String): String {
     return value.replace("\\", "\\\\").replace(".", "\\.")
+}
+
+private fun Char.isJsonLiteralTerminator(): Boolean {
+    return this == ',' || this == '}' || this == ']' || this == ' ' || this == '\n' || this == '\r' || this == '\t'
 }
 
 internal fun quoteJsonPreview(value: String): String {

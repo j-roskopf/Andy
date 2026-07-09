@@ -1,0 +1,3 @@
+src/desktopMain/resources/proxy/andy_mitm_addon.py text eol=lf
+src/desktopTest/resources/golden/*.json text eol=lf
+src/desktopTest/resources/golden/*.jsonl text eol=lf

@@ -75,13 +75,10 @@ internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): Int
     val pixels = IntArray(width * height)
     val bytes = rgb.duplicate()
     bytes.position(0)
-    val row = ByteArray(pixels.size * 3)
-    bytes.get(row)
-    var source = 0
     for (index in pixels.indices) {
-        val red = row[source++].toInt() and 0xff
-        val green = row[source++].toInt() and 0xff
-        val blue = row[source++].toInt() and 0xff
+        val red = bytes.get().toInt() and 0xff
+        val green = bytes.get().toInt() and 0xff
+        val blue = bytes.get().toInt() and 0xff
         pixels[index] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
     }
     return pixels
@@ -649,4 +646,3 @@ class DesktopMirrorEngine(
 
     private data class CaptureSize(val width: Int, val height: Int)
 }
-

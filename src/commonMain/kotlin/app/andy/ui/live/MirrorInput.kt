@@ -116,8 +116,8 @@ internal fun rememberMirrorInputSender(
                                         val root = lookup?.let {
                                             try {
                                                 withTimeoutOrNull(BugTapAccessibilityLookupMillis) { it.await() }
-                                            } catch (cancelled: CancellationException) {
-                                                throw cancelled
+                                            } catch (_: CancellationException) {
+                                                null
                                             } catch (_: Exception) {
                                                 null
                                             }

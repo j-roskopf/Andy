@@ -56,9 +56,9 @@ internal fun AccessibilityNode.proximityCandidatesAt(x: Int, y: Int, depth: Int 
         drawingOrder = attributes["drawing-order"]?.toIntOrNull() ?: 0,
         distanceSquared = distanceSquared,
         labelScore = listOf(text, contentDescription, hint, resourceId).count { !it.isNullOrBlank() } +
-            if (!contentDescription.isNullOrBlank()) 3 else 0 +
-            if (clickable) 3 else 0 +
-            if (focusable) 1 else 0,
+            (if (!contentDescription.isNullOrBlank()) 3 else 0) +
+            (if (clickable) 3 else 0) +
+            (if (focusable) 1 else 0),
         isFullScreenContainer = depth <= 2 && area > 1_200_000 && text.isNullOrBlank() &&
             contentDescription.isNullOrBlank() && resourceId.isNullOrBlank(),
     )
