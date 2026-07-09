@@ -77,8 +77,11 @@ class DesktopAvdService(
     }
 
     override suspend fun listVirtualDevices(): List<VirtualDevice> {
-        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
-        val avds = AndroidParsers.parseAvdList(runner.run(listOf(avdManager, "list", "avd"), 20).stdout)
+        val sdk = locator.discover(preferredSdkPath())
+        val fromAvdManager = sdk.avdManagerPath?.let { avdManager ->
+            AndroidParsers.parseAvdList(runner.run(listOf(avdManager, "list", "avd"), 20).stdout)
+        }.orEmpty()
+        val avds = fromAvdManager.ifEmpty { discoverVirtualDevicesWithoutAvdManager(sdk.emulatorPath) }
         val running = runningEmulatorNames()
         return avds.map { avd ->
             val config = loadAvdConfig(avd).orEmpty()
@@ -87,6 +90,26 @@ class DesktopAvdService(
                 apiLevel = avd.apiLevel ?: Regex("""android-(\d+)""").find(config["image.sysdir.1"].orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(),
                 deviceType = AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config),
                 config = config,
+            )
+        }
+    }
+
+    private suspend fun discoverVirtualDevicesWithoutAvdManager(emulatorPath: String?): List<VirtualDevice> {
+        val fromDisk = AvdHomeScanner.listVirtualDevices()
+        if (fromDisk.isNotEmpty()) return fromDisk
+        val emulator = emulatorPath ?: return emptyList()
+        val names = runner.run(listOf(emulator, "-list-avds"), 12).stdout
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toList()
+        return names.map { name ->
+            VirtualDevice(
+                name = name,
+                path = File(AvdHomeScanner.avdHome(), "$name.avd").takeIf { it.isDirectory }?.absolutePath,
+                target = null,
+                abi = null,
+                running = false,
             )
         }
     }
