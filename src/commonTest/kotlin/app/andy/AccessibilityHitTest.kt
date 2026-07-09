@@ -1,8 +1,11 @@
 package app.andy
 
+import app.andy.domain.findBestNodeAt
+import app.andy.domain.parseBounds
 import app.andy.model.AccessibilityNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class AccessibilityHitTest {
     @Test
@@ -31,6 +34,23 @@ class AccessibilityHitTest {
         )
 
         assertEquals("play", root.findBestNodeAt(988, 1862)?.id)
+    }
+
+    @Test
+    fun returnsNullWhenPointIsFarFromAllNodes() {
+        val root = node(
+            id = "root",
+            className = "android.widget.FrameLayout",
+            bounds = "[0,0][100,100]",
+        )
+        assertNull(root.findBestNodeAt(2000, 2000))
+    }
+
+    @Test
+    fun parseBoundsExtractsFourIntegers() {
+        assertEquals(listOf(10, 20, 30, 40), parseBounds("[10,20][30,40]"))
+        assertNull(parseBounds("[10,20]"))
+        assertNull(parseBounds(null))
     }
 
     private fun node(
