@@ -1,0 +1,25 @@
+package app.andy.model
+
+data class AccessibilityNode(
+    val id: String,
+    val className: String?,
+    val packageName: String? = null,
+    val resourceId: String?,
+    val text: String?,
+    val contentDescription: String?,
+    val hint: String? = null,
+    val bounds: String?,
+    val clickable: Boolean,
+    val longClickable: Boolean = false,
+    val focusable: Boolean,
+    val focused: Boolean = false,
+    val enabled: Boolean,
+    val selected: Boolean = false,
+    val checkable: Boolean = false,
+    val checked: Boolean = false,
+    val scrollable: Boolean = false,
+    val password: Boolean = false,
+    val visible: Boolean = true,
+    val attributes: Map<String, String> = emptyMap(),
+    val children: List<AccessibilityNode> = emptyList(),
+)
