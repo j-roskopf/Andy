@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.desktop.service.proxy.DesktopProxyService
+import app.andy.desktop.service.proxy.ProxyProcess
 import app.andy.model.WorkspaceState
 import app.andy.service.CommandResult
 import app.andy.service.WorkspaceStore

@@ -1,5 +1,7 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.proxy.ProxyRuleJson
+import app.andy.desktop.service.proxy.parseMitmproxyFlowLine
 import app.andy.model.ProxyRule
 import kotlin.test.Test
 import kotlin.test.assertEquals
