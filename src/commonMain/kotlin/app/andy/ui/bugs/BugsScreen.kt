@@ -28,12 +28,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -50,7 +46,6 @@ import app.andy.domain.activeBugActionIndex
 import app.andy.domain.activeBugPointerEvent
 import app.andy.domain.bugPlaybackMillis
 import app.andy.domain.BugPointerEvent
-import app.andy.model.BugReport
 import app.andy.service.BugService
 import app.andy.service.MirrorFrame
 import app.andy.ui.components.Button
@@ -78,85 +73,65 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun BugsScreen(bugs: BugService) {
     val scope = rememberCoroutineScope()
-    var reports by remember { mutableStateOf<List<BugReport>>(emptyList()) }
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var selected by remember { mutableStateOf<BugReport?>(null) }
-    var logcat by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf("Details") }
-    var playbackFrame by remember { mutableStateOf<MirrorFrame?>(null) }
-    var playbackRunId by remember { mutableStateOf(0) }
-    var isReplaying by remember { mutableStateOf(false) }
-    var playbackFrameCount by remember { mutableStateOf(0) }
-    var playbackFrameIndex by remember { mutableStateOf(0) }
-    var playbackStartFrameIndex by remember { mutableStateOf(0) }
-    var isInspectingPlayback by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("") }
-    var stepsPaneWidth by remember { mutableStateOf(380f) }
-    var bugDetailsPaneWidth by remember { mutableStateOf(320f) }
-    val expandedStepIds = remember { mutableStateMapOf<String, Boolean>() }
+    val state = remember(bugs) { BugsScreenState(bugs) }
     val stepsListState = rememberLazyListState()
 
     fun refreshReports() {
         scope.launch {
-            reports = bugs.listBugs()
-            if (selectedId == null || reports.none { it.id == selectedId }) {
-                selectedId = reports.firstOrNull()?.id
+            state.reports = state.bugs.listBugs()
+            if (state.selectedId == null || state.reports.none { it.id == state.selectedId }) {
+                state.selectedId = state.reports.firstOrNull()?.id
             }
         }
     }
 
     LaunchedEffect(Unit) { refreshReports() }
-    LaunchedEffect(selectedId, reports) {
-        val id = selectedId
-        selected = reports.firstOrNull { it.id == id } ?: id?.let { bugs.loadBug(it) }
-        logcat = id?.let { bugs.loadBugLog(it) }.orEmpty()
-        playbackFrame = null
-        playbackFrameIndex = 0
-        playbackStartFrameIndex = 0
-        isInspectingPlayback = false
-        playbackFrameCount = id?.let { bugs.bugVideoFrameCount(it) } ?: 0
-        isReplaying = false
-        expandedStepIds.clear()
+    LaunchedEffect(state.selectedId, state.reports) {
+        val id = state.selectedId
+        state.selected = state.reports.firstOrNull { it.id == id } ?: id?.let { state.bugs.loadBug(it) }
+        state.logcat = id?.let { state.bugs.loadBugLog(it) }.orEmpty()
+        state.resetPlaybackForSelection()
+        state.playbackFrameCount = id?.let { state.bugs.bugVideoFrameCount(it) } ?: 0
     }
-    LaunchedEffect(selectedId, playbackFrameCount, playbackFrameIndex, isReplaying) {
-        val id = selectedId ?: return@LaunchedEffect
-        if (isReplaying || playbackFrameCount <= 0) return@LaunchedEffect
-        bugs.loadBugVideoFrame(id, playbackFrameIndex)?.let { frame ->
-            playbackFrame = frame
+    LaunchedEffect(state.selectedId, state.playbackFrameCount, state.playbackFrameIndex, state.isReplaying) {
+        val id = state.selectedId ?: return@LaunchedEffect
+        if (state.isReplaying || state.playbackFrameCount <= 0) return@LaunchedEffect
+        state.bugs.loadBugVideoFrame(id, state.playbackFrameIndex)?.let { frame ->
+            state.playbackFrame = frame
         }
     }
-    LaunchedEffect(selectedId, playbackRunId, isReplaying) {
-        val id = selectedId ?: return@LaunchedEffect
-        if (!isReplaying || playbackRunId == 0) return@LaunchedEffect
-        val runId = playbackRunId
-        playbackFrame = null
+    LaunchedEffect(state.selectedId, state.playbackRunId, state.isReplaying) {
+        val id = state.selectedId ?: return@LaunchedEffect
+        if (!state.isReplaying || state.playbackRunId == 0) return@LaunchedEffect
+        val runId = state.playbackRunId
+        state.playbackFrame = null
         try {
-            bugs.playbackFrames(id, playbackStartFrameIndex).collect { frame ->
-                playbackFrame = frame
-                playbackFrameIndex = frame.frameNumber.toInt().coerceAtLeast(1) - 1
-                isInspectingPlayback = true
+            state.bugs.playbackFrames(id, state.playbackStartFrameIndex).collect { frame ->
+                state.playbackFrame = frame
+                state.playbackFrameIndex = frame.frameNumber.toInt().coerceAtLeast(1) - 1
+                state.isInspectingPlayback = true
             }
         } finally {
-            if (playbackRunId == runId) {
-                isReplaying = false
+            if (state.playbackRunId == runId) {
+                state.isReplaying = false
             }
         }
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         PanelCard(Modifier.width(270.dp).fillMaxHeight()) {
-            Toolbar("Bugs", "${reports.size} reports", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
-            if (reports.isEmpty()) {
+            Toolbar("Bugs", "${state.reports.size} reports", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
+            if (state.reports.isEmpty()) {
                 EmptyState("No bug reports yet")
             } else {
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(reports) { report ->
-                        val active = report.id == selectedId
+                    items(state.reports) { report ->
+                        val active = report.id == state.selectedId
                         Column(
                             Modifier.fillMaxWidth()
                                 .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.R3))
                                 .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.R3))
-                                .clickable { selectedId = report.id }
+                                .clickable { state.selectedId = report.id }
                                 .padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
@@ -169,25 +144,18 @@ internal fun BugsScreen(bugs: BugService) {
             }
         }
 
-        val report = selected
+        val report = state.selected
         if (report == null) {
             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                 Text("Save a bug from Live to see its replay here.", color = TextSecondary)
             }
         } else {
-            val playbackMillis = bugPlaybackMillis(report, playbackFrameIndex, playbackFrameCount)
-            val showReplayAnnotations = isInspectingPlayback && playbackFrame != null
+            val playbackMillis = bugPlaybackMillis(report, state.playbackFrameIndex, state.playbackFrameCount)
+            val showReplayAnnotations = state.isInspectingPlayback && state.playbackFrame != null
             val activeActionIndex = if (showReplayAnnotations) activeBugActionIndex(report.actions, playbackMillis) else -1
             val pointerEvent = if (showReplayAnnotations) activeBugPointerEvent(report.actions, playbackMillis) else null
             fun toggleBugReplay() {
-                if (isReplaying) {
-                    isReplaying = false
-                } else {
-                    isInspectingPlayback = true
-                    playbackStartFrameIndex = playbackFrameIndex
-                    isReplaying = true
-                    playbackRunId++
-                }
+                state.toggleReplay()
             }
             LaunchedEffect(report.id, activeActionIndex) {
                 if (activeActionIndex >= 0) {
@@ -217,29 +185,29 @@ internal fun BugsScreen(bugs: BugService) {
                         onClick = { toggleBugReplay() },
                         colors = primaryButtonColors(),
                         shape = RoundedCornerShape(10.dp),
-                    ) { Text(if (isReplaying) "Pause" else "Reproduce") }
+                    ) { Text(if (state.isReplaying) "Pause" else "Reproduce") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = {
                         scope.launch {
-                            status = bugs.exportBug(report.id)?.let { "Exported to $it" } ?: "Export failed"
+                            state.status = state.bugs.exportBug(report.id)?.let { "Exported to $it" } ?: "Export failed"
                         }
                     }) { Text("Export") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
                             scope.launch {
-                                bugs.deleteBug(report.id)
-                                status = "Deleted ${report.title}"
-                                selectedId = null
+                                state.bugs.deleteBug(report.id)
+                                state.status = "Deleted ${report.title}"
+                                state.selectedId = null
                                 refreshReports()
                             }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
                     ) { Text("Delete") }
                 }
-                if (status.isNotBlank()) Text(status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PanelCard(Modifier.width(stepsPaneWidth.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.width(state.stepsPaneWidth.dp).fillMaxHeight()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Text("${report.actions.size} events", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
@@ -250,13 +218,13 @@ internal fun BugsScreen(bugs: BugService) {
                             }
                             itemsIndexed(report.actions) { index, action ->
                                 val active = index == activeActionIndex
-                                val expanded = expandedStepIds[action.id] == true
+                                val expanded = state.expandedStepIds[action.id] == true
                                 Column(
                                     Modifier.fillMaxWidth()
                                         .animateContentSize()
                                         .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
                                         .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                                        .clickable { expandedStepIds[action.id] = !expanded }
+                                        .clickable { state.expandedStepIds[action.id] = !expanded }
                                         .padding(horizontal = 6.dp, vertical = 4.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
@@ -292,7 +260,7 @@ internal fun BugsScreen(bugs: BugService) {
                         }
                     }
                     PaneDivider(
-                        onDrag = { dragX -> stepsPaneWidth = (stepsPaneWidth + dragX).coerceIn(260f, 1_400f) },
+                        onDrag = { dragX -> state.stepsPaneWidth = (state.stepsPaneWidth + dragX).coerceIn(260f, 1_400f) },
                     )
                     PanelCard(Modifier.weight(1f).widthIn(min = 96.dp).fillMaxHeight()) {
                         Text("VIDEO", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -301,10 +269,10 @@ internal fun BugsScreen(bugs: BugService) {
                                 Modifier.weight(1f).fillMaxWidth()
                                     .background(Color.Black, RoundedCornerShape(AndyRadius.R3))
                                     .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                                    .clickable(enabled = playbackFrameCount > 0) { toggleBugReplay() },
+                                    .clickable(enabled = state.playbackFrameCount > 0) { toggleBugReplay() },
                                 contentAlignment = Alignment.Center,
                             ) {
-                                val frame = playbackFrame
+                                val frame = state.playbackFrame
                                 if (frame != null) {
                                     Box(Modifier.fillMaxSize()) {
                                         MirrorVideoSurface(
@@ -322,23 +290,21 @@ internal fun BugsScreen(bugs: BugService) {
                                     Text("Press Reproduce to play capture.mp4", color = TextSecondary, fontSize = 12.sp)
                                 }
                             }
-                            if (playbackFrameCount > 0) {
+                            if (state.playbackFrameCount > 0) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    val sliderMax = (playbackFrameCount - 1).coerceAtLeast(1).toFloat()
+                                    val sliderMax = (state.playbackFrameCount - 1).coerceAtLeast(1).toFloat()
                                     Slider(
-                                        value = playbackFrameIndex.toFloat().coerceIn(0f, sliderMax),
+                                        value = state.playbackFrameIndex.toFloat().coerceIn(0f, sliderMax),
                                         onValueChange = { value ->
-                                            val index = value.toInt().coerceIn(0, playbackFrameCount - 1)
-                                            isReplaying = false
-                                            isInspectingPlayback = true
-                                            playbackFrameIndex = index
+                                            val index = value.toInt().coerceIn(0, state.playbackFrameCount - 1)
+                                            state.seekPlayback(index)
                                         },
                                         valueRange = 0f..sliderMax,
-                                        enabled = playbackFrameCount > 1,
+                                        enabled = state.playbackFrameCount > 1,
                                         modifier = Modifier.weight(1f),
                                     )
                                     Text(
-                                        "${playbackFrameIndex + 1}/$playbackFrameCount",
+                                        "${state.playbackFrameIndex + 1}/${state.playbackFrameCount}",
                                         color = TextSecondary,
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 11.sp,
@@ -351,14 +317,14 @@ internal fun BugsScreen(bugs: BugService) {
                         }
                     }
                     PaneDivider(
-                        onDrag = { dragX -> bugDetailsPaneWidth = (bugDetailsPaneWidth - dragX).coerceIn(220f, 900f) },
+                        onDrag = { dragX -> state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - dragX).coerceIn(220f, 900f) },
                     )
-                    PanelCard(Modifier.width(bugDetailsPaneWidth.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.width(state.bugDetailsPaneWidth.dp).fillMaxHeight()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterPill("Details", selectedTab == "Details", Rust) { selectedTab = "Details" }
-                            FilterPill("Logcat", selectedTab == "Logcat", Rust) { selectedTab = "Logcat" }
+                            FilterPill("Details", state.selectedTab == "Details", Rust) { state.selectedTab = "Details" }
+                            FilterPill("Logcat", state.selectedTab == "Logcat", Rust) { state.selectedTab = "Logcat" }
                         }
-                        if (selectedTab == "Details") {
+                        if (state.selectedTab == "Details") {
                             DetailSection("DEVICE")
                             DetailRow("Model", report.deviceModel)
                             DetailRow("Serial", report.deviceSerial)
@@ -375,7 +341,7 @@ internal fun BugsScreen(bugs: BugService) {
                                 Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))
                             }
                         } else {
-                            BugLogcatView(logcat, Modifier.fillMaxSize())
+                            BugLogcatView(state.logcat, Modifier.fillMaxSize())
                         }
                     }
                 }

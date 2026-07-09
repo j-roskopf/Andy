@@ -28,14 +28,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -82,12 +80,9 @@ import app.andy.andy.generated.resources.intellij_filetype_unknown_dark
 import app.andy.andy.generated.resources.intellij_filetype_xml_dark
 import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
 import app.andy.andy.generated.resources.intellij_node_folder_dark
-import app.andy.model.HostFileEntry
 import app.andy.model.HostFileSaveResult
-import app.andy.model.HostIndexStatus
 import app.andy.model.HostSearchMatchKind
 import app.andy.model.HostSearchMode
-import app.andy.model.HostSearchResult
 import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.service.HostFileService
@@ -114,18 +109,6 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 
-private data class HostEditorTab(
-    val path: String,
-    val content: String,
-    val savedContent: String,
-    val modifiedMillis: Long,
-    val sizeBytes: Long,
-    val languageHint: String,
-    val message: String = "",
-) {
-    val dirty: Boolean get() = content != savedContent
-}
-
 @Composable
 internal fun HostFilesScreen(
     service: HostFileService,
@@ -133,6 +116,7 @@ internal fun HostFilesScreen(
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val state = remember(service) { HostFilesScreenState(service) }
     var selectedRoot by remember(workspaceState.hostFileRoots, workspaceState.lastHostFilePath) {
         mutableStateOf(resolveHostRootForPath(workspaceState.lastHostFilePath, workspaceState.hostFileRoots) ?: workspaceState.hostFileRoots.firstOrNull())
     }
@@ -141,29 +125,17 @@ internal fun HostFilesScreen(
         val selected = selectedRoot
         mutableStateOf(if (saved != null && selected != null && hostPathStartsWith(saved, selected)) saved else selected.orEmpty())
     }
-    var message by remember { mutableStateOf("") }
-    var searchQuery by remember { mutableStateOf("") }
-    var searchMode by remember { mutableStateOf(HostSearchMode.Combined) }
-    var searchResults by remember { mutableStateOf<List<HostSearchResult>>(emptyList()) }
-    var tabs by remember { mutableStateOf<List<HostEditorTab>>(emptyList()) }
-    var activePath by remember { mutableStateOf<String?>(null) }
-    var conflictTab by remember { mutableStateOf<HostEditorTab?>(null) }
-    val statuses = remember { mutableStateMapOf<String, HostIndexStatus>() }
-    val treeChildren = remember { mutableStateMapOf<String, List<HostFileEntry>>() }
-    val expandedPaths = remember { mutableStateMapOf<String, Boolean>() }
-    val searchFocusRequester = remember { FocusRequester() }
     val treeListState = rememberLazyListState()
-    var pendingTreeScrollPath by remember { mutableStateOf<String?>(null) }
     var localHostFileTreePaneWidth by remember(workspaceState.hostFileTreePaneWidth) {
         mutableStateOf(workspaceState.hostFileTreePaneWidth.coerceIn(220f, 620f))
     }
     var localHostFileSearchPaneWidth by remember(workspaceState.hostFileSearchPaneWidth) {
         mutableStateOf(workspaceState.hostFileSearchPaneWidth.coerceIn(500f, 980f))
     }
-    val activeTab = activePath?.let { path -> tabs.firstOrNull { it.path == path } }
-    val dirtyPaths = remember(tabs) { tabs.filter { it.dirty }.map { it.path }.toSet() }
-    val treeRows = remember(selectedRoot, treeChildren.toMap(), expandedPaths.toMap()) {
-        selectedRoot?.let { root -> hostTreeRows(root, treeChildren, expandedPaths) }.orEmpty()
+    val activeTab = state.activePath?.let { path -> state.tabs.firstOrNull { it.path == path } }
+    val dirtyPaths = remember(state.tabs) { state.tabs.filter { it.dirty }.map { it.path }.toSet() }
+    val treeRows = remember(selectedRoot, state.treeChildren.toMap(), state.expandedPaths.toMap()) {
+        selectedRoot?.let { root -> hostTreeRows(root, state.treeChildren, state.expandedPaths) }.orEmpty()
     }
 
     fun updateRecent(path: String) {
@@ -178,28 +150,28 @@ internal fun HostFilesScreen(
     fun loadPath(path: String = selectedPath) {
         if (path.isBlank()) return
         scope.launch {
-            runCatching { service.list(path) }
+            runCatching { state.service.list(path) }
                 .onSuccess {
                     selectedPath = path
-                    treeChildren[path] = it
-                    if (message.endsWith("entries")) message = ""
+                    state.treeChildren[path] = it
+                    if (state.message.endsWith("entries")) state.message = ""
                     onUpdateWorkspace { state -> state.copy(lastHostFilePath = path) }
                 }
-                .onFailure { message = it.message ?: "Browse failed" }
+                .onFailure { state.message = it.message ?: "Browse failed" }
         }
     }
 
     fun openFile(path: String) {
         scope.launch {
-            runCatching { service.read(path) }
+            runCatching { state.service.read(path) }
                 .onSuccess { doc ->
                     val next = HostEditorTab(doc.path, doc.content, doc.content, doc.modifiedMillis, doc.sizeBytes, doc.languageHint)
-                    tabs = (tabs.filterNot { it.path == doc.path } + next)
-                    activePath = doc.path
+                    state.tabs = (state.tabs.filterNot { it.path == doc.path } + next)
+                    state.activePath = doc.path
                     updateRecent(doc.path)
-                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                    if (state.message.startsWith("Opened ") || state.message.startsWith("Saved ")) state.message = ""
                 }
-                .onFailure { message = it.message ?: "Open failed" }
+                .onFailure { state.message = it.message ?: "Open failed" }
         }
     }
 
@@ -208,99 +180,88 @@ internal fun HostFilesScreen(
         val parent = hostParentPath(path)
         selectedRoot = root
         selectedPath = parent
-        searchQuery = ""
-        pendingTreeScrollPath = path
+        state.searchQuery = ""
+        state.pendingTreeScrollPath = path
         hostAncestorDirectories(path, root).forEach { directory ->
-            expandedPaths[directory] = true
+            state.expandedPaths[directory] = true
             loadPath(directory)
         }
     }
 
-    fun saveTab(tab: HostEditorTab, overwrite: Boolean = false, visiblePath: String? = activePath) {
+    fun saveTab(tab: HostEditorTab, overwrite: Boolean = false, visiblePath: String? = state.activePath) {
         if (visiblePath != tab.path) {
             val visibleName = visiblePath?.let(::hostFileName) ?: "no active file"
-            message = "Save blocked: ${hostFileName(tab.path)} is not the visible editor file ($visibleName)."
-            tabs = tabs.map { if (it.path == tab.path) it.copy(message = "Save blocked: not the visible editor file") else it }
+            state.message = "Save blocked: ${hostFileName(tab.path)} is not the visible editor file ($visibleName)."
+            state.tabs = state.tabs.map { if (it.path == tab.path) it.copy(message = "Save blocked: not the visible editor file") else it }
             return
         }
         scope.launch {
-            val currentTab = tabs.firstOrNull { it.path == tab.path }
-            if (currentTab == null || activePath != tab.path) {
-                message = "Save blocked: active editor changed before save."
+            val currentTab = state.tabs.firstOrNull { it.path == tab.path }
+            if (currentTab == null || state.activePath != tab.path) {
+                state.message = "Save blocked: active editor changed before save."
                 return@launch
             }
-            when (val result = service.save(currentTab.path, currentTab.content, if (overwrite) 0L else currentTab.modifiedMillis)) {
+            when (val result = state.service.save(currentTab.path, currentTab.content, if (overwrite) 0L else currentTab.modifiedMillis)) {
                 is HostFileSaveResult.Saved -> {
-                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(savedContent = currentTab.content, modifiedMillis = result.modifiedMillis, message = "") else it }
-                    if (message.startsWith("Opened ") || message.startsWith("Saved ")) message = ""
+                    state.tabs = state.tabs.map { if (it.path == currentTab.path) it.copy(savedContent = currentTab.content, modifiedMillis = result.modifiedMillis, message = "") else it }
+                    if (state.message.startsWith("Opened ") || state.message.startsWith("Saved ")) state.message = ""
                 }
                 is HostFileSaveResult.Conflict -> {
-                    conflictTab = currentTab.copy(message = "Changed outside Andy at ${result.currentModifiedMillis}")
+                    state.conflictTab = currentTab.copy(message = "Changed outside Andy at ${result.currentModifiedMillis}")
                 }
                 is HostFileSaveResult.Failed -> {
-                    tabs = tabs.map { if (it.path == currentTab.path) it.copy(message = result.message) else it }
-                    message = result.message
+                    state.tabs = state.tabs.map { if (it.path == currentTab.path) it.copy(message = result.message) else it }
+                    state.message = result.message
                 }
             }
         }
     }
 
     fun updateEditorTextForPath(path: String, value: String) {
-        if (path != activePath) {
-            message = "Edit ignored: editor event did not match the visible file."
-            return
-        }
-        if (tabs.none { it.path == path }) {
-            message = "Edit ignored: file tab is no longer open."
-            return
-        }
-        tabs = tabs.map { if (it.path == path) it.copy(content = value) else it }
+        state.updateEditorTextForPath(path, value)
     }
 
     fun saveEditorContentForPath(path: String, value: String) {
-        if (path != activePath) {
-            message = "Save blocked: editor event did not match the visible file."
+        if (path != state.activePath) {
+            state.message = "Save blocked: editor event did not match the visible file."
             return
         }
-        val currentTab = tabs.firstOrNull { it.path == path }
+        val currentTab = state.tabs.firstOrNull { it.path == path }
         if (currentTab == null) {
-            message = "Save blocked: file tab is no longer open."
+            state.message = "Save blocked: file tab is no longer open."
             return
         }
         val updated = currentTab.copy(content = value)
-        tabs = tabs.map { if (it.path == path) updated else it }
+        state.tabs = state.tabs.map { if (it.path == path) updated else it }
         saveTab(updated, visiblePath = path)
     }
 
     fun closeActiveTab() {
-        val path = activePath ?: return
-        val nextTabs = tabs.filterNot { it.path == path }
-        tabs = nextTabs
-        activePath = nextTabs.lastOrNull()?.path
+        state.closeActiveTab()
     }
 
     fun setSearchModeAndFocus(mode: HostSearchMode) {
-        searchMode = mode
+        state.searchMode = mode
         scope.launch {
             delay(30)
-            searchFocusRequester.requestFocus()
+            state.searchFocusRequester.requestFocus()
         }
     }
 
     fun toggleTreeDirectory(path: String) {
-        val expanded = expandedPaths[path] == true
+        val expanded = state.expandedPaths[path] == true
         if (expanded) {
-            expandedPaths[path] = false
+            state.expandedPaths[path] = false
             return
         }
-        expandedPaths[path] = true
+        state.expandedPaths[path] = true
         loadPath(path)
     }
 
     LaunchedEffect(workspaceState.hostFileRoots) {
         workspaceState.hostFileRoots.forEach { root ->
-            expandedPaths[root] = true
-            launch { service.indexRoot(root).collect { statuses[root] = it } }
+            state.expandedPaths[root] = true
+            launch { state.service.indexRoot(root).collect { state.statuses[root] = it } }
         }
         selectedRoot?.let { root ->
             if (selectedPath.isBlank() || !hostPathStartsWith(selectedPath, root)) selectedPath = root
@@ -309,23 +270,23 @@ internal fun HostFilesScreen(
         }
     }
 
-    LaunchedEffect(searchQuery, searchMode, selectedRoot) {
+    LaunchedEffect(state.searchQuery, state.searchMode, selectedRoot) {
         delay(180)
         val root = selectedRoot
-        searchResults = if (searchQuery.isBlank() || root.isNullOrBlank()) {
+        state.searchResults = if (state.searchQuery.isBlank() || root.isNullOrBlank()) {
             emptyList()
         } else {
-            service.search(searchQuery, searchMode, listOf(root), 200)
+            state.service.search(state.searchQuery, state.searchMode, listOf(root), 200)
         }
     }
 
-    LaunchedEffect(pendingTreeScrollPath, treeRows) {
-        val target = pendingTreeScrollPath ?: return@LaunchedEffect
+    LaunchedEffect(state.pendingTreeScrollPath, treeRows) {
+        val target = state.pendingTreeScrollPath ?: return@LaunchedEffect
         val index = treeRows.indexOfFirst { it.entry.path == target }
         if (index >= 0) {
             delay(50)
             treeListState.animateScrollToItem(index)
-            pendingTreeScrollPath = null
+            state.pendingTreeScrollPath = null
         }
     }
 
@@ -337,7 +298,7 @@ internal fun HostFilesScreen(
                 if (!command) return@onPreviewKeyEvent false
                 when {
                     event.key == Key.S && activeTab != null -> {
-                        tabs.firstOrNull { it.path == activeTab.path }?.let { saveTab(it) }
+                        state.tabs.firstOrNull { it.path == activeTab.path }?.let { saveTab(it) }
                         true
                     }
                     event.key == Key.W -> {
@@ -350,7 +311,7 @@ internal fun HostFilesScreen(
                                 onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
                                 selectedRoot = picked
                                 selectedPath = picked
-                                expandedPaths[picked] = true
+                                state.expandedPaths[picked] = true
                                 loadPath(picked)
                             }
                         }
@@ -373,13 +334,13 @@ internal fun HostFilesScreen(
             },
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Toolbar("Computer Files", "${workspaceState.hostFileRoots.size} roots · ${statuses.values.sumOf { it.indexedFiles }} indexed", onPrimary = {
+        Toolbar("Computer Files", "${workspaceState.hostFileRoots.size} roots · ${state.statuses.values.sumOf { it.indexedFiles }} indexed", onPrimary = {
             scope.launch {
                 pickDirectory(selectedRoot)?.let { picked ->
                     onUpdateWorkspace { state -> state.copy(hostFileRoots = (state.hostFileRoots + picked).distinct(), lastHostFilePath = picked) }
                     selectedRoot = picked
                     selectedPath = picked
-                    expandedPaths[picked] = true
+                    state.expandedPaths[picked] = true
                     loadPath(picked)
                 }
             }
@@ -391,7 +352,7 @@ internal fun HostFilesScreen(
                     Text("Add a folder to start indexing files on this computer.", color = TextSecondary, fontSize = 12.sp)
                 }
                 workspaceState.hostFileRoots.forEach { root ->
-                    val status = statuses[root]
+                    val status = state.statuses[root]
                     Column(
                         Modifier.fillMaxWidth()
                             .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.R2))
@@ -399,7 +360,7 @@ internal fun HostFilesScreen(
                             .clickable {
                                 selectedRoot = root
                                 selectedPath = root
-                                expandedPaths[root] = true
+                                state.expandedPaths[root] = true
                                 loadPath(root)
                             }
                             .padding(8.dp),
@@ -456,8 +417,8 @@ internal fun HostFilesScreen(
                             selectedRoot?.let { root ->
                                 scope.launch {
                                     var sawIndexing = false
-                                    service.indexRoot(root).first { status ->
-                                        statuses[root] = status
+                                    state.service.indexRoot(root).first { status ->
+                                        state.statuses[root] = status
                                         if (status.indexing) sawIndexing = true
                                         sawIndexing && !status.indexing
                                     }
@@ -469,22 +430,22 @@ internal fun HostFilesScreen(
                     }
                 }
                 TextField(
-                    searchQuery,
-                    { searchQuery = it },
+                    state.searchQuery,
+                    { state.searchQuery = it },
                     placeholder = { Text("Search indexed files", color = TextSecondary) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().height(48.dp).focusRequester(searchFocusRequester),
+                    modifier = Modifier.fillMaxWidth().height(48.dp).focusRequester(state.searchFocusRequester),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SearchModePill("All", "ctrl shift A", searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
-                    SearchModePill("Names", "ctrl shift N", searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
-                    SearchModePill("Contents", "ctrl shift F", searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
+                    SearchModePill("All", "ctrl shift A", state.searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
+                    SearchModePill("Names", "ctrl shift N", state.searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
+                    SearchModePill("Contents", "ctrl shift F", state.searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
                 }
-                if (message.isNotBlank()) Text(message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (searchQuery.isNotBlank()) {
+                if (state.message.isNotBlank()) Text(state.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (state.searchQuery.isNotBlank()) {
                     LazyColumn(Modifier.weight(1f)) {
-                        items(searchResults) { result ->
+                        items(state.searchResults) { result ->
                             val icon = hostFileIconForPath(result.path, isDirectory = false)
                             Column(
                                 Modifier.fillMaxWidth()
@@ -514,8 +475,8 @@ internal fun HostFilesScreen(
                         items(treeRows, key = { it.entry.path }) { row ->
                             HostTreeRowView(
                                 row = row,
-                                expanded = expandedPaths[row.entry.path] == true,
-                                selected = !row.entry.isDirectory && activePath == row.entry.path,
+                                expanded = state.expandedPaths[row.entry.path] == true,
+                                selected = !row.entry.isDirectory && state.activePath == row.entry.path,
                                 dirty = dirtyPaths.contains(row.entry.path),
                                 onClick = {
                                     if (row.entry.isDirectory) toggleTreeDirectory(row.entry.path) else openFile(row.entry.path)
@@ -569,16 +530,16 @@ internal fun HostFilesScreen(
         }
     }
 
-    conflictTab?.let { tab ->
+    state.conflictTab?.let { tab ->
         ConfirmationDialog(
             confirmation = PendingConfirmation("Overwrite external changes?", "${tab.path}\nThe file changed since Andy opened it.") {
                 saveTab(tab, overwrite = true)
-                conflictTab = null
+                state.conflictTab = null
             },
-            onDismiss = { conflictTab = null },
+            onDismiss = { state.conflictTab = null },
             onConfirm = {
                 saveTab(tab, overwrite = true)
-                conflictTab = null
+                state.conflictTab = null
             },
         )
     }

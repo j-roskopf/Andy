@@ -99,18 +99,11 @@ internal fun DevicesScreen(
     startStatus: String,
 ) {
     val scope = rememberCoroutineScope()
-    var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
-    var avdStatus by remember { mutableStateOf("") }
-    var startingAvd by remember { mutableStateOf<String?>(null) }
-    var deviceQuery by remember { mutableStateOf("") }
-    var deviceFilter by remember { mutableStateOf(DeviceListFilter.All) }
-    var showCreateWizard by remember { mutableStateOf(false) }
-    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
-    var cloneSource by remember { mutableStateOf<VirtualDevice?>(null) }
+    val state = remember(services.avd) { DevicesScreenState(services.avd) }
 
     fun refreshAvds() {
         scope.launch {
-            avds = services.avd.listVirtualDevices()
+            state.avds = state.avd.listVirtualDevices()
         }
     }
 
@@ -118,29 +111,29 @@ internal fun DevicesScreen(
         refreshAvds()
     }
     val filteredDevices = devices.filter { device ->
-        val matchesQuery = deviceQuery.isBlank() ||
-            device.displayName.contains(deviceQuery, true) ||
-            device.serial.contains(deviceQuery, true) ||
-            device.apiLevel.orEmpty().contains(deviceQuery, true)
-        matchesQuery && device.matchesFilter(deviceFilter)
+        val matchesQuery = state.deviceQuery.isBlank() ||
+            device.displayName.contains(state.deviceQuery, true) ||
+            device.serial.contains(state.deviceQuery, true) ||
+            device.apiLevel.orEmpty().contains(state.deviceQuery, true)
+        matchesQuery && device.matchesFilter(state.deviceFilter)
     }
-    val filteredAvds = avds.filter { avd ->
-        val matchesQuery = deviceQuery.isBlank() ||
-            avd.name.contains(deviceQuery, true) ||
-            avd.target.orEmpty().contains(deviceQuery, true) ||
-            avd.abi.orEmpty().contains(deviceQuery, true)
-        matchesQuery && avd.matchesFilter(deviceFilter)
+    val filteredAvds = state.avds.filter { avd ->
+        val matchesQuery = state.deviceQuery.isBlank() ||
+            avd.name.contains(state.deviceQuery, true) ||
+            avd.target.orEmpty().contains(state.deviceQuery, true) ||
+            avd.abi.orEmpty().contains(state.deviceQuery, true)
+        matchesQuery && avd.matchesFilter(state.deviceFilter)
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Toolbar("Devices", "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${avds.size} created", onPrimary = {
+        Toolbar("Devices", "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${state.avds.size} created", onPrimary = {
             onRefresh()
             refreshAvds()
         }, primaryLabel = "Refresh")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextField(
-                deviceQuery,
-                { deviceQuery = it },
+                state.deviceQuery,
+                { state.deviceQuery = it },
                 placeholder = { Text("Search devices", color = TextSecondary) },
                 singleLine = true,
                 modifier = Modifier.width(280.dp).height(54.dp),
@@ -148,10 +141,10 @@ internal fun DevicesScreen(
                 colors = fieldColors(),
             )
             DeviceListFilter.entries.forEach { filter ->
-                FilterPill(filter.label, deviceFilter == filter, if (deviceFilter == filter) Rust else Cyan) { deviceFilter = filter }
+                FilterPill(filter.label, state.deviceFilter == filter, if (state.deviceFilter == filter) Rust else Cyan) { state.deviceFilter = filter }
             }
             Spacer(Modifier.weight(1f))
-            Button(onClick = { showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
+            Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
         }
         if (sdk.issues.isNotEmpty()) {
             PanelCard {
@@ -168,7 +161,7 @@ internal fun DevicesScreen(
                     Text(startStatus, color = if (startingEmulatorName != null) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 }
             }
-            if (avdStatus.isNotBlank()) Text(avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            if (state.avdStatus.isNotBlank()) Text(state.avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             if (stopStatus.isNotBlank()) Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             if (filteredAvds.isEmpty()) {
                 Text("No AVDs found. Create one in Catalog or Android Studio, then refresh.", color = TextSecondary, fontSize = 12.sp)
@@ -203,20 +196,20 @@ internal fun DevicesScreen(
                                     }
                                     val before = devices.map { it.serial }.toSet()
                                     scope.launch {
-                                        startingAvd = avd.name
-                                        val result = services.avd.startVirtualDevice(avd.name)
-                                        avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                                        startingAvd = null
+                                        state.startingAvd = avd.name
+                                        val result = state.avd.startVirtualDevice(avd.name)
+                                        state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                        state.startingAvd = null
                                         refreshAvds()
                                         if (result.isSuccess) onEmulatorStarted(before, avd.name)
                                     }
                                 },
-                                enabled = startingAvd == null && startingEmulatorName == null,
+                                enabled = state.startingAvd == null && startingEmulatorName == null,
                             ) {
                                 Text(
                                     when {
                                         startingEmulatorName == avd.name -> "Booting"
-                                        startingAvd == avd.name -> "Starting"
+                                        state.startingAvd == avd.name -> "Starting"
                                         runningDevice != null -> "Live"
                                         else -> "Start"
                                     },
@@ -231,33 +224,33 @@ internal fun DevicesScreen(
                                 }
                             }
                             AvdActionsMenu(
-                                enabled = startingAvd == null && startingEmulatorName == null,
+                                enabled = state.startingAvd == null && startingEmulatorName == null,
                                 onColdBoot = {
                                     val before = devices.map { it.serial }.toSet()
                                     scope.launch {
-                                        startingAvd = avd.name
-                                        val result = services.avd.coldBootVirtualDevice(avd.name)
-                                        avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                                        startingAvd = null
+                                        state.startingAvd = avd.name
+                                        val result = state.avd.coldBootVirtualDevice(avd.name)
+                                        state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                        state.startingAvd = null
                                         refreshAvds()
                                         if (result.isSuccess) onEmulatorStarted(before, avd.name)
                                     }
                                 },
                                 onWipe = {
-                                    pendingConfirmation = PendingConfirmation("Wipe ${avd.name}?", "This erases user data for the virtual device.") {
+                                    state.pendingConfirmation = PendingConfirmation("Wipe ${avd.name}?", "This erases user data for the virtual device.") {
                                         scope.launch {
-                                            val result = services.avd.wipeVirtualDevice(avd.name)
-                                            avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                            val result = state.avd.wipeVirtualDevice(avd.name)
+                                            state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
                                             refreshAvds()
                                         }
                                     }
                                 },
-                                onClone = { cloneSource = avd },
+                                onClone = { state.cloneSource = avd },
                                 onDelete = {
-                                    pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
+                                    state.pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
                                         scope.launch {
-                                            val result = services.avd.deleteVirtualDevice(avd.name)
-                                            avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
+                                            val result = state.avd.deleteVirtualDevice(avd.name)
+                                            state.avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
                                             refreshAvds()
                                         }
                                     }
@@ -303,35 +296,35 @@ internal fun DevicesScreen(
             }
         }
         if (devices.isEmpty()) EmptyState("No connected Android devices. Connect USB debugging or start an emulator.")
-        if (showCreateWizard) {
+        if (state.showCreateWizard) {
             CreateVirtualDeviceDialog(
-                avd = services.avd,
-                onDismiss = { showCreateWizard = false },
+                avd = state.avd,
+                onDismiss = { state.showCreateWizard = false },
                 onCreated = {
-                    avdStatus = it
-                    showCreateWizard = false
+                    state.avdStatus = it
+                    state.showCreateWizard = false
                     refreshAvds()
                     onRefresh()
                 },
             )
         }
-        cloneSource?.let { source ->
+        state.cloneSource?.let { source ->
             CloneAvdDialog(
                 source = source,
-                onDismiss = { cloneSource = null },
+                onDismiss = { state.cloneSource = null },
                 onClone = { newName ->
                     scope.launch {
-                        val result = services.avd.cloneVirtualDevice(source.name, newName)
-                        avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                        cloneSource = null
+                        val result = state.avd.cloneVirtualDevice(source.name, newName)
+                        state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                        state.cloneSource = null
                         refreshAvds()
                     }
                 },
             )
         }
-        pendingConfirmation?.let { confirmation ->
-            ConfirmationDialog(confirmation, onDismiss = { pendingConfirmation = null }, onConfirm = {
-                pendingConfirmation = null
+        state.pendingConfirmation?.let { confirmation ->
+            ConfirmationDialog(confirmation, onDismiss = { state.pendingConfirmation = null }, onConfirm = {
+                state.pendingConfirmation = null
                 confirmation.onConfirm()
             })
         }
@@ -346,7 +339,7 @@ private fun normalizeName(value: String): String {
     return value.replace('_', ' ').trim().lowercase()
 }
 
-private enum class DeviceListFilter(val label: String) {
+internal enum class DeviceListFilter(val label: String) {
     All("All"),
     Running("Running"),
     Phone("Phone"),

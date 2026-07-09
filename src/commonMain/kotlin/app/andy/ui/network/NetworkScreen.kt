@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -147,165 +146,128 @@ internal fun NetworkScreen(
     onRulesChange: (List<ProxyRule>) -> Unit,
     onRulesVisibleChange: (Boolean) -> Unit,
 ) {
-    val proxy = services.proxy
     val scope = rememberCoroutineScope()
+    val state = remember(services.proxy) { NetworkScreenState(services.proxy) }
+    val proxy = state.proxy
     var portText by remember(port) { mutableStateOf(port.toString()) }
-    var status by remember { mutableStateOf("Proxy stopped") }
-    var proxyStatus by remember { mutableStateOf("Proxy stopped") }
-    var engineStatus by remember { mutableStateOf("Checking mitmdump") }
-    var engineReady by remember { mutableStateOf(false) }
-    var caPath by remember { mutableStateOf("") }
-    var proxyHost by remember { mutableStateOf("") }
-    var exchanges by remember { mutableStateOf<List<NetworkExchange>>(emptyList()) }
-    var selectedFlowId by remember { mutableStateOf<String?>(null) }
-    var setupExpanded by remember { mutableStateOf(false) }
-    var setupManuallyToggled by remember { mutableStateOf(false) }
-    var setupDefaultApplied by remember { mutableStateOf(false) }
-    var selectedExpanded by remember { mutableStateOf(true) }
-    var seenFlowIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    val expandedTrafficKeys = remember { mutableStateMapOf<String, Boolean>() }
-    val flashingTrafficKeys = remember { mutableStateMapOf<String, Long>() }
-    var ruleName by remember { mutableStateOf("") }
-    var rulePattern by remember { mutableStateOf("") }
-    var ruleMethod by remember { mutableStateOf("") }
-    var ruleStatus by remember { mutableStateOf("") }
-    var ruleSetHeaders by remember { mutableStateOf("") }
-    var ruleRemoveHeaders by remember { mutableStateOf("") }
-    var ruleBody by remember { mutableStateOf("") }
-    var editingRuleId by remember { mutableStateOf<String?>(null) }
-    val selected = exchanges.firstOrNull { it.flowId == selectedFlowId } ?: exchanges.lastOrNull()
-    var trafficWidth by remember { mutableStateOf(260f) }
-    var statusWidth by remember { mutableStateOf(72f) }
-    var typeWidth by remember { mutableStateOf(150f) }
-    var sizeWidth by remember { mutableStateOf(80f) }
-    var msWidth by remember { mutableStateOf(70f) }
-    var focusedPath by remember { mutableStateOf<String?>(null) }
-    var engineChecked by remember { mutableStateOf(false) }
-    var deviceReadinessChecked by remember { mutableStateOf(false) }
+    val selected = state.exchanges.firstOrNull { it.flowId == state.selectedFlowId } ?: state.exchanges.lastOrNull()
 
     val currentPort = portText.toIntOrNull()?.coerceIn(1, 65535) ?: port
-    val filteredExchanges = remember(exchanges, focusedPath) {
-        if (focusedPath == null) {
-            exchanges
+    val filteredExchanges = remember(state.exchanges, state.focusedPath) {
+        if (state.focusedPath == null) {
+            state.exchanges
         } else {
-            exchanges.filter { exchange ->
-                focusedPath in networkTrafficAncestorKeys(exchange)
+            state.exchanges.filter { exchange ->
+                state.focusedPath in networkTrafficAncestorKeys(exchange)
             }
         }
     }
     val trafficTree = remember(filteredExchanges) { buildNetworkTrafficTree(filteredExchanges) }
-    val visibleTrafficRows = remember(trafficTree, expandedTrafficKeys.toMap()) {
-        flattenNetworkTrafficTree(trafficTree, expandedTrafficKeys)
+    val visibleTrafficRows = remember(trafficTree, state.expandedTrafficKeys.toMap()) {
+        flattenNetworkTrafficTree(trafficTree, state.expandedTrafficKeys)
     }
-    var caInstalled by remember { mutableStateOf(false) }
-    var proxyConfigured by remember { mutableStateOf(false) }
-    var routeDiagnostics by remember { mutableStateOf<NetworkRouteDiagnostics?>(null) }
-    var userCaVerifiedByTrafficForDevice by remember { mutableStateOf(false) }
-    var proxyTrafficObservedForDevice by remember { mutableStateOf(false) }
-    var trafficEvidenceSerial by remember { mutableStateOf<String?>(null) }
-    var flowIdsAtSerialChange by remember { mutableStateOf(emptySet<String>()) }
     val latestRules by rememberUpdatedState(rules)
 
     LaunchedEffect(Unit) {
-        caPath = proxy.certificateAuthorityPath()
+        state.caPath = proxy.certificateAuthorityPath()
         val engine = proxy.detectMitmproxy()
-        engineReady = engine.isSuccess
-        engineStatus = if (engine.isSuccess) {
+        state.engineReady = engine.isSuccess
+        state.engineStatus = if (engine.isSuccess) {
             "mitmdump: ${engine.stdout.ifBlank { "ready" }}"
         } else {
             engine.stderr
         }
-        engineChecked = true
+        state.engineChecked = true
     }
-    LaunchedEffect(engineReady, currentPort) {
-        if (!engineReady) return@LaunchedEffect
+    LaunchedEffect(state.engineReady, currentPort) {
+        if (!state.engineReady) return@LaunchedEffect
         val currentStatus = try {
             withTimeout(200) { proxy.status.first() }
         } catch (_: Exception) {
-            proxyStatus
+            state.proxyStatus
         }
         if (shouldAutoStartProxy(currentStatus, currentPort)) {
             proxy.ensureCertificateAuthority()
             val result = proxy.start(currentPort, latestRules)
             val message = if (result.isSuccess) result.stdout else result.stderr
-            status = message
-            if (result.isSuccess) proxyStatus = message
+            state.status = message
+            if (result.isSuccess) state.proxyStatus = message
         }
     }
     LaunchedEffect(Unit) {
-        proxy.exchanges.collectLatest { exchanges = it }
+        proxy.exchanges.collectLatest { state.exchanges = it }
     }
     LaunchedEffect(Unit) {
         proxy.status.collectLatest {
-            proxyStatus = it
-            status = it
+            state.proxyStatus = it
+            state.status = it
         }
     }
-    LaunchedEffect(serial, exchanges) {
-        if (serial != trafficEvidenceSerial) {
-            trafficEvidenceSerial = serial
-            flowIdsAtSerialChange = exchanges.map { it.flowId }.toSet()
-            userCaVerifiedByTrafficForDevice = false
-            proxyTrafficObservedForDevice = false
+    LaunchedEffect(serial, state.exchanges) {
+        if (serial != state.trafficEvidenceSerial) {
+            state.trafficEvidenceSerial = serial
+            state.flowIdsAtSerialChange = state.exchanges.map { it.flowId }.toSet()
+            state.userCaVerifiedByTrafficForDevice = false
+            state.proxyTrafficObservedForDevice = false
         } else {
-            val newExchanges = exchanges.filter { it.flowId !in flowIdsAtSerialChange }
-            if (newExchanges.isNotEmpty()) proxyTrafficObservedForDevice = true
+            val newExchanges = state.exchanges.filter { it.flowId !in state.flowIdsAtSerialChange }
+            if (newExchanges.isNotEmpty()) state.proxyTrafficObservedForDevice = true
             if (newExchanges.any { it.tlsStatus == "tls" && it.error == null }) {
-                userCaVerifiedByTrafficForDevice = true
+                state.userCaVerifiedByTrafficForDevice = true
             }
         }
     }
     LaunchedEffect(serial, currentPort) {
         if (serial == null) {
-            caInstalled = false
-            proxyConfigured = false
-            routeDiagnostics = null
-            deviceReadinessChecked = true
+            state.caInstalled = false
+            state.proxyConfigured = false
+            state.routeDiagnostics = null
+            state.deviceReadinessChecked = true
             return@LaunchedEffect
         }
-        deviceReadinessChecked = false
+        state.deviceReadinessChecked = false
         while (true) {
             val isCaOk = proxy.isCertificateInstalled(serial)
             val host = proxy.resolveDeviceProxyHost(serial)
             val isProxyOk = proxy.isDeviceProxyConfigured(serial, host, currentPort)
             val route = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
-            caInstalled = isCaOk
-            proxyConfigured = isProxyOk
-            routeDiagnostics = route
-            deviceReadinessChecked = true
+            state.caInstalled = isCaOk
+            state.proxyConfigured = isProxyOk
+            state.routeDiagnostics = route
+            state.deviceReadinessChecked = true
             delay(3000)
         }
     }
     LaunchedEffect(
-        engineChecked,
-        deviceReadinessChecked,
+        state.engineChecked,
+        state.deviceReadinessChecked,
         sdk.hasAdb,
-        engineReady,
-        proxyStatus,
+        state.engineReady,
+        state.proxyStatus,
         serial,
-        caInstalled,
-        proxyTrafficObservedForDevice,
-        proxyConfigured,
-        routeDiagnostics,
+        state.caInstalled,
+        state.proxyTrafficObservedForDevice,
+        state.proxyConfigured,
+        state.routeDiagnostics,
     ) {
-        if (setupDefaultApplied || setupManuallyToggled || !engineChecked || !deviceReadinessChecked) return@LaunchedEffect
+        if (state.setupDefaultApplied || state.setupManuallyToggled || !state.engineChecked || !state.deviceReadinessChecked) return@LaunchedEffect
         val redCount = listOf(
             sdk.hasAdb,
             true,
-            engineReady,
-            proxyStatus.contains("listening on"),
-            serial != null && (caInstalled || proxyTrafficObservedForDevice),
-            serial != null && proxyConfigured,
-            serial != null && routeDiagnostics?.vpnActive != true && routeDiagnostics?.routeUsesVpn != true,
+            state.engineReady,
+            state.proxyStatus.contains("listening on"),
+            serial != null && (state.caInstalled || state.proxyTrafficObservedForDevice),
+            serial != null && state.proxyConfigured,
+            serial != null && state.routeDiagnostics?.vpnActive != true && state.routeDiagnostics?.routeUsesVpn != true,
         ).count { !it }
-        setupExpanded = redCount > 2
-        setupDefaultApplied = true
+        state.setupExpanded = redCount > 2
+        state.setupDefaultApplied = true
     }
     LaunchedEffect(serial) {
-        proxyHost = serial?.let { selectedSerial ->
+        state.proxyHost = serial?.let { selectedSerial ->
             val activation = proxy.activatePersistedCertificateAuthority(selectedSerial)
             if (activation.isSuccess && activation.stdout.isNotBlank()) {
-                status = activation.stdout
+                state.status = activation.stdout
             }
             proxy.resolveDeviceProxyHost(selectedSerial)
         }.orEmpty()
@@ -313,24 +275,24 @@ internal fun NetworkScreen(
     LaunchedEffect(rules) {
         proxy.updateRules(rules)
     }
-    LaunchedEffect(exchanges.map { it.flowId }) {
-        val currentIds = exchanges.map { it.flowId }.toSet()
-        val added = exchanges.filter { it.flowId !in seenFlowIds }
-        if (seenFlowIds.isNotEmpty() && added.isNotEmpty()) {
+    LaunchedEffect(state.exchanges.map { it.flowId }) {
+        val currentIds = state.exchanges.map { it.flowId }.toSet()
+        val added = state.exchanges.filter { it.flowId !in state.seenFlowIds }
+        if (state.seenFlowIds.isNotEmpty() && added.isNotEmpty()) {
             added.flatMap(::networkTrafficAncestorKeys).distinct().forEach { key ->
-                if (expandedTrafficKeys[key] != true && key !in flashingTrafficKeys) {
+                if (state.expandedTrafficKeys[key] != true && key !in state.flashingTrafficKeys) {
                     val flashToken = System.nanoTime()
-                    flashingTrafficKeys[key] = flashToken
+                    state.flashingTrafficKeys[key] = flashToken
                     scope.launch {
                         delay(280)
-                        if (flashingTrafficKeys[key] == flashToken) {
-                            flashingTrafficKeys.remove(key)
+                        if (state.flashingTrafficKeys[key] == flashToken) {
+                            state.flashingTrafficKeys.remove(key)
                         }
                     }
                 }
             }
         }
-        seenFlowIds = currentIds
+        state.seenFlowIds = currentIds
     }
 
     fun persistPort() {
@@ -338,34 +300,27 @@ internal fun NetworkScreen(
     }
 
     fun resetRuleForm() {
-        ruleName = ""
-        rulePattern = ""
-        ruleMethod = ""
-        ruleStatus = ""
-        ruleSetHeaders = ""
-        ruleRemoveHeaders = ""
-        ruleBody = ""
-        editingRuleId = null
+        state.clearRuleEditor()
     }
 
     fun addOrSaveRule() {
-        val pattern = rulePattern.trim()
+        val pattern = state.rulePattern.trim()
         if (pattern.isBlank()) {
-            status = "Enter a URL match pattern before adding a rule"
+            state.status = "Enter a URL match pattern before adding a rule"
             return
         }
-        val editId = editingRuleId
+        val editId = state.editingRuleId
         val editIdx = editId?.let { id -> rules.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
         val rule = ProxyRule(
             id = editId ?: "rule-${rules.size + 1}-${pattern.hashCode().toString().replace("-", "n")}",
-            name = ruleName.ifBlank { pattern },
+            name = state.ruleName.ifBlank { pattern },
             enabled = editIdx?.let { rules[it].enabled } ?: true,
             urlPattern = pattern,
-            method = ruleMethod.trim().uppercase().ifBlank { null },
-            statusCode = ruleStatus.toIntOrNull(),
-            setHeaders = parseHeaderLines(ruleSetHeaders),
-            removeHeaders = ruleRemoveHeaders.split(',', '\n').map { it.trim() }.filter { it.isNotBlank() },
-            responseBody = ruleBody.takeIf { it.isNotBlank() },
+            method = state.ruleMethod.trim().uppercase().ifBlank { null },
+            statusCode = state.ruleStatus.toIntOrNull(),
+            setHeaders = parseHeaderLines(state.ruleSetHeaders),
+            removeHeaders = state.ruleRemoveHeaders.split(',', '\n').map { it.trim() }.filter { it.isNotBlank() },
+            responseBody = state.ruleBody.takeIf { it.isNotBlank() },
         )
         if (editIdx != null) {
             onRulesChange(rules.mapIndexed { i, existing -> if (i == editIdx) rule else existing })
@@ -378,23 +333,25 @@ internal fun NetworkScreen(
     fun clearCapturedTraffic() {
         scope.launch {
             val result = proxy.clearTraffic()
-            selectedFlowId = null
-            seenFlowIds = emptySet()
-            flashingTrafficKeys.clear()
-            status = if (result.isSuccess) result.stdout else result.stderr
+            state.selectedFlowId = null
+            state.seenFlowIds = emptySet()
+            state.flashingTrafficKeys.clear()
+            state.status = if (result.isSuccess) result.stdout else result.stderr
         }
     }
 
     fun editRule(ruleId: String) {
         val rule = rules.firstOrNull { it.id == ruleId } ?: return
-        ruleName = rule.name
-        rulePattern = rule.urlPattern
-        ruleMethod = rule.method ?: ""
-        ruleStatus = rule.statusCode?.toString() ?: ""
-        ruleSetHeaders = rule.setHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
-        ruleRemoveHeaders = rule.removeHeaders.joinToString("\n")
-        ruleBody = rule.responseBody ?: ""
-        editingRuleId = rule.id
+        state.loadRuleEditor(
+            name = rule.name,
+            pattern = rule.urlPattern,
+            method = rule.method ?: "",
+            statusCode = rule.statusCode?.toString() ?: "",
+            setHeaders = rule.setHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" },
+            removeHeaders = rule.removeHeaders.joinToString("\n"),
+            body = rule.responseBody ?: "",
+            ruleId = rule.id,
+        )
         onRulesVisibleChange(true)
     }
 
@@ -434,50 +391,50 @@ internal fun NetworkScreen(
                             proxy.ensureCertificateAuthority()
                             val result = proxy.start(currentPort, rules)
                             val message = if (result.isSuccess) result.stdout else result.stderr
-                            status = message
-                            if (result.isSuccess) proxyStatus = message
+                            state.status = message
+                            if (result.isSuccess) state.proxyStatus = message
                         }
                     }) { Text("Start") }
                     OutlinedButton(onClick = {
                         scope.launch {
                             val result = proxy.stop()
-                            status = result.stdout
-                            proxyStatus = result.stdout
+                            state.status = result.stdout
+                            state.proxyStatus = result.stdout
                         }
                     }) { Text("Stop") }
                     OutlinedButton(onClick = ::clearCapturedTraffic) { Text("Clear traffic") }
                     Text(
-                        if (setupExpanded) "Hide setup" else "Show setup",
+                        if (state.setupExpanded) "Hide setup" else "Show setup",
                         color = Rust,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.clickable {
-                            setupManuallyToggled = true
-                            setupExpanded = !setupExpanded
+                            state.setupManuallyToggled = true
+                            state.setupExpanded = !state.setupExpanded
                         },
                     )
                 }
-                val proxyStarted = proxyStatus.contains("listening on")
+                val proxyStarted = state.proxyStatus.contains("listening on")
                 val caText = when {
                     serial == null -> "Select a device first"
-                    caInstalled -> "System CA installed"
-                    userCaVerifiedByTrafficForDevice -> "User CA verified by HTTPS traffic"
-                    proxyTrafficObservedForDevice -> "Traffic observed"
+                    state.caInstalled -> "System CA installed"
+                    state.userCaVerifiedByTrafficForDevice -> "User CA verified by HTTPS traffic"
+                    state.proxyTrafficObservedForDevice -> "Traffic observed"
                     else -> "Use System CA or Prepare phone CA"
                 }
                 val configText = when {
                     serial == null -> "Select a device first"
-                    proxyConfigured -> "Device is routed"
+                    state.proxyConfigured -> "Device is routed"
                     else -> "Click 'Configure' to route"
                 }
                 val routeText = when {
                     serial == null -> "Select a device first"
-                    routeDiagnostics == null -> "Checking route"
-                    routeDiagnostics?.hostProxyActive == true && routeDiagnostics?.hostUpstreamProxy != null -> "Mac proxy chained"
-                    routeDiagnostics?.hostProxyActive == true -> "Mac proxy active"
-                    routeDiagnostics?.vpnActive == true -> "VPN active (may cause issues)"
-                    routeDiagnostics?.routeUsesVpn == true -> "Proxy route uses VPN"
-                    routeDiagnostics?.proxyConfigured == false -> "Proxy route needs repair"
+                    state.routeDiagnostics == null -> "Checking route"
+                    state.routeDiagnostics?.hostProxyActive == true && state.routeDiagnostics?.hostUpstreamProxy != null -> "Mac proxy chained"
+                    state.routeDiagnostics?.hostProxyActive == true -> "Mac proxy active"
+                    state.routeDiagnostics?.vpnActive == true -> "VPN active (may cause issues)"
+                    state.routeDiagnostics?.routeUsesVpn == true -> "Proxy route uses VPN"
+                    state.routeDiagnostics?.proxyConfigured == false -> "Proxy route needs repair"
                     else -> "No VPN route issue detected"
                 }
                 val setupRequirements = listOf(
@@ -495,8 +452,8 @@ internal fun NetworkScreen(
                     ),
                     SetupRequirement(
                         label = "mitmproxy",
-                        ok = engineReady,
-                        readyText = engineStatus,
+                        ok = state.engineReady,
+                        readyText = state.engineStatus,
                         missingText = "Required for Network capture and rewrite rules",
                         installCommand = "brew install mitmproxy",
                     ),
@@ -510,28 +467,28 @@ internal fun NetworkScreen(
                     ),
                     SetupRequirement(
                         label = "CA Trust",
-                        ok = serial != null && (caInstalled || proxyTrafficObservedForDevice),
+                        ok = serial != null && (state.caInstalled || state.proxyTrafficObservedForDevice),
                         readyText = caText,
                         missingText = caText,
                     ),
                     SetupRequirement(
                         label = "Device Proxy Routing",
-                        ok = serial != null && proxyConfigured,
+                        ok = serial != null && state.proxyConfigured,
                         readyText = configText,
                         missingText = configText,
                     ),
                     SetupRequirement(
                         label = "VPN / Route",
                         ok = serial != null &&
-                            routeDiagnostics?.vpnActive != true &&
-                            routeDiagnostics?.routeUsesVpn != true &&
-                            routeDiagnostics?.hostProxyBypassLooksSafe != false,
+                            state.routeDiagnostics?.vpnActive != true &&
+                            state.routeDiagnostics?.routeUsesVpn != true &&
+                            state.routeDiagnostics?.hostProxyBypassLooksSafe != false,
                         readyText = routeText,
                         missingText = routeText,
                     ),
                 )
-                val showRouteWarning = routeDiagnostics?.hasBlockingIssue == true && proxyStarted && !proxyTrafficObservedForDevice
-                AnimatedVisibility(setupExpanded) {
+                val showRouteWarning = state.routeDiagnostics?.hasBlockingIssue == true && proxyStarted && !state.proxyTrafficObservedForDevice
+                AnimatedVisibility(state.setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -543,11 +500,11 @@ internal fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val host = proxy.resolveDeviceProxyHost(serial)
-                                        proxyHost = host
+                                        state.proxyHost = host
                                         val result = proxy.configureDeviceProxy(serial, host, currentPort)
-                                        status = if (result.isSuccess) result.stdout else result.stderr
-                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                                        routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
+                                        state.status = if (result.isSuccess) result.stdout else result.stderr
+                                        state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                        state.routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
                                     }
                                 },
                             ) { Text("Configure device proxy") }
@@ -556,13 +513,13 @@ internal fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val host = proxy.resolveDeviceProxyHost(serial)
-                                        proxyHost = host
+                                        state.proxyHost = host
                                         val configured = proxy.configureDeviceProxy(serial, host, currentPort)
                                         val route = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
-                                        routeDiagnostics = route
-                                        proxyConfigured = route.proxyConfigured
+                                        state.routeDiagnostics = route
+                                        state.proxyConfigured = route.proxyConfigured
                                         val restart = if (route.hostProxyActive) proxy.start(currentPort, rules) else null
-                                        status = if (route.vpnActive) {
+                                        state.status = if (route.vpnActive) {
                                             "Proxy route repaired, but VPN is still active. Open VPN settings and disable or split-tunnel the test app."
                                         } else if (restart?.isSuccess == true) {
                                             "Proxy route repaired; Andy restarted mitmproxy through the Mac proxy."
@@ -579,7 +536,7 @@ internal fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val result = proxy.openVpnSettings(serial)
-                                        status = if (result.isSuccess) "Opened Android VPN settings" else result.stderr
+                                        state.status = if (result.isSuccess) "Opened Android VPN settings" else result.stderr
                                     }
                                 },
                             ) { Text("Open VPN settings") }
@@ -588,9 +545,9 @@ internal fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val result = proxy.clearDeviceProxy(serial)
-                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                        state.status = if (result.isSuccess) result.stdout else result.stderr
                                         val host = proxy.resolveDeviceProxyHost(serial)
-                                        proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                        state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                                     }
                                 },
                             ) { Text("Clear proxy") }
@@ -599,8 +556,8 @@ internal fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val result = proxy.installSystemCertificateAuthority(serial)
-                                        status = if (result.isSuccess) result.stdout else result.stderr
-                                        caInstalled = proxy.isCertificateInstalled(serial)
+                                        state.status = if (result.isSuccess) result.stdout else result.stderr
+                                        state.caInstalled = proxy.isCertificateInstalled(serial)
                                     }
                                 },
                             ) { Text("System CA (root)") }
@@ -610,7 +567,7 @@ internal fun NetworkScreen(
                                     if (serial != null) scope.launch {
                                         proxy.ensureCertificateAuthority()
                                         val result = proxy.prepareUserCertificateInstall(serial)
-                                        status = if (result.isSuccess) result.stdout else result.stderr
+                                        state.status = if (result.isSuccess) result.stdout else result.stderr
                                     }
                                 },
                             ) { Text("Prepare phone CA") }
@@ -618,17 +575,17 @@ internal fun NetworkScreen(
                         SetupChecklist(setupRequirements)
                         SetupChecklist(networkStatusRequirements)
                         AnimatedVisibility(showRouteWarning) {
-                            NetworkRouteWarningCard(routeDiagnostics)
+                            NetworkRouteWarningCard(state.routeDiagnostics)
                         }
-                        Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(state.status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            StatusTag(if (engineReady) "mitmproxy ready" else "mitmproxy missing", if (engineReady) Green else Red)
+                            StatusTag(if (state.engineReady) "mitmproxy ready" else "mitmproxy missing", if (state.engineReady) Green else Red)
                             Text(
                                 text = buildString {
-                                    append(engineStatus)
+                                    append(state.engineStatus)
                                     append("  ·  ")
                                     append("Endpoint: ")
-                                    append(proxyHost.ifBlank { "select device" })
+                                    append(state.proxyHost.ifBlank { "select device" })
                                     append(":")
                                     append(currentPort)
                                 },
@@ -642,11 +599,11 @@ internal fun NetworkScreen(
                         }
                         InstallStepsCard(
                             title = "Host prerequisites",
-                            steps = hostSetupSteps(engineReady),
+                            steps = hostSetupSteps(state.engineReady),
                         )
-                        Text("CA: ${caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("CA: ${state.caPath.ifBlank { "~/.andy/proxy/mitmproxy-ca-cert.cer" }}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         ManualCertificateSetupCard(
-                            steps = manualCertificateSteps(caPath, proxyHost, currentPort),
+                            steps = manualCertificateSteps(state.caPath, state.proxyHost, currentPort),
                         )
                         Text(
                             "Capture scope: physical devices can trust Andy as a user CA only after manual approval, and only debug apps that opt into user CAs will decrypt. Chrome and many third-party apps need system trust on a rooted device or rootable non-Play emulator; pinned apps, QUIC/HTTP3, private DNS, and direct UDP will not appear in v1.",
@@ -669,7 +626,7 @@ internal fun NetworkScreen(
                     }
                 }
             }
-            if (focusedPath != null) {
+            if (state.focusedPath != null) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -687,7 +644,7 @@ internal fun NetworkScreen(
                                 .background(AndyColors.Orange, RoundedCornerShape(AndyRadius.Pill))
                         )
                         Text(
-                            text = "Focus mode: showing only ${focusedPath?.removePrefix("base:")}",
+                            text = "Focus mode: showing only ${state.focusedPath?.removePrefix("base:")}",
                             color = AndyColors.Neutral100,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
@@ -700,48 +657,48 @@ internal fun NetworkScreen(
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier
-                            .clickable { focusedPath = null }
+                            .clickable { state.focusedPath = null }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
             Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                HeaderCell("TRAFFIC", trafficWidth.dp) { trafficWidth = it.coerceIn(120f, 600f) }
-                HeaderCell("STATUS", statusWidth.dp) { statusWidth = it.coerceIn(50f, 150f) }
-                HeaderCell("TYPE", typeWidth.dp) { typeWidth = it.coerceIn(80f, 250f) }
-                HeaderCell("SIZE", sizeWidth.dp) { sizeWidth = it.coerceIn(50f, 150f) }
-                HeaderCell("MS", msWidth.dp) { msWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("TRAFFIC", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(120f, 600f) }
+                HeaderCell("STATUS", state.statusWidth.dp) { state.statusWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("TYPE", state.typeWidth.dp) { state.typeWidth = it.coerceIn(80f, 250f) }
+                HeaderCell("SIZE", state.sizeWidth.dp) { state.sizeWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("MS", state.msWidth.dp) { state.msWidth = it.coerceIn(50f, 150f) }
                 Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
             }
             LazyColumn(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 520.dp)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
                     NetworkTrafficRowItem(
                         row = row,
-                        expanded = expandedTrafficKeys[row.key] == true,
-                        flashing = row.key in flashingTrafficKeys,
-                        trafficWidth = trafficWidth,
-                        statusWidth = statusWidth,
-                        typeWidth = typeWidth,
-                        sizeWidth = sizeWidth,
-                        msWidth = msWidth,
+                        expanded = state.expandedTrafficKeys[row.key] == true,
+                        flashing = row.key in state.flashingTrafficKeys,
+                        trafficWidth = state.trafficWidth,
+                        statusWidth = state.statusWidth,
+                        typeWidth = state.typeWidth,
+                        sizeWidth = state.sizeWidth,
+                        msWidth = state.msWidth,
                         onToggle = {
                             if (row.hasChildren) {
-                                expandedTrafficKeys[row.key] = expandedTrafficKeys[row.key] != true
-                                flashingTrafficKeys.remove(row.key)
+                                state.expandedTrafficKeys[row.key] = state.expandedTrafficKeys[row.key] != true
+                                state.flashingTrafficKeys.remove(row.key)
                             }
                         },
                         onSelect = { exchange ->
-                            selectedFlowId = exchange.flowId
+                            state.selectedFlowId = exchange.flowId
                         },
                         onFocus = { path ->
-                            focusedPath = path
+                            state.focusedPath = path
                         },
                         onAddRule = { exchange ->
                             val pathSegment = exchange.url.substringAfterLast("/").substringBefore("?")
-                            ruleName = if (pathSegment.isNotBlank()) "Mock $pathSegment" else "Mock response"
-                            rulePattern = exchange.url
-                            ruleMethod = exchange.method
-                            ruleStatus = exchange.statusCode?.toString() ?: "200"
+                            state.ruleName = if (pathSegment.isNotBlank()) "Mock $pathSegment" else "Mock response"
+                            state.rulePattern = exchange.url
+                            state.ruleMethod = exchange.method
+                            state.ruleStatus = exchange.statusCode?.toString() ?: "200"
                             val excludedHeaders = setOf(
                                 "content-length",
                                 "content-encoding",
@@ -754,11 +711,11 @@ internal fun NetworkScreen(
                                 "content-range",
                                 "age"
                             )
-                            ruleSetHeaders = exchange.responseHeaders.entries
+                            state.ruleSetHeaders = exchange.responseHeaders.entries
                                 .filter { it.key.lowercase() !in excludedHeaders }
                                 .joinToString("\n") { "${it.key}: ${it.value}" }
-                            ruleRemoveHeaders = ""
-                            ruleBody = exchange.responseBodyPreview ?: ""
+                            state.ruleRemoveHeaders = ""
+                            state.ruleBody = exchange.responseBodyPreview ?: ""
                             onRulesVisibleChange(true)
                         }
                     )
@@ -772,9 +729,9 @@ internal fun NetworkScreen(
             }
             SelectedFlowPanel(
                 selected = selected,
-                expanded = selectedExpanded,
-                onToggle = { selectedExpanded = !selectedExpanded },
-                modifier = Modifier.fillMaxWidth().then(if (selectedExpanded) Modifier.height(340.dp) else Modifier.heightIn(min = 54.dp)),
+                expanded = state.selectedExpanded,
+                onToggle = { state.selectedExpanded = !state.selectedExpanded },
+                modifier = Modifier.fillMaxWidth().then(if (state.selectedExpanded) Modifier.height(340.dp) else Modifier.heightIn(min = 54.dp)),
             )
         }
         if (rulesVisible || liveVisible) {
@@ -792,23 +749,23 @@ internal fun NetworkScreen(
                     )
                     RulesPaneContent(
                         rules = rules,
-                        ruleName = ruleName,
-                        onRuleNameChange = { ruleName = it },
-                        rulePattern = rulePattern,
-                        onRulePatternChange = { rulePattern = it },
-                        ruleMethod = ruleMethod,
-                        onRuleMethodChange = { ruleMethod = it },
-                        ruleStatus = ruleStatus,
-                        onRuleStatusChange = { ruleStatus = it },
-                        ruleSetHeaders = ruleSetHeaders,
-                        onRuleSetHeadersChange = { ruleSetHeaders = it },
-                        ruleRemoveHeaders = ruleRemoveHeaders,
-                        onRuleRemoveHeadersChange = { ruleRemoveHeaders = it },
-                        ruleBody = ruleBody,
-                        onRuleBodyChange = { ruleBody = it },
+                        ruleName = state.ruleName,
+                        onRuleNameChange = { state.ruleName = it },
+                        rulePattern = state.rulePattern,
+                        onRulePatternChange = { state.rulePattern = it },
+                        ruleMethod = state.ruleMethod,
+                        onRuleMethodChange = { state.ruleMethod = it },
+                        ruleStatus = state.ruleStatus,
+                        onRuleStatusChange = { state.ruleStatus = it },
+                        ruleSetHeaders = state.ruleSetHeaders,
+                        onRuleSetHeadersChange = { state.ruleSetHeaders = it },
+                        ruleRemoveHeaders = state.ruleRemoveHeaders,
+                        onRuleRemoveHeadersChange = { state.ruleRemoveHeaders = it },
+                        ruleBody = state.ruleBody,
+                        onRuleBodyChange = { state.ruleBody = it },
                         onRulesChange = onRulesChange,
                         onAddOrSaveRule = ::addOrSaveRule,
-                        editingRuleId = editingRuleId,
+                        editingRuleId = state.editingRuleId,
                         onEditRule = ::editRule,
                         onCancelEdit = ::resetRuleForm,
                         modifier = Modifier.fillMaxWidth().weight(1f)
@@ -823,23 +780,23 @@ internal fun NetworkScreen(
                 } else if (rulesVisible) {
                     RulesPaneContent(
                         rules = rules,
-                        ruleName = ruleName,
-                        onRuleNameChange = { ruleName = it },
-                        rulePattern = rulePattern,
-                        onRulePatternChange = { rulePattern = it },
-                        ruleMethod = ruleMethod,
-                        onRuleMethodChange = { ruleMethod = it },
-                        ruleStatus = ruleStatus,
-                        onRuleStatusChange = { ruleStatus = it },
-                        ruleSetHeaders = ruleSetHeaders,
-                        onRuleSetHeadersChange = { ruleSetHeaders = it },
-                        ruleRemoveHeaders = ruleRemoveHeaders,
-                        onRuleRemoveHeadersChange = { ruleRemoveHeaders = it },
-                        ruleBody = ruleBody,
-                        onRuleBodyChange = { ruleBody = it },
+                        ruleName = state.ruleName,
+                        onRuleNameChange = { state.ruleName = it },
+                        rulePattern = state.rulePattern,
+                        onRulePatternChange = { state.rulePattern = it },
+                        ruleMethod = state.ruleMethod,
+                        onRuleMethodChange = { state.ruleMethod = it },
+                        ruleStatus = state.ruleStatus,
+                        onRuleStatusChange = { state.ruleStatus = it },
+                        ruleSetHeaders = state.ruleSetHeaders,
+                        onRuleSetHeadersChange = { state.ruleSetHeaders = it },
+                        ruleRemoveHeaders = state.ruleRemoveHeaders,
+                        onRuleRemoveHeadersChange = { state.ruleRemoveHeaders = it },
+                        ruleBody = state.ruleBody,
+                        onRuleBodyChange = { state.ruleBody = it },
                         onRulesChange = onRulesChange,
                         onAddOrSaveRule = ::addOrSaveRule,
-                        editingRuleId = editingRuleId,
+                        editingRuleId = state.editingRuleId,
                         onEditRule = ::editRule,
                         onCancelEdit = ::resetRuleForm,
                         modifier = Modifier.fillMaxWidth().weight(1f)
