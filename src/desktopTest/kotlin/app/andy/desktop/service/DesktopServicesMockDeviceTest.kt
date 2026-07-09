@@ -481,4 +481,22 @@ class DesktopServicesMockDeviceTest {
         assertEquals("emulator-5554 ready", accessibility.children.single().text)
         assertTrue(env.ran("uiautomator", "dump", "/sdcard/window_dump.xml"))
     }
+
+    @Test
+    fun proxyWifiRestartFallsBackToSettingsWifiStatus() = runBlocking {
+        val env = MockAndroidDeviceEnvironment().apply {
+            wifiStatusCommandSupported = false
+        }
+        val services = env.services()
+
+        val configured = services.proxy.configureDeviceProxy("emulator-5554", "10.0.2.2", 8888)
+        val cleared = services.proxy.clearDeviceProxy("emulator-5554")
+
+        assertTrue(configured.isSuccess)
+        assertTrue(cleared.isSuccess)
+        assertTrue(env.commands.any { command -> command.takeLast(4) == listOf("shell", "cmd", "wifi", "status") })
+        assertTrue(env.commands.any { command -> command.takeLast(5) == listOf("shell", "settings", "get", "global", "wifi_on") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "disabled") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "enabled") })
+    }
 }

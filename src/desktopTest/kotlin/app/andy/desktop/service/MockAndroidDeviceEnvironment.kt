@@ -34,6 +34,7 @@ internal class MockAndroidDeviceEnvironment {
     var chromeFlagsResult: CommandResult = CommandResult.success()
     var remountResult: CommandResult = CommandResult.success("remount succeeded")
     var wifiEnabled: Boolean = true
+    var wifiStatusCommandSupported: Boolean = true
     var persistedCaInstalled: Boolean = false
     var keepStoppedEmulatorInAdbAsOffline: Boolean = false
     var httpProxyValue: String = "10.0.2.2:8888"
@@ -204,7 +205,11 @@ internal class MockAndroidDeviceEnvironment {
             return CommandResult.success(routeToProxyOutput)
         }
         if (shell == listOf("cmd", "wifi", "status")) {
+            if (!wifiStatusCommandSupported) return CommandResult.failure("Unknown command: status")
             return CommandResult.success(if (wifiEnabled) "Wifi is enabled\nWifi is connected to \"AndroidWifi\"" else "Wifi is disabled")
+        }
+        if (shell == listOf("settings", "get", "global", "wifi_on")) {
+            return CommandResult.success(if (wifiEnabled) "1" else "0")
         }
         if (shell == listOf("cmd", "wifi", "set-wifi-enabled", "disabled") || shell == listOf("svc", "wifi", "disable")) {
             wifiEnabled = false

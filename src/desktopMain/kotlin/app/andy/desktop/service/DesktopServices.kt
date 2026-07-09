@@ -767,10 +767,13 @@ internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): Int
     val pixels = IntArray(width * height)
     val bytes = rgb.duplicate()
     bytes.position(0)
+    val row = ByteArray(pixels.size * 3)
+    bytes.get(row)
+    var source = 0
     for (index in pixels.indices) {
-        val red = bytes.get().toInt() and 0xff
-        val green = bytes.get().toInt() and 0xff
-        val blue = bytes.get().toInt() and 0xff
+        val red = row[source++].toInt() and 0xff
+        val green = row[source++].toInt() and 0xff
+        val blue = row[source++].toInt() and 0xff
         pixels[index] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
     }
     return pixels
@@ -2886,11 +2889,16 @@ class DesktopProxyService(
 
     private suspend fun readWifiEnabled(adb: String, serial: String): Boolean? {
         val status = runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "status"), 10)
-        if (!status.isSuccess) return null
-        val output = status.stdout.lowercase()
+        val output = if (status.isSuccess) {
+            status.stdout.lowercase()
+        } else {
+            val fallback = runner.run(listOf(adb, "-s", serial, "shell", "settings", "get", "global", "wifi_on"), 10)
+            if (!fallback.isSuccess) return null
+            fallback.stdout.trim()
+        }
         return when {
-            output.contains("wifi is enabled") || output.contains("wi-fi is enabled") -> true
-            output.contains("wifi is disabled") || output.contains("wi-fi is disabled") -> false
+            output.contains("wifi is enabled") || output.contains("wi-fi is enabled") || output == "1" -> true
+            output.contains("wifi is disabled") || output.contains("wi-fi is disabled") || output == "0" -> false
             else -> null
         }
     }
