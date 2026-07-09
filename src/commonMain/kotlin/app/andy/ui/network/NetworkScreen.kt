@@ -51,7 +51,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.DeviceLivePanel
 import app.andy.HeaderCell
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
@@ -69,6 +68,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
+import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
