@@ -9,7 +9,9 @@ import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.LogcatEntry
 import app.andy.model.LogLevel
+import app.andy.model.SdkDiscovery
 import app.andy.service.CommandResult
+import app.andy.service.DeviceService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MirrorEngine
@@ -98,6 +100,22 @@ class DesktopBugServiceTest {
         assertEquals(report.artifacts.single().sizeBytes, decoded.artifacts.single().sizeBytes)
         assertEquals(report.videoFrameTimestampsMillis, decoded.videoFrameTimestampsMillis)
     }
+
+    @Test
+    fun captureRecordsForegroundScreen() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-screen-test").toFile()
+        val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home, FakeForegroundDeviceService())
+
+        service.startCapture("emulator-5554", null)
+        delay(150)
+
+        val report = service.saveBug(BugCaptureDraft("Screen changed"), null)
+
+        val screen = report.actions.firstOrNull { it.kind == "screen" }
+        assertNotNull(screen)
+        assertEquals("Screen MainActivity", screen.label)
+        assertTrue(screen.detail?.contains("com.example.app/com.example.app.MainActivity") == true)
+    }
 }
 
 private class FakeMirrorEngine : MirrorEngine {
@@ -114,4 +132,21 @@ private class FakeLogcatService : LogcatService {
     override fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>> = batches
     override suspend fun snapshot(serial: String, filter: LogcatFilter, limit: Int): List<LogcatEntry> = emptyList()
     override suspend fun clear(serial: String) = Unit
+}
+
+private class FakeForegroundDeviceService : DeviceService {
+    override suspend fun discoverSdk(): SdkDiscovery = SdkDiscovery(null, null, null, null, null)
+    override suspend fun listDevices(): List<AndroidDevice> = emptyList()
+    override suspend fun shell(serial: String, command: List<String>): CommandResult {
+        return when (command) {
+            listOf("dumpsys", "activity", "activities") -> CommandResult.success(
+                "topResumedActivity=ActivityRecord{abc u0 com.example.app/.MainActivity t1}\n" +
+                    "    #0: HomeFragment{abc}\n",
+            )
+            listOf("dumpsys", "window", "windows") -> CommandResult.success(
+                "mCurrentFocus=Window{abc u0 com.example.app/.MainActivity}\n",
+            )
+            else -> CommandResult.success()
+        }
+    }
 }

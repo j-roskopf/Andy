@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import kotlinx.coroutines.flow.Flow
 
 @Composable
 expect fun MirrorVideoSurface(
@@ -13,6 +14,21 @@ expect fun MirrorVideoSurface(
     onInput: (MirrorInput) -> Unit = {},
     onHoverColor: (String) -> Unit = {},
     passThroughInput: Boolean = true,
+    onPickerClick: (String) -> Unit = {},
+    onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
+    onRulerResize: (Float, Float) -> Unit = { _, _ -> },
+    overlay: MirrorOverlay = MirrorOverlay(),
+)
+
+@Composable
+expect fun MirrorVideoSurface(
+    frames: Flow<MirrorFrame>,
+    resetKey: Any? = null,
+    modifier: Modifier = Modifier,
+    onInput: (MirrorInput) -> Unit = {},
+    onHoverColor: (String) -> Unit = {},
+    passThroughInput: Boolean = true,
+    onPickerClick: (String) -> Unit = {},
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
     overlay: MirrorOverlay = MirrorOverlay(),

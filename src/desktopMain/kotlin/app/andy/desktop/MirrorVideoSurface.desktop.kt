@@ -1,6 +1,8 @@
 package app.andy
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
@@ -10,6 +12,8 @@ import app.andy.service.MirrorTouchAction
 import java.awt.Point
 import java.awt.BasicStroke
 import java.awt.Cursor
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
@@ -18,8 +22,13 @@ import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
+import java.awt.geom.Ellipse2D
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 actual fun MirrorVideoSurface(
@@ -28,6 +37,7 @@ actual fun MirrorVideoSurface(
     onInput: (MirrorInput) -> Unit,
     onHoverColor: (String) -> Unit,
     passThroughInput: Boolean,
+    onPickerClick: (String) -> Unit,
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
@@ -41,11 +51,47 @@ actual fun MirrorVideoSurface(
             panel.onInput = onInput
             panel.onHoverColor = onHoverColor
             panel.passThroughInput = passThroughInput
+            panel.onPickerClick = onPickerClick
             panel.onDevicePointClick = onDevicePointClick
             panel.onRulerResize = onRulerResize
             panel.setOverlay(overlay)
         },
     )
+}
+
+@Composable
+actual fun MirrorVideoSurface(
+    frames: Flow<MirrorFrame>,
+    resetKey: Any?,
+    modifier: Modifier,
+    onInput: (MirrorInput) -> Unit,
+    onHoverColor: (String) -> Unit,
+    passThroughInput: Boolean,
+    onPickerClick: (String) -> Unit,
+    onDevicePointClick: (Int, Int) -> Unit,
+    onRulerResize: (Float, Float) -> Unit,
+    overlay: MirrorOverlay,
+) {
+    val panel = remember { MirrorPanel() }
+    SwingPanel(
+        modifier = modifier,
+        background = Color.Black,
+        factory = { panel },
+        update = {
+            panel.onInput = onInput
+            panel.onHoverColor = onHoverColor
+            panel.passThroughInput = passThroughInput
+            panel.onPickerClick = onPickerClick
+            panel.onDevicePointClick = onDevicePointClick
+            panel.onRulerResize = onRulerResize
+            panel.setOverlay(overlay)
+        },
+    )
+    LaunchedEffect(panel, frames, resetKey) {
+        frames.collectLatest { frame ->
+            panel.enqueueFrame(frame)
+        }
+    }
 }
 
 private class MirrorPanel : JPanel() {
@@ -56,6 +102,7 @@ private class MirrorPanel : JPanel() {
     private var overlay: MirrorOverlay = MirrorOverlay()
     var onInput: (MirrorInput) -> Unit = {}
     var onHoverColor: (String) -> Unit = {}
+    var onPickerClick: (String) -> Unit = {}
     var onDevicePointClick: (Int, Int) -> Unit = { _, _ -> }
     var onRulerResize: (Float, Float) -> Unit = { _, _ -> }
     var passThroughInput: Boolean = true
@@ -63,18 +110,47 @@ private class MirrorPanel : JPanel() {
     private var pickerPoint: Point? = null
     private var dragMode = DragMode.None
     private var lastDeviceMoveSentAtNanos = 0L
+    private val frameLock = Any()
+    private var pendingFrame: MirrorFrame? = null
+    private var frameDispatchPending = false
 
     init {
         background = java.awt.Color.BLACK
         preferredSize = Dimension(240, 520)
         isDoubleBuffered = true
+        // Let the panel own keyboard focus so physical keystrokes reach the device,
+        // and keep Tab/Enter for ourselves instead of moving focus within Swing.
+        isFocusable = true
+        focusTraversalKeysEnabled = false
+        addKeyListener(object : KeyAdapter() {
+            override fun keyTyped(event: KeyEvent) {
+                if (!passThroughInput) return
+                val char = event.keyChar
+                // Printable characters are forwarded as text; control keys (Enter,
+                // Backspace, Tab, Esc, Delete) are handled in keyPressed as key events.
+                if (char == KeyEvent.CHAR_UNDEFINED || char.isISOControl()) return
+                onInput(MirrorInput.Text(char.toString()))
+            }
+
+            override fun keyPressed(event: KeyEvent) {
+                if (!passThroughInput) return
+                val androidKeyCode = androidKeyCodeFor(event.keyCode) ?: return
+                onInput(MirrorInput.Key(androidKeyCode))
+                event.consume()
+            }
+        })
         val listener = object : MouseAdapter() {
             override fun mousePressed(event: MouseEvent) {
+                requestFocusInWindow()
                 pressedPoint = event.point
                 mapPoint(event.point)?.let { point ->
                     dragMode = rulerDragMode(event.point)
                     when {
                         dragMode == DragMode.RulerX || dragMode == DragMode.RulerY -> updateRulerDrag(event.point)
+                        overlay.pickerColor != null -> {
+                            dragMode = DragMode.Inspect
+                            updateHoverColor(event.point)?.let(onPickerClick)
+                        }
                         passThroughInput -> {
                             dragMode = DragMode.Device
                             lastDeviceMoveSentAtNanos = 0L
@@ -91,18 +167,23 @@ private class MirrorPanel : JPanel() {
 
             override fun mouseDragged(event: MouseEvent) {
                 updateHoverColor(event.point)
-                mapPoint(event.point)?.let { point ->
-                    when (dragMode) {
-                        DragMode.RulerX, DragMode.RulerY -> updateRulerDrag(event.point)
-                        DragMode.Device -> sendDeviceMove(point)
-                        else -> Unit
-                    }
+                when (dragMode) {
+                    DragMode.RulerX, DragMode.RulerY -> mapPoint(event.point)?.let { updateRulerDrag(event.point) }
+                    // Clamp so a fling that leaves the image edge still carries its
+                    // final velocity to the device instead of being dropped.
+                    DragMode.Device -> mapPoint(event.point, clamp = true)?.let(::sendDeviceMove)
+                    else -> Unit
                 }
             }
 
             override fun mouseReleased(event: MouseEvent) {
-                mapPoint(event.point)?.let { point ->
-                    if (dragMode == DragMode.Device) onInput(MirrorInput.Touch(MirrorTouchAction.Up, point.x, point.y))
+                // Always release a device touch, even when the mouse is let go outside
+                // the image bounds. Skipping the Up here strands a finger "down" on the
+                // emulator (it uses NEVER_EXPIRE), which wedges every later tap.
+                if (dragMode == DragMode.Device) {
+                    mapPoint(event.point, clamp = true)?.let { point ->
+                        onInput(MirrorInput.Touch(MirrorTouchAction.Up, point.x, point.y))
+                    }
                 }
                 pressedPoint = null
                 lastDeviceMoveSentAtNanos = 0L
@@ -117,9 +198,32 @@ private class MirrorPanel : JPanel() {
                     else -> Cursor.getDefaultCursor()
                 }
             }
+
+            override fun mouseExited(event: MouseEvent) {
+                pickerPoint = null
+                repaint()
+            }
         }
         addMouseListener(listener)
         addMouseMotionListener(listener)
+    }
+
+    // Maps AWT key codes for non-text keys to Android key codes (KeyEvent.KEYCODE_*).
+    private fun androidKeyCodeFor(awtKeyCode: Int): Int? = when (awtKeyCode) {
+        KeyEvent.VK_ENTER -> 66
+        KeyEvent.VK_BACK_SPACE -> 67
+        KeyEvent.VK_DELETE -> 112
+        KeyEvent.VK_TAB -> 61
+        KeyEvent.VK_ESCAPE -> 111
+        KeyEvent.VK_UP -> 19
+        KeyEvent.VK_DOWN -> 20
+        KeyEvent.VK_LEFT -> 21
+        KeyEvent.VK_RIGHT -> 22
+        KeyEvent.VK_HOME -> 122
+        KeyEvent.VK_END -> 123
+        KeyEvent.VK_PAGE_UP -> 92
+        KeyEvent.VK_PAGE_DOWN -> 93
+        else -> null
     }
 
     private fun sendDeviceMove(point: DevicePoint) {
@@ -136,8 +240,24 @@ private class MirrorPanel : JPanel() {
             ?: BufferedImage(frame.width, frame.height, BufferedImage.TYPE_INT_ARGB).also {
                 image = it
             }
-        buffered.setRGB(0, 0, frame.width, frame.height, frame.argb, 0, frame.width)
+        val pixels = (buffered.raster.dataBuffer as DataBufferInt).data
+        frame.argb.copyInto(pixels, endIndex = frame.width * frame.height)
         repaint()
+    }
+
+    fun enqueueFrame(frame: MirrorFrame) {
+        synchronized(frameLock) {
+            pendingFrame = frame
+            if (frameDispatchPending) return
+            frameDispatchPending = true
+        }
+        SwingUtilities.invokeLater {
+            val next = synchronized(frameLock) {
+                frameDispatchPending = false
+                pendingFrame.also { pendingFrame = null }
+            }
+            setFrame(next)
+        }
     }
 
     fun setOverlay(next: MirrorOverlay) {
@@ -156,13 +276,16 @@ private class MirrorPanel : JPanel() {
         paintOverlay(g2, frameImage, rect)
     }
 
-    private fun mapPoint(point: Point): DevicePoint? {
+    // When clamp is false, points outside the fitted image return null (used for
+    // hit-testing hover/press). When clamp is true, off-image points are pinned to the
+    // nearest edge so an in-progress drag/release still produces a valid device point.
+    private fun mapPoint(point: Point, clamp: Boolean = false): DevicePoint? {
         val frameImage = image ?: return null
         if (width <= 0 || height <= 0 || frameImage.width <= 0 || frameImage.height <= 0) return null
         val rect = fittedRect(frameImage)
         val localX = point.x - rect.x
         val localY = point.y - rect.y
-        if (localX < 0.0 || localY < 0.0 || localX > rect.width || localY > rect.height) return null
+        if (!clamp && (localX < 0.0 || localY < 0.0 || localX > rect.width || localY > rect.height)) return null
         return DevicePoint(
             x = (localX / rect.scale).roundToInt().coerceIn(0, frameImage.width - 1),
             y = (localY / rect.scale).roundToInt().coerceIn(0, frameImage.height - 1),
@@ -232,8 +355,13 @@ private class MirrorPanel : JPanel() {
             val point = pickerPoint?.takeIf { it.x in rect.x..(rect.x + rect.width) && it.y in rect.y..(rect.y + rect.height) }
             val cx = point?.x ?: (rect.x + rect.width * 7 / 10)
             val cy = point?.y ?: (rect.y + rect.height / 3)
-            g2.color = color.toAwtColor(alphaOverride = 0.38f)
-            g2.fillOval(cx - radius, cy - radius, radius * 2, radius * 2)
+            val mapped = point?.let { mapPoint(it) }
+            if (mapped != null) {
+                drawMagnifier(g2, frameImage, cx, cy, radius, mapped)
+            } else {
+                g2.color = color.toAwtColor(alphaOverride = 0.38f)
+                g2.fillOval(cx - radius, cy - radius, radius * 2, radius * 2)
+            }
             g2.color = java.awt.Color(216, 111, 74)
             g2.stroke = BasicStroke(2f)
             g2.drawOval(cx - radius, cy - radius, radius * 2, radius * 2)
@@ -243,14 +371,74 @@ private class MirrorPanel : JPanel() {
         }
     }
 
-    private fun updateHoverColor(point: Point) {
-        val frameImage = image ?: return
-        val mapped = mapPoint(point) ?: return
+    private fun drawMagnifier(g2: Graphics2D, frameImage: BufferedImage, cx: Int, cy: Int, radius: Int, point: DevicePoint) {
+        val zoom = 5
+        val sourceRadius = (radius / zoom).coerceAtLeast(1)
+        val sourceLeft = (point.x - sourceRadius).coerceAtLeast(0)
+        val sourceTop = (point.y - sourceRadius).coerceAtLeast(0)
+        val sourceRight = (point.x + sourceRadius + 1).coerceAtMost(frameImage.width)
+        val sourceBottom = (point.y + sourceRadius + 1).coerceAtMost(frameImage.height)
+        val destLeft = cx - (point.x - sourceLeft) * zoom - zoom / 2
+        val destTop = cy - (point.y - sourceTop) * zoom - zoom / 2
+        val destRight = destLeft + (sourceRight - sourceLeft) * zoom
+        val destBottom = destTop + (sourceBottom - sourceTop) * zoom
+        val lens = Ellipse2D.Float(
+            (cx - radius).toFloat(),
+            (cy - radius).toFloat(),
+            (radius * 2).toFloat(),
+            (radius * 2).toFloat(),
+        )
+        val lensGraphics = g2.create() as Graphics2D
+        try {
+            lensGraphics.clip = lens
+            lensGraphics.color = java.awt.Color(8, 8, 8)
+            lensGraphics.fill(lens)
+            lensGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+            lensGraphics.drawImage(
+                frameImage,
+                destLeft,
+                destTop,
+                destRight,
+                destBottom,
+                sourceLeft,
+                sourceTop,
+                sourceRight,
+                sourceBottom,
+                null,
+            )
+            lensGraphics.color = java.awt.Color(0, 0, 0, 58)
+            lensGraphics.stroke = BasicStroke(1f)
+            for (x in cx downTo cx - radius step zoom) {
+                lensGraphics.drawLine(x, cy - radius, x, cy + radius)
+            }
+            for (x in cx + zoom..(cx + radius) step zoom) {
+                lensGraphics.drawLine(x, cy - radius, x, cy + radius)
+            }
+            for (y in cy downTo cy - radius step zoom) {
+                lensGraphics.drawLine(cx - radius, y, cx + radius, y)
+            }
+            for (y in cy + zoom..(cy + radius) step zoom) {
+                lensGraphics.drawLine(cx - radius, y, cx + radius, y)
+            }
+        } finally {
+            lensGraphics.dispose()
+        }
+    }
+
+    private fun updateHoverColor(point: Point): String? {
+        val frameImage = image ?: return null
+        val mapped = mapPoint(point) ?: run {
+            pickerPoint = null
+            repaint()
+            return null
+        }
         pickerPoint = point
         val rgb = frameImage.getRGB(mapped.x, mapped.y)
         val color = java.awt.Color(rgb, true)
-        onHoverColor("#%02X%02X%02X".format(color.red, color.green, color.blue))
+        val hex = "#%02X%02X%02X".format(color.red, color.green, color.blue)
+        onHoverColor(hex)
         repaint()
+        return hex
     }
 
     private fun rulerDragMode(point: Point): DragMode {

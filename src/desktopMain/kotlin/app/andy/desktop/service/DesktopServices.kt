@@ -3,6 +3,17 @@ package app.andy.desktop.service
 import app.andy.desktop.parser.AndroidParsers
 import app.andy.model.*
 import app.andy.service.*
+import io.grpc.CallOptions
+import io.grpc.Channel
+import io.grpc.ClientCall
+import io.grpc.ClientInterceptor
+import io.grpc.ClientInterceptors
+import io.grpc.ForwardingClientCall
+import io.grpc.ManagedChannel
+import io.grpc.ManagedChannelBuilder
+import io.grpc.Metadata
+import io.grpc.MethodDescriptor
+import io.grpc.stub.ClientCalls
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,10 +39,18 @@ import org.bytedeco.javacpp.IntPointer
 import org.bytedeco.javacpp.PointerPointer
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.net.Socket
 import java.net.ServerSocket
 import java.net.Inet4Address
@@ -41,6 +60,7 @@ import java.util.concurrent.TimeUnit
 import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 import kotlin.random.Random
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import app.andy.desktop.updates.DesktopAppUpdateService
 import kotlinx.coroutines.CoroutineScope
@@ -91,7 +111,7 @@ fun createDesktopServices(): AndyServices {
         proxy = proxy,
         metrics = DesktopMetricsService(runner, devices),
         accessibility = accessibility,
-        bugs = DesktopBugService(mirror, logcat),
+        bugs = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility),
         artifacts = DesktopArtifactService(runner, devices, mirror),
         workspaceStore = store,
         updates = updates,
@@ -157,21 +177,23 @@ class DesktopDeviceService(
         val adb = sdk.adbPath ?: return emptyList()
         val result = runner.run(listOf(adb, "devices", "-l"))
         if (!result.isSuccess) return emptyList()
-        return AndroidParsers.parseAdbDevices(result.stdout).map { base ->
-            if (base.state != DeviceConnectionState.Online) return@map base
-            val props = getProps(adb, base.serial)
-            val avdName = props["ro.boot.qemu.avd_name"] ?: props["ro.kernel.qemu.avd_name"]
-            base.copy(
-                displayName = if (base.kind == DeviceKind.Emulator) avdName ?: props["ro.product.model"] ?: base.displayName else props["ro.product.model"] ?: base.displayName,
-                apiLevel = props["ro.build.version.sdk"],
-                abi = props["ro.product.cpu.abi"],
-                model = props["ro.product.model"] ?: base.model,
-                product = props["ro.product.name"] ?: base.product,
-                batteryPercent = AndroidParsers.parseBatteryPercent(runner.run(listOf(adb, "-s", base.serial, "shell", "dumpsys", "battery"), 6).stdout),
-                screenSize = AndroidParsers.parseWmSize(runner.run(listOf(adb, "-s", base.serial, "shell", "wm", "size"), 6).stdout),
-                storageSummary = AndroidParsers.parseStorage(runner.run(listOf(adb, "-s", base.serial, "shell", "df", "-h", "/data"), 6).stdout),
-            )
-        }
+        return AndroidParsers.parseAdbDevices(result.stdout)
+            .filterNot { it.kind == DeviceKind.Emulator && it.state == DeviceConnectionState.Offline }
+            .map { base ->
+                if (base.state != DeviceConnectionState.Online) return@map base
+                val props = getProps(adb, base.serial)
+                val avdName = props["ro.boot.qemu.avd_name"] ?: props["ro.kernel.qemu.avd_name"]
+                base.copy(
+                    displayName = if (base.kind == DeviceKind.Emulator) avdName ?: props["ro.product.model"] ?: base.displayName else props["ro.product.model"] ?: base.displayName,
+                    apiLevel = props["ro.build.version.sdk"],
+                    abi = props["ro.product.cpu.abi"],
+                    model = props["ro.product.model"] ?: base.model,
+                    product = props["ro.product.name"] ?: base.product,
+                    batteryPercent = AndroidParsers.parseBatteryPercent(runner.run(listOf(adb, "-s", base.serial, "shell", "dumpsys", "battery"), 6).stdout),
+                    screenSize = AndroidParsers.parseWmSize(runner.run(listOf(adb, "-s", base.serial, "shell", "wm", "size"), 6).stdout),
+                    storageSummary = AndroidParsers.parseStorage(runner.run(listOf(adb, "-s", base.serial, "shell", "df", "-h", "/data"), 6).stdout),
+                )
+            }
     }
 
     override suspend fun shell(serial: String, command: List<String>): CommandResult {
@@ -251,13 +273,11 @@ class DesktopAvdService(
     override suspend fun listVirtualDevices(): List<VirtualDevice> {
         val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
         val avds = AndroidParsers.parseAvdList(runner.run(listOf(avdManager, "list", "avd"), 20).stdout)
-        val running = runningEmulatorNames() + avds.filter { avd ->
-            avd.path?.let { File(it, "hardware-qemu.ini.lock").exists() } == true
-        }.map { it.name }
+        val running = runningEmulatorNames()
         return avds.map { avd ->
             val config = loadAvdConfig(avd).orEmpty()
             avd.copy(
-                running = avd.name in running,
+                running = running.any { namesMatch(it, avd.name) },
                 apiLevel = avd.apiLevel ?: Regex("""android-(\d+)""").find(config["image.sysdir.1"].orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(),
                 deviceType = AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config),
                 config = config,
@@ -311,8 +331,14 @@ class DesktopAvdService(
     private suspend fun launchVirtualDevice(name: String, extraArgs: List<String> = emptyList()): CommandResult {
         val emulator = locator.discover(preferredSdkPath()).emulatorPath ?: return CommandResult.failure("emulator not found")
         return withContext(Dispatchers.IO) {
-            ProcessBuilder(listOf(emulator, "-avd", name, "-no-window") + extraArgs + listOf("-no-boot-anim", "-gpu", "swiftshader_indirect", "-writable-system")).start()
-            CommandResult.success("Starting $name headless with writable system")
+            val ports = allocateEmulatorLaunchPorts()
+                ?: return@withContext CommandResult.failure("No free emulator port pair found")
+            val logFile = emulatorLaunchLogFile(name)
+            ProcessBuilder(emulatorStudioStyleLaunchCommand(emulator, name, extraArgs, ports))
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+                .start()
+            CommandResult.success("Starting $name with hidden emulator window and local gRPC control on ${ports.grpc}")
         }
     }
 
@@ -326,11 +352,17 @@ class DesktopAvdService(
                 namesMatch(resolveAvdName(adb, device.serial) ?: device.displayName, name)
         } ?: return CommandResult.failure("No running emulator found for $name")
         val result = runner.run(listOf(adb, "-s", emulator.serial, "emu", "kill"), 8)
-        return if (result.isSuccess) {
-            CommandResult.success("Stopped $name (${emulator.serial})")
-        } else {
-            result
+        if (!result.isSuccess) return result
+        // `emu kill` returns as soon as the console accepts it, but the emulator takes
+        // a moment to actually leave `adb devices`. Wait for it to disappear so a caller
+        // that refreshes right after doesn't still report the device as running.
+        repeat(20) {
+            val stillOnline = AndroidParsers.parseAdbDevices(runner.run(listOf(adb, "devices", "-l"), 8).stdout)
+                .any { it.serial == emulator.serial && it.state == DeviceConnectionState.Online }
+            if (!stillOnline) return CommandResult.success("Stopped $name (${emulator.serial})")
+            delay(300)
         }
+        return CommandResult.success("Stopped $name (${emulator.serial})")
     }
 
     override suspend fun deleteVirtualDevice(name: String): CommandResult {
@@ -548,11 +580,12 @@ class DesktopAvdService(
     }
 
     private suspend fun runningEmulatorNames(): Set<String> = withContext(Dispatchers.IO) {
-        File(System.getProperty("user.home"), ".android/avd").listFiles()
-            ?.filter { it.name.endsWith(".avd") && File(it, "hardware-qemu.ini.lock").exists() }
-            ?.map { it.name.removeSuffix(".avd") }
-            ?.toSet()
-            ?: emptySet()
+        val sdk = locator.discover(preferredSdkPath())
+        val adb = sdk.adbPath ?: return@withContext emptySet()
+        AndroidParsers.parseAdbDevices(runner.run(listOf(adb, "devices", "-l"), 8).stdout)
+            .filter { it.kind == DeviceKind.Emulator && it.state == DeviceConnectionState.Online }
+            .mapNotNull { device -> resolveAvdName(adb, device.serial) ?: device.displayName }
+            .toSet()
     }
 
     private suspend fun findRunningEmulatorSerial(name: String): String? {
@@ -647,6 +680,107 @@ class DesktopAvdService(
     private fun normalizeName(value: String): String {
         return value.replace('_', ' ').trim().lowercase()
     }
+
+    private fun allocateEmulatorLaunchPorts(): EmulatorLaunchPorts? {
+        for (console in 5554..5682 step 2) {
+            val adb = console + 1
+            val grpc = console + 3000
+            if (isLocalTcpPortAvailable(console) && isLocalTcpPortAvailable(adb) && isLocalTcpPortAvailable(grpc)) {
+                return EmulatorLaunchPorts(console = console, adb = adb, grpc = grpc)
+            }
+        }
+        return null
+    }
+
+    private fun isLocalTcpPortAvailable(port: Int): Boolean {
+        return runCatching {
+            ServerSocket().use { socket ->
+                socket.reuseAddress = false
+                socket.bind(InetSocketAddress("127.0.0.1", port))
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun emulatorLaunchLogFile(name: String): File {
+        val safeName = name.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+        return File(System.getProperty("user.home"), ".andy/emulator/$safeName.log").also { file ->
+            file.parentFile?.mkdirs()
+        }
+    }
+}
+
+internal data class EmulatorLaunchPorts(
+    val console: Int,
+    val adb: Int,
+    val grpc: Int,
+)
+
+internal fun emulatorStudioStyleLaunchCommand(
+    emulator: String,
+    name: String,
+    extraArgs: List<String> = emptyList(),
+    ports: EmulatorLaunchPorts = EmulatorLaunchPorts(console = 5554, adb = 5555, grpc = 8554),
+): List<String> {
+    return listOf(
+        emulator,
+        "-avd", name,
+        "-qt-hide-window",
+        "-ports", "${ports.console},${ports.adb}",
+        "-grpc", ports.grpc.toString(),
+        "-idle-grpc-timeout", "300",
+    ) + extraArgs + listOf(
+        "-no-boot-anim",
+        "-gpu", "auto",
+        "-writable-system",
+    )
+}
+
+private const val EMULATOR_IMAGE_BYTES_PER_PIXEL = 3
+private const val EMULATOR_DISPLAY_SIZE_SETTLE_NANOS = 60_000_000_000L
+private const val EMULATOR_DISPLAY_SIZE_REFRESH_MIN_NANOS = 1_000_000_000L
+private val EMULATOR_WM_SIZE_REGEX = Regex("""(?:Physical|Override) size:\s*(\d+)x(\d+)""")
+
+internal data class EmulatorDisplaySize(val width: Int, val height: Int)
+internal data class EmulatorTouchPoint(val x: Int, val y: Int)
+
+private fun MirrorInput.usesTouchCoordinates(): Boolean = when (this) {
+    is MirrorInput.Touch,
+    is MirrorInput.Tap,
+    is MirrorInput.Swipe -> true
+    is MirrorInput.Key,
+    is MirrorInput.Text,
+    MirrorInput.Back,
+    MirrorInput.Home,
+    MirrorInput.Recents,
+    MirrorInput.Power -> false
+}
+
+private fun emulatorDisplayAspectDrifted(frame: MirrorFrame, displaySize: EmulatorDisplaySize): Boolean {
+    if (frame.width <= 1 || frame.height <= 1 || displaySize.width <= 0 || displaySize.height <= 0) return false
+    val frameAspect = frame.width.toDouble() / frame.height
+    val displayAspect = displaySize.width.toDouble() / displaySize.height
+    return abs(frameAspect - displayAspect) > 0.03
+}
+
+internal fun scaledEmulatorTouchPoint(
+    x: Int,
+    y: Int,
+    frame: MirrorFrame,
+    displaySize: EmulatorDisplaySize?,
+): EmulatorTouchPoint {
+    val frameWidth = frame.width.coerceAtLeast(1)
+    val frameHeight = frame.height.coerceAtLeast(1)
+    val targetWidth = displaySize?.width ?: frameWidth
+    val targetHeight = displaySize?.height ?: frameHeight
+    return EmulatorTouchPoint(
+        x = (x.coerceIn(0, frameWidth - 1).toLong() * targetWidth / frameWidth)
+            .toInt()
+            .coerceIn(0, targetWidth - 1),
+        y = (y.coerceIn(0, frameHeight - 1).toLong() * targetHeight / frameHeight)
+            .toInt()
+            .coerceIn(0, targetHeight - 1),
+    )
 }
 
 class DesktopMirrorEngine(
@@ -659,9 +793,12 @@ class DesktopMirrorEngine(
     private var videoProcess: Process? = null
     private var controlSocket: Socket? = null
     private var controlOutput: BufferedOutputStream? = null
+    private var emulatorGrpcClient: EmulatorGrpcClient? = null
     private var videoForwardPort: Int? = null
     private var connectedSerial: String? = null
     private var connectedConfig: MirrorVideoConfig? = null
+    private var connectedAtNanos: Long = 0L
+    private var lastEmulatorDisplaySizeRefreshNanos: Long = 0L
     private val controlLock = Any()
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
@@ -671,10 +808,24 @@ class DesktopMirrorEngine(
         disconnect()
         connectedSerial = serial
         connectedConfig = config
+        connectedAtNanos = System.nanoTime()
+        lastEmulatorDisplaySizeRefreshNanos = 0L
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
+        frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
+        if (serial.isEmulatorSerial()) {
+            val grpcPort = serial.emulatorConsolePort()?.plus(3000)
+                ?: return CommandResult.failure("Unable to resolve emulator gRPC port for $serial")
+            val token = readEmulatorGrpcToken(grpcPort)
+            val client = EmulatorGrpcClient("127.0.0.1", grpcPort, token, readEmulatorDisplaySize(adb, serial))
+            emulatorGrpcClient = client
+            status.value = "Starting emulator gRPC mirror for $serial on port $grpcPort"
+            videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                runEmulatorGrpcVideoLoop(adb, serial, client, config)
+            }
+            return CommandResult.success("Emulator gRPC mirror starting for $serial")
+        }
         val scrcpyServer = ScrcpyServerLocator.find()
             ?: return CommandResult.failure("scrcpy-server not found. Andy bundles it for packaged builds; for development, install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
-        frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
         status.value = "Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)"
         videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runNativeVideoLoop(adb, serial, scrcpyServer, config)
@@ -683,14 +834,17 @@ class DesktopMirrorEngine(
     }
 
     override suspend fun disconnect() {
-        videoJob?.cancel()
+        val job = videoJob
         videoJob = null
+        job?.cancel()
         synchronized(controlLock) {
             runCatching { controlOutput?.close() }
             controlOutput = null
             runCatching { controlSocket?.close() }
             controlSocket = null
         }
+        emulatorGrpcClient?.close()
+        emulatorGrpcClient = null
         videoProcess?.destroyForcibly()
         videoProcess = null
         videoForwardPort?.let { port ->
@@ -701,10 +855,33 @@ class DesktopMirrorEngine(
         }
         videoForwardPort = null
         connectedConfig = null
+        connectedAtNanos = 0L
+        lastEmulatorDisplaySizeRefreshNanos = 0L
+        // Wait for the video loop to fully stop before clearing the frame so a late
+        // in-flight frame can't win the race and leave a frozen image on screen.
+        job?.let { runCatching { it.join() } }
+        frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
         status.value = "Disconnected"
     }
 
     override suspend fun sendInput(input: MirrorInput): CommandResult {
+        emulatorGrpcClient?.let { client ->
+            // Run the blocking gRPC touch RPC off the Compose UI dispatcher so dragging
+            // stays as smooth as Android Studio instead of stalling the event thread.
+            withContext(Dispatchers.IO) {
+                val frame = frames.value
+                val serial = connectedSerial
+                val adb = devices.adbPath()
+                val touchInput = input.usesTouchCoordinates()
+                if (serial != null && adb != null && touchInput) {
+                    refreshEmulatorDisplaySizeIfNeeded(client, adb, serial, frame)
+                }
+                if (touchInput && client.displaySize == null) {
+                    return@withContext CommandResult.failure("Waiting for emulator display size before sending touch input")
+                }
+                client.sendInput(input, frame)
+            }?.let { return it }
+        }
         sendScrcpyControl(input)?.let { return it }
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
         val selectedSerial = connectedSerial ?: devices.listDevices().firstOrNull { it.state == DeviceConnectionState.Online }?.serial
@@ -724,6 +901,25 @@ class DesktopMirrorEngine(
             MirrorInput.Power -> listOf(adb, "-s", selectedSerial, "shell", "input", "keyevent", "26")
         }
         return runner.run(command)
+    }
+
+    private suspend fun refreshEmulatorDisplaySizeIfNeeded(
+        client: EmulatorGrpcClient,
+        adb: String,
+        serial: String,
+        frame: MirrorFrame,
+    ) {
+        val now = System.nanoTime()
+        val withinBootSettleWindow = connectedAtNanos > 0L && now - connectedAtNanos < EMULATOR_DISPLAY_SIZE_SETTLE_NANOS
+        val shouldRefresh = client.displaySize == null ||
+            withinBootSettleWindow ||
+            client.displaySize?.let { displaySize -> emulatorDisplayAspectDrifted(frame, displaySize) } == true
+        if (!shouldRefresh) return
+        if (now - lastEmulatorDisplaySizeRefreshNanos < EMULATOR_DISPLAY_SIZE_REFRESH_MIN_NANOS) return
+        lastEmulatorDisplaySizeRefreshNanos = now
+
+        val next = readEmulatorDisplaySize(adb, serial) ?: return
+        client.updateDisplaySize(next)
     }
 
     private fun sendScrcpyControl(input: MirrorInput): CommandResult? {
@@ -750,6 +946,109 @@ class DesktopMirrorEngine(
         val adb = devices.adbPath() ?: return null
         val result = runner.run(listOf(adb, "-s", serial, "exec-out", "screencap", "-p"), 8)
         return result.stdout.encodeToByteArray().takeIf { result.isSuccess }
+    }
+
+    private suspend fun readEmulatorDisplaySize(adb: String, serial: String): EmulatorDisplaySize? {
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 4)
+        if (!result.isSuccess) return null
+        return result.stdout
+            .lineSequence()
+            .mapNotNull { line -> EMULATOR_WM_SIZE_REGEX.find(line)?.destructured }
+            .mapNotNull { (width, height) ->
+                val parsedWidth = width.toIntOrNull()
+                val parsedHeight = height.toIntOrNull()
+                if (parsedWidth != null && parsedHeight != null && parsedWidth > 0 && parsedHeight > 0) {
+                    EmulatorDisplaySize(parsedWidth, parsedHeight)
+                } else {
+                    null
+                }
+            }
+            .firstOrNull()
+    }
+
+    private suspend fun runEmulatorGrpcVideoLoop(adb: String, serial: String, client: EmulatorGrpcClient, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
+        var frameNumber = 0L
+        var fpsWindowStartedAt = System.nanoTime()
+        var fpsWindowFrame = 0L
+        var decodedFps = 0f
+        var mappedFramebuffer: EmulatorMappedFramebuffer? = null
+        try {
+            mappedFramebuffer = if (System.getenv("ANDY_EMULATOR_GRPC_MMAP") != "0") {
+                runCatching { EmulatorMappedFramebuffer.create(config.maxSize) }.getOrNull()
+            } else {
+                null
+            }
+            val transport = if (mappedFramebuffer != null) "MMAP" else "raw"
+            status.value = "Emulator gRPC video connected (${config.maxSize}px $transport RGB stream)"
+            val screenshots = client.streamScreenshots(config.maxSize, mappedFramebuffer?.handle)
+            while (isActive && screenshots.hasNext()) {
+                val image = screenshots.next()
+                if (image.width <= 0 || image.height <= 0) {
+                    continue
+                }
+                val expectedBytes = image.width * image.height * EMULATOR_IMAGE_BYTES_PER_PIXEL
+                val rgb = if (image.pixels.isNotEmpty()) {
+                    ByteBuffer.wrap(image.pixels)
+                } else {
+                    mappedFramebuffer?.frameBytes(expectedBytes)
+                }
+                if (rgb == null || rgb.remaining() < expectedBytes) {
+                    status.value = "Skipping short emulator frame (${rgb?.remaining() ?: 0}/$expectedBytes bytes)"
+                    continue
+                }
+                fpsWindowFrame++
+                val now = System.nanoTime()
+                val elapsedNanos = now - fpsWindowStartedAt
+                if (elapsedNanos >= 1_000_000_000L) {
+                    decodedFps = fpsWindowFrame * 1_000_000_000f / elapsedNanos
+                    fpsWindowFrame = 0
+                    fpsWindowStartedAt = now
+                }
+                frames.value = MirrorFrame(
+                    width = image.width,
+                    height = image.height,
+                    argb = rgbToArgb(image.width, image.height, rgb),
+                    frameNumber = ++frameNumber,
+                    decodedFps = decodedFps.takeIf { it > 0f },
+                )
+            }
+            status.value = "Emulator gRPC video stream ended"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            val reason = error.message ?: error::class.simpleName.orEmpty()
+            status.value = "Emulator gRPC video failed; falling back to scrcpy: $reason"
+            if (emulatorGrpcClient === client) emulatorGrpcClient = null
+            runCatching { client.close() }
+            val scrcpyServer = ScrcpyServerLocator.find()
+            if (scrcpyServer == null) {
+                status.value = "Emulator gRPC video failed and scrcpy-server was not found: $reason"
+                return@withContext
+            }
+            runNativeVideoLoop(adb, serial, scrcpyServer, config)
+        } finally {
+            mappedFramebuffer?.close()
+        }
+    }
+
+    // The emulator gRPC streamScreenshot RGB888 payload is top-down (top-left origin),
+    // matching how Android Studio renders it, so rows are copied in natural order.
+    private fun rgbToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
+        val pixels = IntArray(width * height)
+        val row = ByteArray(width * EMULATOR_IMAGE_BYTES_PER_PIXEL)
+        for (y in 0 until height) {
+            rgb.position(y * row.size)
+            rgb.get(row, 0, row.size)
+            var source = 0
+            var destination = y * width
+            while (source < row.size) {
+                val red = row[source++].toInt() and 0xff
+                val green = row[source++].toInt() and 0xff
+                val blue = row[source++].toInt() and 0xff
+                pixels[destination++] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
+            }
+        }
+        return pixels
     }
 
     private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
@@ -913,6 +1212,8 @@ class DesktopMirrorEngine(
             parser?.let { avcodec.av_parser_close(it) }
             // Avoid avcodec_free_context() here for now. JavaCPP/FFmpeg may crash if
             // the parser-owned packet pointers are still referenced during teardown.
+            currentDecodedFrameBuffer?.close()
+            currentDecodedFrameBuffer = null
             process.destroy()
             if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly()
@@ -924,6 +1225,7 @@ class DesktopMirrorEngine(
     }
 
     private var currentSwsContext: SwsContext? = null
+    private var currentDecodedFrameBuffer: DecodedFrameBuffer? = null
 
     private fun receiveDecodedFrames(
         codecContext: AVCodecContext,
@@ -954,39 +1256,54 @@ class DesktopMirrorEngine(
                     null as DoubleArray?,
                 )
             }
-            val bgra = BytePointer(width.toLong() * height * 4)
-            val dstData = PointerPointer<BytePointer>(4)
-            val dstLinesize = IntPointer(4)
-            avutil.av_image_fill_arrays(dstData, dstLinesize, bgra, avutil.AV_PIX_FMT_BGRA, width, height, 1)
-            val scaledRows = swscale.sws_scale(context, frame.data(), frame.linesize(), 0, height, dstData, dstLinesize)
+            val output = decodedFrameBuffer(width, height)
+            val scaledRows = swscale.sws_scale(context, frame.data(), frame.linesize(), 0, height, output.dstData, output.dstLinesize)
             if (scaledRows <= 0) {
-                bgra.close()
-                dstData.close()
-                dstLinesize.close()
                 avutil.av_frame_unref(frame)
                 continue
             }
-            frames.value = MirrorFrame(width, height, bgraToArgb(bgra, width * height), ++nextFrameNumber, decodedFps.takeIf { it > 0f })
-            bgra.close()
-            dstData.close()
-            dstLinesize.close()
+            frames.value = MirrorFrame(width, height, bgraToArgb(output.bgra, width * height), ++nextFrameNumber, decodedFps.takeIf { it > 0f })
             avutil.av_frame_unref(frame)
         }
         currentSwsContext = context
         return nextFrameNumber
     }
 
+    private fun decodedFrameBuffer(width: Int, height: Int): DecodedFrameBuffer {
+        currentDecodedFrameBuffer?.takeIf { it.width == width && it.height == height }?.let { return it }
+        currentDecodedFrameBuffer?.close()
+        val bgra = BytePointer(width.toLong() * height * 4L)
+        val dstData = PointerPointer<BytePointer>(4)
+        val dstLinesize = IntPointer(4)
+        avutil.av_image_fill_arrays(dstData, dstLinesize, bgra, avutil.AV_PIX_FMT_BGRA, width, height, 1)
+        return DecodedFrameBuffer(width, height, bgra, dstData, dstLinesize).also {
+            currentDecodedFrameBuffer = it
+        }
+    }
+
     private fun bgraToArgb(bytes: BytePointer, pixelCount: Int): IntArray {
         val pixels = IntArray(pixelCount)
-        var byteIndex = 0L
-        for (pixelIndex in pixels.indices) {
-            val b = bytes.get(byteIndex++).toInt() and 0xff
-            val g = bytes.get(byteIndex++).toInt() and 0xff
-            val r = bytes.get(byteIndex++).toInt() and 0xff
-            val a = bytes.get(byteIndex++).toInt() and 0xff
-            pixels[pixelIndex] = (a shl 24) or (r shl 16) or (g shl 8) or b
-        }
+        bytes.position(0)
+            .limit(pixelCount.toLong() * 4L)
+            .asByteBuffer()
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asIntBuffer()
+            .get(pixels)
         return pixels
+    }
+
+    private data class DecodedFrameBuffer(
+        val width: Int,
+        val height: Int,
+        val bgra: BytePointer,
+        val dstData: PointerPointer<BytePointer>,
+        val dstLinesize: IntPointer,
+    ) {
+        fun close() {
+            bgra.close()
+            dstData.close()
+            dstLinesize.close()
+        }
     }
 
     private suspend fun captureSize(adb: String, serial: String, maxSize: Int): CaptureSize {
@@ -1058,6 +1375,513 @@ internal object ScrcpyServerLocator {
         }
         return target.takeIf { it.isFile && it.length() > 0 }
     }
+}
+
+private class EmulatorMappedFramebuffer private constructor(
+    private val file: File,
+    private val channel: FileChannel,
+    private val buffer: MappedByteBuffer,
+) : AutoCloseable {
+    val handle: String = file.toPath().toUri().toASCIIString()
+
+    fun frameBytes(byteCount: Int): ByteBuffer? {
+        if (byteCount <= 0 || byteCount > buffer.capacity()) return null
+        val frame = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        frame.position(0)
+        frame.limit(byteCount)
+        return frame.slice().order(ByteOrder.LITTLE_ENDIAN)
+    }
+
+    override fun close() {
+        runCatching { channel.close() }
+        runCatching { file.delete() }
+    }
+
+    companion object {
+        fun create(maxSize: Int): EmulatorMappedFramebuffer {
+            val boundedMaxSize = maxSize.coerceIn(1, 4096)
+            val byteCount = boundedMaxSize.toLong() * boundedMaxSize * EMULATOR_IMAGE_BYTES_PER_PIXEL + 4096L
+            val file = File.createTempFile("andy-emulator-framebuffer-", ".rgb")
+            file.deleteOnExit()
+            val channel = FileChannel.open(
+                file.toPath(),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.READ,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+            )
+            try {
+                channel.truncate(byteCount)
+                val buffer = channel.map(FileChannel.MapMode.READ_WRITE, 0, byteCount)
+                return EmulatorMappedFramebuffer(file, channel, buffer)
+            } catch (error: Throwable) {
+                runCatching { channel.close() }
+                runCatching { file.delete() }
+                throw error
+            }
+        }
+    }
+}
+
+private class EmulatorGrpcClient(
+    host: String,
+    port: Int,
+    token: String?,
+    initialDisplaySize: EmulatorDisplaySize?,
+) {
+    var displaySize: EmulatorDisplaySize? = initialDisplaySize
+        private set
+    private val managedChannel: ManagedChannel = ManagedChannelBuilder.forAddress(host, port)
+        .usePlaintext()
+        .build()
+    private val channel: Channel = token
+        ?.let { ClientInterceptors.intercept(managedChannel, EmulatorGrpcAuthInterceptor(it)) }
+        ?: managedChannel
+
+    fun streamScreenshots(maxSize: Int, mmapHandle: String? = null): Iterator<EmulatorImage> {
+        return ClientCalls.blockingServerStreamingCall(
+            channel,
+            STREAM_SCREENSHOT_METHOD,
+            CallOptions.DEFAULT,
+            EmulatorImageFormat(maxSize, mmapHandle),
+        )
+    }
+
+    fun sendInput(input: MirrorInput, frame: MirrorFrame): CommandResult? {
+        return when (input) {
+            is MirrorInput.Touch -> sendTouch(
+                touch = EmulatorTouch(
+                    x = scaleX(input.x, frame),
+                    y = scaleY(input.y, frame),
+                    pressure = if (input.action == MirrorTouchAction.Up) 0 else 1,
+                ),
+            )
+            is MirrorInput.Tap -> {
+                val x = scaleX(input.x, frame)
+                val y = scaleY(input.y, frame)
+                sendTouch(EmulatorTouch(x, y, pressure = 1))
+                sendTouch(EmulatorTouch(x, y, pressure = 0))
+            }
+            is MirrorInput.Swipe -> {
+                val startX = scaleX(input.startX, frame)
+                val startY = scaleY(input.startY, frame)
+                val endX = scaleX(input.endX, frame)
+                val endY = scaleY(input.endY, frame)
+                sendTouch(EmulatorTouch(startX, startY, pressure = 1))
+                sendTouch(EmulatorTouch(endX, endY, pressure = 1))
+                sendTouch(EmulatorTouch(endX, endY, pressure = 0))
+            }
+            is MirrorInput.Text -> sendText(input.value)
+            // Named keys go over gRPC for snappy typing; anything unmapped (volume,
+            // etc.) returns null so the caller falls back to adb keyevent.
+            is MirrorInput.Key -> domKeyName(input.keyCode)?.let { sendNamedKey(it) }
+            MirrorInput.Back,
+            MirrorInput.Home,
+            MirrorInput.Recents,
+            MirrorInput.Power -> null
+        }
+    }
+
+    // Returns null when the gRPC keyboard call cannot be delivered so the caller
+    // falls back to adb `input text`/`keyevent` instead of surfacing an error.
+    private fun sendText(text: String): CommandResult? {
+        if (text.isEmpty()) return null
+        return sendKey(EmulatorKeyEvent(eventType = KEY_EVENT_KEYPRESS, text = text))
+    }
+
+    private fun sendNamedKey(key: String): CommandResult? {
+        val down = sendKey(EmulatorKeyEvent(eventType = KEY_EVENT_KEYDOWN, key = key)) ?: return null
+        return sendKey(EmulatorKeyEvent(eventType = KEY_EVENT_KEYUP, key = key)) ?: down
+    }
+
+    private fun sendKey(event: EmulatorKeyEvent): CommandResult? {
+        return runCatching {
+            ClientCalls.blockingUnaryCall(channel, SEND_KEY_METHOD, CallOptions.DEFAULT, event)
+            CommandResult.success("Input sent")
+        }.getOrNull()
+    }
+
+    // Android key codes (KeyEvent.KEYCODE_*) → DOM-style key names the emulator understands.
+    private fun domKeyName(androidKeyCode: Int): String? = when (androidKeyCode) {
+        66 -> "Enter"
+        67 -> "Backspace"
+        112 -> "Delete"
+        61 -> "Tab"
+        111 -> "Escape"
+        19 -> "ArrowUp"
+        20 -> "ArrowDown"
+        21 -> "ArrowLeft"
+        22 -> "ArrowRight"
+        122 -> "Home"
+        123 -> "End"
+        92 -> "PageUp"
+        93 -> "PageDown"
+        else -> null
+    }
+
+    private fun scaleX(x: Int, frame: MirrorFrame): Int {
+        return scaledEmulatorTouchPoint(x, 0, frame, displaySize).x
+    }
+
+    private fun scaleY(y: Int, frame: MirrorFrame): Int {
+        return scaledEmulatorTouchPoint(0, y, frame, displaySize).y
+    }
+
+    fun close() {
+        managedChannel.shutdownNow()
+        managedChannel.awaitTermination(500, TimeUnit.MILLISECONDS)
+    }
+
+    private fun sendTouch(touch: EmulatorTouch): CommandResult {
+        return runCatching {
+            ClientCalls.blockingUnaryCall(
+                channel,
+                SEND_TOUCH_METHOD,
+                CallOptions.DEFAULT,
+                EmulatorTouchEvent(listOf(touch)),
+            )
+            CommandResult.success("Input sent")
+        }.getOrElse { error ->
+            CommandResult.failure("Emulator gRPC touch failed: ${error.message ?: error::class.simpleName}")
+        }
+    }
+
+    fun updateDisplaySize(next: EmulatorDisplaySize) {
+        displaySize = next
+    }
+
+    private class EmulatorGrpcAuthInterceptor(private val token: String) : ClientInterceptor {
+        override fun <ReqT : Any?, RespT : Any?> interceptCall(
+            method: MethodDescriptor<ReqT, RespT>,
+            callOptions: CallOptions,
+            next: Channel,
+        ): ClientCall<ReqT, RespT> {
+            return object : ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(next.newCall(method, callOptions)) {
+                override fun start(responseListener: Listener<RespT>, headers: Metadata) {
+                    headers.put(AUTHORIZATION, "Bearer $token")
+                    super.start(responseListener, headers)
+                }
+            }
+        }
+    }
+
+    private companion object {
+        private val AUTHORIZATION: Metadata.Key<String> =
+            Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER)
+        private val STREAM_SCREENSHOT_METHOD: MethodDescriptor<EmulatorImageFormat, EmulatorImage> =
+            MethodDescriptor.newBuilder<EmulatorImageFormat, EmulatorImage>()
+                .setType(MethodDescriptor.MethodType.SERVER_STREAMING)
+                .setFullMethodName(
+                    MethodDescriptor.generateFullMethodName(
+                        "android.emulation.control.EmulatorController",
+                        "streamScreenshot",
+                    ),
+                )
+                .setRequestMarshaller(EmulatorImageFormatMarshaller)
+                .setResponseMarshaller(EmulatorImageMarshaller)
+                .build()
+        private val SEND_TOUCH_METHOD: MethodDescriptor<EmulatorTouchEvent, Unit> =
+            MethodDescriptor.newBuilder<EmulatorTouchEvent, Unit>()
+                .setType(MethodDescriptor.MethodType.UNARY)
+                .setFullMethodName(
+                    MethodDescriptor.generateFullMethodName(
+                        "android.emulation.control.EmulatorController",
+                        "sendTouch",
+                    ),
+                )
+                .setRequestMarshaller(EmulatorTouchEventMarshaller)
+                .setResponseMarshaller(EmulatorEmptyMarshaller)
+                .build()
+        private val SEND_KEY_METHOD: MethodDescriptor<EmulatorKeyEvent, Unit> =
+            MethodDescriptor.newBuilder<EmulatorKeyEvent, Unit>()
+                .setType(MethodDescriptor.MethodType.UNARY)
+                .setFullMethodName(
+                    MethodDescriptor.generateFullMethodName(
+                        "android.emulation.control.EmulatorController",
+                        "sendKey",
+                    ),
+                )
+                .setRequestMarshaller(EmulatorKeyEventMarshaller)
+                .setResponseMarshaller(EmulatorEmptyMarshaller)
+                .build()
+    }
+}
+
+private const val KEY_EVENT_KEYDOWN = 0
+private const val KEY_EVENT_KEYUP = 1
+private const val KEY_EVENT_KEYPRESS = 2
+
+internal data class EmulatorImageFormat(val maxSize: Int, val mmapHandle: String? = null)
+internal data class EmulatorImage(
+    val width: Int,
+    val height: Int,
+    val pixels: ByteArray,
+    val seq: Long = 0,
+    val timestampUs: Long = 0,
+)
+internal data class EmulatorTouch(val x: Int, val y: Int, val pressure: Int)
+internal data class EmulatorTouchEvent(val touches: List<EmulatorTouch>, val display: Int = 0)
+internal data class EmulatorKeyEvent(val eventType: Int = KEY_EVENT_KEYDOWN, val key: String = "", val text: String = "")
+
+private object EmulatorImageFormatMarshaller : MethodDescriptor.Marshaller<EmulatorImageFormat> {
+    override fun stream(value: EmulatorImageFormat): InputStream {
+        return ByteArrayInputStream(EmulatorGrpcProto.imageFormat(value.maxSize.coerceAtLeast(1), value.mmapHandle))
+    }
+
+    override fun parse(stream: InputStream): EmulatorImageFormat {
+        stream.readAllBytes()
+        return EmulatorImageFormat(0)
+    }
+}
+
+private object EmulatorImageMarshaller : MethodDescriptor.Marshaller<EmulatorImage> {
+    override fun stream(value: EmulatorImage): InputStream {
+        return ByteArrayInputStream(ByteArray(0))
+    }
+
+    override fun parse(stream: InputStream): EmulatorImage {
+        return EmulatorGrpcProto.parseImage(stream.readAllBytes())
+    }
+}
+
+private object EmulatorTouchEventMarshaller : MethodDescriptor.Marshaller<EmulatorTouchEvent> {
+    override fun stream(value: EmulatorTouchEvent): InputStream {
+        return ByteArrayInputStream(EmulatorGrpcProto.touchEvent(value))
+    }
+
+    override fun parse(stream: InputStream): EmulatorTouchEvent {
+        stream.readAllBytes()
+        return EmulatorTouchEvent(emptyList())
+    }
+}
+
+private object EmulatorKeyEventMarshaller : MethodDescriptor.Marshaller<EmulatorKeyEvent> {
+    override fun stream(value: EmulatorKeyEvent): InputStream {
+        return ByteArrayInputStream(EmulatorGrpcProto.keyEvent(value))
+    }
+
+    override fun parse(stream: InputStream): EmulatorKeyEvent {
+        stream.readAllBytes()
+        return EmulatorKeyEvent()
+    }
+}
+
+private object EmulatorEmptyMarshaller : MethodDescriptor.Marshaller<Unit> {
+    override fun stream(value: Unit): InputStream = ByteArrayInputStream(ByteArray(0))
+
+    override fun parse(stream: InputStream) {
+        stream.readAllBytes()
+    }
+}
+
+internal object EmulatorGrpcProto {
+    fun imageFormat(maxSize: Int, mmapHandle: String? = null): ByteArray {
+        val writer = ProtoWriter()
+        writer.varint(1, 2) // ImageFormat.RGB888
+        writer.varint(3, maxSize.toLong())
+        writer.varint(4, maxSize.toLong())
+        if (!mmapHandle.isNullOrBlank()) {
+            val transport = ProtoWriter()
+            transport.varint(1, 1) // ImageTransport.MMAP
+            transport.string(2, mmapHandle)
+            writer.bytes(6, transport.toByteArray())
+        }
+        return writer.toByteArray()
+    }
+
+    fun touchEvent(event: EmulatorTouchEvent): ByteArray {
+        val writer = ProtoWriter()
+        event.touches.forEach { touch ->
+            val touchWriter = ProtoWriter()
+            touchWriter.varint(1, touch.x.coerceAtLeast(0).toLong())
+            touchWriter.varint(2, touch.y.coerceAtLeast(0).toLong())
+            touchWriter.varint(3, 0)
+            touchWriter.varint(4, touch.pressure.coerceAtLeast(0).toLong())
+            touchWriter.varint(7, 1) // NEVER_EXPIRE; Andy sends explicit pressure=0 on release.
+            writer.bytes(1, touchWriter.toByteArray())
+        }
+        if (event.display != 0) writer.varint(2, event.display.toLong())
+        return writer.toByteArray()
+    }
+
+    // KeyboardEvent { codeType=1(Usb, default), eventType=2, keyCode=3, key=4, text=5 }
+    fun keyEvent(event: EmulatorKeyEvent): ByteArray {
+        val writer = ProtoWriter()
+        if (event.eventType != 0) writer.varint(2, event.eventType.toLong())
+        if (event.key.isNotEmpty()) writer.string(4, event.key)
+        if (event.text.isNotEmpty()) writer.string(5, event.text)
+        return writer.toByteArray()
+    }
+
+    fun parseImage(bytes: ByteArray): EmulatorImage {
+        val reader = ProtoReader(bytes)
+        var width = 0
+        var height = 0
+        var deprecatedWidth = 0
+        var deprecatedHeight = 0
+        var image = ByteArray(0)
+        var seq = 0L
+        var timestampUs = 0L
+        while (!reader.isAtEnd()) {
+            when (val tag = reader.readTag()) {
+                10 -> {
+                    val format = parseImageFormat(reader.readBytes())
+                    width = format.first
+                    height = format.second
+                }
+                16 -> deprecatedWidth = reader.readVarint().toInt()
+                24 -> deprecatedHeight = reader.readVarint().toInt()
+                34 -> image = reader.readBytes()
+                40 -> seq = reader.readVarint()
+                48 -> timestampUs = reader.readVarint()
+                else -> reader.skip(tag)
+            }
+        }
+        return EmulatorImage(
+            width = width.takeIf { it > 0 } ?: deprecatedWidth,
+            height = height.takeIf { it > 0 } ?: deprecatedHeight,
+            pixels = image,
+            seq = seq,
+            timestampUs = timestampUs,
+        )
+    }
+
+    private fun parseImageFormat(bytes: ByteArray): Pair<Int, Int> {
+        val reader = ProtoReader(bytes)
+        var width = 0
+        var height = 0
+        while (!reader.isAtEnd()) {
+            when (val tag = reader.readTag()) {
+                8 -> reader.readVarint()
+                24 -> width = reader.readVarint().toInt()
+                32 -> height = reader.readVarint().toInt()
+                else -> reader.skip(tag)
+            }
+        }
+        return width to height
+    }
+
+    class ProtoWriter {
+        private val output = ByteArrayOutputStream()
+
+        fun varint(field: Int, value: Long) {
+            tag(field, 0)
+            writeVarint(value)
+        }
+
+        fun bytes(field: Int, bytes: ByteArray) {
+            tag(field, 2)
+            writeVarint(bytes.size.toLong())
+            output.write(bytes)
+        }
+
+        fun string(field: Int, value: String) {
+            bytes(field, value.encodeToByteArray())
+        }
+
+        fun toByteArray(): ByteArray = output.toByteArray()
+
+        private fun tag(field: Int, wireType: Int) {
+            writeVarint(((field shl 3) or wireType).toLong())
+        }
+
+        private fun writeVarint(value: Long) {
+            var remaining = value
+            while ((remaining and 0x7f.inv().toLong()) != 0L) {
+                output.write(((remaining and 0x7f) or 0x80).toInt())
+                remaining = remaining ushr 7
+            }
+            output.write(remaining.toInt())
+        }
+    }
+
+    private class ProtoReader(private val bytes: ByteArray) {
+        private var offset = 0
+
+        fun isAtEnd(): Boolean = offset >= bytes.size
+
+        fun readTag(): Int = readVarint().toInt()
+
+        fun readVarint(): Long {
+            var shift = 0
+            var result = 0L
+            while (shift < 64 && offset < bytes.size) {
+                val b = bytes[offset++].toInt() and 0xff
+                result = result or ((b and 0x7f).toLong() shl shift)
+                if ((b and 0x80) == 0) return result
+                shift += 7
+            }
+            return result
+        }
+
+        fun readBytes(): ByteArray {
+            val size = readVarint().toInt().coerceAtLeast(0)
+            val end = (offset + size).coerceAtMost(bytes.size)
+            return bytes.copyOfRange(offset, end).also { offset = end }
+        }
+
+        fun skip(tag: Int) {
+            when (tag and 0x7) {
+                0 -> readVarint()
+                1 -> offset = (offset + 8).coerceAtMost(bytes.size)
+                2 -> {
+                    val size = readVarint().toInt().coerceAtLeast(0)
+                    offset = (offset + size).coerceAtMost(bytes.size)
+                }
+                5 -> offset = (offset + 4).coerceAtMost(bytes.size)
+                else -> offset = bytes.size
+            }
+        }
+    }
+}
+
+private fun String.isEmulatorSerial(): Boolean = startsWith("emulator-")
+
+private fun String.emulatorConsolePort(): Int? = removePrefix("emulator-").toIntOrNull()
+
+private fun readEmulatorGrpcToken(grpcPort: Int): String? {
+    return emulatorGrpcDiscoveryFiles()
+        .asSequence()
+        .mapNotNull { file -> loadEmulatorGrpcDiscovery(file) }
+        .firstOrNull { discovery -> discovery.port == grpcPort }
+        ?.token
+}
+
+private data class EmulatorGrpcDiscovery(val port: Int?, val token: String?)
+
+private fun emulatorGrpcDiscoveryFiles(): List<File> {
+    val home = File(System.getProperty("user.home"))
+    val tmpDir = System.getenv("TMPDIR")?.takeIf { it.isNotBlank() }?.let(::File)
+    val xdgRuntime = System.getenv("XDG_RUNTIME_DIR")?.takeIf { it.isNotBlank() }?.let(::File)
+    val roots = listOfNotNull(
+        File(home, "Library/Caches/TemporaryItems/avd/running"),
+        tmpDir?.resolve("avd/running"),
+        xdgRuntime?.resolve("avd/running"),
+        File("/tmp/android-${System.getProperty("user.name")}/avd/running"),
+    ).distinctBy { it.absolutePath }
+    return roots.flatMap { root ->
+        root.listFiles { file -> file.isFile && file.name.startsWith("pid_") && file.name.endsWith(".ini") }
+            ?.toList()
+            .orEmpty()
+    }
+}
+
+private fun loadEmulatorGrpcDiscovery(file: File): EmulatorGrpcDiscovery? {
+    val entries = runCatching {
+        file.readLines()
+            .mapNotNull { line ->
+                val trimmed = line.trim()
+                if (trimmed.isBlank() || trimmed.startsWith("#") || "=" !in trimmed) {
+                    null
+                } else {
+                    trimmed.substringBefore("=").trim() to trimmed.substringAfter("=").trim()
+                }
+            }
+            .toMap()
+    }.getOrNull() ?: return null
+    val port = entries["grpc.port"]?.toIntOrNull()
+    val token = entries["grpc.token"]?.takeIf { it.isNotBlank() }
+    return EmulatorGrpcDiscovery(port = port, token = token)
 }
 
 private object ScrcpyControlMessage {
@@ -2379,6 +3203,8 @@ class DesktopMetricsService(
     private val devices: DesktopDeviceService,
 ) : MetricsService {
     override fun stream(serial: String, packageName: String?): Flow<PerformanceSample> = flow {
+        var lastNetworkTotals: Pair<Long, Long>? = null
+        var lastNetworkAtMillis: Long? = null
         while (true) {
             val cpu = devices.shell(serial, listOf("dumpsys", "cpuinfo")).stdout
             val processRows = devices.shell(serial, listOf("top", "-b", "-n", "1", "-o", "PID,%CPU,RES,ARGS", "-m", "80")).stdout
@@ -2386,21 +3212,42 @@ class DesktopMetricsService(
             val processes = AndroidParsers.parseProcessMetrics(processRows)
             val mem = packageName?.let { devices.shell(serial, listOf("dumpsys", "meminfo", it)).stdout }
             val battery = devices.shell(serial, listOf("dumpsys", "battery")).stdout
+            val netDev = devices.shell(serial, listOf("cat", "/proc/net/dev")).stdout
             val focusedPackage = packageName
                 ?: AndroidParsers.parseFocusedPackage(devices.shell(serial, listOf("dumpsys", "window", "windows")).stdout)
                 ?: AndroidParsers.parseFocusedPackage(devices.shell(serial, listOf("dumpsys", "activity", "activities")).stdout)
             val frameTimes = focusedPackage?.let {
                 AndroidParsers.parseFrameStats(devices.shell(serial, listOf("dumpsys", "gfxinfo", it, "framestats")).stdout)
             }.orEmpty()
+            val now = System.currentTimeMillis()
+            val networkTotals = AndroidParsers.parseNetworkTotals(netDev)
+            var networkRxKbps: Float? = null
+            var networkTxKbps: Float? = null
+            val previousTotals = lastNetworkTotals
+            val previousAtMillis = lastNetworkAtMillis
+            if (networkTotals != null && previousTotals != null && previousAtMillis != null) {
+                val elapsedSeconds = (now - previousAtMillis) / 1000f
+                if (elapsedSeconds > 0f) {
+                    networkRxKbps = ((networkTotals.first - previousTotals.first).coerceAtLeast(0) / 1024f) / elapsedSeconds
+                    networkTxKbps = ((networkTotals.second - previousTotals.second).coerceAtLeast(0) / 1024f) / elapsedSeconds
+                }
+            }
+            if (networkTotals != null) {
+                lastNetworkTotals = networkTotals
+                lastNetworkAtMillis = now
+            }
             emit(
                 PerformanceSample(
-                    timestampMillis = System.currentTimeMillis(),
+                    timestampMillis = now,
                     cpuPercent = Regex("""(\d+(?:\.\d+)?)%""").find(cpu)?.groupValues?.getOrNull(1)?.toFloatOrNull(),
                     memoryMb = (mem?.let { Regex("""TOTAL\s+(\d+)""").find(it)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.div(1024f) }
                         ?: processes.sumOf { it.memoryMb?.toDouble() ?: 0.0 }.toFloat().takeIf { it > 0f }),
-                    fps = frameTimes.takeLast(60).count { it.millis <= 16.6f }.takeIf { frameTimes.isNotEmpty() }?.toFloat(),
+                    fps = frameTimes.takeLast(30).mapNotNull { it.vsyncGapMillis }.takeIf { it.isNotEmpty() }
+                        ?.let { gaps -> 1000f / (gaps.sum() / gaps.size) },
                     batteryPercent = AndroidParsers.parseBatteryPercent(battery),
                     thermalStatus = null,
+                    networkRxKbps = networkRxKbps,
+                    networkTxKbps = networkTxKbps,
                     processes = processes,
                     frameRenderTimes = frameTimes,
                 ),
@@ -2441,6 +3288,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
             appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
+            performanceLivePaneWidth = props.getProperty("performanceLivePaneWidth")?.toFloatOrNull() ?: 320f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
             accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
             hostFileRoots = props.getProperty("hostFileRoots").orEmpty().lines().filter { it.isNotBlank() },
@@ -2479,6 +3327,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("appsListPaneWidth", state.appsListPaneWidth.toString())
             setProperty("appsDetailsPaneHeight", state.appsDetailsPaneHeight.toString())
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
+            setProperty("performanceLivePaneWidth", state.performanceLivePaneWidth.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
             setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
             setProperty("hostFileRoots", state.hostFileRoots.joinToString("\n"))

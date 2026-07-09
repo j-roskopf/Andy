@@ -111,6 +111,10 @@ kotlin {
                 implementation("io.ktor:ktor-server-netty:3.0.1")
                 implementation("io.ktor:ktor-server-sse:3.0.1")
                 implementation("io.ktor:ktor-server-double-receive:3.0.1")
+                implementation("io.grpc:grpc-api:1.69.0")
+                implementation("io.grpc:grpc-core:1.69.0")
+                implementation("io.grpc:grpc-netty-shaded:1.69.0")
+                implementation("io.grpc:grpc-stub:1.69.0")
 
                 // Add the base JavaCV library
                 implementation("org.bytedeco:javacv:1.5.11")

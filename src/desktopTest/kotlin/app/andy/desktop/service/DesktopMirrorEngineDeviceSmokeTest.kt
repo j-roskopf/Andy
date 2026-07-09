@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,7 +27,11 @@ class DesktopMirrorEngineDeviceSmokeTest {
         }
             ?: error("No online Android device connected")
 
-        val result = services.mirror.connect(device.serial)
+        val maxSize = System.getenv("ANDY_DEVICE_SMOKE_MAX_SIZE")?.toIntOrNull()
+        val result = services.mirror.connect(
+            device.serial,
+            maxSize?.let { MirrorVideoConfig(maxSize = it) } ?: MirrorVideoConfig(),
+        )
         assertTrue(result.isSuccess, result.stderr.ifBlank { result.stdout })
 
         val statuses = mutableListOf<String>()
