@@ -10,7 +10,6 @@ import java.util.concurrent.TimeUnit
 
 class CommandRunner(
     private val defaultTimeoutSeconds: Long = 20,
-    private val javaHomeProvider: () -> String? = { JavaHomeLocator.find() },
     private val executor: (suspend (command: List<String>, timeoutSeconds: Long) -> CommandResult)? = null,
 ) {
     suspend fun run(command: List<String>, timeoutSeconds: Long = defaultTimeoutSeconds): CommandResult = withContext(Dispatchers.IO) {
@@ -19,7 +18,6 @@ class CommandRunner(
         runCatching {
             val process = ProcessBuilder(command)
                 .redirectErrorStream(false)
-                .also { builder -> ensureJavaHome(builder.environment()) }
                 .start()
             val readerPool = Executors.newFixedThreadPool(2)
             val stdoutFuture = readerPool.submit(Callable { process.inputStream.bufferedReader().readText() })
@@ -39,12 +37,6 @@ class CommandRunner(
         }.getOrElse { error ->
             CommandResult.failure(error.message ?: "Command failed")
         }
-    }
-
-    private fun ensureJavaHome(environment: MutableMap<String, String>) {
-        val current = environment["JAVA_HOME"]
-        if (!current.isNullOrBlank() && JavaHomeLocator.isUsableJavaHome(current)) return
-        javaHomeProvider()?.takeIf { JavaHomeLocator.isUsableJavaHome(it) }?.let { environment["JAVA_HOME"] = it }
     }
 
     fun existingExecutable(path: String?): String? {
