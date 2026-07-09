@@ -342,6 +342,7 @@ data class WorkspaceState(
     val proxyStartOnLaunch: Boolean = false,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
+    val workspaceSidebarExpanded: Boolean = true,
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 230f,
     val appsListPaneWidth: Float = 520f,

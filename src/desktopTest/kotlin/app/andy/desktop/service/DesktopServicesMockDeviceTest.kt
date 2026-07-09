@@ -108,10 +108,10 @@ class DesktopServicesMockDeviceTest {
     fun emulatorRgbFramesKeepTopDownOrientation() {
         val rgb = ByteBuffer.wrap(
             byteArrayOf(
-                0, 0, 255.toByte(), // bottom-left blue
-                255.toByte(), 255.toByte(), 255.toByte(), // bottom-right white
                 255.toByte(), 0, 0, // top-left red
                 0, 255.toByte(), 0, // top-right green
+                0, 0, 255.toByte(), // bottom-left blue
+                255.toByte(), 255.toByte(), 255.toByte(), // bottom-right white
             ),
         )
 
@@ -456,6 +456,14 @@ class DesktopServicesMockDeviceTest {
         assertTrue(env.ran("settings", "put", "global", "http_proxy", ":0"))
         assertTrue(env.ran("settings", "delete", "global", "global_http_proxy_host"))
         assertTrue(env.ran("settings", "delete", "global", "global_http_proxy_port"))
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "disabled") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "enabled") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(4) == listOf("shell", "cmd", "wifi", "reconnect") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(4) == listOf("shell", "cmd", "wifi", "start-scan") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(4) == listOf("shell", "svc", "data", "disable") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(4) == listOf("shell", "svc", "data", "enable") })
+        assertTrue(env.commands.count { command -> command.takeLast(4) == listOf("shell", "cmd", "wifi", "status") } >= 6)
+        assertFalse(env.commands.any { command -> command.any { it.contains("(svc") } })
         assertTrue(services.proxy.exchanges.value.isNotEmpty())
         assertTrue(services.proxy.clearTraffic().isSuccess)
         assertTrue(services.proxy.exchanges.value.isEmpty())
@@ -472,5 +480,23 @@ class DesktopServicesMockDeviceTest {
         assertEquals("android.widget.FrameLayout", accessibility.className)
         assertEquals("emulator-5554 ready", accessibility.children.single().text)
         assertTrue(env.ran("uiautomator", "dump", "/sdcard/window_dump.xml"))
+    }
+
+    @Test
+    fun proxyWifiRestartFallsBackToSettingsWifiStatus() = runBlocking {
+        val env = MockAndroidDeviceEnvironment().apply {
+            wifiStatusCommandSupported = false
+        }
+        val services = env.services()
+
+        val configured = services.proxy.configureDeviceProxy("emulator-5554", "10.0.2.2", 8888)
+        val cleared = services.proxy.clearDeviceProxy("emulator-5554")
+
+        assertTrue(configured.isSuccess)
+        assertTrue(cleared.isSuccess)
+        assertTrue(env.commands.any { command -> command.takeLast(4) == listOf("shell", "cmd", "wifi", "status") })
+        assertTrue(env.commands.any { command -> command.takeLast(5) == listOf("shell", "settings", "get", "global", "wifi_on") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "disabled") })
+        assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "enabled") })
     }
 }
