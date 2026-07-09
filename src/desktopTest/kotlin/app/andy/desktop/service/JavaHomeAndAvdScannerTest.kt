@@ -47,6 +47,9 @@ class JavaHomeLocatorTest {
         val root = createTempDir("andy-bad-java-home")
         val emptyHome = File(root, "jlink-runtime").also { it.mkdirs() }
 
+        // jlink-style runtimes (and empty dirs) must not count as usable JAVA_HOME.
+        // find() may still discover a real host JDK elsewhere on the machine.
+        assertTrue(!JavaHomeLocator.isUsableJavaHome(emptyHome.absolutePath))
         assertNull(
             JavaHomeLocator.find(
                 env = mapOf("JAVA_HOME" to emptyHome.absolutePath),
@@ -54,7 +57,7 @@ class JavaHomeLocatorTest {
                 userHome = File(root, "home").also { it.mkdirs() },
                 applications = File(root, "Applications").also { it.mkdirs() },
                 runCommand = { null },
-            )
+            )?.takeIf { it == emptyHome.absolutePath }
         )
     }
 
