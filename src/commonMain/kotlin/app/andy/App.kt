@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
@@ -38,7 +37,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
@@ -114,6 +112,30 @@ import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
 import app.andy.ui.theme.*
+import app.andy.ui.components.Button
+import app.andy.ui.components.Button
+import app.andy.ui.components.DetailRow
+import app.andy.ui.components.DetailSection
+import app.andy.ui.components.EmptyState
+import app.andy.ui.components.FilterPill
+import app.andy.ui.components.FormRow
+import app.andy.ui.components.HorizontalPaneDivider
+import app.andy.ui.components.LabeledField
+import app.andy.ui.components.MonoCell
+import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PaneDivider
+import app.andy.ui.components.PanelCard
+import app.andy.ui.components.PlaceholderScreen
+import app.andy.ui.components.StatusRow
+import app.andy.ui.components.StatusTag
+import app.andy.ui.components.TableHeader
+import app.andy.ui.components.TableRow
+import app.andy.ui.components.TextField
+import app.andy.ui.components.Toolbar
+import app.andy.ui.components.fieldColors
+import app.andy.ui.components.noiseGridOverlay
+import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.components.secondaryButtonColors
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -162,126 +184,6 @@ private data class SetupRequirement(
     val missingText: String,
     val installCommand: String? = null,
 )
-
-private fun Modifier.rightBorder(color: Color): Modifier = drawBehind {
-    val strokeWidth = 1.dp.toPx()
-    val x = size.width - strokeWidth / 2f
-    drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth)
-}
-
-private fun Modifier.bottomBorder(color: Color): Modifier = drawBehind {
-    val strokeWidth = 1.dp.toPx()
-    val y = size.height - strokeWidth / 2f
-    drawLine(color, Offset(0f, y), Offset(size.width, y), strokeWidth)
-}
-
-private fun Modifier.noiseGridOverlay(alpha: Float = 0.07f): Modifier = drawBehind {
-    val grid = 18.dp.toPx()
-    var x = 0f
-    while (x < size.width) {
-        drawLine(AndyColors.Neutral100.copy(alpha = alpha), Offset(x, 0f), Offset(x, size.height), 1f)
-        x += grid
-    }
-    var y = 0f
-    while (y < size.height) {
-        drawLine(AndyColors.Neutral100.copy(alpha = alpha * 0.6f), Offset(0f, y), Offset(size.width, y), 1f)
-        y += grid
-    }
-}
-
-@Composable
-private fun Button(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
-    colors: ButtonColors = primaryButtonColors(),
-    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-    content: @Composable RowScope.() -> Unit,
-) {
-    androidx.compose.material3.Button(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        shape = shape,
-        colors = colors,
-        contentPadding = contentPadding,
-        content = content,
-    )
-}
-
-@Composable
-private fun OutlinedButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
-    colors: ButtonColors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary, disabledContentColor = AndyColors.Neutral500),
-    border: BorderStroke? = BorderStroke(1.dp, AndyColors.Neutral100.copy(alpha = 0.16f)),
-    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-    content: @Composable RowScope.() -> Unit,
-) {
-    androidx.compose.material3.OutlinedButton(
-        onClick = onClick,
-        modifier = modifier,
-        enabled = enabled,
-        shape = shape,
-        colors = colors,
-        border = border,
-        contentPadding = contentPadding,
-        content = content,
-    )
-}
-
-@Composable
-private fun TextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    readOnly: Boolean = false,
-    textStyle: TextStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, color = TextPrimary),
-    singleLine: Boolean = false,
-    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
-    minLines: Int = 1,
-    placeholder: @Composable (() -> Unit)? = null,
-    colors: TextFieldColors = fieldColors(),
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
-) {
-    val enabledAlpha = if (enabled) 1f else 0.48f
-    val effectiveTextStyle = textStyle.copy(fontFamily = MonoFont, color = if (textStyle.color == Color.Unspecified) TextPrimary else textStyle.color)
-    val fieldShape = shape
-    @Suppress("UNUSED_VARIABLE")
-    val retainedColorsForCallSiteCompatibility = colors
-
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier
-            .background(AndyColors.Neutral900.copy(alpha = 0.62f * enabledAlpha), fieldShape)
-            .border(1.dp, AndyColors.Neutral100.copy(alpha = 0.18f * enabledAlpha), fieldShape),
-        enabled = enabled,
-        readOnly = readOnly,
-        textStyle = effectiveTextStyle,
-        singleLine = singleLine,
-        maxLines = maxLines,
-        minLines = minLines,
-        cursorBrush = SolidColor(Rust),
-        decorationBox = { innerTextField ->
-            Box(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
-            ) {
-                if (value.isEmpty() && placeholder != null) {
-                    Box(Modifier.graphicsLayer(alpha = 0.62f)) {
-                        placeholder()
-                    }
-                }
-                innerTextField()
-            }
-        },
-    )
-}
 
 @Composable
 private fun rememberMirrorInputSender(
@@ -1157,35 +1059,6 @@ private fun actionIconMarker(icon: String): String = when (icon.trim().lowercase
     "server" -> "|~"
     "deploy" -> "|^"
     else -> "|*"
-}
-
-@Composable
-private fun StatusRow(label: String, value: String, ok: Boolean) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-        Text(value.lowercase(), color = if (ok) Green else Rust, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-    }
-}
-
-@Composable
-private fun StatusTag(label: String, color: Color, modifier: Modifier = Modifier) {
-    Row(
-        modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            Modifier.heightIn(min = 22.dp)
-                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.Pill))
-                .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.Pill))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Box(Modifier.size(6.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
-            Text(label, color = color, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
-        }
-    }
 }
 
 @Composable
@@ -3267,48 +3140,6 @@ private fun distanceSquaredToBounds(x: Int, y: Int, bounds: List<Int>): Int {
         else -> 0
     }
     return dx * dx + dy * dy
-}
-
-@Composable
-private fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
-    val latestOnDrag by rememberUpdatedState(onDrag)
-    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
-    val density = LocalDensity.current.density
-    Box(
-        Modifier.width(14.dp)
-            .fillMaxHeight()
-            .horizontalResizeCursor()
-            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = { latestOnDragEnd() },
-                    onDragCancel = { latestOnDragEnd() },
-                ) { _, drag -> latestOnDrag(drag.x / density) }
-            },
-    ) {
-        Box(Modifier.align(Alignment.Center).width(3.dp).fillMaxHeight().background(PaneDividerTint))
-    }
-}
-
-@Composable
-private fun HorizontalPaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
-    val latestOnDrag by rememberUpdatedState(onDrag)
-    val latestOnDragEnd by rememberUpdatedState(onDragEnd)
-    val density = LocalDensity.current.density
-    Box(
-        Modifier.fillMaxWidth()
-            .height(18.dp)
-            .verticalResizeCursor()
-            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = { latestOnDragEnd() },
-                    onDragCancel = { latestOnDragEnd() },
-                ) { _, drag -> latestOnDrag(drag.y / density) }
-            },
-    ) {
-        Box(Modifier.align(Alignment.Center).fillMaxWidth().height(4.dp).background(PaneDividerTint, RoundedCornerShape(2.dp)))
-    }
 }
 
 class LogcatState {
@@ -7091,27 +6922,6 @@ private fun AccessibilityDetails(node: AccessibilityNode?) {
 }
 
 @Composable
-private fun DetailSection(title: String) {
-    Text(title, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().background(PanelSoft).padding(horizontal = 4.dp, vertical = 2.dp))
-}
-
-@Composable
-private fun DetailRow(label: String, value: String?) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.width(116.dp))
-        Text(
-            value?.takeIf { it.isNotBlank() } ?: "<not set>",
-            color = TextPrimary,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
 private fun BugsScreen(bugs: BugService) {
     val scope = rememberCoroutineScope()
     var reports by remember { mutableStateOf<List<BugReport>>(emptyList()) }
@@ -7561,87 +7371,6 @@ private fun formatBytes(bytes: Long): String {
 }
 
 @Composable
-private fun PlaceholderScreen(name: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("$name subsystem is represented in navigation and service contracts for v1 expansion.", color = TextSecondary)
-    }
-}
-
-@Composable
-private fun Toolbar(title: String, subtitle: String, onPrimary: (() -> Unit)? = null, primaryLabel: String = "Run") {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 23.sp)
-            Text(subtitle.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-        }
-        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel.lowercase(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-    }
-}
-
-@Composable
-private fun PanelCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.R3)
-    Column(
-        modifier
-            .background(AndyColors.Neutral800.copy(alpha = 0.82f), shape)
-            .border(1.dp, Border, shape)
-            .noiseGridOverlay(0.025f)
-            .padding(AndySpace.S4),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        content = content,
-    )
-}
-
-@Composable
-private fun EmptyState(text: String) {
-    Box(Modifier.fillMaxWidth().height(150.dp).background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)), contentAlignment = Alignment.Center) {
-        Text(text.lowercase(), color = TextSecondary, fontFamily = MonoFont)
-    }
-}
-
-@Composable
-private fun FilterPill(text: String, selected: Boolean, color: Color, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
-    Box(
-        Modifier.height(28.dp)
-            .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
-            .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text.lowercase(), color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, lineHeight = 14.sp)
-    }
-}
-
-@Composable
-private fun TableHeader(columns: List<Pair<String, androidx.compose.ui.unit.Dp>>) {
-    Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        columns.forEach { (title, width) ->
-            Text(title.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, modifier = if (width.value == 1f) Modifier.weight(1f) else Modifier.width(width))
-        }
-    }
-}
-
-@Composable
-private fun TableRow(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
-    Row(
-        modifier.fillMaxWidth()
-            .heightIn(min = 32.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.72f))
-            .border(1.dp, Color.White.copy(alpha = 0.05f))
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        content = content,
-    )
-}
-
-@Composable
-private fun MonoCell(text: String, width: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
-    Text(text, color = color, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (modifier != Modifier) modifier else Modifier.width(width))
-}
-
-@Composable
 private fun AppIconCell(serial: String, packageName: String, apps: AppService, cache: MutableMap<String, ByteArray?>) {
     val icon = cache[packageName]
     LaunchedEffect(serial, packageName) {
@@ -7658,56 +7387,6 @@ private fun AppIconCell(serial: String, packageName: String, apps: AppService, c
         if (bitmap != null) {
             Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.fillMaxSize())
         }
-    }
-}
-
-@Composable
-private fun FormRow(label: String, field: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(110.dp))
-        field()
-    }
-}
-
-@Composable
-private fun LabeledField(
-    label: String,
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    singleLine: Boolean = true,
-    minHeight: androidx.compose.ui.unit.Dp = 54.dp,
-    placeholder: String? = null,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-        TextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = singleLine,
-            modifier = Modifier.fillMaxWidth().heightIn(min = minHeight),
-            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
-            colors = fieldColors(),
-            placeholder = placeholder?.let { hint ->
-                { Text(hint.lowercase(), color = TextSecondary, fontFamily = MonoFont) }
-            },
-        )
-    }
-}
-
-@Composable
-private fun ControlRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont)
-        Text(value, color = TextPrimary, fontFamily = MonoFont)
-    }
-}
-
-@Composable
-private fun MetricCard(label: String, value: String) {
-    PanelCard(Modifier.width(170.dp).height(96.dp)) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold)
-        Text(value, color = TextPrimary, fontSize = 26.sp, fontFamily = MonoFont)
     }
 }
 
@@ -7765,37 +7444,6 @@ private fun levelColor(level: LogLevel): Color = when (level) {
     LogLevel.Error, LogLevel.Fatal -> Red
     LogLevel.Silent -> TextSecondary
 }
-
-@Composable
-private fun fieldColors(): TextFieldColors = TextFieldDefaults.colors(
-    focusedTextColor = TextPrimary,
-    unfocusedTextColor = TextPrimary,
-    focusedContainerColor = AndyColors.Neutral900.copy(alpha = 0.72f),
-    unfocusedContainerColor = AndyColors.Neutral850,
-    disabledContainerColor = AndyColors.Neutral800,
-    focusedIndicatorColor = AndyColors.OrangeBorder,
-    unfocusedIndicatorColor = Border,
-    disabledIndicatorColor = Border.copy(alpha = 0.45f),
-    cursorColor = Rust,
-    focusedPlaceholderColor = TextSecondary,
-    unfocusedPlaceholderColor = TextSecondary,
-)
-
-@Composable
-private fun primaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
-    containerColor = AndyColors.OrangeSubtle,
-    contentColor = AndyColors.Neutral100,
-    disabledContainerColor = AndyColors.Neutral600,
-    disabledContentColor = AndyColors.Neutral400,
-)
-
-@Composable
-private fun secondaryButtonColors(): ButtonColors = ButtonDefaults.buttonColors(
-    containerColor = AndyColors.Neutral850,
-    contentColor = TextPrimary,
-    disabledContainerColor = AndyColors.Neutral700,
-    disabledContentColor = AndyColors.Neutral500,
-)
 
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
