@@ -113,6 +113,7 @@ import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
 import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
+import app.andy.ui.theme.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -153,62 +154,6 @@ enum class AndyDestination(val label: String) {
     Bugs("Bugs"),
     Settings("Settings"),
 }
-
-private object AndyColors {
-    val Neutral100 = Color(0xFFF4F1E8)
-    val Neutral200 = Color(0xFFE4DED0)
-    val Neutral300 = Color(0xFFC6BEAD)
-    val Neutral400 = Color(0xFF8E8779)
-    val Neutral500 = Color(0xFF514D44)
-    val Neutral600 = Color(0xFF302D27)
-    val Neutral700 = Color(0xFF24211C)
-    val Neutral750 = Color(0xFF1D1A16)
-    val Neutral800 = Color(0xFF171511)
-    val Neutral850 = Color(0xFF11100D)
-    val Neutral900 = Color(0xFF0A0908)
-
-    val Orange = Color(0xFFD18A4B)
-    val OrangeHover = Color(0xFFE0A56E)
-    val OrangePressed = Color(0xFFB97138)
-    val OrangeSubtle = Color(0xFF2C2117)
-    val OrangeBorder = Color(0xFF8D6746)
-    val Green = Color(0xFF94C17A)
-    val GreenSoft = Color(0xFFB4D59E)
-    val GreenSubtle = Color(0xFF172418)
-    val Blue = Color(0xFF88AFC8)
-    val Warning = Color(0xFFE3B05E)
-    val Error = Color(0xFFE26F5C)
-}
-
-private object AndySpace {
-    val S1 = 4.dp
-    val S2 = 8.dp
-    val S3 = 12.dp
-    val S4 = 16.dp
-    val S5 = 24.dp
-}
-
-private object AndyRadius {
-    val R2 = 4.dp
-    val R3 = 6.dp
-    val R4 = 8.dp
-    val R5 = 10.dp
-    val Pill = 999.dp
-}
-
-private val MonoFont = FontFamily.Monospace
-private val Ink = AndyColors.Neutral900
-private val Panel = AndyColors.Neutral800
-private val PanelSoft = AndyColors.Neutral700
-private val Border = AndyColors.Neutral100.copy(alpha = 0.10f)
-private val PaneDividerTint = AndyColors.OrangeBorder.copy(alpha = 0.72f)
-private val TextPrimary = AndyColors.Neutral200
-private val TextSecondary = AndyColors.Neutral400
-private val Rust = AndyColors.Orange
-private val Green = AndyColors.Green
-private val Cyan = AndyColors.Blue
-private val Yellow = AndyColors.Warning
-private val Red = AndyColors.Error
 
 private data class SetupRequirement(
     val label: String,
@@ -573,29 +518,7 @@ fun AndyApp(
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
 ) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            background = Ink,
-            surface = Panel,
-            surfaceVariant = PanelSoft,
-            primary = Rust,
-            secondary = Green,
-            onBackground = TextPrimary,
-            onSurface = TextPrimary,
-            onSurfaceVariant = TextSecondary,
-            outline = Border,
-            error = Red,
-        ),
-        typography = Typography(
-            displayLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 30.sp, lineHeight = 38.sp, fontWeight = FontWeight.SemiBold),
-            headlineLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
-            titleMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
-            bodyMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp),
-            bodySmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 16.sp),
-            labelMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium),
-            labelSmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 9.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium),
-        ),
-    ) {
+    AndyTheme {
         AndyShell(services, requestedDestination, onDestinationConsumed, onPopOutMirror, contentTopPadding)
     }
 }
@@ -607,20 +530,7 @@ fun AndyMirrorPopOut(
     deviceName: String? = null,
     controlsVisible: Boolean = false,
 ) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            background = Ink,
-            surface = Panel,
-            surfaceVariant = PanelSoft,
-            primary = Rust,
-            secondary = Green,
-            onBackground = TextPrimary,
-            onSurface = TextPrimary,
-            onSurfaceVariant = TextSecondary,
-            outline = Border,
-            error = Red,
-        ),
-    ) {
+    AndyTheme {
         val scope = rememberCoroutineScope()
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }
