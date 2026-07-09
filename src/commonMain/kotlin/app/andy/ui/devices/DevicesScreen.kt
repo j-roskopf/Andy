@@ -309,13 +309,11 @@ internal fun DevicesScreen(
                                 OutlinedButton(onClick = {
                                     state.wifiStatus = "Disconnecting ${live.serial}..."
                                     onDisconnectWifi(live.serial)
-                                    state.wifiStatus = "Disconnected ${live.serial}"
                                 }) { Text("Disconnect") }
                             } else {
                                 OutlinedButton(onClick = {
                                     state.wifiStatus = "Reconnecting ${paired.displayName}..."
                                     onReconnectPairedWifi(paired)
-                                    state.wifiStatus = "Reconnect requested for ${paired.displayName}"
                                 }) { Text("Reconnect") }
                             }
                             OutlinedButton(onClick = {

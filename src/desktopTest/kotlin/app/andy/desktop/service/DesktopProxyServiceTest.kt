@@ -389,6 +389,28 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun routeDiagnosticsRecognizesIpv6LoopbackAsLocalDebugProxy() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        env.macProxyOutput = """
+            <dictionary> {
+              HTTPEnable : 1
+              HTTPProxy : ::1
+              HTTPPort : 9090
+              HTTPSEnable : 1
+              HTTPSProxy : ::1
+              HTTPSPort : 9090
+            }
+        """.trimIndent()
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertTrue(diagnostics.hostProxyActive)
+        assertEquals("http://[::1]:9090", diagnostics.hostUpstreamProxy)
+        assertTrue(diagnostics.issues.any { it.contains("local debug proxy") })
+    }
+
+    @Test
     fun openVpnSettingsStartsAndroidVpnSettings() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()

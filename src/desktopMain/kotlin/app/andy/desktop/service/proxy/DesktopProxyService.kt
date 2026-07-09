@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -671,14 +672,13 @@ class DesktopProxyService(
                     when (val event = parseMitmproxyEvent(line)) {
                         is MitmproxyEvent.Exchange -> {
                             val exchange = event.exchange
-                            val current = exchanges.value
-                            val index = current.indexOfFirst { it.id == exchange.id }
-                            if (index >= 0) {
-                                val mutable = current.toMutableList()
-                                mutable[index] = exchange
-                                exchanges.value = mutable
-                            } else {
-                                exchanges.value = (current + exchange).takeLast(MaxNetworkExchanges)
+                            exchanges.update { current ->
+                                val index = current.indexOfFirst { it.id == exchange.id }
+                                if (index >= 0) {
+                                    current.toMutableList().also { it[index] = exchange }
+                                } else {
+                                    (current + exchange).takeLast(MaxNetworkExchanges)
+                                }
                             }
                             if (isClientTlsRejectionError(exchange.error) || exchange.method == "TLS") {
                                 pushWarning(
@@ -694,7 +694,7 @@ class DesktopProxyService(
                             }
                         }
                         is MitmproxyEvent.ClientConnected -> {
-                            clientConnectionCount.value = clientConnectionCount.value + 1
+                            clientConnectionCount.update { it + 1 }
                         }
                         is MitmproxyEvent.ClientDisconnected -> Unit
                         null -> Unit
@@ -739,7 +739,7 @@ class DesktopProxyService(
             message = message.take(400),
             sni = sni,
         )
-        warnings.value = (warnings.value + warning).takeLast(50)
+        warnings.update { (it + warning).takeLast(50) }
     }
 
     private fun writeRules(rules: List<ProxyRule>) {

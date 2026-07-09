@@ -70,16 +70,20 @@ internal fun proxyEndpoint(entries: Map<String, String>, prefix: String): String
     val host = entries["${prefix}Proxy"]?.takeIf { it.isNotBlank() } ?: return null
     val port = entries["${prefix}Port"]?.takeIf { it.isNotBlank() } ?: return null
     val scheme = if (prefix == "SOCKS") "socks5" else "http"
-    return "$scheme://$host:$port"
+    val authorityHost = if (':' in host && !host.startsWith("[")) "[$host]" else host
+    return "$scheme://$authorityHost:$port"
 }
 
 internal fun isLocalHostProxy(upstream: String?): Boolean {
     if (upstream.isNullOrBlank()) return false
-    val host = upstream
+    val authority = upstream
         .substringAfter("://", missingDelimiterValue = upstream)
         .substringBefore('/')
-        .substringBefore(':')
-        .lowercase()
+    val host = when {
+        authority.startsWith("[") -> authority.substringBefore(']') + "]"
+        authority.count { it == ':' } > 1 -> authority // unbracketed IPv6 without port, or already host-only
+        else -> authority.substringBefore(':')
+    }.lowercase()
     return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
 }
 

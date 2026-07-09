@@ -168,8 +168,10 @@ internal class ShellState(
         actionsConfig = services.actionConfig.load()
         workspaceLoaded = true
         if (saved.pairedWifiDevices.isNotEmpty()) {
-            val discovery = services.devices.discoverSdk()
-            if (discovery.hasAdb) {
+            // Reconnect in the background so workspace load / first device refresh are not blocked.
+            scope.launch {
+                val discovery = services.devices.discoverSdk()
+                if (!discovery.hasAdb) return@launch
                 val mdnsReady = runCatching { services.devices.mdnsAvailable() }.getOrDefault(false)
                 val mdnsServices = if (mdnsReady) {
                     runCatching { services.devices.listMdnsServices() }.getOrDefault(emptyList())
@@ -177,21 +179,23 @@ internal class ShellState(
                     emptyList()
                 }
                 saved.pairedWifiDevices.forEach { paired ->
-                    runCatching {
-                        withTimeout(8_000) {
-                            val (result, endpoint) = reconnectPairedWifiDevice(services.devices, paired, mdnsServices)
-                            if (result.isSuccess && endpoint != null && endpoint != paired.lastEndpoint) {
-                                workspaceState = workspaceState.copy(
-                                    pairedWifiDevices = workspaceState.pairedWifiDevices.map {
-                                        if (it.id == paired.id) it.copy(lastEndpoint = endpoint) else it
-                                    },
-                                )
+                    launch {
+                        runCatching {
+                            withTimeout(8_000) {
+                                val (result, endpoint) = reconnectPairedWifiDevice(services.devices, paired, mdnsServices)
+                                if (result.isSuccess && endpoint != null && endpoint != paired.lastEndpoint) {
+                                    updateWorkspace { state ->
+                                        state.copy(
+                                            pairedWifiDevices = state.pairedWifiDevices.map {
+                                                if (it.id == paired.id) it.copy(lastEndpoint = endpoint) else it
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
+                        refreshDevicesNow()
                     }
-                }
-                if (workspaceState.pairedWifiDevices != saved.pairedWifiDevices) {
-                    services.workspaceStore.save(workspaceState)
                 }
             }
         }
