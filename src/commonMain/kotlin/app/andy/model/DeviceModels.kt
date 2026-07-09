@@ -14,6 +14,8 @@ data class AndroidDevice(
     val abi: String? = null,
     val model: String? = null,
     val product: String? = null,
+    /** Stable device identity (ro.serialno / mDNS adb instance body). Not the ADB transport serial. */
+    val hardwareId: String? = null,
     val batteryPercent: Int? = null,
     val screenSize: String? = null,
     val storageSummary: String? = null,
@@ -48,6 +50,23 @@ fun isWifiIpSerial(serial: String): Boolean = WifiSerialPattern.matches(serial)
 fun isMdnsAdbSerial(serial: String): Boolean =
     serial.contains("_adb-tls-connect", ignoreCase = true) || serial.contains("._tcp")
 
+fun isWirelessAdbSerial(serial: String): Boolean = isWifiIpSerial(serial) || isMdnsAdbSerial(serial)
+
+/**
+ * mDNS ADB serials look like `adb-<serial>[-suffix]._adb-tls-connect._tcp`.
+ * Returns the instance body after `adb-` when present.
+ */
+fun extractMdnsHardwareId(serial: String): String? {
+    if (!isMdnsAdbSerial(serial)) return null
+    val instance = serial.substringBefore("._").trim()
+    if (instance.isEmpty()) return null
+    val body = when {
+        instance.startsWith("adb-", ignoreCase = true) -> instance.drop(4)
+        else -> instance
+    }.trim()
+    return body.takeIf { it.isNotEmpty() }
+}
+
 fun classifyDeviceKind(serial: String): DeviceKind =
     if (serial.startsWith("emulator-")) DeviceKind.Emulator else DeviceKind.Physical
 
@@ -61,6 +80,9 @@ fun classifyDeviceTransport(serial: String): DeviceTransport = when {
 /**
  * adb often lists the same wireless device twice: once as `ip:port` (from `adb connect`)
  * and once as `adb-…._adb-tls-connect._tcp` (mDNS). Prefer the IP:port serial.
+ *
+ * Only collapse aliases when a stable hardware id is known on both sides — never by
+ * model/product alone, which would hide a second phone of the same model.
  */
 fun dedupeWifiDeviceAliases(devices: List<AndroidDevice>): List<AndroidDevice> {
     val ipWifi = devices.filter { isWifiIpSerial(it.serial) }
@@ -76,24 +98,12 @@ fun dedupeWifiDeviceAliases(devices: List<AndroidDevice>): List<AndroidDevice> {
 }
 
 private fun sameWifiDeviceIdentity(left: AndroidDevice, right: AndroidDevice): Boolean {
-    val leftModel = left.model?.replace('_', ' ')?.trim()?.lowercase().orEmpty()
-    val rightModel = right.model?.replace('_', ' ')?.trim()?.lowercase().orEmpty()
-    if (leftModel.isNotEmpty() && leftModel == rightModel) return true
-
-    val leftProduct = left.product?.trim()?.lowercase().orEmpty()
-    val rightProduct = right.product?.trim()?.lowercase().orEmpty()
-    if (leftProduct.isNotEmpty() && leftProduct == rightProduct) return true
-
-    val leftName = left.displayName.replace('_', ' ').trim().lowercase()
-    val rightName = right.displayName.replace('_', ' ').trim().lowercase()
-    if (leftName.isNotEmpty() &&
-        leftName == rightName &&
-        !isWifiIpSerial(leftName) &&
-        !isMdnsAdbSerial(leftName)
-    ) {
-        return true
-    }
-    return false
+    val leftId = left.hardwareId?.trim().orEmpty()
+    val rightId = right.hardwareId?.trim().orEmpty()
+    if (leftId.length < 4 || rightId.length < 4) return false
+    if (leftId.equals(rightId, ignoreCase = true)) return true
+    // mDNS instance bodies often append a short random suffix after ro.serialno.
+    return leftId.contains(rightId, ignoreCase = true) || rightId.contains(leftId, ignoreCase = true)
 }
 
 data class SdkDiscovery(

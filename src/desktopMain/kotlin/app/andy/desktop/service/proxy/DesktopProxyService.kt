@@ -11,6 +11,7 @@ import app.andy.model.ProxyWarning
 import app.andy.model.ProxyWarningKind
 import app.andy.model.isClientTlsRejectionError
 import app.andy.model.isUpstreamTlsVerificationError
+import app.andy.model.isWirelessAdbSerial
 import app.andy.service.CommandResult
 import app.andy.service.ProxyService
 import kotlinx.coroutines.Dispatchers
@@ -608,6 +609,10 @@ class DesktopProxyService(
     }
 
     private suspend fun restartDeviceInternet(adb: String, serial: String): CommandResult {
+        // Disabling Wi-Fi on an ADB-over-Wi-Fi session drops the transport before re-enable can run.
+        if (isWirelessAdbSerial(serial)) {
+            return CommandResult.success("Skipped Wi-Fi restart for wireless ADB device to avoid dropping the connection")
+        }
         val wifiWasEnabled = readWifiEnabled(adb, serial) != false
         val disableWifi = runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "set-wifi-enabled", "disabled"), 10)
             .takeIf { it.isSuccess }

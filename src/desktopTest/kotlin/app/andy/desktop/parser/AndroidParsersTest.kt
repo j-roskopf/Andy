@@ -5,6 +5,8 @@ import app.andy.model.DeviceKind
 import app.andy.model.LogLevel
 import app.andy.model.AvdProfileCategory
 import app.andy.model.VirtualDeviceType
+import app.andy.model.isMdnsAdbSerial
+import app.andy.model.isWifiIpSerial
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -54,7 +56,9 @@ class AndroidParsersTest {
     }
 
     @Test
-    fun dedupesWifiIpAndMdnsAliasForSameDevice() {
+    fun keepsWifiIpAndMdnsAliasUntilHardwareIdsAreKnown() {
+        // Parse-time rows only have a hardware id on the mDNS serial, so aliases stay until
+        // DesktopDeviceService enriches IP devices with ro.serialno and dedupes again.
         val output = """
             List of devices attached
             192.168.86.150:35923	device product:blazer model:Pixel_10_Pro device:blazer transport_id:3
@@ -64,26 +68,35 @@ class AndroidParsersTest {
 
         val devices = AndroidParsers.parseAdbDevices(output)
 
-        assertEquals(2, devices.size)
-        assertEquals("192.168.86.150:35923", devices[0].serial)
-        assertEquals(app.andy.model.DeviceTransport.Wifi, devices[0].transport)
-        assertEquals("emulator-5554", devices[1].serial)
-        assertTrue(devices.none { it.serial.contains("_adb-tls-connect") })
+        assertEquals(3, devices.size)
+        assertEquals(
+            setOf(
+                "192.168.86.150:35923",
+                "adb-5A080DLCH000UR-oVigq2._adb-tls-connect._tcp",
+                "emulator-5554",
+            ),
+            devices.map { it.serial }.toSet(),
+        )
+        assertEquals("5A080DLCH000UR-oVigq2", devices.first { isMdnsAdbSerial(it.serial) }.hardwareId)
+        assertNull(devices.first { isWifiIpSerial(it.serial) }.hardwareId)
     }
 
     @Test
-    fun keepsDistinctWifiDevicesWithDifferentModels() {
+    fun keepsDistinctSameModelWifiDevicesWithoutSharedHardwareId() {
         val output = """
             List of devices attached
             192.168.86.150:35923	device product:blazer model:Pixel_10_Pro device:blazer transport_id:3
             192.168.86.200:5555	device product:e3q model:SM_S921U device:e3q transport_id:4
-            adb-OTHER._adb-tls-connect._tcp	device product:e3q model:SM_S921U device:e3q transport_id:5
+            adb-OTHERSERIAL._adb-tls-connect._tcp	device product:e3q model:SM_S921U device:e3q transport_id:5
         """.trimIndent()
 
         val devices = AndroidParsers.parseAdbDevices(output)
 
-        assertEquals(2, devices.size)
-        assertEquals(setOf("192.168.86.150:35923", "192.168.86.200:5555"), devices.map { it.serial }.toSet())
+        assertEquals(3, devices.size)
+        assertEquals(
+            setOf("192.168.86.150:35923", "192.168.86.200:5555", "adb-OTHERSERIAL._adb-tls-connect._tcp"),
+            devices.map { it.serial }.toSet(),
+        )
     }
 
     @Test

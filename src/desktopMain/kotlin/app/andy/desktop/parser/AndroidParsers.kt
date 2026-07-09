@@ -32,6 +32,7 @@ object AndroidParsers {
                     transport = classifyDeviceTransport(serial),
                     model = fields["model"],
                     product = fields["product"],
+                    hardwareId = extractMdnsHardwareId(serial),
                 )
             }
             .toList()

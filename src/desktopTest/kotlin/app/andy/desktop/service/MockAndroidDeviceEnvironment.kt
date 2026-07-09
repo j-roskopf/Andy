@@ -58,6 +58,7 @@ internal class MockAndroidDeviceEnvironment {
     """.trimIndent()
     var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
     var hostOsName: String = "Mac OS X"
+    var getpropOverrides: Map<String, String> = emptyMap()
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -401,6 +402,7 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun getprop(serial: String): String {
+        getpropOverrides[serial]?.let { return it }
         return if (serial.startsWith("emulator-")) {
             """
             [ro.boot.qemu.avd_name]: [Pixel_8_API_36]
@@ -408,13 +410,20 @@ internal class MockAndroidDeviceEnvironment {
             [ro.product.cpu.abi]: [arm64-v8a]
             [ro.product.model]: [sdk_gphone64_arm64]
             [ro.product.name]: [sdk_gphone64_arm64]
+            [ro.serialno]: [$serial]
             """.trimIndent()
         } else {
+            val hardwareId = when {
+                serial.startsWith("adb-") -> serial.substringAfter("adb-").substringBefore("._").substringBefore('-').ifBlank { serial }
+                serial.contains(':') -> "WIFI-${serial.substringBefore(':').replace('.', '-')}"
+                else -> serial
+            }
             """
             [ro.build.version.sdk]: [35]
             [ro.product.cpu.abi]: [arm64-v8a]
             [ro.product.model]: [Galaxy S24]
             [ro.product.name]: [e3q]
+            [ro.serialno]: [$hardwareId]
             """.trimIndent()
         }
     }

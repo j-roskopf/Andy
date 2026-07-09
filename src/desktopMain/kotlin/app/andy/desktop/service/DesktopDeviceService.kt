@@ -42,6 +42,9 @@ class DesktopDeviceService(
                     abi = props["ro.product.cpu.abi"],
                     model = props["ro.product.model"] ?: base.model,
                     product = props["ro.product.name"] ?: base.product,
+                    hardwareId = props["ro.serialno"]
+                        ?: props["ro.boot.serialno"]
+                        ?: base.hardwareId,
                     batteryPercent = AndroidParsers.parseBatteryPercent(runner.run(listOf(adb, "-s", base.serial, "shell", "dumpsys", "battery"), 6).stdout),
                     screenSize = AndroidParsers.parseWmSize(runner.run(listOf(adb, "-s", base.serial, "shell", "wm", "size"), 6).stdout),
                     storageSummary = AndroidParsers.parseStorage(runner.run(listOf(adb, "-s", base.serial, "shell", "df", "-h", "/data"), 6).stdout),
