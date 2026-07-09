@@ -38,6 +38,7 @@ import app.andy.ui.intents.IntentsScreen
 import app.andy.ui.live.LiveScreen
 import app.andy.ui.logcat.LogcatScreen
 import app.andy.ui.network.NetworkScreen
+import app.andy.model.ProxyStartOptions
 import app.andy.ui.network.shouldAutoStartProxy
 import app.andy.ui.performance.PerformanceScreen
 import app.andy.ui.settings.SettingsScreen
@@ -88,7 +89,7 @@ internal fun AndyShell(
         }
     }
 
-    LaunchedEffect(state.workspaceLoaded, state.workspaceState.proxyStartOnLaunch, state.workspaceState.proxyPort, state.workspaceState.proxyRules) {
+    LaunchedEffect(state.workspaceLoaded, state.workspaceState.proxyStartOnLaunch, state.workspaceState.proxyPort, state.workspaceState.proxyRules, state.workspaceState.proxySslInsecure, state.workspaceState.proxyUpstreamTrustedCaPath) {
         if (!state.workspaceLoaded || !state.workspaceState.proxyStartOnLaunch) return@LaunchedEffect
         val currentStatus = try {
             withTimeout(200) { services.proxy.status.first() }
@@ -97,7 +98,14 @@ internal fun AndyShell(
         }
         if (shouldAutoStartProxy(currentStatus, state.workspaceState.proxyPort)) {
             services.proxy.ensureCertificateAuthority()
-            services.proxy.start(state.workspaceState.proxyPort, state.workspaceState.proxyRules)
+            services.proxy.start(
+                state.workspaceState.proxyPort,
+                state.workspaceState.proxyRules,
+                ProxyStartOptions(
+                    sslInsecure = state.workspaceState.proxySslInsecure,
+                    upstreamTrustedCaPath = state.workspaceState.proxyUpstreamTrustedCaPath,
+                ),
+            )
         }
     }
 
@@ -159,6 +167,7 @@ internal fun AndyShell(
                             services,
                             state.devices,
                             state.sdk,
+                            pairedWifiDevices = state.workspaceState.pairedWifiDevices,
                             onRefresh = { state.refreshDevices() },
                             onLive = { state.openLive(it) },
                             onEmulatorStarted = { previousSerials, avdName ->
@@ -169,6 +178,10 @@ internal fun AndyShell(
                             stopStatus = state.emulatorStopStatus,
                             startingEmulatorName = state.startingEmulatorName,
                             startStatus = state.emulatorStartStatus,
+                            onSavePairedWifi = state::savePairedWifi,
+                            onForgetPairedWifi = state::forgetPairedWifi,
+                            onReconnectPairedWifi = state::reconnectPairedWifi,
+                            onDisconnectWifi = state::disconnectWifi,
                         )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
@@ -222,9 +235,15 @@ internal fun AndyShell(
                             rules = state.workspaceState.proxyRules,
                             rulesVisible = state.networkRulesVisible,
                             liveVisible = state.networkLiveVisible,
+                            sslInsecure = state.workspaceState.proxySslInsecure,
+                            upstreamTrustedCaPath = state.workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
                             onPortChange = { value -> state.updateWorkspace { it.copy(proxyPort = value) } },
                             onRulesChange = { value -> state.updateWorkspace { it.copy(proxyRules = value) } },
                             onRulesVisibleChange = { state.setNetworkRulesVisible(it) },
+                            onSslInsecureChange = { value -> state.updateWorkspace { it.copy(proxySslInsecure = value) } },
+                            onUpstreamTrustedCaPathChange = { value ->
+                                state.updateWorkspace { it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() }) }
+                            },
                         )
                         AndyDestination.Actions -> ActionsScreen(
                             services = services,

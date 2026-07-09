@@ -16,6 +16,8 @@ internal class DevicesScreenState(
     var deviceQuery by mutableStateOf("")
     var deviceFilter by mutableStateOf(DeviceListFilter.All)
     var showCreateWizard by mutableStateOf(false)
+    var showPairDialog by mutableStateOf(false)
+    var wifiStatus by mutableStateOf("")
     var pendingConfirmation by mutableStateOf<PendingConfirmation?>(null)
     var cloneSource by mutableStateOf<VirtualDevice?>(null)
 }

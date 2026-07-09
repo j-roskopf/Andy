@@ -32,6 +32,14 @@ internal class MockAndroidDeviceEnvironment {
         OFFLINE	offline
         UNAUTH	unauthorized
     """.trimIndent()
+    var mdnsServicesOutput: String = """
+        List of discovered mdns services
+        adb-VAN10A203710441	_adb._tcp	192.168.86.47:5555
+        adb-VAN10A203710441	_adb-tls-connect._tcp	192.168.86.47:37123
+        adb-PAIRING	_adb-tls-pairing._tcp	192.168.86.47:37199
+    """.trimIndent()
+    var pairShouldSucceed: Boolean = true
+    var connectShouldSucceed: Boolean = true
     var rootResult: CommandResult = CommandResult.failure("adbd cannot run as root in production builds")
     var runtimeCaInjectionResult: CommandResult = CommandResult.success("Injected CA")
     var chromeFlagsResult: CommandResult = CommandResult.success()
@@ -50,6 +58,7 @@ internal class MockAndroidDeviceEnvironment {
     """.trimIndent()
     var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
     var hostOsName: String = "Mac OS X"
+    var getpropOverrides: Map<String, String> = emptyMap()
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -144,6 +153,39 @@ internal class MockAndroidDeviceEnvironment {
     private fun runAdb(command: List<String>): CommandResult {
         if (command.drop(1) == listOf("devices", "-l")) {
             return CommandResult.success(adbDevicesOutput)
+        }
+        if (command.drop(1) == listOf("mdns", "check")) {
+            return CommandResult.success("mdns daemon version ...")
+        }
+        if (command.drop(1) == listOf("mdns", "services")) {
+            return CommandResult.success(mdnsServicesOutput)
+        }
+        if (command.getOrNull(1) == "pair") {
+            val endpoint = command.getOrNull(2).orEmpty()
+            val code = command.getOrNull(3).orEmpty()
+            return if (pairShouldSucceed && code.isNotBlank()) {
+                CommandResult.success("Successfully paired to $endpoint [guid=mock-guid]")
+            } else {
+                CommandResult(0, "Failed: Wrong password or connection was dropped.", "")
+            }
+        }
+        if (command.getOrNull(1) == "connect") {
+            val endpoint = command.getOrNull(2).orEmpty()
+            return if (connectShouldSucceed) {
+                if (!adbDevicesOutput.contains(endpoint)) {
+                    adbDevicesOutput = adbDevicesOutput.trimEnd() + "\n$endpoint\tdevice product:wifi model:Wifi_Device device:wifi transport_id:9"
+                }
+                CommandResult.success("connected to $endpoint")
+            } else {
+                CommandResult(0, "failed to connect to $endpoint", "")
+            }
+        }
+        if (command.getOrNull(1) == "disconnect") {
+            val serial = command.getOrNull(2).orEmpty()
+            adbDevicesOutput = adbDevicesOutput.lineSequence()
+                .filterNot { it.trimStart().startsWith("$serial\t") || it.trimStart().startsWith("$serial ") }
+                .joinToString("\n")
+            return CommandResult.success("disconnected $serial")
         }
 
         val serial = command.getOrNull(2)
@@ -360,6 +402,7 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun getprop(serial: String): String {
+        getpropOverrides[serial]?.let { return it }
         return if (serial.startsWith("emulator-")) {
             """
             [ro.boot.qemu.avd_name]: [Pixel_8_API_36]
@@ -367,13 +410,20 @@ internal class MockAndroidDeviceEnvironment {
             [ro.product.cpu.abi]: [arm64-v8a]
             [ro.product.model]: [sdk_gphone64_arm64]
             [ro.product.name]: [sdk_gphone64_arm64]
+            [ro.serialno]: [$serial]
             """.trimIndent()
         } else {
+            val hardwareId = when {
+                serial.startsWith("adb-") -> serial.substringAfter("adb-").substringBefore("._").substringBefore('-').ifBlank { serial }
+                serial.contains(':') -> "WIFI-${serial.substringBefore(':').replace('.', '-')}"
+                else -> serial
+            }
             """
             [ro.build.version.sdk]: [35]
             [ro.product.cpu.abi]: [arm64-v8a]
             [ro.product.model]: [Galaxy S24]
             [ro.product.name]: [e3q]
+            [ro.serialno]: [$hardwareId]
             """.trimIndent()
         }
     }
@@ -422,13 +472,14 @@ internal class MockAndroidDeviceEnvironment {
     """.trimIndent()
 }
 
-internal class MockProxyProcess : ProxyProcess {
-    override val stdout: InputStream = ByteArrayInputStream(
-        """
+internal class MockProxyProcess(
+    stdoutText: String = """
         {"type":"flow","id":"flow-1","startedAtMillis":1000,"completedAtMillis":1042,"durationMillis":42,"method":"GET","url":"https://example.test/api","statusCode":201,"contentType":"application/json","sizeBytes":17,"requestHeaders":{"accept":"application/json"},"responseHeaders":{"content-type":"application/json"},"requestBodyPreview":null,"responseBodyPreview":"{\"ok\":true}","error":null,"tlsStatus":"tls","matchedRuleId":"rule-1"}
-        """.trimIndent().encodeToByteArray(),
-    )
-    override val stderr: InputStream = ByteArrayInputStream(ByteArray(0))
+        """.trimIndent(),
+    stderrText: String = "",
+) : ProxyProcess {
+    override val stdout: InputStream = ByteArrayInputStream(stdoutText.encodeToByteArray())
+    override val stderr: InputStream = ByteArrayInputStream(stderrText.encodeToByteArray())
     private var alive = true
     override fun isAlive(): Boolean = alive
     override fun destroy() {

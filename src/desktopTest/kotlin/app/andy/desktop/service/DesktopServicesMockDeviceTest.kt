@@ -193,6 +193,44 @@ class DesktopServicesMockDeviceTest {
     }
 
     @Test
+    fun wifiPairConnectAndMdnsUseMockAdb() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        assertTrue(services.devices.mdnsAvailable())
+        val mdns = services.devices.listMdnsServices()
+        assertEquals(3, mdns.size)
+        assertTrue(mdns.any { it.isPairing })
+        assertTrue(mdns.any { it.isConnect })
+
+        val paired = services.devices.pair("192.168.86.47", 37199, "123456")
+        assertTrue(paired.isSuccess)
+        assertTrue(paired.stdout.contains("Successfully paired"))
+
+        env.pairShouldSucceed = false
+        val failedPair = services.devices.pair("192.168.86.47", 37199, "000000")
+        assertFalse(failedPair.isSuccess)
+
+        val connected = services.devices.connect("192.168.86.47", 5555)
+        assertTrue(connected.isSuccess)
+        assertTrue(connected.stdout.contains("connected to"))
+        assertTrue(env.ran("connect", "192.168.86.47:5555"))
+
+        env.connectShouldSucceed = false
+        val failedConnect = services.devices.connect("192.168.86.47", 5555)
+        assertFalse(failedConnect.isSuccess)
+
+        env.connectShouldSucceed = true
+        val disconnected = services.devices.disconnect("192.168.86.47:5555")
+        assertTrue(disconnected.isSuccess)
+        assertTrue(env.ran("disconnect", "192.168.86.47:5555"))
+
+        val qr = services.devices.generatePairingQr("WIFI:T:ADB;S:Andy123;P:654321;;")
+        assertNotNull(qr)
+        assertTrue(qr.size > 100)
+    }
+
+    @Test
     fun avdCatalogAndLifecycleUseMockSdkTools() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()
@@ -503,5 +541,59 @@ class DesktopServicesMockDeviceTest {
         assertTrue(env.commands.any { command -> command.takeLast(5) == listOf("shell", "settings", "get", "global", "wifi_on") })
         assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "disabled") })
         assertEquals(2, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "enabled") })
+    }
+
+    @Test
+    fun configureDeviceProxySkipsWifiRestartForWirelessAdb() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        val wirelessSerial = "192.168.86.47:5555"
+
+        val configured = services.proxy.configureDeviceProxy(wirelessSerial, "192.168.86.10", 8888)
+        val cleared = services.proxy.clearDeviceProxy(wirelessSerial)
+
+        assertTrue(configured.isSuccess)
+        assertTrue(cleared.isSuccess)
+        assertTrue(configured.stdout.contains("Skipped Wi-Fi restart", ignoreCase = true))
+        assertTrue(cleared.stdout.contains("Skipped Wi-Fi restart", ignoreCase = true))
+        assertEquals(0, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "disabled") })
+        assertEquals(0, env.commands.count { command -> command.takeLast(5) == listOf("shell", "cmd", "wifi", "set-wifi-enabled", "enabled") })
+        assertEquals(0, env.commands.count { command -> command.takeLast(4) == listOf("shell", "svc", "data", "disable") })
+    }
+
+    @Test
+    fun listDevicesDedupesWifiIpAndMdnsUsingHardwareId() = runBlocking {
+        val env = MockAndroidDeviceEnvironment().apply {
+            adbDevicesOutput = """
+                List of devices attached
+                192.168.86.150:35923	device product:blazer model:Pixel_10_Pro device:blazer transport_id:3
+                adb-5A080DLCH000UR-oVigq2._adb-tls-connect._tcp	device product:blazer model:Pixel_10_Pro device:blazer transport_id:4
+                emulator-5554	device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1
+            """.trimIndent()
+            // Force both wireless rows to share the same ro.serialno so enrichment can alias them.
+            getpropOverrides = mapOf(
+                "192.168.86.150:35923" to """
+                    [ro.build.version.sdk]: [35]
+                    [ro.product.cpu.abi]: [arm64-v8a]
+                    [ro.product.model]: [Pixel 10 Pro]
+                    [ro.product.name]: [blazer]
+                    [ro.serialno]: [5A080DLCH000UR]
+                """.trimIndent(),
+                "adb-5A080DLCH000UR-oVigq2._adb-tls-connect._tcp" to """
+                    [ro.build.version.sdk]: [35]
+                    [ro.product.cpu.abi]: [arm64-v8a]
+                    [ro.product.model]: [Pixel 10 Pro]
+                    [ro.product.name]: [blazer]
+                    [ro.serialno]: [5A080DLCH000UR]
+                """.trimIndent(),
+            )
+        }
+        val services = env.services()
+
+        val devices = services.devices.listDevices()
+
+        assertEquals(2, devices.size)
+        assertEquals(setOf("192.168.86.150:35923", "emulator-5554"), devices.map { it.serial }.toSet())
+        assertTrue(devices.none { it.serial.contains("_adb-tls-connect") })
     }
 }

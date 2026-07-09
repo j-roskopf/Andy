@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.ProjectAction
+import app.andy.model.ProjectNote
 import app.andy.service.ActionConfigStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,6 +40,7 @@ private data class ActionsFileDto(
     val version: Int = 1,
     val projects: List<ProjectDto> = emptyList(),
     val actions: List<ActionDto> = emptyList(),
+    val notes: List<NoteDto> = emptyList(),
 )
 
 @Serializable
@@ -60,8 +62,18 @@ private data class ActionDto(
     @TomlInline val env: Map<String, String> = emptyMap(),
 )
 
+@Serializable
+private data class NoteDto(
+    val id: String,
+    val projectId: String,
+    val title: String,
+    val body: String = "",
+    val completed: Boolean = false,
+)
+
 private fun ActionsFileDto.toModel(): ActionsConfig {
     val actionsByProject = actions.groupBy { it.projectId }
+    val notesByProject = notes.groupBy { it.projectId }
     return ActionsConfig(
         projects = projects.map { project ->
             ActionProject(
@@ -77,6 +89,14 @@ private fun ActionsFileDto.toModel(): ActionsConfig {
                         command = action.command,
                         cwd = action.cwd.takeIf { it.isNotBlank() },
                         env = action.env,
+                    )
+                },
+                notes = notesByProject[project.id].orEmpty().map { note ->
+                    ProjectNote(
+                        id = note.id,
+                        title = note.title,
+                        body = note.body,
+                        completed = note.completed,
                     )
                 },
             )
@@ -103,6 +123,17 @@ private fun ActionsConfig.toFileDto(): ActionsFileDto = ActionsFileDto(
                 command = action.command,
                 cwd = action.cwd.orEmpty(),
                 env = action.env,
+            )
+        }
+    },
+    notes = projects.flatMap { project ->
+        project.notes.map { note ->
+            NoteDto(
+                id = note.id,
+                projectId = project.id,
+                title = note.title,
+                body = note.body,
+                completed = note.completed,
             )
         }
     },

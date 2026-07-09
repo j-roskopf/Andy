@@ -104,6 +104,7 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
+                implementation("com.google.zxing:core:3.5.3")
 
                 // MCP and Ktor Server Dependencies
                 implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")

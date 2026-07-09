@@ -16,7 +16,7 @@ class MitmAddonSourceTest {
     companion object {
         /** SHA-256 of `src/desktopMain/resources/proxy/andy_mitm_addon.py` (runtime source). */
         const val EXPECTED_RESOURCE_SHA256 =
-            "9873513a43d1986934cc51d6e2c6edec2616c5fb6db54843a3876d6ed6b788a6"
+            "7972e62dc6ba215cd6dd4d4189dd2a5bfafdc5f598c560afc11ce6e5aecafe02"
     }
 
     @Test
@@ -24,7 +24,11 @@ class MitmAddonSourceTest {
         val bytes = MitmAddon.getAddonSource()
         assertEquals(EXPECTED_RESOURCE_SHA256, sha256Hex(bytes))
         assertTrue(bytes.isNotEmpty())
-        assertTrue(String(bytes, Charsets.UTF_8).contains("def request("))
+        val source = String(bytes, Charsets.UTF_8)
+        assertTrue(source.contains("def request("))
+        assertTrue(source.contains("def tls_failed_client("))
+        assertTrue(source.contains("tls_failed"))
+        assertTrue(source.contains("def client_connected("))
     }
 
     private fun sha256Hex(bytes: ByteArray): String {

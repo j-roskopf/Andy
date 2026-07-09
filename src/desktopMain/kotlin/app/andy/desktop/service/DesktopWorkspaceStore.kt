@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
 import app.andy.model.WorkspaceState
 import app.andy.service.WorkspaceStore
@@ -20,10 +21,13 @@ class DesktopWorkspaceStore : WorkspaceStore {
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
             proxyStartOnLaunch = props.getProperty("proxyStartOnLaunch")?.toBooleanStrictOrNull() ?: false,
+            proxySslInsecure = props.getProperty("proxySslInsecure")?.toBooleanStrictOrNull() ?: false,
+            proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             proxyRules = loadProxyRules(props),
+            pairedWifiDevices = loadPairedWifi(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 230f,
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
@@ -49,6 +53,8 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
             setProperty("proxyStartOnLaunch", state.proxyStartOnLaunch.toString())
+            setProperty("proxySslInsecure", state.proxySslInsecure.toString())
+            setProperty("proxyUpstreamTrustedCaPath", state.proxyUpstreamTrustedCaPath.orEmpty())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
@@ -64,6 +70,15 @@ class DesktopWorkspaceStore : WorkspaceStore {
                 setProperty(prefix + "setHeaders", encodeHeaderMap(rule.setHeaders))
                 setProperty(prefix + "removeHeaders", rule.removeHeaders.joinToString("\n"))
                 setProperty(prefix + "responseBody", rule.responseBody.orEmpty())
+            }
+            setProperty("pairedWifiCount", state.pairedWifiDevices.size.toString())
+            state.pairedWifiDevices.forEachIndexed { index, device ->
+                val prefix = "pairedWifi.$index."
+                setProperty(prefix + "id", device.id)
+                setProperty(prefix + "displayName", device.displayName)
+                setProperty(prefix + "mdnsInstanceName", device.mdnsInstanceName.orEmpty())
+                setProperty(prefix + "lastEndpoint", device.lastEndpoint.orEmpty())
+                setProperty(prefix + "pairedAtMillis", device.pairedAtMillis.toString())
             }
             setProperty("liveDevicePaneWidth", state.liveDevicePaneWidth.toString())
             setProperty("liveControlsPaneHeight", state.liveControlsPaneHeight.toString())
@@ -98,6 +113,21 @@ class DesktopWorkspaceStore : WorkspaceStore {
                 setHeaders = decodeHeaderMap(props.getProperty(prefix + "setHeaders").orEmpty()),
                 removeHeaders = props.getProperty(prefix + "removeHeaders").orEmpty().lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList(),
                 responseBody = props.getProperty(prefix + "responseBody")?.takeIf { it.isNotBlank() },
+            )
+        }
+    }
+
+    private fun loadPairedWifi(props: Properties): List<PairedWifiDevice> {
+        val count = props.getProperty("pairedWifiCount")?.toIntOrNull() ?: return emptyList()
+        return (0 until count).mapNotNull { index ->
+            val prefix = "pairedWifi.$index."
+            val id = props.getProperty(prefix + "id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            PairedWifiDevice(
+                id = id,
+                displayName = props.getProperty(prefix + "displayName").orEmpty().ifBlank { id },
+                mdnsInstanceName = props.getProperty(prefix + "mdnsInstanceName")?.takeIf { it.isNotBlank() },
+                lastEndpoint = props.getProperty(prefix + "lastEndpoint")?.takeIf { it.isNotBlank() },
+                pairedAtMillis = props.getProperty(prefix + "pairedAtMillis")?.toLongOrNull() ?: 0L,
             )
         }
     }

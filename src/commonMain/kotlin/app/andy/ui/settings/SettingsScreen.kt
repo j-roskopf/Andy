@@ -176,6 +176,42 @@ internal fun SettingsScreen(
                     Text(proxyStatus, color = if (proxyRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
                 }
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "Corporate TLS inspection: if your Mac routes through a security proxy that re-signs HTTPS, point Andy at the corporate root CA or enable insecure upstream.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(
+                    checked = workspaceState.proxySslInsecure,
+                    onCheckedChange = { checked ->
+                        onUpdateWorkspace { it.copy(proxySslInsecure = checked) }
+                    },
+                )
+                Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 13.sp)
+            }
+            TextField(
+                value = workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
+                onValueChange = { value ->
+                    onUpdateWorkspace {
+                        it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() })
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+                placeholder = {
+                    Text("Corporate root CA path (optional)", color = TextSecondary, fontSize = 13.sp)
+                },
+            )
         }
 
         PanelCard {
