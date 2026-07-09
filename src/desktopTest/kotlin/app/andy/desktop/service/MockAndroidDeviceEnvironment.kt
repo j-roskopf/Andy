@@ -35,6 +35,16 @@ internal class MockAndroidDeviceEnvironment {
     var remountResult: CommandResult = CommandResult.success("remount succeeded")
     var persistedCaInstalled: Boolean = false
     var keepStoppedEmulatorInAdbAsOffline: Boolean = false
+    var httpProxyValue: String = "10.0.2.2:8888"
+    var connectivityDump: String = "NetworkAgentInfo [WIFI () - 100]\n"
+    var routeToProxyOutput: String = "10.0.2.2 dev eth0 src 10.0.2.15\n"
+    var macProxyOutput: String = """
+        <dictionary> {
+          ExcludeSimpleHostnames : 1
+        }
+    """.trimIndent()
+    var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
+    var hostOsName: String = "Mac OS X"
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -76,6 +86,7 @@ internal class MockAndroidDeviceEnvironment {
                     proxyCommands += command
                     MockProxyProcess()
                 },
+                hostOsName = { hostOsName },
             ),
             metrics = DesktopMetricsService(runner, devices),
             accessibility = DesktopAccessibilityService(runner, devices),
@@ -119,6 +130,8 @@ internal class MockAndroidDeviceEnvironment {
             adb.absolutePath -> runAdb(command)
             sdkManager.absolutePath -> runSdkManager(command)
             avdManager.absolutePath -> runAvdManager(command)
+            "/usr/sbin/scutil" -> if (command == listOf("/usr/sbin/scutil", "--proxy")) CommandResult.success(macProxyOutput) else CommandResult.failure("Unexpected scutil command: ${command.joinToString(" ")}")
+            "/sbin/ifconfig" -> if (command == listOf("/sbin/ifconfig")) CommandResult.success(hostIfconfigOutput) else CommandResult.failure("Unexpected ifconfig command: ${command.joinToString(" ")}")
             else -> CommandResult.failure("Unexpected command: ${command.joinToString(" ")}")
         }
     }
@@ -167,6 +180,28 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun runShell(serial: String, shell: List<String>): CommandResult {
+        if (shell.size == 5 && shell.take(4) == listOf("settings", "put", "global", "http_proxy")) {
+            httpProxyValue = shell[4]
+            return CommandResult.success()
+        }
+        if (shell == listOf("settings", "get", "global", "http_proxy")) {
+            return CommandResult.success(httpProxyValue)
+        }
+        if (shell.size == 5 && shell.take(4) == listOf("settings", "put", "global", "global_http_proxy_host")) {
+            return CommandResult.success()
+        }
+        if (shell.size == 5 && shell.take(4) == listOf("settings", "put", "global", "global_http_proxy_port")) {
+            return CommandResult.success()
+        }
+        if (shell.size == 4 && shell.take(3) == listOf("settings", "delete", "global")) {
+            return CommandResult.success()
+        }
+        if (shell == listOf("dumpsys", "connectivity")) {
+            return CommandResult.success(connectivityDump)
+        }
+        if (shell.size == 4 && shell.take(3) == listOf("ip", "route", "get")) {
+            return CommandResult.success(routeToProxyOutput)
+        }
         return when (shell) {
             listOf("getprop") -> CommandResult.success(getprop(serial))
             listOf("dumpsys", "battery") -> CommandResult.success("level: 87\nstatus: 2\n")
@@ -207,8 +242,6 @@ internal class MockAndroidDeviceEnvironment {
             listOf("chcon", "u:object_r:system_file:s0", "/system/etc/andy/cacerts/abcdef12.0", "/system/etc/security/cacerts/abcdef12.0", "/system/etc/andy/andy-ca-injector.sh", "/system/etc/init/andy-ca.rc") -> CommandResult.success()
             listOf("test", "-f", "/system/etc/andy/andy-ca-injector.sh") -> if (persistedCaInstalled) CommandResult.success() else CommandResult.failure("missing")
             listOf("sh", "/system/etc/andy/andy-ca-injector.sh") -> runtimeCaInjectionResult
-            listOf("settings", "put", "global", "http_proxy", "10.0.2.2:8888") -> CommandResult.success()
-            listOf("settings", "put", "global", "http_proxy", ":0") -> CommandResult.success()
             listOf("settings", "put", "global", "global_http_proxy_host", "10.0.2.2") -> CommandResult.success()
             listOf("settings", "put", "global", "global_http_proxy_port", "8888") -> CommandResult.success()
             listOf("settings", "delete", "global", "global_http_proxy_host") -> CommandResult.success()
@@ -232,6 +265,7 @@ internal class MockAndroidDeviceEnvironment {
             listOf("input", "swipe", "1", "2", "3", "4", "250") -> CommandResult.success()
             listOf("input", "text", "hello%sworld") -> CommandResult.success()
             listOf("input", "keyevent", "4") -> CommandResult.success()
+            listOf("am", "start", "-a", "android.settings.VPN_SETTINGS") -> CommandResult.success("Starting: Intent")
             else -> {
                 if (shell.take(2) == listOf("am", "start")) {
                     CommandResult.success("Starting: Intent")

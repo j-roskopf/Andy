@@ -92,6 +92,8 @@ interface ProxyService {
     suspend fun resolveDeviceProxyHost(serial: String): String
     suspend fun configureDeviceProxy(serial: String, host: String, port: Int): CommandResult
     suspend fun clearDeviceProxy(serial: String): CommandResult
+    suspend fun diagnoseDeviceProxyRoute(serial: String, host: String, port: Int): NetworkRouteDiagnostics
+    suspend fun openVpnSettings(serial: String): CommandResult
     suspend fun prepareUserCertificateInstall(serial: String): CommandResult
     suspend fun installSystemCertificateAuthority(serial: String): CommandResult
     suspend fun activatePersistedCertificateAuthority(serial: String): CommandResult
