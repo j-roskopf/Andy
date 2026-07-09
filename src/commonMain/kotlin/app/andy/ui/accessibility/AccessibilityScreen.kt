@@ -41,14 +41,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.LiveDevicePane
-import app.andy.MirrorFrameContent
 import app.andy.domain.findBestNodeAt
 import app.andy.domain.parseBounds
 import app.andy.model.AccessibilityNode
 import app.andy.model.AndroidDevice
-import app.andy.rememberMirrorInputSender
 import app.andy.service.AndyServices
+import app.andy.ui.live.LiveDevicePane
+import app.andy.ui.live.MirrorFrameContent
+import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.components.DetailRow
 import app.andy.ui.components.DetailSection
 import app.andy.ui.components.FilterPill
