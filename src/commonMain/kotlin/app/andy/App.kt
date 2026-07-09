@@ -7396,7 +7396,8 @@ private fun activeBugPointerEvent(actions: List<BugAction>, playbackMillis: Long
 
 private fun parseBugActionPoint(action: BugAction): Pair<Int, Int>? {
     if (action.kind != "input") return null
-    val match = Regex("""(\d+),(\d+)""").find(action.label) ?: return null
+    val text = listOfNotNull(action.label, action.detail).joinToString(" ")
+    val match = Regex("""(\d+),(\d+)""").find(text) ?: return null
     val x = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
     val y = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return null
     return x to y

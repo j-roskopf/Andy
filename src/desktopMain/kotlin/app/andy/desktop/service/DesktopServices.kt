@@ -1032,13 +1032,14 @@ class DesktopMirrorEngine(
         }
     }
 
-    // The emulator gRPC streamScreenshot RGB888 payload is top-down (top-left origin),
-    // matching how Android Studio renders it, so rows are copied in natural order.
+    // The emulator gRPC streamScreenshot RGB888 payload is bottom-up, so flip rows
+    // while converting to the top-down ARGB layout expected by Swing/Compose.
     private fun rgbToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
         val pixels = IntArray(width * height)
         val row = ByteArray(width * EMULATOR_IMAGE_BYTES_PER_PIXEL)
         for (y in 0 until height) {
-            rgb.position(y * row.size)
+            val sourceY = height - 1 - y
+            rgb.position(sourceY * row.size)
             rgb.get(row, 0, row.size)
             var source = 0
             var destination = y * width
