@@ -692,6 +692,7 @@ private fun AndyShell(
     var sdk by remember { mutableStateOf(SdkDiscovery(null, null, null, null, null, listOf("SDK not scanned yet"))) }
     var selectedSerial by remember { mutableStateOf<String?>(null) }
     var workspaceState by remember { mutableStateOf(WorkspaceState()) }
+    var workspaceLoaded by remember { mutableStateOf(false) }
     var networkRulesVisible by remember { mutableStateOf(false) }
     var networkLiveVisible by remember { mutableStateOf(false) }
     var performanceLiveVisible by remember { mutableStateOf(false) }
@@ -777,6 +778,7 @@ private fun AndyShell(
         workspaceState = saved
         selectedSerial = saved.selectedDeviceSerial
         actionsConfig = services.actionConfig.load()
+        workspaceLoaded = true
         refreshDevices()
     }
 
@@ -802,6 +804,19 @@ private fun AndyShell(
         }
     }
 
+    LaunchedEffect(workspaceLoaded, workspaceState.proxyStartOnLaunch, workspaceState.proxyPort, workspaceState.proxyRules) {
+        if (!workspaceLoaded || !workspaceState.proxyStartOnLaunch) return@LaunchedEffect
+        val currentStatus = try {
+            withTimeout(200) { services.proxy.status.first() }
+        } catch (_: Exception) {
+            "Proxy stopped"
+        }
+        if (shouldAutoStartProxy(currentStatus, workspaceState.proxyPort)) {
+            services.proxy.ensureCertificateAuthority()
+            services.proxy.start(workspaceState.proxyPort, workspaceState.proxyRules)
+        }
+    }
+
     fun updateWorkspace(transform: (WorkspaceState) -> WorkspaceState) {
         val updated = transform(workspaceState).copy(selectedDeviceSerial = selectedSerial)
         workspaceState = updated
@@ -814,6 +829,8 @@ private fun AndyShell(
     }
 
     val mcpRunning by services.mcp.running.collectAsState(false)
+    val proxyStatus by services.proxy.status.collectAsState("Proxy stopped")
+    val proxyRunning = proxyStatus.contains("listening on")
 
     Box(
         Modifier.fillMaxSize()
@@ -848,6 +865,7 @@ private fun AndyShell(
                         services.actionRuns.stop(run.runId)
                         activeRunId = run.runId
                     },
+                    proxyRunning = proxyRunning,
                     actions = {
                         if (destination == AndyDestination.Network) {
                             FilterPill("Rules", networkRulesVisible, Rust) { networkRulesVisible = !networkRulesVisible }
@@ -1202,6 +1220,7 @@ private fun TopChrome(
     runningActions: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     onStopAction: (RunningAction) -> Unit,
+    proxyRunning: Boolean,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
@@ -1219,6 +1238,10 @@ private fun TopChrome(
         }
         Spacer(Modifier.weight(1f))
         actions()
+        if (destination != AndyDestination.Network && proxyRunning) {
+            ProxyToolbarIndicator()
+            Spacer(Modifier.width(10.dp))
+        }
         if (hasActionRunnerControls) {
             ActionRunnerSelector(
                 config = actionConfig,
@@ -1244,6 +1267,21 @@ private fun TopChrome(
         }
         Spacer(Modifier.width(10.dp))
         DevicePicker(devices, selectedDevice?.serial, onSelectDevice)
+    }
+}
+
+@Composable
+private fun ProxyToolbarIndicator() {
+    Row(
+        Modifier.height(30.dp)
+            .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.Pill))
+            .border(1.dp, Green.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.Pill))
+            .padding(horizontal = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        GlowingDot(isGreen = true, modifier = Modifier.size(14.dp))
+        Text("proxy", color = AndyColors.GreenSoft, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
     }
 }
 
@@ -4933,6 +4971,7 @@ private fun NetworkScreen(
     }
     var caInstalled by remember { mutableStateOf(false) }
     var proxyConfigured by remember { mutableStateOf(false) }
+    var routeDiagnostics by remember { mutableStateOf<NetworkRouteDiagnostics?>(null) }
     var userCaVerifiedByTrafficForDevice by remember { mutableStateOf(false) }
     var proxyTrafficObservedForDevice by remember { mutableStateOf(false) }
     var trafficEvidenceSerial by remember { mutableStateOf<String?>(null) }
@@ -4992,6 +5031,7 @@ private fun NetworkScreen(
         if (serial == null) {
             caInstalled = false
             proxyConfigured = false
+            routeDiagnostics = null
             deviceReadinessChecked = true
             return@LaunchedEffect
         }
@@ -5000,8 +5040,10 @@ private fun NetworkScreen(
             val isCaOk = proxy.isCertificateInstalled(serial)
             val host = proxy.resolveDeviceProxyHost(serial)
             val isProxyOk = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+            val route = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
             caInstalled = isCaOk
             proxyConfigured = isProxyOk
+            routeDiagnostics = route
             deviceReadinessChecked = true
             delay(3000)
         }
@@ -5016,6 +5058,7 @@ private fun NetworkScreen(
         caInstalled,
         proxyTrafficObservedForDevice,
         proxyConfigured,
+        routeDiagnostics,
     ) {
         if (setupDefaultApplied || setupManuallyToggled || !engineChecked || !deviceReadinessChecked) return@LaunchedEffect
         val redCount = listOf(
@@ -5025,6 +5068,7 @@ private fun NetworkScreen(
             proxyStatus.contains("listening on"),
             serial != null && (caInstalled || proxyTrafficObservedForDevice),
             serial != null && proxyConfigured,
+            serial != null && routeDiagnostics?.vpnActive != true && routeDiagnostics?.routeUsesVpn != true,
         ).count { !it }
         setupExpanded = redCount > 2
         setupDefaultApplied = true
@@ -5198,6 +5242,16 @@ private fun NetworkScreen(
                     proxyConfigured -> "Device is routed"
                     else -> "Click 'Configure' to route"
                 }
+                val routeText = when {
+                    serial == null -> "Select a device first"
+                    routeDiagnostics == null -> "Checking route"
+                    routeDiagnostics?.hostProxyActive == true && routeDiagnostics?.hostUpstreamProxy != null -> "Mac proxy chained"
+                    routeDiagnostics?.hostProxyActive == true -> "Mac proxy active"
+                    routeDiagnostics?.vpnActive == true -> "VPN active (may cause issues)"
+                    routeDiagnostics?.routeUsesVpn == true -> "Proxy route uses VPN"
+                    routeDiagnostics?.proxyConfigured == false -> "Proxy route needs repair"
+                    else -> "No VPN route issue detected"
+                }
                 val setupRequirements = listOf(
                     SetupRequirement(
                         label = "Android SDK platform-tools",
@@ -5238,7 +5292,17 @@ private fun NetworkScreen(
                         readyText = configText,
                         missingText = configText,
                     ),
+                    SetupRequirement(
+                        label = "VPN / Route",
+                        ok = serial != null &&
+                            routeDiagnostics?.vpnActive != true &&
+                            routeDiagnostics?.routeUsesVpn != true &&
+                            routeDiagnostics?.hostProxyBypassLooksSafe != false,
+                        readyText = routeText,
+                        missingText = routeText,
+                    ),
                 )
+                val showRouteWarning = routeDiagnostics?.hasBlockingIssue == true && proxyStarted && !proxyTrafficObservedForDevice
                 AnimatedVisibility(setupExpanded) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
@@ -5255,9 +5319,42 @@ private fun NetworkScreen(
                                         val result = proxy.configureDeviceProxy(serial, host, currentPort)
                                         status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
                                         proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                        routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
                                     }
                                 },
                             ) { Text("Configure device proxy") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val host = proxy.resolveDeviceProxyHost(serial)
+                                        proxyHost = host
+                                        val configured = proxy.configureDeviceProxy(serial, host, currentPort)
+                                        val route = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
+                                        routeDiagnostics = route
+                                        proxyConfigured = route.proxyConfigured
+                                        val restart = if (route.hostProxyActive) proxy.start(currentPort, rules) else null
+                                        status = if (route.vpnActive) {
+                                            "Proxy route repaired, but VPN is still active. Open VPN settings and disable or split-tunnel the test app."
+                                        } else if (restart?.isSuccess == true) {
+                                            "Proxy route repaired; Andy restarted mitmproxy through the Mac proxy."
+                                        } else if (configured.isSuccess && !route.hasBlockingIssue) {
+                                            "Proxy route repaired"
+                                        } else {
+                                            (route.issues.ifEmpty { listOf(restart?.stderr ?: configured.stderr) }).joinToString(" ")
+                                        }
+                                    }
+                                },
+                            ) { Text("Repair proxy route") }
+                            OutlinedButton(
+                                enabled = serial != null,
+                                onClick = {
+                                    if (serial != null) scope.launch {
+                                        val result = proxy.openVpnSettings(serial)
+                                        status = if (result.isSuccess) "Opened Android VPN settings" else result.stderr
+                                    }
+                                },
+                            ) { Text("Open VPN settings") }
                             OutlinedButton(
                                 enabled = serial != null,
                                 onClick = {
@@ -5292,6 +5389,9 @@ private fun NetworkScreen(
                         }
                         SetupChecklist(setupRequirements)
                         SetupChecklist(networkStatusRequirements)
+                        AnimatedVisibility(showRouteWarning) {
+                            NetworkRouteWarningCard(routeDiagnostics)
+                        }
                         Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             StatusTag(if (engineReady) "mitmproxy ready" else "mitmproxy missing", if (engineReady) Green else Red)
@@ -5561,6 +5661,30 @@ private fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
                 .size(8.dp)
                 .background(color, CircleShape)
                 .border(1.dp, color.copy(alpha = 0.8f), CircleShape)
+        )
+    }
+}
+
+@Composable
+private fun NetworkRouteWarningCard(diagnostics: NetworkRouteDiagnostics?, modifier: Modifier = Modifier) {
+    val issues = diagnostics?.issues.orEmpty()
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(Yellow.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Yellow.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Traffic may be bypassing Andy", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        issues.take(3).forEach { issue ->
+            Text(issue, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        Text(
+            "Repair proxy route reapplies Android's global proxy and restarts mitmproxy through the Mac proxy when one is configured. If traffic still disappears, add localhost, 127.0.0.1, and 10.0.2.2 to the Mac proxy bypass list or disable/split-tunnel the VPN.",
+            color = Yellow,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
         )
     }
 }
@@ -8099,12 +8223,56 @@ private fun SettingsScreen(
 
     val mcpStatus by services.mcp.status.collectAsState("stopped")
     val mcpRunning by services.mcp.running.collectAsState(false)
+    val proxyStatus by services.proxy.status.collectAsState("Proxy stopped")
+    val proxyRunning = proxyStatus.contains("listening on")
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text("mcp settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+        Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        PanelCard {
+            Text("HTTP debug proxy", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text(
+                "Start Andy's mitmdump capture proxy automatically when the app opens.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Checkbox(
+                        checked = workspaceState.proxyStartOnLaunch,
+                        onCheckedChange = { checked ->
+                            onUpdateWorkspace { it.copy(proxyStartOnLaunch = checked) }
+                        }
+                    )
+                    Text("Start proxy on app launch", color = TextPrimary, fontSize = 13.sp)
+                }
+
+                Spacer(Modifier.width(16.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Proxy Status:", color = TextSecondary, fontSize = 12.sp)
+                    GlowingDot(proxyRunning)
+                    Text(proxyStatus, color = if (proxyRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
 
         PanelCard {
             Text("Model Context Protocol (MCP) Server", color = TextPrimary, fontWeight = FontWeight.Bold)

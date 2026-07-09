@@ -81,6 +81,7 @@ class DesktopProxyServiceTest {
             val store = DesktopWorkspaceStore()
             store.save(
                 WorkspaceState(
+                    proxyStartOnLaunch = true,
                     proxyRules = listOf(
                         ProxyRule(
                             id = "rule-404",
@@ -97,8 +98,10 @@ class DesktopProxyServiceTest {
                 ),
             )
 
-            val loadedRule = store.load().proxyRules.single()
+            val loaded = store.load()
+            val loadedRule = loaded.proxyRules.single()
 
+            assertTrue(loaded.proxyStartOnLaunch)
             assertEquals(404, loadedRule.statusCode)
             assertEquals(mapOf("x-andy" to "missing", "content-type" to "application/json"), loadedRule.setHeaders)
             assertEquals(listOf("Server", "etag"), loadedRule.removeHeaders)
@@ -132,12 +135,108 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun startChainsMitmproxyThroughDetectedMacProxy() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        env.macProxyOutput = """
+            <dictionary> {
+              HTTPEnable : 1
+              HTTPProxy : proxy.example.test
+              HTTPPort : 8080
+              ExceptionsList : <array> {
+                0 : localhost
+                1 : 127.0.0.1
+                2 : 10.0.2.2
+              }
+            }
+        """.trimIndent()
+        val services = env.services()
+
+        val result = services.proxy.start(8888, emptyList())
+
+        assertTrue(result.isSuccess)
+        val command = env.proxyCommands.single()
+        assertTrue(command.windowed(2).any { it == listOf("--mode", "upstream:http://proxy.example.test:8080") })
+        assertTrue(result.stdout.contains("via Mac proxy http://proxy.example.test:8080"))
+    }
+
+    @Test
     fun deviceProxyHostUsesEmulatorLoopbackAliasOnlyForEmulators() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()
 
         assertEquals("10.0.2.2", services.proxy.resolveDeviceProxyHost("emulator-5554"))
         assertTrue(services.proxy.resolveDeviceProxyHost("R3CXB056ZZB").isNotBlank())
+    }
+
+    @Test
+    fun routeDiagnosticsDetectsActiveVpnAndProxyMismatch() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        env.httpProxyValue = ":0"
+        env.connectivityDump = """
+            NetworkAgentInfo{ ni{[type: VPN[], state: CONNECTED/CONNECTED, reason: connected]}
+              mOwnerName=com.example.vpn
+              NetworkCapabilities: TRANSPORT_VPN
+            }
+        """.trimIndent()
+        env.routeToProxyOutput = "10.0.2.2 dev tun0 src 10.8.0.2"
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertFalse(diagnostics.proxyConfigured)
+        assertTrue(diagnostics.vpnActive)
+        assertEquals("com.example.vpn", diagnostics.vpnName)
+        assertTrue(diagnostics.routeUsesVpn)
+        assertTrue(diagnostics.issues.any { it.contains("VPN is active") })
+        assertTrue(diagnostics.issues.any { it.contains("expected 10.0.2.2:8888") })
+    }
+
+    @Test
+    fun routeDiagnosticsReportsMacProxyBypassRisk() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        env.macProxyOutput = """
+            <dictionary> {
+              HTTPEnable : 1
+              HTTPProxy : proxy.example.test
+              HTTPPort : 8080
+              ExceptionsList : <array> {
+                0 : localhost
+              }
+            }
+        """.trimIndent()
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertTrue(diagnostics.hostProxyActive)
+        assertEquals("http://proxy.example.test:8080", diagnostics.hostUpstreamProxy)
+        assertFalse(diagnostics.hostProxyBypassLooksSafe)
+        assertTrue(diagnostics.issues.any { it.contains("Mac proxy is active") })
+        assertTrue(diagnostics.issues.any { it.contains("bypass rules") })
+    }
+
+    @Test
+    fun routeDiagnosticsPassesWhenProxyIsConfiguredAndNoVpnIsActive() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertTrue(diagnostics.proxyConfigured)
+        assertFalse(diagnostics.vpnActive)
+        assertFalse(diagnostics.routeUsesVpn)
+        assertTrue(diagnostics.issues.isEmpty())
+    }
+
+    @Test
+    fun openVpnSettingsStartsAndroidVpnSettings() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        val result = services.proxy.openVpnSettings("emulator-5554")
+
+        assertTrue(result.isSuccess)
+        assertTrue(env.ran("shell", "am", "start", "-a", "android.settings.VPN_SETTINGS"))
     }
 
     @Test

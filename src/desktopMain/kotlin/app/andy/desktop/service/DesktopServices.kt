@@ -763,6 +763,19 @@ private fun emulatorDisplayAspectDrifted(frame: MirrorFrame, displaySize: Emulat
     return abs(frameAspect - displayAspect) > 0.03
 }
 
+internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
+    val pixels = IntArray(width * height)
+    val bytes = rgb.duplicate()
+    bytes.position(0)
+    for (index in pixels.indices) {
+        val red = bytes.get().toInt() and 0xff
+        val green = bytes.get().toInt() and 0xff
+        val blue = bytes.get().toInt() and 0xff
+        pixels[index] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
+    }
+    return pixels
+}
+
 internal fun scaledEmulatorTouchPoint(
     x: Int,
     y: Int,
@@ -1007,7 +1020,7 @@ class DesktopMirrorEngine(
                 frames.value = MirrorFrame(
                     width = image.width,
                     height = image.height,
-                    argb = rgbToArgb(image.width, image.height, rgb),
+                    argb = emulatorRgb888ToArgb(image.width, image.height, rgb),
                     frameNumber = ++frameNumber,
                     decodedFps = decodedFps.takeIf { it > 0f },
                 )
@@ -1030,27 +1043,6 @@ class DesktopMirrorEngine(
         } finally {
             mappedFramebuffer?.close()
         }
-    }
-
-    // The emulator gRPC streamScreenshot RGB888 payload is bottom-up, so flip rows
-    // while converting to the top-down ARGB layout expected by Swing/Compose.
-    private fun rgbToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
-        val pixels = IntArray(width * height)
-        val row = ByteArray(width * EMULATOR_IMAGE_BYTES_PER_PIXEL)
-        for (y in 0 until height) {
-            val sourceY = height - 1 - y
-            rgb.position(sourceY * row.size)
-            rgb.get(row, 0, row.size)
-            var source = 0
-            var destination = y * width
-            while (source < row.size) {
-                val red = row[source++].toInt() and 0xff
-                val green = row[source++].toInt() and 0xff
-                val blue = row[source++].toInt() and 0xff
-                pixels[destination++] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
-            }
-        }
-        return pixels
     }
 
     private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
@@ -2351,19 +2343,28 @@ class DesktopProxyService(
         proxyDir.mkdirs()
         writeAddon()
         writeRules(rules)
-        val command = listOf(
-            executable,
-            "--listen-host", "0.0.0.0",
-            "--listen-port", port.toString(),
-            "--set", "confdir=${proxyDir.absolutePath}",
-            "-s", addonFile.absolutePath,
-            "--set", "termlog_verbosity=warn",
-        )
+        val hostProxy = detectHostProxyState()
+        val command = buildList {
+            add(executable)
+            hostProxy.upstreamProxy?.let { upstream ->
+                add("--mode")
+                add("upstream:$upstream")
+            }
+            addAll(
+                listOf(
+                    "--listen-host", "0.0.0.0",
+                    "--listen-port", port.toString(),
+                    "--set", "confdir=${proxyDir.absolutePath}",
+                    "-s", addonFile.absolutePath,
+                    "--set", "termlog_verbosity=warn",
+                ),
+            )
+        }
         runCatching {
             process = processStarter(command, proxyDir, mapOf("ANDY_RULES_PATH" to rulesFile.absolutePath))
-            status.value = "mitmdump listening on 0.0.0.0:$port"
+            status.value = "mitmdump listening on 0.0.0.0:$port" + hostProxy.upstreamProxy?.let { " via Mac proxy $it" }.orEmpty()
             pumpProcess(process!!)
-            CommandResult.success("mitmdump listening on 0.0.0.0:$port")
+            CommandResult.success(status.value)
         }.getOrElse { error ->
             status.value = "Proxy failed: ${error.message ?: error::class.simpleName}"
             CommandResult.failure(status.value)
@@ -2424,6 +2425,56 @@ class DesktopProxyService(
             listOf("settings", "delete", "global", "global_proxy_pac_url"),
         )
         return runAdbShellSequence(adb, serial, commands, "Device proxy cleared")
+    }
+
+    override suspend fun diagnoseDeviceProxyRoute(serial: String, host: String, port: Int): NetworkRouteDiagnostics = withContext(Dispatchers.IO) {
+        val adb = devices.adbPath()
+            ?: return@withContext NetworkRouteDiagnostics(
+                expectedProxy = "$host:$port",
+                configuredProxy = null,
+                proxyConfigured = false,
+                vpnActive = false,
+                issues = listOf("ADB not found"),
+            )
+        val expectedProxy = "$host:$port"
+        val configuredProxy = readConfiguredProxy(adb, serial)
+        val proxyConfigured = configuredProxy == expectedProxy
+        val connectivity = runner.run(listOf(adb, "-s", serial, "shell", "dumpsys", "connectivity"), 10)
+        val vpn = parseVpnRouteState(connectivity.stdout)
+        val route = runner.run(listOf(adb, "-s", serial, "shell", "ip", "route", "get", host), 10)
+        val routeSummary = route.stdout.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+        val routeUsesVpn = routeSummary?.contains(Regex("""\b(tun|ppp|wg|vpn)\w*""", RegexOption.IGNORE_CASE)) == true
+        val hostProxy = detectHostProxyState()
+        val hostVpn = detectHostVpnState()
+        val issues = buildList {
+            if (!proxyConfigured) add("Android global proxy is ${configuredProxy ?: "not set"}; expected $expectedProxy.")
+            if (vpn.active) add("A VPN is active${vpn.name?.let { " ($it)" }.orEmpty()}; it can bypass Android's global HTTP proxy or route Andy's proxy endpoint into the tunnel.")
+            if (routeUsesVpn) add("The route to Andy's proxy host appears to use a VPN interface: $routeSummary")
+            if (hostProxy.active && hostProxy.upstreamProxy != null) add("Mac proxy is active; Andy will chain mitmproxy through ${hostProxy.upstreamProxy}.")
+            if (hostProxy.active && !hostProxy.bypassLooksSafe) add("Mac proxy bypass rules do not clearly include localhost/127.0.0.1/10.0.2.2; add them if emulator traffic still disappears.")
+            if (hostVpn.active) add("Mac VPN-like interfaces are active (${hostVpn.summary}); emulator traffic may be routed by the host tunnel.")
+        }
+        NetworkRouteDiagnostics(
+            expectedProxy = expectedProxy,
+            configuredProxy = configuredProxy,
+            proxyConfigured = proxyConfigured,
+            vpnActive = vpn.active,
+            vpnName = vpn.name,
+            routeUsesVpn = routeUsesVpn,
+            routeSummary = routeSummary,
+            hostProxyActive = hostProxy.active,
+            hostProxySummary = hostProxy.summary,
+            hostUpstreamProxy = hostProxy.upstreamProxy,
+            hostProxyBypassLooksSafe = hostProxy.bypassLooksSafe,
+            hostVpnActive = hostVpn.active,
+            hostVpnSummary = hostVpn.summary,
+            issues = issues,
+        )
+    }
+
+    override suspend fun openVpnSettings(serial: String): CommandResult {
+        val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
+        return runner.run(listOf(adb, "-s", serial, "shell", "am", "start", "-a", "android.settings.VPN_SETTINGS"), 10)
     }
 
     override suspend fun prepareUserCertificateInstall(serial: String): CommandResult = withContext(Dispatchers.IO) {
@@ -2500,19 +2551,36 @@ class DesktopProxyService(
 
     override suspend fun isDeviceProxyConfigured(serial: String, host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         val adb = devices.adbPath() ?: return@withContext false
-        val result = runner.run(listOf(adb, "-s", serial, "shell", "settings", "get", "global", "http_proxy"), 10)
-        if (!result.isSuccess) return@withContext false
-        val currentProxy = result.stdout.trim()
-        val parts = currentProxy.split(':')
-        if (parts.size == 2) {
-            val currentHost = parts[0].trim()
-            val currentPort = parts[1].trim().toIntOrNull()
-            currentHost == host && currentPort == port
-        } else {
-            false
-        }
+        readConfiguredProxy(adb, serial) == "$host:$port"
     }
 
+    private suspend fun readConfiguredProxy(adb: String, serial: String): String? {
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "settings", "get", "global", "http_proxy"), 10)
+        if (!result.isSuccess) return null
+        return result.stdout.trim().takeIf { it.isNotBlank() && it != "null" && it != ":0" }
+    }
+
+    private suspend fun detectHostProxyState(): HostProxyState {
+        val result = runner.run(listOf("/usr/sbin/scutil", "--proxy"), 5)
+        if (!result.isSuccess) return HostProxyState(active = false)
+        return parseMacProxyState(result.stdout)
+    }
+
+    private suspend fun detectHostVpnState(): HostVpnState {
+        val result = runner.run(listOf("/sbin/ifconfig"), 5)
+        if (!result.isSuccess) return HostVpnState(active = false)
+        val activeInterfaces = Regex("""^([a-z]+[0-9]+): flags=.*\bUP\b""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE))
+            .findAll(result.stdout)
+            .mapNotNull { match ->
+                val name = match.groupValues.getOrNull(1).orEmpty()
+                name.takeIf { it.startsWith("utun") || it.startsWith("ppp") || it.startsWith("ipsec") || it.startsWith("wg") }
+            }
+            .toList()
+        return HostVpnState(
+            active = activeInterfaces.isNotEmpty(),
+            summary = activeInterfaces.distinct().joinToString(", ").takeIf { it.isNotBlank() },
+        )
+    }
 
     private suspend fun installPersistentCertificateAuthority(adb: String, serial: String, androidCert: File, originalCertificate: File): CommandResult {
         val remount = remountWritableSystem(adb, serial)
@@ -2977,6 +3045,91 @@ internal fun parseMitmproxyFlowLine(line: String): NetworkExchange? {
     )
 }
 
+internal data class VpnRouteState(val active: Boolean, val name: String?)
+
+internal fun parseVpnRouteState(dumpsysConnectivity: String): VpnRouteState {
+    val lines = dumpsysConnectivity.lines()
+    val vpnLine = lines.firstOrNull { line ->
+        line.contains("TRANSPORT_VPN") ||
+            line.contains("type: VPN", ignoreCase = true) ||
+            (line.contains("VPN") && line.contains("CONNECTED", ignoreCase = true))
+    } ?: return VpnRouteState(active = false, name = null)
+    val ownerLine = lines.firstOrNull { line ->
+        line.contains("mOwnerName=", ignoreCase = true) ||
+            line.contains("owner=", ignoreCase = true) ||
+            (line.contains("vpn", ignoreCase = true) && line.contains("package", ignoreCase = true))
+    }
+    val name = ownerLine
+        ?.let { Regex("""(?:mOwnerName|owner|packageName|package)=([A-Za-z0-9_.-]+)""", RegexOption.IGNORE_CASE).find(it)?.groupValues?.getOrNull(1) }
+        ?: Regex("""\b([a-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+){2,})\b""").find(vpnLine)?.groupValues?.getOrNull(1)
+    return VpnRouteState(active = true, name = name)
+}
+
+internal data class HostProxyState(
+    val active: Boolean,
+    val summary: String? = null,
+    val upstreamProxy: String? = null,
+    val bypassLooksSafe: Boolean = true,
+)
+
+private data class HostVpnState(val active: Boolean, val summary: String? = null)
+
+internal fun parseMacProxyState(scutilProxy: String): HostProxyState {
+    val entries = scutilProxy.lineSequence()
+        .mapNotNull { line ->
+            val trimmed = line.trim()
+            if (":" !in trimmed) return@mapNotNull null
+            trimmed.substringBefore(":").trim() to trimmed.substringAfter(":").trim()
+        }
+        .toMap()
+    val http = proxyEndpoint(entries, "HTTP")
+    val https = proxyEndpoint(entries, "HTTPS")
+    val socks = proxyEndpoint(entries, "SOCKS")
+    val upstream = https ?: http ?: socks
+    val activeParts = listOfNotNull(
+        http?.let { "HTTP $it" },
+        https?.let { "HTTPS $it" },
+        socks?.let { "SOCKS $it" },
+        entries["ProxyAutoConfigEnable"]?.takeIf { it == "1" }?.let { entries["ProxyAutoConfigURLString"]?.let { url -> "PAC $url" } ?: "PAC" },
+    )
+    val active = activeParts.isNotEmpty()
+    val exceptions = scutilProxy.lineSequence()
+        .map { it.trim() }
+        .filter { Regex("""^\d+\s*:""").containsMatchIn(it) }
+        .map { it.substringAfter(":").trim() }
+        .toList()
+    val simpleHostsExcluded = entries["ExcludeSimpleHostnames"] == "1"
+    val bypassLooksSafe = !active || simpleHostsExcluded || listOf("localhost", "127.0.0.1", "10.0.2.2").all { expected ->
+        exceptions.any { exception -> proxyExceptionCovers(exception, expected) }
+    }
+    return HostProxyState(
+        active = active,
+        summary = activeParts.joinToString(", ").takeIf { it.isNotBlank() },
+        upstreamProxy = upstream,
+        bypassLooksSafe = bypassLooksSafe,
+    )
+}
+
+private fun proxyEndpoint(entries: Map<String, String>, prefix: String): String? {
+    if (entries["${prefix}Enable"] != "1") return null
+    val host = entries["${prefix}Proxy"]?.takeIf { it.isNotBlank() } ?: return null
+    val port = entries["${prefix}Port"]?.takeIf { it.isNotBlank() } ?: return null
+    val scheme = if (prefix == "SOCKS") "socks5" else "http"
+    return "$scheme://$host:$port"
+}
+
+private fun proxyExceptionCovers(exception: String, expected: String): Boolean {
+    val normalized = exception.trim().lowercase()
+    val target = expected.lowercase()
+    return normalized == target ||
+        normalized == "<local>" && target == "localhost" ||
+        normalized == "*.local" && target.endsWith(".local") ||
+        normalized.endsWith(".*") && target.startsWith(normalized.removeSuffix(".*")) ||
+        normalized.endsWith("/8") && normalized.substringBefore("/") == "10.0.0.0" && target.startsWith("10.") ||
+        normalized.endsWith("/16") && target.startsWith(normalized.substringBeforeLast('.').removeSuffix(".0")) ||
+        normalized.endsWith("/24") && target.startsWith(normalized.substringBeforeLast('.'))
+}
+
 private fun quoteJson(value: String): String {
     return buildString {
         append('"')
@@ -3285,6 +3438,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             selectedDeviceSerial = props.getProperty("selectedDeviceSerial")?.takeIf { it.isNotBlank() },
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
+            proxyStartOnLaunch = props.getProperty("proxyStartOnLaunch")?.toBooleanStrictOrNull() ?: false,
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             proxyRules = loadProxyRules(props),
@@ -3312,6 +3466,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
+            setProperty("proxyStartOnLaunch", state.proxyStartOnLaunch.toString())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())

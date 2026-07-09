@@ -261,6 +261,26 @@ data class NetworkExchange(
     val flowId: String,
 )
 
+data class NetworkRouteDiagnostics(
+    val expectedProxy: String,
+    val configuredProxy: String?,
+    val proxyConfigured: Boolean,
+    val vpnActive: Boolean,
+    val vpnName: String? = null,
+    val routeUsesVpn: Boolean = false,
+    val routeSummary: String? = null,
+    val hostProxyActive: Boolean = false,
+    val hostProxySummary: String? = null,
+    val hostUpstreamProxy: String? = null,
+    val hostProxyBypassLooksSafe: Boolean = true,
+    val hostVpnActive: Boolean = false,
+    val hostVpnSummary: String? = null,
+    val hostRouteSummary: String? = null,
+    val issues: List<String> = emptyList(),
+) {
+    val hasBlockingIssue: Boolean get() = issues.isNotEmpty()
+}
+
 data class PerformanceSample(
     val timestampMillis: Long,
     val cpuPercent: Float?,
@@ -319,6 +339,7 @@ data class WorkspaceState(
     val enabledLogLevels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
     val proxyRules: List<ProxyRule> = emptyList(),
     val proxyPort: Int = 9099,
+    val proxyStartOnLaunch: Boolean = false,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
     val liveDevicePaneWidth: Float = 720f,

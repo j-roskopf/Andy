@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.nio.ByteBuffer
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -101,6 +102,31 @@ class DesktopServicesMockDeviceTest {
         assertEquals(7, parsed.seq)
         assertEquals(123, parsed.timestampUs)
         assertContentEquals(imageBytes, parsed.pixels)
+    }
+
+    @Test
+    fun emulatorRgbFramesKeepTopDownOrientation() {
+        val rgb = ByteBuffer.wrap(
+            byteArrayOf(
+                255.toByte(), 0, 0, // top-left red
+                0, 255.toByte(), 0, // top-right green
+                0, 0, 255.toByte(), // bottom-left blue
+                255.toByte(), 255.toByte(), 255.toByte(), // bottom-right white
+            ),
+        )
+
+        val argb = emulatorRgb888ToArgb(width = 2, height = 2, rgb = rgb)
+
+        assertContentEquals(
+            intArrayOf(
+                0xffff0000.toInt(),
+                0xff00ff00.toInt(),
+                0xff0000ff.toInt(),
+                0xffffffff.toInt(),
+            ),
+            argb,
+        )
+        assertEquals(0, rgb.position(), "conversion should not mutate caller-owned ByteBuffer position")
     }
 
     @Test
