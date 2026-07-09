@@ -98,6 +98,15 @@ class DesktopProxyServiceTest {
                             responseBody = """{"error":"missing"}""",
                         ),
                     ),
+                    pairedWifiDevices = listOf(
+                        app.andy.model.PairedWifiDevice(
+                            id = "wifi-1",
+                            displayName = "adb-VAN10A203710441",
+                            mdnsInstanceName = "adb-VAN10A203710441",
+                            lastEndpoint = "192.168.86.47:5555",
+                            pairedAtMillis = 1_720_000_000_000L,
+                        ),
+                    ),
                 ),
             )
 
@@ -108,6 +117,10 @@ class DesktopProxyServiceTest {
             assertEquals(404, loadedRule.statusCode)
             assertEquals(mapOf("x-andy" to "missing", "content-type" to "application/json"), loadedRule.setHeaders)
             assertEquals(listOf("Server", "etag"), loadedRule.removeHeaders)
+            val loadedWifi = loaded.pairedWifiDevices.single()
+            assertEquals("wifi-1", loadedWifi.id)
+            assertEquals("adb-VAN10A203710441", loadedWifi.mdnsInstanceName)
+            assertEquals("192.168.86.47:5555", loadedWifi.lastEndpoint)
         } finally {
             System.setProperty("user.home", originalHome)
             testHome.deleteRecursively()

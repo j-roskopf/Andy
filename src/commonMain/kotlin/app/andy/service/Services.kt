@@ -8,6 +8,12 @@ interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
     suspend fun listDevices(): List<AndroidDevice>
     suspend fun shell(serial: String, command: List<String>): CommandResult
+    suspend fun pair(host: String, port: Int, code: String): CommandResult
+    suspend fun connect(host: String, port: Int): CommandResult
+    suspend fun disconnect(serial: String): CommandResult
+    suspend fun listMdnsServices(): List<MdnsService>
+    suspend fun mdnsAvailable(): Boolean
+    suspend fun generatePairingQr(content: String): ByteArray?
 }
 
 interface AvdService {

@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AndroidParsersTest {
@@ -28,9 +29,83 @@ class AndroidParsersTest {
         assertEquals("SM S921U", devices[0].displayName)
         assertEquals(DeviceKind.Physical, devices[0].kind)
         assertEquals(DeviceConnectionState.Online, devices[0].state)
+        assertEquals(app.andy.model.DeviceTransport.Usb, devices[0].transport)
         assertEquals(DeviceKind.Emulator, devices[1].kind)
         assertEquals(DeviceConnectionState.Offline, devices[1].state)
+        assertEquals(app.andy.model.DeviceTransport.Unknown, devices[1].transport)
         assertEquals(DeviceConnectionState.Unauthorized, devices[2].state)
+    }
+
+    @Test
+    fun classifiesWifiTransportFromIpPortSerial() {
+        val output = """
+            List of devices attached
+            192.168.86.47:5555	device product:e3q model:SM_S921U device:e3q transport_id:4
+            emulator-5554	device
+            R3CXB056ZZB	device product:e3q model:SM_S921U device:e3q transport_id:5
+        """.trimIndent()
+
+        val devices = AndroidParsers.parseAdbDevices(output)
+
+        assertEquals(app.andy.model.DeviceTransport.Wifi, devices[0].transport)
+        assertEquals(DeviceKind.Physical, devices[0].kind)
+        assertEquals(app.andy.model.DeviceTransport.Unknown, devices[1].transport)
+        assertEquals(app.andy.model.DeviceTransport.Usb, devices[2].transport)
+    }
+
+    @Test
+    fun dedupesWifiIpAndMdnsAliasForSameDevice() {
+        val output = """
+            List of devices attached
+            192.168.86.150:35923	device product:blazer model:Pixel_10_Pro device:blazer transport_id:3
+            adb-5A080DLCH000UR-oVigq2._adb-tls-connect._tcp	device product:blazer model:Pixel_10_Pro device:blazer transport_id:4
+            emulator-5554	device product:sdk_gphone64_arm64 model:Pixel_9 device:emu64a transport_id:1
+        """.trimIndent()
+
+        val devices = AndroidParsers.parseAdbDevices(output)
+
+        assertEquals(2, devices.size)
+        assertEquals("192.168.86.150:35923", devices[0].serial)
+        assertEquals(app.andy.model.DeviceTransport.Wifi, devices[0].transport)
+        assertEquals("emulator-5554", devices[1].serial)
+        assertTrue(devices.none { it.serial.contains("_adb-tls-connect") })
+    }
+
+    @Test
+    fun keepsDistinctWifiDevicesWithDifferentModels() {
+        val output = """
+            List of devices attached
+            192.168.86.150:35923	device product:blazer model:Pixel_10_Pro device:blazer transport_id:3
+            192.168.86.200:5555	device product:e3q model:SM_S921U device:e3q transport_id:4
+            adb-OTHER._adb-tls-connect._tcp	device product:e3q model:SM_S921U device:e3q transport_id:5
+        """.trimIndent()
+
+        val devices = AndroidParsers.parseAdbDevices(output)
+
+        assertEquals(2, devices.size)
+        assertEquals(setOf("192.168.86.150:35923", "192.168.86.200:5555"), devices.map { it.serial }.toSet())
+    }
+
+    @Test
+    fun parsesMdnsServices() {
+        val output = """
+            List of discovered mdns services
+            adb-VAN10A203710441	_adb._tcp	192.168.86.47:5555
+            adb-VAN10A203710441	_adb-tls-connect._tcp	192.168.86.47:37123
+            adb-PAIRING	_adb-tls-pairing._tcp	192.168.86.47:37199
+        """.trimIndent()
+
+        val services = AndroidParsers.parseMdnsServices(output)
+
+        assertEquals(3, services.size)
+        assertEquals("adb-VAN10A203710441", services[0].instanceName)
+        assertEquals("_adb._tcp", services[0].serviceType)
+        assertEquals("192.168.86.47", services[0].host)
+        assertEquals(5555, services[0].port)
+        assertTrue(services[0].isConnect)
+        assertTrue(services[1].isConnect)
+        assertTrue(services[2].isPairing)
+        assertFalse(services[2].isConnect)
     }
 
     @Test

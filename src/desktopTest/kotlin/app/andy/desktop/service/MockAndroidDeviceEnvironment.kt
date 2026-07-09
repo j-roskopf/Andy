@@ -32,6 +32,14 @@ internal class MockAndroidDeviceEnvironment {
         OFFLINE	offline
         UNAUTH	unauthorized
     """.trimIndent()
+    var mdnsServicesOutput: String = """
+        List of discovered mdns services
+        adb-VAN10A203710441	_adb._tcp	192.168.86.47:5555
+        adb-VAN10A203710441	_adb-tls-connect._tcp	192.168.86.47:37123
+        adb-PAIRING	_adb-tls-pairing._tcp	192.168.86.47:37199
+    """.trimIndent()
+    var pairShouldSucceed: Boolean = true
+    var connectShouldSucceed: Boolean = true
     var rootResult: CommandResult = CommandResult.failure("adbd cannot run as root in production builds")
     var runtimeCaInjectionResult: CommandResult = CommandResult.success("Injected CA")
     var chromeFlagsResult: CommandResult = CommandResult.success()
@@ -144,6 +152,39 @@ internal class MockAndroidDeviceEnvironment {
     private fun runAdb(command: List<String>): CommandResult {
         if (command.drop(1) == listOf("devices", "-l")) {
             return CommandResult.success(adbDevicesOutput)
+        }
+        if (command.drop(1) == listOf("mdns", "check")) {
+            return CommandResult.success("mdns daemon version ...")
+        }
+        if (command.drop(1) == listOf("mdns", "services")) {
+            return CommandResult.success(mdnsServicesOutput)
+        }
+        if (command.getOrNull(1) == "pair") {
+            val endpoint = command.getOrNull(2).orEmpty()
+            val code = command.getOrNull(3).orEmpty()
+            return if (pairShouldSucceed && code.isNotBlank()) {
+                CommandResult.success("Successfully paired to $endpoint [guid=mock-guid]")
+            } else {
+                CommandResult(0, "Failed: Wrong password or connection was dropped.", "")
+            }
+        }
+        if (command.getOrNull(1) == "connect") {
+            val endpoint = command.getOrNull(2).orEmpty()
+            return if (connectShouldSucceed) {
+                if (!adbDevicesOutput.contains(endpoint)) {
+                    adbDevicesOutput = adbDevicesOutput.trimEnd() + "\n$endpoint\tdevice product:wifi model:Wifi_Device device:wifi transport_id:9"
+                }
+                CommandResult.success("connected to $endpoint")
+            } else {
+                CommandResult(0, "failed to connect to $endpoint", "")
+            }
+        }
+        if (command.getOrNull(1) == "disconnect") {
+            val serial = command.getOrNull(2).orEmpty()
+            adbDevicesOutput = adbDevicesOutput.lineSequence()
+                .filterNot { it.trimStart().startsWith("$serial\t") || it.trimStart().startsWith("$serial ") }
+                .joinToString("\n")
+            return CommandResult.success("disconnected $serial")
         }
 
         val serial = command.getOrNull(2)

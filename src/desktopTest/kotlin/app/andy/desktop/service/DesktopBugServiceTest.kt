@@ -149,4 +149,10 @@ private class FakeForegroundDeviceService : DeviceService {
             else -> CommandResult.success()
         }
     }
+    override suspend fun pair(host: String, port: Int, code: String): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun connect(host: String, port: Int): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun disconnect(serial: String): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun listMdnsServices(): List<app.andy.model.MdnsService> = emptyList()
+    override suspend fun mdnsAvailable(): Boolean = false
+    override suspend fun generatePairingQr(content: String): ByteArray? = null
 }

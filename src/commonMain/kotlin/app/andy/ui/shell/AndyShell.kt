@@ -159,6 +159,7 @@ internal fun AndyShell(
                             services,
                             state.devices,
                             state.sdk,
+                            pairedWifiDevices = state.workspaceState.pairedWifiDevices,
                             onRefresh = { state.refreshDevices() },
                             onLive = { state.openLive(it) },
                             onEmulatorStarted = { previousSerials, avdName ->
@@ -169,6 +170,10 @@ internal fun AndyShell(
                             stopStatus = state.emulatorStopStatus,
                             startingEmulatorName = state.startingEmulatorName,
                             startStatus = state.emulatorStartStatus,
+                            onSavePairedWifi = state::savePairedWifi,
+                            onForgetPairedWifi = state::forgetPairedWifi,
+                            onReconnectPairedWifi = state::reconnectPairedWifi,
+                            onDisconnectWifi = state::disconnectWifi,
                         )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(

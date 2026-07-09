@@ -12,16 +12,19 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.PairedWifiDevice
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.ui.accessibility.AccessibilityState
+import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 internal class ShellState(
     private val services: AndyServices,
@@ -164,7 +167,75 @@ internal class ShellState(
         selectedSerial = saved.selectedDeviceSerial
         actionsConfig = services.actionConfig.load()
         workspaceLoaded = true
+        if (saved.pairedWifiDevices.isNotEmpty()) {
+            val discovery = services.devices.discoverSdk()
+            if (discovery.hasAdb) {
+                val mdnsReady = runCatching { services.devices.mdnsAvailable() }.getOrDefault(false)
+                val mdnsServices = if (mdnsReady) {
+                    runCatching { services.devices.listMdnsServices() }.getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+                saved.pairedWifiDevices.forEach { paired ->
+                    runCatching {
+                        withTimeout(8_000) {
+                            val (result, endpoint) = reconnectPairedWifiDevice(services.devices, paired, mdnsServices)
+                            if (result.isSuccess && endpoint != null && endpoint != paired.lastEndpoint) {
+                                workspaceState = workspaceState.copy(
+                                    pairedWifiDevices = workspaceState.pairedWifiDevices.map {
+                                        if (it.id == paired.id) it.copy(lastEndpoint = endpoint) else it
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (workspaceState.pairedWifiDevices != saved.pairedWifiDevices) {
+                    services.workspaceStore.save(workspaceState)
+                }
+            }
+        }
         refreshDevices()
+    }
+
+    fun savePairedWifi(device: PairedWifiDevice) {
+        updateWorkspace { state ->
+            val without = state.pairedWifiDevices.filterNot {
+                it.id == device.id ||
+                    (device.mdnsInstanceName != null && it.mdnsInstanceName == device.mdnsInstanceName) ||
+                    (device.lastEndpoint != null && it.lastEndpoint == device.lastEndpoint)
+            }
+            state.copy(pairedWifiDevices = without + device)
+        }
+    }
+
+    fun forgetPairedWifi(id: String) {
+        updateWorkspace { state ->
+            state.copy(pairedWifiDevices = state.pairedWifiDevices.filterNot { it.id == id })
+        }
+    }
+
+    fun reconnectPairedWifi(paired: PairedWifiDevice) {
+        scope.launch {
+            val (result, endpoint) = reconnectPairedWifiDevice(services.devices, paired)
+            if (result.isSuccess && endpoint != null && endpoint != paired.lastEndpoint) {
+                updateWorkspace { state ->
+                    state.copy(
+                        pairedWifiDevices = state.pairedWifiDevices.map {
+                            if (it.id == paired.id) it.copy(lastEndpoint = endpoint) else it
+                        },
+                    )
+                }
+            }
+            refreshDevicesNow()
+        }
+    }
+
+    fun disconnectWifi(serial: String) {
+        scope.launch {
+            services.devices.disconnect(serial)
+            refreshDevicesNow()
+        }
     }
 
     fun syncActiveRun(runningActions: List<RunningAction>) {

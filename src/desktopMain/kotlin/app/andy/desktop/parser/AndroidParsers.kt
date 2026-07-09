@@ -22,16 +22,37 @@ object AndroidParsers {
                 AndroidDevice(
                     serial = serial,
                     displayName = fields["model"]?.replace("_", " ") ?: serial,
-                    kind = if (serial.startsWith("emulator-")) DeviceKind.Emulator else DeviceKind.Physical,
+                    kind = classifyDeviceKind(serial),
                     state = when (stateRaw) {
                         "device" -> DeviceConnectionState.Online
                         "offline" -> DeviceConnectionState.Offline
                         "unauthorized" -> DeviceConnectionState.Unauthorized
                         else -> DeviceConnectionState.Unknown
                     },
+                    transport = classifyDeviceTransport(serial),
                     model = fields["model"],
                     product = fields["product"],
                 )
+            }
+            .toList()
+            .let(::dedupeWifiDeviceAliases)
+    }
+
+    fun parseMdnsServices(output: String): List<MdnsService> {
+        return output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot { it.startsWith("List of discovered", ignoreCase = true) }
+            .mapNotNull { line ->
+                val parts = line.split(Regex("\\s+"))
+                if (parts.size < 3) return@mapNotNull null
+                val instanceName = parts[0]
+                val serviceType = parts[1]
+                val endpoint = parts[2]
+                val host = endpoint.substringBeforeLast(':')
+                val port = endpoint.substringAfterLast(':').toIntOrNull() ?: return@mapNotNull null
+                if (host.isBlank()) return@mapNotNull null
+                MdnsService(instanceName = instanceName, serviceType = serviceType, host = host, port = port)
             }
             .toList()
     }

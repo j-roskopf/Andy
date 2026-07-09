@@ -7,6 +7,7 @@ data class WorkspaceState(
     val logSearch: String = "",
     val enabledLogLevels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
     val proxyRules: List<ProxyRule> = emptyList(),
+    val pairedWifiDevices: List<PairedWifiDevice> = emptyList(),
     val proxyPort: Int = 9099,
     val proxyStartOnLaunch: Boolean = false,
     val mcpServerEnabled: Boolean = false,

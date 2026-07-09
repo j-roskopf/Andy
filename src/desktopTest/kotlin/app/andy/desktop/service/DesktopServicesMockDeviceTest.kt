@@ -193,6 +193,44 @@ class DesktopServicesMockDeviceTest {
     }
 
     @Test
+    fun wifiPairConnectAndMdnsUseMockAdb() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        assertTrue(services.devices.mdnsAvailable())
+        val mdns = services.devices.listMdnsServices()
+        assertEquals(3, mdns.size)
+        assertTrue(mdns.any { it.isPairing })
+        assertTrue(mdns.any { it.isConnect })
+
+        val paired = services.devices.pair("192.168.86.47", 37199, "123456")
+        assertTrue(paired.isSuccess)
+        assertTrue(paired.stdout.contains("Successfully paired"))
+
+        env.pairShouldSucceed = false
+        val failedPair = services.devices.pair("192.168.86.47", 37199, "000000")
+        assertFalse(failedPair.isSuccess)
+
+        val connected = services.devices.connect("192.168.86.47", 5555)
+        assertTrue(connected.isSuccess)
+        assertTrue(connected.stdout.contains("connected to"))
+        assertTrue(env.ran("connect", "192.168.86.47:5555"))
+
+        env.connectShouldSucceed = false
+        val failedConnect = services.devices.connect("192.168.86.47", 5555)
+        assertFalse(failedConnect.isSuccess)
+
+        env.connectShouldSucceed = true
+        val disconnected = services.devices.disconnect("192.168.86.47:5555")
+        assertTrue(disconnected.isSuccess)
+        assertTrue(env.ran("disconnect", "192.168.86.47:5555"))
+
+        val qr = services.devices.generatePairingQr("WIFI:T:ADB;S:Andy123;P:654321;;")
+        assertNotNull(qr)
+        assertTrue(qr.size > 100)
+    }
+
+    @Test
     fun avdCatalogAndLifecycleUseMockSdkTools() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()

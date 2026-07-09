@@ -51,6 +51,8 @@ import app.andy.model.AvdCreationConfig
 import app.andy.model.AvdProfile
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.DeviceTransport
+import app.andy.model.PairedWifiDevice
 import app.andy.model.SdkDiscovery
 import app.andy.model.SystemImage
 import app.andy.model.VirtualDevice
@@ -89,6 +91,7 @@ internal fun DevicesScreen(
     services: AndyServices,
     devices: List<AndroidDevice>,
     sdk: SdkDiscovery,
+    pairedWifiDevices: List<PairedWifiDevice>,
     onRefresh: () -> Unit,
     onLive: (String) -> Unit,
     onEmulatorStarted: (Set<String>, String) -> Unit,
@@ -97,6 +100,10 @@ internal fun DevicesScreen(
     stopStatus: String,
     startingEmulatorName: String?,
     startStatus: String,
+    onSavePairedWifi: (PairedWifiDevice) -> Unit,
+    onForgetPairedWifi: (String) -> Unit,
+    onReconnectPairedWifi: (PairedWifiDevice) -> Unit,
+    onDisconnectWifi: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(services.avd) { DevicesScreenState(services.avd) }
@@ -144,6 +151,7 @@ internal fun DevicesScreen(
                 FilterPill(filter.label, state.deviceFilter == filter, if (state.deviceFilter == filter) Rust else Cyan) { state.deviceFilter = filter }
             }
             Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = { state.showPairDialog = true }) { Text("Pair over Wi‑Fi") }
             Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
         }
         if (sdk.issues.isNotEmpty()) {
@@ -261,6 +269,69 @@ internal fun DevicesScreen(
                 }
             }
         }
+        PanelCard {
+            Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
+            if (state.wifiStatus.isNotBlank()) {
+                Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            }
+            if (pairedWifiDevices.isEmpty()) {
+                Text("No remembered Wi‑Fi devices. Use Pair over Wi‑Fi to add one.", color = TextSecondary, fontSize = 12.sp)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pairedWifiDevices.forEach { paired ->
+                        val live = findLiveWifiDevice(devices, paired)
+                        val online = live?.state == DeviceConnectionState.Online
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
+                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(paired.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Text(
+                                    listOfNotNull(paired.mdnsInstanceName, paired.lastEndpoint, live?.serial)
+                                        .distinct()
+                                        .joinToString(" · "),
+                                    color = TextSecondary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            StatusTag(if (online) "connected" else "disconnected", if (online) Green else TextSecondary)
+                            if (live != null && online) {
+                                OutlinedButton(onClick = { onLive(live.serial) }) { Text("Live") }
+                                OutlinedButton(onClick = {
+                                    state.wifiStatus = "Disconnecting ${live.serial}..."
+                                    onDisconnectWifi(live.serial)
+                                    state.wifiStatus = "Disconnected ${live.serial}"
+                                }) { Text("Disconnect") }
+                            } else {
+                                OutlinedButton(onClick = {
+                                    state.wifiStatus = "Reconnecting ${paired.displayName}..."
+                                    onReconnectPairedWifi(paired)
+                                    state.wifiStatus = "Reconnect requested for ${paired.displayName}"
+                                }) { Text("Reconnect") }
+                            }
+                            OutlinedButton(onClick = {
+                                state.pendingConfirmation = PendingConfirmation(
+                                    "Forget ${paired.displayName}?",
+                                    "Removes this device from Andy's remembered Wi‑Fi list. It does not unpair on the phone.",
+                                ) {
+                                    onForgetPairedWifi(paired.id)
+                                    state.wifiStatus = "Forgot ${paired.displayName}"
+                                }
+                            }) { Text("Forget") }
+                        }
+                    }
+                }
+            }
+        }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(filteredDevices) { device ->
                 val online = device.state == DeviceConnectionState.Online
@@ -281,7 +352,12 @@ internal fun DevicesScreen(
                     }
                     Text("API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(170.dp))
                     Text(device.storageSummary ?: "-", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(150.dp))
-                    StatusTag(device.state.name, if (online) Green else TextSecondary, Modifier.weight(1f))
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        StatusTag(device.state.name, if (online) Green else TextSecondary)
+                        if (device.transport == DeviceTransport.Wifi) {
+                            StatusTag("Wi‑Fi", Cyan)
+                        }
+                    }
                     OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
                     if (device.kind == DeviceKind.Emulator && online) {
                         Spacer(Modifier.width(8.dp))
@@ -295,7 +371,7 @@ internal fun DevicesScreen(
                 }
             }
         }
-        if (devices.isEmpty()) EmptyState("No connected Android devices. Connect USB debugging or start an emulator.")
+        if (devices.isEmpty()) EmptyState("No connected Android devices. Connect USB debugging, pair over Wi‑Fi, or start an emulator.")
         if (state.showCreateWizard) {
             CreateVirtualDeviceDialog(
                 avd = state.avd,
@@ -304,6 +380,18 @@ internal fun DevicesScreen(
                     state.avdStatus = it
                     state.showCreateWizard = false
                     refreshAvds()
+                    onRefresh()
+                },
+            )
+        }
+        if (state.showPairDialog) {
+            PairOverWifiDialog(
+                devices = services.devices,
+                onDismiss = { state.showPairDialog = false },
+                onPaired = { paired, message ->
+                    onSavePairedWifi(paired)
+                    state.wifiStatus = message
+                    state.showPairDialog = false
                     onRefresh()
                 },
             )
