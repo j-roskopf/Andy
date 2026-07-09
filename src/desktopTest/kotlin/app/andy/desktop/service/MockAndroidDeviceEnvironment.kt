@@ -33,6 +33,7 @@ internal class MockAndroidDeviceEnvironment {
     var runtimeCaInjectionResult: CommandResult = CommandResult.success("Injected CA")
     var chromeFlagsResult: CommandResult = CommandResult.success()
     var remountResult: CommandResult = CommandResult.success("remount succeeded")
+    var wifiEnabled: Boolean = true
     var persistedCaInstalled: Boolean = false
     var keepStoppedEmulatorInAdbAsOffline: Boolean = false
     var httpProxyValue: String = "10.0.2.2:8888"
@@ -201,6 +202,23 @@ internal class MockAndroidDeviceEnvironment {
         }
         if (shell.size == 4 && shell.take(3) == listOf("ip", "route", "get")) {
             return CommandResult.success(routeToProxyOutput)
+        }
+        if (shell == listOf("cmd", "wifi", "status")) {
+            return CommandResult.success(if (wifiEnabled) "Wifi is enabled\nWifi is connected to \"AndroidWifi\"" else "Wifi is disabled")
+        }
+        if (shell == listOf("cmd", "wifi", "set-wifi-enabled", "disabled") || shell == listOf("svc", "wifi", "disable")) {
+            wifiEnabled = false
+            return CommandResult.success()
+        }
+        if (shell == listOf("cmd", "wifi", "set-wifi-enabled", "enabled") || shell == listOf("svc", "wifi", "enable")) {
+            wifiEnabled = true
+            return CommandResult.success()
+        }
+        if (shell == listOf("cmd", "wifi", "reconnect") || shell == listOf("cmd", "wifi", "start-scan")) {
+            return CommandResult.success()
+        }
+        if (shell == listOf("svc", "data", "disable") || shell == listOf("svc", "data", "enable")) {
+            return CommandResult.success()
         }
         return when (shell) {
             listOf("getprop") -> CommandResult.success(getprop(serial))

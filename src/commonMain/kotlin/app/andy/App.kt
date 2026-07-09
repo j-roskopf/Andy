@@ -842,12 +842,14 @@ private fun AndyShell(
                 current = destination,
                 deviceCount = devices.size,
                 onSelect = { destination = it },
+                expanded = workspaceState.workspaceSidebarExpanded,
+                onExpandedChange = { expanded -> updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
                 sdk = sdk,
                 updates = services.updates,
                 mcpRunning = mcpRunning,
                 mcpPort = workspaceState.mcpServerPort
             )
-            Column(Modifier.fillMaxSize().padding(start = 12.dp)) {
+            Column(Modifier.fillMaxSize().padding(start = 10.dp)) {
                 TopChrome(
                     destination = destination,
                     selectedDevice = devices.firstOrNull { it.serial == selectedSerial },
@@ -1021,6 +1023,8 @@ private fun Sidebar(
     current: AndyDestination,
     deviceCount: Int,
     onSelect: (AndyDestination) -> Unit,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     sdk: SdkDiscovery,
     updates: AppUpdateService,
     mcpRunning: Boolean,
@@ -1028,26 +1032,48 @@ private fun Sidebar(
 ) {
     val updateState by updates.state.collectAsState()
     val scope = rememberCoroutineScope()
+    val sidebarWidth by animateDpAsState(
+        targetValue = if (expanded) 246.dp else 64.dp,
+        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        label = "workspaceSidebarWidth",
+    )
+    val horizontalPadding by animateDpAsState(
+        targetValue = if (expanded) AndySpace.S3 else AndySpace.S2,
+        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        label = "workspaceSidebarPadding",
+    )
+    val labelAlpha by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 130, easing = FastOutSlowInEasing),
+        label = "workspaceSidebarLabelAlpha",
+    )
+    val labelGap by animateDpAsState(
+        targetValue = if (expanded) 8.dp else 0.dp,
+        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        label = "workspaceSidebarLabelGap",
+    )
 
     Column(
-        Modifier.width(246.dp).fillMaxHeight()
+        Modifier.width(sidebarWidth).fillMaxHeight()
             .background(Brush.verticalGradient(listOf(AndyColors.Neutral750, AndyColors.Neutral850)), RoundedCornerShape(AndyRadius.R4))
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-            .padding(AndySpace.S3),
-        verticalArrangement = Arrangement.SpaceBetween,
+            .padding(horizontal = horizontalPadding, vertical = AndySpace.S3),
     ) {
         Column {
             Row(
                 Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(AndySpace.S2),
+                horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
             ) {
                 AndyRobotIcon(Modifier.size(28.dp))
-                Column {
-                    Text("andy", color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text("workspace", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
+                if (labelAlpha > 0.01f) {
+                    Column {
+                        Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
+                    }
                 }
             }
+            WorkspaceSidebarToggle(expanded = expanded, onClick = { onExpandedChange(!expanded) })
             AndyDestination.entries.forEach { item ->
                 val active = item == current
                 Row(
@@ -1058,72 +1084,117 @@ private fun Sidebar(
                         .clickable { onSelect(item) }
                         .padding(horizontal = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
                 ) {
                     Text(navMark(item), color = if (active) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(item.label.lowercase(), color = if (active) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-                    if (item == AndyDestination.Logcat) Text("live", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                    if (labelAlpha > 0.01f) {
+                        Spacer(Modifier.width(labelGap))
+                        Text(
+                            item.label.lowercase(),
+                            color = (if (active) AndyColors.Neutral100 else AndyColors.Neutral300).copy(alpha = labelAlpha),
+                            fontFamily = MonoFont,
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 11.sp)
+                        if (item == AndyDestination.Logcat) Text("live", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 10.sp)
+                    }
                 }
             }
         }
-        Column(
-            Modifier.fillMaxWidth()
-                .background(AndyColors.Neutral900.copy(alpha = 0.56f), RoundedCornerShape(AndyRadius.R3))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+        Spacer(Modifier.weight(1f))
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandHorizontally(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
+            exit = shrinkHorizontally(animationSpec = tween(140, easing = FastOutSlowInEasing)) + fadeOut(tween(90)),
         ) {
-            Text("v${app.andy.updates.AndyBuildInfo.versionName}  h.264 embedded", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-            StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-            StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
-            StatusRow("Proxy CA", "local", true)
-            StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
-
-            Divider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
-
-            val updateText = when (updateState) {
-                AppUpdateState.Idle -> "Check for updates"
-                AppUpdateState.Checking -> "Checking for updates..."
-                AppUpdateState.Current -> "Andy is up to date"
-                is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
-                is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
-                    val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
-                    "${it.message}$pct"
-                }
-                is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
-            }
-
-            val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
-            val updateColor = when (updateState) {
-                is AppUpdateState.Available -> Rust
-                is AppUpdateState.Failed -> Red
-                else -> TextSecondary
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (isActionable) Modifier.clickable {
-                        scope.launch {
-                            if (updateState is AppUpdateState.Available) {
-                                updates.installAvailableUpdate()
-                            } else {
-                                updates.checkForUpdates()
-                            }
-                        }
-                    } else Modifier)
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(AndyColors.Neutral900.copy(alpha = 0.56f), RoundedCornerShape(AndyRadius.R3))
+                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    text = updateText,
-                    color = updateColor,
-                    fontSize = 11.sp,
-                    fontFamily = MonoFont,
-                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
-                )
+                Text("v${app.andy.updates.AndyBuildInfo.versionName}  h.264 embedded", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
+                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
+                StatusRow("Proxy CA", "local", true)
+                StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
+
+                Divider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                val updateText = when (updateState) {
+                    AppUpdateState.Idle -> "Check for updates"
+                    AppUpdateState.Checking -> "Checking for updates..."
+                    AppUpdateState.Current -> "Andy is up to date"
+                    is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
+                    is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
+                        val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
+                        "${it.message}$pct"
+                    }
+                    is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
+                }
+
+                val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
+                val updateColor = when (updateState) {
+                    is AppUpdateState.Available -> Rust
+                    is AppUpdateState.Failed -> Red
+                    else -> TextSecondary
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (isActionable) Modifier.clickable {
+                            scope.launch {
+                                if (updateState is AppUpdateState.Available) {
+                                    updates.installAvailableUpdate()
+                                } else {
+                                    updates.checkForUpdates()
+                                }
+                            }
+                        } else Modifier)
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = updateText,
+                        color = updateColor,
+                        fontSize = 11.sp,
+                        fontFamily = MonoFont,
+                        fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceSidebarToggle(expanded: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .height(30.dp)
+            .padding(bottom = 6.dp),
+        horizontalArrangement = if (expanded) Arrangement.End else Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(24.dp)
+                .background(AndyColors.Neutral900.copy(alpha = 0.50f), RoundedCornerShape(AndyRadius.R2))
+                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R2))
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (expanded) "<<" else ">>",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
@@ -5317,7 +5388,7 @@ private fun NetworkScreen(
                                         val host = proxy.resolveDeviceProxyHost(serial)
                                         proxyHost = host
                                         val result = proxy.configureDeviceProxy(serial, host, currentPort)
-                                        status = if (result.isSuccess) "Device proxy set to $host:$currentPort" else result.stderr
+                                        status = if (result.isSuccess) result.stdout else result.stderr
                                         proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                                         routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
                                     }
@@ -5360,7 +5431,7 @@ private fun NetworkScreen(
                                 onClick = {
                                     if (serial != null) scope.launch {
                                         val result = proxy.clearDeviceProxy(serial)
-                                        status = if (result.isSuccess) "Device proxy cleared" else result.stderr
+                                        status = if (result.isSuccess) result.stdout else result.stderr
                                         val host = proxy.resolveDeviceProxyHost(serial)
                                         proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
                                     }
@@ -5791,60 +5862,60 @@ private fun RulesPaneContent(
     modifier: Modifier = Modifier
 ) {
     val isEditing = editingRuleId != null
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        PanelCard {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (isEditing) "Edit rule" else "Rules", color = TextPrimary, fontWeight = FontWeight.Bold)
-                if (isEditing) {
-                    Text(
-                        "Cancel",
-                        color = Rust,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable { onCancelEdit() },
-                    )
+    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            PanelCard {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(if (isEditing) "Edit rule" else "Rules", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    if (isEditing) {
+                        Text(
+                            "Cancel",
+                            color = Rust,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { onCancelEdit() },
+                        )
+                    }
                 }
+                LabeledField("Name", ruleName, onRuleNameChange, Modifier.fillMaxWidth(), placeholder = "Mock response")
+                LabeledField("URL pattern", rulePattern, onRulePatternChange, Modifier.fillMaxWidth(), placeholder = "https://api.example.com/v1/*/profile")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LabeledField("Method", ruleMethod, { onRuleMethodChange(it.uppercase().take(8)) }, Modifier.width(110.dp))
+                    LabeledField("Status", ruleStatus, { onRuleStatusChange(it.filter(Char::isDigit).take(3)) }, Modifier.width(100.dp), placeholder = "200")
+                }
+                LabeledField("Set headers", ruleSetHeaders, onRuleSetHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 92.dp, placeholder = "content-type: application/json\nx-debug: true")
+                LabeledField("Remove headers", ruleRemoveHeaders, onRuleRemoveHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 76.dp, placeholder = "Server\netag\nx-powered-by")
+                TextField(
+                    ruleBody,
+                    onRuleBodyChange,
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                    colors = fieldColors(),
+                    placeholder = { Text("{\"andy\":true}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                )
+                Button(onClick = onAddOrSaveRule, modifier = Modifier.fillMaxWidth()) { Text(if (isEditing) "Save rule" else "Add rule") }
             }
-            LabeledField("Name", ruleName, onRuleNameChange, Modifier.fillMaxWidth(), placeholder = "Mock response")
-            LabeledField("URL pattern", rulePattern, onRulePatternChange, Modifier.fillMaxWidth(), placeholder = "https://api.example.com/v1/*/profile")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LabeledField("Method", ruleMethod, { onRuleMethodChange(it.uppercase().take(8)) }, Modifier.width(110.dp))
-                LabeledField("Status", ruleStatus, { onRuleStatusChange(it.filter(Char::isDigit).take(3)) }, Modifier.width(100.dp), placeholder = "200")
-            }
-            LabeledField("Set headers", ruleSetHeaders, onRuleSetHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 92.dp, placeholder = "content-type: application/json\nx-debug: true")
-            LabeledField("Remove headers", ruleRemoveHeaders, onRuleRemoveHeadersChange, Modifier.fillMaxWidth(), singleLine = false, minHeight = 76.dp, placeholder = "Server\netag\nx-powered-by")
-            TextField(
-                ruleBody,
-                onRuleBodyChange,
-                modifier = Modifier.fillMaxWidth().height(120.dp),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
-                colors = fieldColors(),
-                placeholder = { Text("{\"andy\":true}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
-            )
-            Button(onClick = onAddOrSaveRule, modifier = Modifier.fillMaxWidth()) { Text(if (isEditing) "Save rule" else "Add rule") }
         }
-        LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
-                val isBeingEdited = editingRuleId == rule.id
-                PanelCard(
-                    modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.R3)) else Modifier
-                ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Checkbox(rule.enabled, { checked ->
-                            onRulesChange(rules.mapIndexed { i, item -> if (i == index) item.copy(enabled = checked) else item })
-                        })
-                        Column(Modifier.weight(1f)) {
-                            Text(rule.name, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${rule.method ?: "*"} ${rule.urlPattern}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(listOfNotNull(rule.statusCode?.let { "status $it" }, rule.responseBody?.let { "body" }, rule.setHeaders.takeIf { it.isNotEmpty() }?.let { "${it.size} headers" }).joinToString(" · "), color = TextSecondary, fontSize = 11.sp)
-                        }
+        itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
+            val isBeingEdited = editingRuleId == rule.id
+            PanelCard(
+                modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.R3)) else Modifier
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Checkbox(rule.enabled, { checked ->
+                        onRulesChange(rules.mapIndexed { i, item -> if (i == index) item.copy(enabled = checked) else item })
+                    })
+                    Column(Modifier.weight(1f)) {
+                        Text(rule.name, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${rule.method ?: "*"} ${rule.urlPattern}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(listOfNotNull(rule.statusCode?.let { "status $it" }, rule.responseBody?.let { "body" }, rule.setHeaders.takeIf { it.isNotEmpty() }?.let { "${it.size} headers" }).joinToString(" · "), color = TextSecondary, fontSize = 11.sp)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { onEditRule(rule.id) }) { Text(if (isBeingEdited) "Editing" else "Edit") }
-                        OutlinedButton(onClick = { if (index > 0) onRulesChange(rules.swapItems(index, index - 1)) }, enabled = index > 0) { Text("Up") }
-                        OutlinedButton(onClick = { if (index < rules.lastIndex) onRulesChange(rules.swapItems(index, index + 1)) }, enabled = index < rules.lastIndex) { Text("Down") }
-                        OutlinedButton(onClick = { onRulesChange(rules.filterIndexed { i, _ -> i != index }) }) { Text("Remove") }
-                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onEditRule(rule.id) }) { Text(if (isBeingEdited) "Editing" else "Edit") }
+                    OutlinedButton(onClick = { if (index > 0) onRulesChange(rules.swapItems(index, index - 1)) }, enabled = index > 0) { Text("Up") }
+                    OutlinedButton(onClick = { if (index < rules.lastIndex) onRulesChange(rules.swapItems(index, index + 1)) }, enabled = index < rules.lastIndex) { Text("Down") }
+                    OutlinedButton(onClick = { onRulesChange(rules.filterIndexed { i, _ -> i != index }) }) { Text("Remove") }
                 }
             }
         }

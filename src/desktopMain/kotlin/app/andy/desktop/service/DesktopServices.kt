@@ -766,20 +766,12 @@ private fun emulatorDisplayAspectDrifted(frame: MirrorFrame, displaySize: Emulat
 internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
     val pixels = IntArray(width * height)
     val bytes = rgb.duplicate()
-    val rowSize = width * EMULATOR_IMAGE_BYTES_PER_PIXEL
-    val row = ByteArray(rowSize)
-    for (y in 0 until height) {
-        val sourceY = height - 1 - y
-        bytes.position(sourceY * rowSize)
-        bytes.get(row, 0, rowSize)
-        var source = 0
-        var destination = y * width
-        while (source < rowSize) {
-            val red = row[source++].toInt() and 0xff
-            val green = row[source++].toInt() and 0xff
-            val blue = row[source++].toInt() and 0xff
-            pixels[destination++] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
-        }
+    bytes.position(0)
+    for (index in pixels.indices) {
+        val red = bytes.get().toInt() and 0xff
+        val green = bytes.get().toInt() and 0xff
+        val blue = bytes.get().toInt() and 0xff
+        pixels[index] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
     }
     return pixels
 }
@@ -2421,7 +2413,14 @@ class DesktopProxyService(
             listOf("settings", "delete", "global", "global_http_proxy_exclusion_list"),
             listOf("settings", "delete", "global", "global_proxy_pac_url"),
         )
-        return runAdbShellSequence(adb, serial, commands, "Device proxy configured at $host:$port")
+        val proxyConfigured = runAdbShellSequence(adb, serial, commands, "Device proxy configured at $host:$port")
+        if (!proxyConfigured.isSuccess) return proxyConfigured
+        val restart = restartDeviceInternet(adb, serial)
+        return CommandResult.success(
+            listOf(proxyConfigured.stdout, restart.stdout.ifBlank { restart.stderr })
+                .filter { it.isNotBlank() }
+                .joinToString(". "),
+        )
     }
 
     override suspend fun clearDeviceProxy(serial: String): CommandResult {
@@ -2433,7 +2432,14 @@ class DesktopProxyService(
             listOf("settings", "delete", "global", "global_http_proxy_exclusion_list"),
             listOf("settings", "delete", "global", "global_proxy_pac_url"),
         )
-        return runAdbShellSequence(adb, serial, commands, "Device proxy cleared")
+        val proxyCleared = runAdbShellSequence(adb, serial, commands, "Device proxy cleared")
+        if (!proxyCleared.isSuccess) return proxyCleared
+        val restart = restartDeviceInternet(adb, serial)
+        return CommandResult.success(
+            listOf(proxyCleared.stdout, restart.stdout.ifBlank { restart.stderr })
+                .filter { it.isNotBlank() }
+                .joinToString(". "),
+        )
     }
 
     override suspend fun diagnoseDeviceProxyRoute(serial: String, host: String, port: Int): NetworkRouteDiagnostics = withContext(Dispatchers.IO) {
@@ -2840,6 +2846,53 @@ class DesktopProxyService(
             if (!result.isSuccess) return result
         }
         return CommandResult.success(successMessage)
+    }
+
+    private suspend fun restartDeviceInternet(adb: String, serial: String): CommandResult {
+        val wifiWasEnabled = readWifiEnabled(adb, serial) != false
+        val disableWifi = runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "set-wifi-enabled", "disabled"), 10)
+            .takeIf { it.isSuccess }
+            ?: runner.run(listOf(adb, "-s", serial, "shell", "svc", "wifi", "disable"), 10)
+        val wifiDisabled = waitForWifiEnabled(adb, serial, enabled = false, attempts = 8)
+
+        val enableWifi = runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "set-wifi-enabled", "enabled"), 10)
+            .takeIf { it.isSuccess }
+            ?: runner.run(listOf(adb, "-s", serial, "shell", "svc", "wifi", "enable"), 10)
+        val wifiEnabled = waitForWifiEnabled(adb, serial, enabled = true, attempts = 12)
+        runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "reconnect"), 10)
+        runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "start-scan"), 10)
+
+        runner.run(listOf(adb, "-s", serial, "shell", "svc", "data", "disable"), 10)
+        delay(1000)
+        runner.run(listOf(adb, "-s", serial, "shell", "svc", "data", "enable"), 10)
+
+        val wifiMessage = when {
+            !disableWifi.isSuccess -> "Wi-Fi restart was requested, but Android rejected the disable command: ${disableWifi.combinedOutput()}"
+            !enableWifi.isSuccess -> "Wi-Fi restart was requested, but Android rejected the enable command: ${enableWifi.combinedOutput()}"
+            wifiDisabled && wifiEnabled -> "Device Wi-Fi restarted and mobile data bounced"
+            !wifiWasEnabled && wifiEnabled -> "Device Wi-Fi was off; Andy enabled it and bounced mobile data"
+            else -> "Device mobile data bounced, but Android did not report a Wi-Fi off/on transition"
+        }
+        return CommandResult.success(wifiMessage)
+    }
+
+    private suspend fun waitForWifiEnabled(adb: String, serial: String, enabled: Boolean, attempts: Int): Boolean {
+        repeat(attempts) {
+            if (readWifiEnabled(adb, serial) == enabled) return true
+            delay(500)
+        }
+        return false
+    }
+
+    private suspend fun readWifiEnabled(adb: String, serial: String): Boolean? {
+        val status = runner.run(listOf(adb, "-s", serial, "shell", "cmd", "wifi", "status"), 10)
+        if (!status.isSuccess) return null
+        val output = status.stdout.lowercase()
+        return when {
+            output.contains("wifi is enabled") || output.contains("wi-fi is enabled") -> true
+            output.contains("wifi is disabled") || output.contains("wi-fi is disabled") -> false
+            else -> null
+        }
     }
 
     private fun pumpProcess(proxyProcess: ProxyProcess) {
@@ -3453,6 +3506,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             proxyStartOnLaunch = props.getProperty("proxyStartOnLaunch")?.toBooleanStrictOrNull() ?: false,
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
+            workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             proxyRules = loadProxyRules(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 230f,
@@ -3481,6 +3535,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("proxyStartOnLaunch", state.proxyStartOnLaunch.toString())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
+            setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
             state.proxyRules.forEachIndexed { index, rule ->
                 val prefix = "proxyRule.$index."
