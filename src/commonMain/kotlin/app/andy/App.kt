@@ -5856,7 +5856,7 @@ private fun shouldAutoStartProxy(status: String, port: Int): Boolean {
     if (normalized == "Proxy stopped" || normalized == "mitmdump exited" || normalized.startsWith("Proxy failed")) {
         return true
     }
-    val listeningPort = Regex(""":(\d{1,5})(?:\D*)?$""")
+    val listeningPort = Regex("""listening on \S+:(\d{1,5})""")
         .find(normalized)
         ?.groupValues
         ?.getOrNull(1)

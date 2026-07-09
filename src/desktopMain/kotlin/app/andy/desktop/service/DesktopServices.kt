@@ -766,12 +766,20 @@ private fun emulatorDisplayAspectDrifted(frame: MirrorFrame, displaySize: Emulat
 internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): IntArray {
     val pixels = IntArray(width * height)
     val bytes = rgb.duplicate()
-    bytes.position(0)
-    for (index in pixels.indices) {
-        val red = bytes.get().toInt() and 0xff
-        val green = bytes.get().toInt() and 0xff
-        val blue = bytes.get().toInt() and 0xff
-        pixels[index] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
+    val rowSize = width * EMULATOR_IMAGE_BYTES_PER_PIXEL
+    val row = ByteArray(rowSize)
+    for (y in 0 until height) {
+        val sourceY = height - 1 - y
+        bytes.position(sourceY * rowSize)
+        bytes.get(row, 0, rowSize)
+        var source = 0
+        var destination = y * width
+        while (source < rowSize) {
+            val red = row[source++].toInt() and 0xff
+            val green = row[source++].toInt() and 0xff
+            val blue = row[source++].toInt() and 0xff
+            pixels[destination++] = 0xff000000.toInt() or (red shl 16) or (green shl 8) or blue
+        }
     }
     return pixels
 }
@@ -2307,6 +2315,7 @@ class DesktopProxyService(
     },
     private val certificateSubjectHash: suspend (File) -> String? = { certificate -> defaultCertificateSubjectHash(runner, certificate) },
     private val certificateSpkiFingerprint: suspend (File) -> String? = { certificate -> defaultCertificateSpkiFingerprint(runner, certificate) },
+    private val hostOsName: () -> String = { System.getProperty("os.name") },
 ) : ProxyService {
     override val exchanges = MutableStateFlow<List<NetworkExchange>>(emptyList())
     override val status = MutableStateFlow("Proxy stopped")
@@ -2450,7 +2459,6 @@ class DesktopProxyService(
             if (!proxyConfigured) add("Android global proxy is ${configuredProxy ?: "not set"}; expected $expectedProxy.")
             if (vpn.active) add("A VPN is active${vpn.name?.let { " ($it)" }.orEmpty()}; it can bypass Android's global HTTP proxy or route Andy's proxy endpoint into the tunnel.")
             if (routeUsesVpn) add("The route to Andy's proxy host appears to use a VPN interface: $routeSummary")
-            if (hostProxy.active && hostProxy.upstreamProxy != null) add("Mac proxy is active; Andy will chain mitmproxy through ${hostProxy.upstreamProxy}.")
             if (hostProxy.active && !hostProxy.bypassLooksSafe) add("Mac proxy bypass rules do not clearly include localhost/127.0.0.1/10.0.2.2; add them if emulator traffic still disappears.")
             if (hostVpn.active) add("Mac VPN-like interfaces are active (${hostVpn.summary}); emulator traffic may be routed by the host tunnel.")
         }
@@ -2561,12 +2569,14 @@ class DesktopProxyService(
     }
 
     private suspend fun detectHostProxyState(): HostProxyState {
+        if (!isMacHost()) return HostProxyState(active = false)
         val result = runner.run(listOf("/usr/sbin/scutil", "--proxy"), 5)
         if (!result.isSuccess) return HostProxyState(active = false)
         return parseMacProxyState(result.stdout)
     }
 
     private suspend fun detectHostVpnState(): HostVpnState {
+        if (!isMacHost()) return HostVpnState(active = false)
         val result = runner.run(listOf("/sbin/ifconfig"), 5)
         if (!result.isSuccess) return HostVpnState(active = false)
         val activeInterfaces = Regex("""^([a-z]+[0-9]+): flags=.*\bUP\b""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE))
@@ -2581,6 +2591,8 @@ class DesktopProxyService(
             summary = activeInterfaces.distinct().joinToString(", ").takeIf { it.isNotBlank() },
         )
     }
+
+    private fun isMacHost(): Boolean = hostOsName().contains("Mac", ignoreCase = true)
 
     private suspend fun installPersistentCertificateAuthority(adb: String, serial: String, androidCert: File, originalCertificate: File): CommandResult {
         val remount = remountWritableSystem(adb, serial)

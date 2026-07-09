@@ -108,10 +108,10 @@ class DesktopServicesMockDeviceTest {
     fun emulatorRgbFramesKeepTopDownOrientation() {
         val rgb = ByteBuffer.wrap(
             byteArrayOf(
-                255.toByte(), 0, 0, // top-left red
-                0, 255.toByte(), 0, // top-right green
                 0, 0, 255.toByte(), // bottom-left blue
                 255.toByte(), 255.toByte(), 255.toByte(), // bottom-right white
+                255.toByte(), 0, 0, // top-left red
+                0, 255.toByte(), 0, // top-right green
             ),
         )
 

@@ -44,6 +44,7 @@ internal class MockAndroidDeviceEnvironment {
         }
     """.trimIndent()
     var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
+    var hostOsName: String = "Mac OS X"
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -85,6 +86,7 @@ internal class MockAndroidDeviceEnvironment {
                     proxyCommands += command
                     MockProxyProcess()
                 },
+                hostOsName = { hostOsName },
             ),
             metrics = DesktopMetricsService(runner, devices),
             accessibility = DesktopAccessibilityService(runner, devices),

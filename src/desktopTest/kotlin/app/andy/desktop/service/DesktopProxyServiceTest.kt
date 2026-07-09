@@ -211,7 +211,6 @@ class DesktopProxyServiceTest {
         assertTrue(diagnostics.hostProxyActive)
         assertEquals("http://proxy.example.test:8080", diagnostics.hostUpstreamProxy)
         assertFalse(diagnostics.hostProxyBypassLooksSafe)
-        assertTrue(diagnostics.issues.any { it.contains("Mac proxy is active") })
         assertTrue(diagnostics.issues.any { it.contains("bypass rules") })
     }
 
