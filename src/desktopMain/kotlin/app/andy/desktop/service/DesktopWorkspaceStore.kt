@@ -21,6 +21,8 @@ class DesktopWorkspaceStore : WorkspaceStore {
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
             proxyStartOnLaunch = props.getProperty("proxyStartOnLaunch")?.toBooleanStrictOrNull() ?: false,
+            proxySslInsecure = props.getProperty("proxySslInsecure")?.toBooleanStrictOrNull() ?: false,
+            proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
@@ -51,6 +53,8 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
             setProperty("proxyStartOnLaunch", state.proxyStartOnLaunch.toString())
+            setProperty("proxySslInsecure", state.proxySslInsecure.toString())
+            setProperty("proxyUpstreamTrustedCaPath", state.proxyUpstreamTrustedCaPath.orEmpty())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())

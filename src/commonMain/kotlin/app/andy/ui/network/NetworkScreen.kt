@@ -53,10 +53,14 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.components.HeaderCell
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
+import app.andy.model.NetworkDiagnosis
+import app.andy.model.NetworkDiagnosisSeverity
 import app.andy.model.NetworkExchange
 import app.andy.model.NetworkRouteDiagnostics
 import app.andy.model.ProxyRule
+import app.andy.model.ProxyStartOptions
 import app.andy.model.SdkDiscovery
+import app.andy.model.diagnoseNetworkTraffic
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
@@ -142,9 +146,13 @@ internal fun NetworkScreen(
     rules: List<ProxyRule>,
     rulesVisible: Boolean,
     liveVisible: Boolean,
+    sslInsecure: Boolean = false,
+    upstreamTrustedCaPath: String = "",
     onPortChange: (Int) -> Unit,
     onRulesChange: (List<ProxyRule>) -> Unit,
     onRulesVisibleChange: (Boolean) -> Unit,
+    onSslInsecureChange: (Boolean) -> Unit = {},
+    onUpstreamTrustedCaPathChange: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(services.proxy) { NetworkScreenState(services.proxy) }
@@ -167,6 +175,15 @@ internal fun NetworkScreen(
         flattenNetworkTrafficTree(trafficTree, state.expandedTrafficKeys)
     }
     val latestRules by rememberUpdatedState(rules)
+    fun currentStartOptions() = ProxyStartOptions(
+        sslInsecure = sslInsecure,
+        upstreamTrustedCaPath = upstreamTrustedCaPath.trim().takeIf { it.isNotBlank() },
+    )
+
+    LaunchedEffect(sslInsecure, upstreamTrustedCaPath) {
+        state.sslInsecure = sslInsecure
+        state.upstreamTrustedCaPath = upstreamTrustedCaPath
+    }
 
     LaunchedEffect(Unit) {
         state.caPath = proxy.certificateAuthorityPath()
@@ -179,7 +196,7 @@ internal fun NetworkScreen(
         }
         state.engineChecked = true
     }
-    LaunchedEffect(state.engineReady, currentPort) {
+    LaunchedEffect(state.engineReady, currentPort, sslInsecure, upstreamTrustedCaPath) {
         if (!state.engineReady) return@LaunchedEffect
         val currentStatus = try {
             withTimeout(200) { proxy.status.first() }
@@ -188,7 +205,7 @@ internal fun NetworkScreen(
         }
         if (shouldAutoStartProxy(currentStatus, currentPort)) {
             proxy.ensureCertificateAuthority()
-            val result = proxy.start(currentPort, latestRules)
+            val result = proxy.start(currentPort, latestRules, currentStartOptions())
             val message = if (result.isSuccess) result.stdout else result.stderr
             state.status = message
             if (result.isSuccess) state.proxyStatus = message
@@ -196,6 +213,12 @@ internal fun NetworkScreen(
     }
     LaunchedEffect(Unit) {
         proxy.exchanges.collectLatest { state.exchanges = it }
+    }
+    LaunchedEffect(Unit) {
+        proxy.warnings.collectLatest { state.warnings = it }
+    }
+    LaunchedEffect(Unit) {
+        proxy.clientConnectionCount.collectLatest { state.clientConnectionCount = it }
     }
     LaunchedEffect(Unit) {
         proxy.status.collectLatest {
@@ -211,11 +234,35 @@ internal fun NetworkScreen(
             state.proxyTrafficObservedForDevice = false
         } else {
             val newExchanges = state.exchanges.filter { it.flowId !in state.flowIdsAtSerialChange }
-            if (newExchanges.isNotEmpty()) state.proxyTrafficObservedForDevice = true
+            if (newExchanges.any { it.method != "TLS" }) state.proxyTrafficObservedForDevice = true
             if (newExchanges.any { it.tlsStatus == "tls" && it.error == null }) {
                 state.userCaVerifiedByTrafficForDevice = true
             }
         }
+    }
+    LaunchedEffect(
+        state.proxyStatus,
+        state.caInstalled,
+        state.proxyConfigured,
+        state.routeDiagnostics,
+        state.exchanges,
+        state.warnings,
+        state.clientConnectionCount,
+        state.sslInsecure,
+        state.upstreamTrustedCaPath,
+    ) {
+        val proxyStarted = state.proxyStatus.contains("listening on")
+        state.diagnoses = diagnoseNetworkTraffic(
+            proxyStarted = proxyStarted,
+            caInstalled = state.caInstalled || state.userCaVerifiedByTrafficForDevice,
+            proxyConfigured = state.proxyConfigured,
+            routeDiagnostics = state.routeDiagnostics,
+            exchanges = state.exchanges,
+            warnings = state.warnings,
+            clientConnectionsObserved = state.clientConnectionCount,
+            sslInsecure = state.sslInsecure,
+            upstreamTrustedCaPath = state.upstreamTrustedCaPath.trim().takeIf { it.isNotBlank() },
+        )
     }
     LaunchedEffect(serial, currentPort) {
         if (serial == null) {
@@ -355,8 +402,6 @@ internal fun NetworkScreen(
         onRulesVisibleChange(true)
     }
 
-    val networkPageScrollState = rememberScrollState()
-
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(
             Modifier
@@ -364,14 +409,7 @@ internal fun NetworkScreen(
                 .fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(networkPageScrollState),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                PanelCard(Modifier.animateContentSize()) {
+            PanelCard(Modifier.animateContentSize()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TextField(
@@ -389,7 +427,7 @@ internal fun NetworkScreen(
                         persistPort()
                         scope.launch {
                             proxy.ensureCertificateAuthority()
-                            val result = proxy.start(currentPort, rules)
+                            val result = proxy.start(currentPort, rules, currentStartOptions())
                             val message = if (result.isSuccess) result.stdout else result.stderr
                             state.status = message
                             if (result.isSuccess) state.proxyStatus = message
@@ -430,7 +468,14 @@ internal fun NetworkScreen(
                 val routeText = when {
                     serial == null -> "Select a device first"
                     state.routeDiagnostics == null -> "Checking route"
-                    state.routeDiagnostics?.hostProxyActive == true && state.routeDiagnostics?.hostUpstreamProxy != null -> "Mac proxy chained"
+                    state.routeDiagnostics?.hostProxyActive == true && state.routeDiagnostics?.hostUpstreamProxy != null -> {
+                        val upstream = state.routeDiagnostics?.hostUpstreamProxy
+                        if (upstream != null && (upstream.contains("127.0.0.1") || upstream.contains("localhost"))) {
+                            "Chaining through local Mac proxy $upstream"
+                        } else {
+                            "Chaining through Mac proxy $upstream"
+                        }
+                    }
                     state.routeDiagnostics?.hostProxyActive == true -> "Mac proxy active"
                     state.routeDiagnostics?.vpnActive == true -> "VPN active (may cause issues)"
                     state.routeDiagnostics?.routeUsesVpn == true -> "Proxy route uses VPN"
@@ -482,14 +527,25 @@ internal fun NetworkScreen(
                         ok = serial != null &&
                             state.routeDiagnostics?.vpnActive != true &&
                             state.routeDiagnostics?.routeUsesVpn != true &&
-                            state.routeDiagnostics?.hostProxyBypassLooksSafe != false,
+                            (
+                                state.routeDiagnostics?.hostProxyBypassLooksSafe != false ||
+                                    state.routeDiagnostics?.hostUpstreamProxy.orEmpty().let { upstream ->
+                                        upstream.contains("127.0.0.1") || upstream.contains("localhost")
+                                    }
+                            ),
                         readyText = routeText,
                         missingText = routeText,
                     ),
                 )
                 val showRouteWarning = state.routeDiagnostics?.hasBlockingIssue == true && proxyStarted && !state.proxyTrafficObservedForDevice
                 AnimatedVisibility(state.setupExpanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -518,7 +574,11 @@ internal fun NetworkScreen(
                                         val route = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
                                         state.routeDiagnostics = route
                                         state.proxyConfigured = route.proxyConfigured
-                                        val restart = if (route.hostProxyActive) proxy.start(currentPort, rules) else null
+                                        val restart = if (route.hostProxyActive) {
+                                            proxy.start(currentPort, rules, currentStartOptions())
+                                        } else {
+                                            null
+                                        }
                                         state.status = if (route.vpnActive) {
                                             "Proxy route repaired, but VPN is still active. Open VPN settings and disable or split-tunnel the test app."
                                         } else if (restart?.isSuccess == true) {
@@ -574,6 +634,19 @@ internal fun NetworkScreen(
                         }
                         SetupChecklist(setupRequirements)
                         SetupChecklist(networkStatusRequirements)
+                        CorporateUpstreamSettings(
+                            sslInsecure = state.sslInsecure,
+                            upstreamTrustedCaPath = state.upstreamTrustedCaPath,
+                            hostUpstreamProxy = state.routeDiagnostics?.hostUpstreamProxy,
+                            onSslInsecureChange = {
+                                onSslInsecureChange(it)
+                                state.sslInsecure = it
+                            },
+                            onUpstreamTrustedCaPathChange = {
+                                onUpstreamTrustedCaPathChange(it)
+                                state.upstreamTrustedCaPath = it
+                            },
+                        )
                         AnimatedVisibility(showRouteWarning) {
                             NetworkRouteWarningCard(state.routeDiagnostics)
                         }
@@ -626,6 +699,13 @@ internal fun NetworkScreen(
                     }
                 }
             }
+            NetworkDiagnosisStrip(state.diagnoses)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
             if (state.focusedPath != null) {
                 Row(
                     modifier = Modifier
@@ -663,14 +743,14 @@ internal fun NetworkScreen(
                 }
             }
             Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                HeaderCell("TRAFFIC", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(120f, 600f) }
+                HeaderCell("TRAFFIC", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(160f, 2400f) }
                 HeaderCell("STATUS", state.statusWidth.dp) { state.statusWidth = it.coerceIn(50f, 150f) }
                 HeaderCell("TYPE", state.typeWidth.dp) { state.typeWidth = it.coerceIn(80f, 250f) }
                 HeaderCell("SIZE", state.sizeWidth.dp) { state.sizeWidth = it.coerceIn(50f, 150f) }
                 HeaderCell("MS", state.msWidth.dp) { state.msWidth = it.coerceIn(50f, 150f) }
                 Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
             }
-            LazyColumn(Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 520.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
                     NetworkTrafficRowItem(
                         row = row,
@@ -722,7 +802,10 @@ internal fun NetworkScreen(
                 }
                 if (visibleTrafficRows.isEmpty()) {
                     item {
-                        EmptyState("No traffic yet. Start the proxy, configure a device, then make a request.")
+                        val emptyMessage = state.diagnoses.firstOrNull { it.severity == NetworkDiagnosisSeverity.Red }?.let {
+                            "${it.title}. ${it.fix}"
+                        } ?: "No traffic yet. Start the proxy, configure a device, then make a request."
+                        EmptyState(emptyMessage)
                     }
                 }
             }
@@ -847,6 +930,85 @@ internal fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
                 .background(color, CircleShape)
                 .border(1.dp, color.copy(alpha = 0.8f), CircleShape)
         )
+    }
+}
+
+@Composable
+private fun NetworkDiagnosisStrip(diagnoses: List<NetworkDiagnosis>, modifier: Modifier = Modifier) {
+    if (diagnoses.isEmpty()) return
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        diagnoses.forEach { diagnosis ->
+            val (bg, border, accent) = when (diagnosis.severity) {
+                NetworkDiagnosisSeverity.Red -> Triple(Red.copy(alpha = 0.12f), Red.copy(alpha = 0.55f), Red)
+                NetworkDiagnosisSeverity.Amber -> Triple(Yellow.copy(alpha = 0.10f), Yellow.copy(alpha = 0.55f), Yellow)
+                NetworkDiagnosisSeverity.Green -> Triple(Green.copy(alpha = 0.10f), Green.copy(alpha = 0.45f), Green)
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(bg, RoundedCornerShape(AndyRadius.R3))
+                    .border(1.dp, border, RoundedCornerShape(AndyRadius.R3))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(8.dp).background(accent, CircleShape))
+                    Text(diagnosis.title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                Text(diagnosis.detail, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+                if (diagnosis.fix.isNotBlank()) {
+                    Text(diagnosis.fix, color = accent, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CorporateUpstreamSettings(
+    sslInsecure: Boolean,
+    upstreamTrustedCaPath: String,
+    hostUpstreamProxy: String?,
+    onSslInsecureChange: (Boolean) -> Unit,
+    onUpstreamTrustedCaPathChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Corporate TLS / upstream trust", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(
+            if (hostUpstreamProxy != null) {
+                val local = hostUpstreamProxy.contains("127.0.0.1") || hostUpstreamProxy.contains("localhost")
+                if (local) {
+                    "Mac system proxy is a local debug tool ($hostUpstreamProxy). Andy chains through it. Quit Proxyman/Charles or fix its bypass list if traffic looks wrong."
+                } else {
+                    "Chaining through Mac proxy $hostUpstreamProxy. If upstream verify fails (corporate TLS inspection), trust the corporate root or enable insecure-upstream."
+                }
+            } else {
+                "When a Mac proxy re-signs TLS (common with corporate security tools), mitmproxy needs the corporate root CA or insecure-upstream to reach the real server."
+            },
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Checkbox(checked = sslInsecure, onCheckedChange = onSslInsecureChange)
+            Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 12.sp)
+        }
+        LabeledField(
+            label = "Corporate root CA path",
+            value = upstreamTrustedCaPath,
+            onValueChange = onUpstreamTrustedCaPathChange,
+            placeholder = "/path/to/corp-root.pem",
+            singleLine = true,
+        )
+        Text("Restart the proxy after changing these options.", color = TextSecondary, fontSize = 11.sp)
     }
 }
 

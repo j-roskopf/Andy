@@ -49,7 +49,16 @@ internal data class MitmproxyFlowLineDto(
     val error: String? = null,
     val tlsStatus: String? = null,
     val matchedRuleId: String? = null,
+    val sni: String? = null,
+    val peer: String? = null,
+    val reason: String? = null,
 )
+
+internal sealed interface MitmproxyEvent {
+    data class Exchange(val exchange: NetworkExchange) : MitmproxyEvent
+    data class ClientConnected(val id: String, val peer: String?, val atMillis: Long) : MitmproxyEvent
+    data class ClientDisconnected(val id: String, val peer: String?, val atMillis: Long) : MitmproxyEvent
+}
 
 internal object ProxyRuleJson {
     fun writeRules(rules: List<ProxyRule>): String {
@@ -58,30 +67,55 @@ internal object ProxyRuleJson {
     }
 }
 
-internal fun parseMitmproxyFlowLine(line: String): NetworkExchange? {
+internal fun parseMitmproxyFlowLine(line: String): NetworkExchange? =
+    (parseMitmproxyEvent(line) as? MitmproxyEvent.Exchange)?.exchange
+
+internal fun parseMitmproxyEvent(line: String): MitmproxyEvent? {
     if (!line.trimStart().startsWith("{")) return null
     val dto = runCatching {
         ProxyJsonFormat.decodeFromString(MitmproxyFlowLineDto.serializer(), line)
     }.getOrNull() ?: return null
-    if (dto.type != "flow") return null
+    return when (dto.type) {
+        "flow", "tls_failed" -> MitmproxyEvent.Exchange(dto.toNetworkExchange())
+        "client_connected" -> MitmproxyEvent.ClientConnected(
+            id = dto.id,
+            peer = dto.peer,
+            atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
+        )
+        "client_disconnected" -> MitmproxyEvent.ClientDisconnected(
+            id = dto.id,
+            peer = dto.peer,
+            atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
+        )
+        else -> null
+    }
+}
+
+private fun MitmproxyFlowLineDto.toNetworkExchange(): NetworkExchange {
+    val host = sni ?: url?.removePrefix("https://")?.substringBefore('/') ?: "unknown-host"
+    val synthesizedError = when {
+        type != "tls_failed" -> error
+        !error.isNullOrBlank() -> error
+        else -> "Client rejected Andy's CA for $host: ${reason ?: "client TLS handshake failed"}"
+    }
     return NetworkExchange(
-        id = dto.id,
-        flowId = dto.id,
-        startedAtMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
-        completedAtMillis = dto.completedAtMillis,
-        method = dto.method ?: "-",
-        url = dto.url ?: "-",
-        statusCode = dto.statusCode,
-        contentType = dto.contentType,
-        sizeBytes = dto.sizeBytes,
-        durationMillis = dto.durationMillis,
-        requestHeaders = dto.requestHeaders,
-        responseHeaders = dto.responseHeaders,
-        requestBodyPreview = dto.requestBodyPreview,
-        responseBodyPreview = dto.responseBodyPreview,
-        error = dto.error,
-        tlsStatus = dto.tlsStatus,
-        matchedRuleId = dto.matchedRuleId,
+        id = id,
+        flowId = id,
+        startedAtMillis = startedAtMillis ?: System.currentTimeMillis(),
+        completedAtMillis = completedAtMillis,
+        method = method ?: if (type == "tls_failed") "TLS" else "-",
+        url = url ?: if (type == "tls_failed") "https://$host/" else "-",
+        statusCode = statusCode,
+        contentType = contentType,
+        sizeBytes = sizeBytes,
+        durationMillis = durationMillis,
+        requestHeaders = requestHeaders,
+        responseHeaders = responseHeaders,
+        requestBodyPreview = requestBodyPreview,
+        responseBodyPreview = responseBodyPreview,
+        error = synthesizedError,
+        tlsStatus = tlsStatus ?: if (type == "tls_failed") "tls" else null,
+        matchedRuleId = matchedRuleId,
     )
 }
 

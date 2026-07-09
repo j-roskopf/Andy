@@ -1,12 +1,16 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.proxy.MitmproxyEvent
 import app.andy.desktop.service.proxy.ProxyRuleJson
+import app.andy.desktop.service.proxy.parseMitmproxyEvent
 import app.andy.desktop.service.proxy.parseMitmproxyFlowLine
 import app.andy.model.ProxyRule
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Golden fixtures for [ProxyRuleJson] and [parseMitmproxyFlowLine] captured before
@@ -47,6 +51,9 @@ class ProxyJsonGoldenTest {
 
     private val errorFlowLine =
         """{"type":"flow","id":"flow-err","startedAtMillis":1,"completedAtMillis":2,"durationMillis":1,"method":"POST","url":"https://example.test/fail","statusCode":null,"contentType":null,"sizeBytes":null,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":null,"error":"connection reset","tlsStatus":"tls","matchedRuleId":null}"""
+
+    private val tlsFailedLine =
+        """{"type":"tls_failed","id":"tls-failed-abc","startedAtMillis":10,"completedAtMillis":10,"durationMillis":0,"method":"TLS","url":"https://api.example.com/","statusCode":null,"contentType":null,"sizeBytes":null,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":null,"error":"Client rejected Andy's CA for api.example.com: The client does not trust the proxy's certificate.","tlsStatus":"tls","matchedRuleId":null,"sni":"api.example.com","peer":"10.0.2.15:51234","reason":"The client does not trust the proxy's certificate."}"""
 
     @Test
     fun writeRulesMatchesGoldenFixture() {
@@ -97,6 +104,28 @@ class ProxyJsonGoldenTest {
         assertNotNull(exchange)
         assertEquals("connection reset", exchange.error)
         assertNull(exchange.statusCode)
+    }
+
+    @Test
+    fun parseTlsFailedClientLine() {
+        val exchange = parseMitmproxyFlowLine(tlsFailedLine)
+        assertNotNull(exchange)
+        assertEquals("tls-failed-abc", exchange.id)
+        assertEquals("TLS", exchange.method)
+        assertEquals("https://api.example.com/", exchange.url)
+        assertEquals("tls", exchange.tlsStatus)
+        assertTrue(exchange.error!!.contains("api.example.com"))
+        assertTrue(exchange.error!!.contains("does not trust the proxy"))
+    }
+
+    @Test
+    fun parseClientConnectedEvent() {
+        val event = parseMitmproxyEvent(
+            """{"type":"client_connected","id":"c1","startedAtMillis":9,"peer":"10.0.2.15:1"}""",
+        )
+        assertIs<MitmproxyEvent.ClientConnected>(event)
+        assertEquals("c1", event.id)
+        assertEquals("10.0.2.15:1", event.peer)
     }
 
     @Test

@@ -463,13 +463,14 @@ internal class MockAndroidDeviceEnvironment {
     """.trimIndent()
 }
 
-internal class MockProxyProcess : ProxyProcess {
-    override val stdout: InputStream = ByteArrayInputStream(
-        """
+internal class MockProxyProcess(
+    stdoutText: String = """
         {"type":"flow","id":"flow-1","startedAtMillis":1000,"completedAtMillis":1042,"durationMillis":42,"method":"GET","url":"https://example.test/api","statusCode":201,"contentType":"application/json","sizeBytes":17,"requestHeaders":{"accept":"application/json"},"responseHeaders":{"content-type":"application/json"},"requestBodyPreview":null,"responseBodyPreview":"{\"ok\":true}","error":null,"tlsStatus":"tls","matchedRuleId":"rule-1"}
-        """.trimIndent().encodeToByteArray(),
-    )
-    override val stderr: InputStream = ByteArrayInputStream(ByteArray(0))
+        """.trimIndent(),
+    stderrText: String = "",
+) : ProxyProcess {
+    override val stdout: InputStream = ByteArrayInputStream(stdoutText.encodeToByteArray())
+    override val stderr: InputStream = ByteArrayInputStream(stderrText.encodeToByteArray())
     private var alive = true
     override fun isAlive(): Boolean = alive
     override fun destroy() {

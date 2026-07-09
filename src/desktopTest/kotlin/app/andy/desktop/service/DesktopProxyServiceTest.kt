@@ -4,10 +4,14 @@ import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.proxy.ProxyRuleJson
 import app.andy.desktop.service.proxy.parseMitmproxyFlowLine
 import app.andy.model.ProxyRule
+import app.andy.model.ProxyStartOptions
+import app.andy.model.ProxyWarningKind
 import app.andy.model.WorkspaceState
 import app.andy.model.matches
 import app.andy.service.CommandResult
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -176,6 +180,121 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun startAppliesCorporateUpstreamTrustOptions() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-proxy-corp-ca").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            val ca = File(testHome, "corp-root.pem").apply { writeText("CORP-CA") }
+            val service = DesktopProxyService(
+                env.runner,
+                env.devices,
+                mitmdumpExecutable = { "/usr/bin/mitmdump" },
+                processStarter = { command, _, _ ->
+                    env.proxyCommands += command
+                    MockProxyProcess()
+                },
+                hostOsName = { env.hostOsName },
+            )
+
+            val result = service.start(
+                8888,
+                emptyList(),
+                ProxyStartOptions(sslInsecure = true, upstreamTrustedCaPath = ca.absolutePath),
+            )
+
+            assertTrue(result.isSuccess)
+            val command = env.proxyCommands.single()
+            assertTrue(command.contains("--ssl-insecure"))
+            assertTrue(command.windowed(2).any { it == listOf("--set", "ssl_verify_upstream_trusted_ca=${ca.absolutePath}") })
+            assertTrue(result.stdout.contains("insecure upstream"))
+            assertTrue(result.stdout.contains("corp CA"))
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun liveStderrTlsWarningsArePublishedWhileProcessIsAlive() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val service = DesktopProxyService(
+            env.runner,
+            env.devices,
+            mitmdumpExecutable = { "/usr/bin/mitmdump" },
+            processStarter = { _, _, _ ->
+                MockProxyProcess(
+                    stdoutText = "",
+                    stderrText = "Client TLS handshake failed. The client does not trust the proxy's certificate.\n",
+                )
+            },
+            hostOsName = { env.hostOsName },
+        )
+
+        assertTrue(service.start(8888, emptyList()).isSuccess)
+        val warnings = withTimeout(2_000) {
+            service.warnings.first { it.isNotEmpty() }
+        }
+        assertTrue(warnings.any { it.kind == ProxyWarningKind.ClientTlsFailure })
+        service.stop()
+        Unit
+    }
+
+    @Test
+    fun tlsFailedAddonEventsAppearInExchanges() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val service = DesktopProxyService(
+            env.runner,
+            env.devices,
+            mitmdumpExecutable = { "/usr/bin/mitmdump" },
+            processStarter = { _, _, _ ->
+                MockProxyProcess(
+                    stdoutText = """
+                        {"type":"client_connected","id":"c1","startedAtMillis":1,"peer":"10.0.2.15:1"}
+                        {"type":"tls_failed","id":"tls-failed-1","startedAtMillis":2,"completedAtMillis":2,"durationMillis":0,"method":"TLS","url":"https://pinned.example/","statusCode":null,"contentType":null,"sizeBytes":null,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":null,"error":"Client rejected Andy's CA for pinned.example: unknown ca","tlsStatus":"tls","matchedRuleId":null,"sni":"pinned.example","peer":"10.0.2.15:1","reason":"unknown ca"}
+                    """.trimIndent(),
+                )
+            },
+            hostOsName = { env.hostOsName },
+        )
+
+        assertTrue(service.start(8888, emptyList()).isSuccess)
+        val exchanges = withTimeout(2_000) {
+            service.exchanges.first { it.any { exchange -> exchange.method == "TLS" } }
+        }
+        assertEquals(1, service.clientConnectionCount.value)
+        assertEquals("https://pinned.example/", exchanges.single().url)
+        assertTrue(exchanges.single().error!!.contains("rejected Andy's CA"))
+        service.stop()
+        Unit
+    }
+
+    @Test
+    fun routeDiagnosticsFlagsDetectedMacCorporateProxy() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        env.macProxyOutput = """
+            <dictionary> {
+              HTTPEnable : 1
+              HTTPProxy : proxy.example.test
+              HTTPPort : 8080
+              ExceptionsList : <array> {
+                0 : localhost
+                1 : 127.0.0.1
+                2 : 10.0.2.2
+              }
+            }
+        """.trimIndent()
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertTrue(diagnostics.hostProxyActive)
+        assertEquals("http://proxy.example.test:8080", diagnostics.hostUpstreamProxy)
+        assertTrue(diagnostics.issues.any { it.contains("Mac system proxy detected") })
+    }
+
+    @Test
     fun deviceProxyHostUsesEmulatorLoopbackAliasOnlyForEmulators() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()
@@ -241,6 +360,32 @@ class DesktopProxyServiceTest {
         assertFalse(diagnostics.vpnActive)
         assertFalse(diagnostics.routeUsesVpn)
         assertTrue(diagnostics.issues.isEmpty())
+    }
+
+    @Test
+    fun routeDiagnosticsDescribesLocalDebugProxyWithoutCorporateLabel() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+        env.macProxyOutput = """
+            <dictionary> {
+              HTTPEnable : 1
+              HTTPProxy : 127.0.0.1
+              HTTPPort : 9090
+              HTTPSEnable : 1
+              HTTPSProxy : 127.0.0.1
+              HTTPSPort : 9090
+              ExceptionsList : <array> {
+                0 : dns.google
+              }
+            }
+        """.trimIndent()
+
+        val diagnostics = services.proxy.diagnoseDeviceProxyRoute("emulator-5554", "10.0.2.2", 8888)
+
+        assertTrue(diagnostics.hostProxyActive)
+        assertEquals("http://127.0.0.1:9090", diagnostics.hostUpstreamProxy)
+        assertTrue(diagnostics.issues.any { it.contains("local debug proxy") })
+        assertTrue(diagnostics.issues.none { it.contains("corporate", ignoreCase = true) })
     }
 
     @Test

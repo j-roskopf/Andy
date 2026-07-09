@@ -88,10 +88,12 @@ interface HostFileService {
 interface ProxyService {
     val exchanges: Flow<List<NetworkExchange>>
     val status: Flow<String>
+    val warnings: Flow<List<ProxyWarning>>
+    val clientConnectionCount: Flow<Int>
     suspend fun detectMitmproxy(): CommandResult
     suspend fun ensureCertificateAuthority(): CommandResult
     suspend fun certificateAuthorityPath(): String
-    suspend fun start(port: Int, rules: List<ProxyRule>): CommandResult
+    suspend fun start(port: Int, rules: List<ProxyRule>, options: ProxyStartOptions = ProxyStartOptions()): CommandResult
     suspend fun updateRules(rules: List<ProxyRule>): CommandResult
     suspend fun clearTraffic(): CommandResult
     suspend fun stop(): CommandResult

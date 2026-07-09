@@ -10,6 +10,8 @@ data class WorkspaceState(
     val pairedWifiDevices: List<PairedWifiDevice> = emptyList(),
     val proxyPort: Int = 9099,
     val proxyStartOnLaunch: Boolean = false,
+    val proxySslInsecure: Boolean = false,
+    val proxyUpstreamTrustedCaPath: String? = null,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
     val workspaceSidebarExpanded: Boolean = true,

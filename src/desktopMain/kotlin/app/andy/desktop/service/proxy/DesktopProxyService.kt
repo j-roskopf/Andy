@@ -6,6 +6,11 @@ import app.andy.model.DeviceKind
 import app.andy.model.NetworkExchange
 import app.andy.model.NetworkRouteDiagnostics
 import app.andy.model.ProxyRule
+import app.andy.model.ProxyStartOptions
+import app.andy.model.ProxyWarning
+import app.andy.model.ProxyWarningKind
+import app.andy.model.isClientTlsRejectionError
+import app.andy.model.isUpstreamTlsVerificationError
 import app.andy.service.CommandResult
 import app.andy.service.ProxyService
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
 
 class DesktopProxyService(
     private val runner: CommandRunner,
@@ -29,6 +35,8 @@ class DesktopProxyService(
 ) : ProxyService {
     override val exchanges = MutableStateFlow<List<NetworkExchange>>(emptyList())
     override val status = MutableStateFlow("Proxy stopped")
+    override val warnings = MutableStateFlow<List<ProxyWarning>>(emptyList())
+    override val clientConnectionCount = MutableStateFlow(0)
     private val proxyDir = File(System.getProperty("user.home"), ".andy/proxy")
     private val rulesFile = File(proxyDir, "rules.json")
     private val addonFile = File(proxyDir, "andy_mitm_addon.py")
@@ -55,14 +63,20 @@ class DesktopProxyService(
         File(proxyDir, "mitmproxy-ca-cert.cer").absolutePath
     }
 
-    override suspend fun start(port: Int, rules: List<ProxyRule>): CommandResult = withContext(Dispatchers.IO) {
+    override suspend fun start(port: Int, rules: List<ProxyRule>, options: ProxyStartOptions): CommandResult = withContext(Dispatchers.IO) {
         val executable = mitmdumpExecutable() ?: return@withContext CommandResult.failure("mitmdump not found. Install mitmproxy with `brew install mitmproxy`.")
         stopCurrentProcess(updateStatus = false)
         killOrphanedProxies()
         proxyDir.mkdirs()
         writeAddon()
         writeRules(rules)
+        warnings.value = emptyList()
+        clientConnectionCount.value = 0
         val hostProxy = detectHostProxyState()
+        val trustedCa = options.upstreamTrustedCaPath?.trim()?.takeIf { it.isNotBlank() }?.let(::File)
+        if (trustedCa != null && !trustedCa.isFile) {
+            return@withContext CommandResult.failure("Corporate root CA not found at ${trustedCa.absolutePath}")
+        }
         val command = buildList {
             add(executable)
             hostProxy.upstreamProxy?.let { upstream ->
@@ -78,10 +92,22 @@ class DesktopProxyService(
                     "--set", "termlog_verbosity=warn",
                 ),
             )
+            if (options.sslInsecure) {
+                add("--ssl-insecure")
+            }
+            if (trustedCa != null) {
+                add("--set")
+                add("ssl_verify_upstream_trusted_ca=${trustedCa.absolutePath}")
+            }
         }
         runCatching {
             process = processStarter(command, proxyDir, mapOf("ANDY_RULES_PATH" to rulesFile.absolutePath))
-            status.value = "mitmdump listening on 0.0.0.0:$port" + hostProxy.upstreamProxy?.let { " via Mac proxy $it" }.orEmpty()
+            status.value = buildString {
+                append("mitmdump listening on 0.0.0.0:$port")
+                hostProxy.upstreamProxy?.let { append(" via Mac proxy $it") }
+                if (options.sslInsecure) append(" (insecure upstream)")
+                if (trustedCa != null) append(" (corp CA ${trustedCa.name})")
+            }
             pumpProcess(process!!)
             CommandResult.success(status.value)
         }.getOrElse { error ->
@@ -98,6 +124,8 @@ class DesktopProxyService(
 
     override suspend fun clearTraffic(): CommandResult = withContext(Dispatchers.IO) {
         exchanges.value = emptyList()
+        warnings.value = emptyList()
+        clientConnectionCount.value = 0
         CommandResult.success("Cleared network traffic")
     }
 
@@ -183,6 +211,19 @@ class DesktopProxyService(
             if (!proxyConfigured) add("Android global proxy is ${configuredProxy ?: "not set"}; expected $expectedProxy.")
             if (vpn.active) add("A VPN is active${vpn.name?.let { " ($it)" }.orEmpty()}; it can bypass Android's global HTTP proxy or route Andy's proxy endpoint into the tunnel.")
             if (routeUsesVpn) add("The route to Andy's proxy host appears to use a VPN interface: $routeSummary")
+            if (hostProxy.active && hostProxy.upstreamProxy != null) {
+                if (isLocalHostProxy(hostProxy.upstreamProxy)) {
+                    add(
+                        "Mac system proxy points at a local debug proxy (${hostProxy.upstreamProxy}) — often Proxyman/Charles. " +
+                            "Andy chains through it; if emulator traffic disappears, add localhost/127.0.0.1/10.0.2.2 to that tool's bypass list or quit it.",
+                    )
+                } else {
+                    add(
+                        "Mac system proxy detected (${hostProxy.upstreamProxy}). Andy chains mitmproxy through it; " +
+                            "if upstream TLS verification fails, add the corporate root CA or enable insecure-upstream.",
+                    )
+                }
+            }
             if (hostProxy.active && !hostProxy.bypassLooksSafe) add("Mac proxy bypass rules do not clearly include localhost/127.0.0.1/10.0.2.2; add them if emulator traffic still disappears.")
             if (hostVpn.active) add("Mac VPN-like interfaces are active (${hostVpn.summary}); emulator traffic may be routed by the host tunnel.")
         }
@@ -622,16 +663,36 @@ class DesktopProxyService(
         stdoutJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stdout.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
-                    parseMitmproxyFlowLine(line)?.let { exchange ->
-                        val current = exchanges.value
-                        val index = current.indexOfFirst { it.id == exchange.id }
-                        if (index >= 0) {
-                            val mutable = current.toMutableList()
-                            mutable[index] = exchange
-                            exchanges.value = mutable
-                        } else {
-                            exchanges.value = (current + exchange).takeLast(MaxNetworkExchanges)
+                    when (val event = parseMitmproxyEvent(line)) {
+                        is MitmproxyEvent.Exchange -> {
+                            val exchange = event.exchange
+                            val current = exchanges.value
+                            val index = current.indexOfFirst { it.id == exchange.id }
+                            if (index >= 0) {
+                                val mutable = current.toMutableList()
+                                mutable[index] = exchange
+                                exchanges.value = mutable
+                            } else {
+                                exchanges.value = (current + exchange).takeLast(MaxNetworkExchanges)
+                            }
+                            if (isClientTlsRejectionError(exchange.error) || exchange.method == "TLS") {
+                                pushWarning(
+                                    ProxyWarningKind.ClientTlsFailure,
+                                    exchange.error ?: "Client TLS handshake failed",
+                                    sni = exchange.url.removePrefix("https://").substringBefore('/').takeIf { it.isNotBlank() },
+                                )
+                            } else if (isUpstreamTlsVerificationError(exchange.error)) {
+                                pushWarning(
+                                    ProxyWarningKind.UpstreamTlsFailure,
+                                    exchange.error ?: "Upstream TLS verification failed",
+                                )
+                            }
                         }
+                        is MitmproxyEvent.ClientConnected -> {
+                            clientConnectionCount.value = clientConnectionCount.value + 1
+                        }
+                        is MitmproxyEvent.ClientDisconnected -> Unit
+                        null -> Unit
                     }
                 }
             }
@@ -641,10 +702,39 @@ class DesktopProxyService(
             proxyProcess.stderr.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
                     System.err.println("[Proxy stderr] $line")
-                    if (process === proxyProcess && line.isNotBlank() && !proxyProcess.isAlive()) status.value = line.take(220)
+                    if (process === proxyProcess && line.isNotBlank()) {
+                        classifyStderrWarning(line)?.let { (kind, message) ->
+                            pushWarning(kind, message)
+                        }
+                        if (!proxyProcess.isAlive()) status.value = line.take(220)
+                    }
                 }
             }
         }
+    }
+
+    private fun classifyStderrWarning(line: String): Pair<ProxyWarningKind, String>? {
+        return when {
+            isUpstreamTlsVerificationError(line) -> ProxyWarningKind.UpstreamTlsFailure to line.trim()
+            isClientTlsRejectionError(line) ||
+                line.contains("client TLS handshake failed", ignoreCase = true) ||
+                line.contains("Client TLS handshake failed", ignoreCase = false) ->
+                ProxyWarningKind.ClientTlsFailure to line.trim()
+            line.contains("TLS", ignoreCase = true) && line.contains("fail", ignoreCase = true) ->
+                ProxyWarningKind.Other to line.trim()
+            else -> null
+        }
+    }
+
+    private fun pushWarning(kind: ProxyWarningKind, message: String, sni: String? = null) {
+        val warning = ProxyWarning(
+            id = UUID.randomUUID().toString(),
+            atMillis = System.currentTimeMillis(),
+            kind = kind,
+            message = message.take(400),
+            sni = sni,
+        )
+        warnings.value = (warnings.value + warning).takeLast(50)
     }
 
     private fun writeRules(rules: List<ProxyRule>) {

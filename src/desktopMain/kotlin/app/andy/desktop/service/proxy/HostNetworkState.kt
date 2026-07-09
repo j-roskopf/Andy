@@ -73,6 +73,16 @@ internal fun proxyEndpoint(entries: Map<String, String>, prefix: String): String
     return "$scheme://$host:$port"
 }
 
+internal fun isLocalHostProxy(upstream: String?): Boolean {
+    if (upstream.isNullOrBlank()) return false
+    val host = upstream
+        .substringAfter("://", missingDelimiterValue = upstream)
+        .substringBefore('/')
+        .substringBefore(':')
+        .lowercase()
+    return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+}
+
 internal fun proxyExceptionCovers(exception: String, expected: String): Boolean {
     val normalized = exception.trim().lowercase()
     val target = expected.lowercase()
