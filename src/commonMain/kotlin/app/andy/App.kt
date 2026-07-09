@@ -114,6 +114,7 @@ import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
@@ -361,7 +362,13 @@ private fun rememberMirrorInputSender(
                 return@collectLatest
             }
             while (true) {
-                latestAccessibilityRoot = services.accessibility.dump(activeSerial)
+                latestAccessibilityRoot = try {
+                    services.accessibility.dump(activeSerial)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
                 delay(BugAccessibilitySnapshotMillis)
             }
         }
@@ -416,7 +423,15 @@ private fun rememberMirrorInputSender(
                                     val lookup = tapAccessibilityLookup
                                     tapAccessibilityLookup = null
                                     scope.launch {
-                                        val root = lookup?.let { withTimeoutOrNull(BugTapAccessibilityLookupMillis) { it.await() } }
+                                        val root = lookup?.let {
+                                            try {
+                                                withTimeoutOrNull(BugTapAccessibilityLookupMillis) { it.await() }
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                null
+                                            }
+                                        }
                                             ?: currentAccessibilityRoot
                                         val (tapLabel, tapDetail) = mirrorTapBugText(input.x, input.y, root)
                                         services.bugs.recordAction("input", tapLabel, tapDetail)

@@ -1016,6 +1016,7 @@ class DesktopMirrorEngine(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            if (!isActive) return@withContext
             val reason = error.message ?: error::class.simpleName.orEmpty()
             status.value = "Emulator gRPC video failed; falling back to scrcpy: $reason"
             if (emulatorGrpcClient === client) emulatorGrpcClient = null
@@ -1528,8 +1529,10 @@ private class EmulatorGrpcClient(
     }
 
     fun close() {
-        managedChannel.shutdownNow()
-        managedChannel.awaitTermination(500, TimeUnit.MILLISECONDS)
+        runCatching {
+            managedChannel.shutdownNow()
+            managedChannel.awaitTermination(500, TimeUnit.MILLISECONDS)
+        }
     }
 
     private fun sendTouch(touch: EmulatorTouch): CommandResult {
@@ -1857,6 +1860,7 @@ private fun emulatorGrpcDiscoveryFiles(): List<File> {
         File(home, "Library/Caches/TemporaryItems/avd/running"),
         tmpDir?.resolve("avd/running"),
         xdgRuntime?.resolve("avd/running"),
+        File(System.getProperty("java.io.tmpdir"), "avd/running"),
         File("/tmp/android-${System.getProperty("user.name")}/avd/running"),
     ).distinctBy { it.absolutePath }
     return roots.flatMap { root ->

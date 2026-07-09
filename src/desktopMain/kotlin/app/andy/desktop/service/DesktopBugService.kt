@@ -437,7 +437,7 @@ class DesktopBugService(
     companion object {
         private const val WINDOW_MILLIS = 30_000L
         private const val BUG_VIDEO_FRAME_RATE = 15.0
-        private const val SCREEN_POLL_MILLIS = 1_000L
+        private const val SCREEN_POLL_MILLIS = 3_000L
 
         private fun parseForegroundScreen(activityOutput: String, windowOutput: String, semantic: ScreenSemantics?): ForegroundScreen? {
             val combined = "$activityOutput\n$windowOutput"
