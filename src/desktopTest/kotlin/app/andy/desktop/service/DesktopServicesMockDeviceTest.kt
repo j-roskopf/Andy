@@ -12,13 +12,16 @@ import app.andy.model.AvdCreationConfig
 import app.andy.model.VirtualDeviceType
 import kotlinx.coroutines.flow.filter
 import app.andy.service.LogcatFilter
+import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -41,6 +44,91 @@ class DesktopServicesMockDeviceTest {
         assertTrue(serverInfo.second)
         assertTrue(serverInfo.third > 100_000)
         assertEquals(File(testHome, ".andy/scrcpy/scrcpy-server").absolutePath, serverInfo.first)
+    }
+
+    @Test
+    fun emulatorLaunchCommandUsesStudioStyleHiddenWindowAndGrpc() {
+        val command = emulatorStudioStyleLaunchCommand(
+            emulator = "/sdk/emulator/emulator",
+            name = "Pixel_8_API_36",
+            extraArgs = listOf("-no-snapshot-load", "-no-snapshot-save"),
+            ports = EmulatorLaunchPorts(console = 5560, adb = 5561, grpc = 8560),
+        )
+
+        assertEquals("/sdk/emulator/emulator", command.first())
+        assertTrue(command.windowed(2).any { it == listOf("-avd", "Pixel_8_API_36") })
+        assertTrue("-qt-hide-window" in command)
+        assertTrue(command.windowed(2).any { it == listOf("-ports", "5560,5561") })
+        assertTrue(command.windowed(2).any { it == listOf("-grpc", "8560") })
+        assertTrue(command.windowed(2).any { it == listOf("-idle-grpc-timeout", "300") })
+        assertTrue(command.windowed(2).any { it == listOf("-gpu", "auto") })
+        assertTrue("-writable-system" in command)
+        assertTrue("-no-snapshot-load" in command)
+        assertTrue("-no-snapshot-save" in command)
+        assertFalse("-no-window" in command)
+        assertFalse("-grpc-use-token" in command)
+        assertFalse("swiftshader_indirect" in command)
+    }
+
+    @Test
+    fun emulatorGrpcProtoRequestsRgbFramesAndParsesImage() {
+        assertContentEquals(
+            byteArrayOf(8, 2, 24, 0xd0.toByte(), 5, 32, 0xd0.toByte(), 5),
+            EmulatorGrpcProto.imageFormat(720),
+        )
+        val format = EmulatorGrpcProto.ProtoWriter().apply {
+            varint(1, 2)
+            varint(3, 2)
+            varint(4, 2)
+        }
+        val imageBytes = byteArrayOf(
+            0, 0, 255.toByte(),
+            255.toByte(), 255.toByte(), 255.toByte(),
+            255.toByte(), 0, 0,
+            0, 255.toByte(), 0,
+        )
+        val image = EmulatorGrpcProto.ProtoWriter().apply {
+            bytes(1, format.toByteArray())
+            bytes(4, imageBytes)
+            varint(5, 7)
+            varint(6, 123)
+        }
+
+        val parsed = EmulatorGrpcProto.parseImage(image.toByteArray())
+
+        assertEquals(2, parsed.width)
+        assertEquals(2, parsed.height)
+        assertEquals(7, parsed.seq)
+        assertEquals(123, parsed.timestampUs)
+        assertContentEquals(imageBytes, parsed.pixels)
+    }
+
+    @Test
+    fun emulatorGrpcTouchCoordinatesScaleFromMirrorFrameToDisplaySize() {
+        val frame = MirrorFrame(
+            width = 324,
+            height = 720,
+            argb = IntArray(324 * 720),
+            frameNumber = 1,
+        )
+
+        val middle = scaledEmulatorTouchPoint(
+            x = 162,
+            y = 360,
+            frame = frame,
+            displaySize = EmulatorDisplaySize(1080, 2400),
+        )
+        val clamped = scaledEmulatorTouchPoint(
+            x = 999,
+            y = 999,
+            frame = frame,
+            displaySize = EmulatorDisplaySize(1080, 2400),
+        )
+
+        assertEquals(540, middle.x)
+        assertEquals(1200, middle.y)
+        assertEquals(1076, clamped.x)
+        assertEquals(2396, clamped.y)
     }
 
     @Test
@@ -116,6 +204,7 @@ class DesktopServicesMockDeviceTest {
         assertEquals("Pixel_8_API_36", avds.single().name)
         assertEquals(36, avds.single().apiLevel)
         assertEquals(VirtualDeviceType.Phone, avds.single().deviceType)
+        assertTrue(avds.single().running)
         assertTrue(created.isSuccess)
         assertTrue(advancedCreated.isSuccess)
         assertTrue(installedImage.isSuccess)
@@ -137,6 +226,49 @@ class DesktopServicesMockDeviceTest {
         assertTrue(env.ran("avd", "snapshot", "delete", "manual"))
         assertTrue(env.ran("delete", "avd", "-n", "Pixel_8_API_36"))
         assertTrue(env.ran("-s", "emulator-5554", "emu", "kill"))
+    }
+
+    @Test
+    fun stopVirtualDeviceWaitsUntilEmulatorLeavesAdb() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        val stopped = services.avd.stopVirtualDevice("Pixel_8_API_36")
+
+        assertTrue(stopped.isSuccess, stopped.stderr)
+        val killIndex = env.commands.indexOfFirst { it.takeLast(2) == listOf("emu", "kill") }
+        assertTrue(killIndex >= 0, "expected an emu kill to be issued")
+        val polledAfterKill = env.commands.drop(killIndex + 1).any { it.takeLast(2) == listOf("devices", "-l") }
+        assertTrue(polledAfterKill, "expected stop to poll `adb devices` until the emulator was gone")
+        assertTrue(services.devices.listDevices().none { it.serial == "emulator-5554" })
+    }
+
+    @Test
+    fun stoppedEmulatorOfflineAdbEntryIsNotListedAsConnectedDevice() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        env.keepStoppedEmulatorInAdbAsOffline = true
+        val services = env.services()
+
+        val stopped = services.avd.stopVirtualDevice("Pixel_8_API_36")
+        val devices = services.devices.listDevices()
+
+        assertTrue(stopped.isSuccess, stopped.stderr)
+        assertTrue(devices.none { it.serial == "emulator-5554" })
+        assertTrue(devices.any { it.serial == "R3CXB056ZZB" && it.state == DeviceConnectionState.Online })
+        assertTrue(devices.any { it.serial == "OFFLINE" && it.state == DeviceConnectionState.Offline })
+    }
+
+    @Test
+    fun staleAvdLockDoesNotMarkVirtualDeviceRunning() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        env.adbDevicesOutput = "List of devices attached\n"
+        env.hardwareQemuLockPath().mkdirs()
+        val services = env.services()
+
+        val avds = services.avd.listVirtualDevices()
+
+        assertEquals("Pixel_8_API_36", avds.single().name)
+        assertFalse(avds.single().running)
     }
 
     @Test

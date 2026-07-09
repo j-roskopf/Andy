@@ -3,6 +3,10 @@ package app.andy
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
@@ -109,7 +113,11 @@ import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
 import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.*
 import app.andy.service.*
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -119,6 +127,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -339,7 +348,31 @@ private fun rememberMirrorInputSender(
     val currentSerial by rememberUpdatedState(serial)
     val currentEnabled by rememberUpdatedState(enabled)
     val currentRecordActions by rememberUpdatedState(recordActions)
+    var latestAccessibilityRoot by remember { mutableStateOf<AccessibilityNode?>(null) }
+    val currentAccessibilityRoot by rememberUpdatedState(latestAccessibilityRoot)
+    var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
+    var tapAccessibilityLookup by remember { mutableStateOf<Deferred<AccessibilityNode?>?>(null) }
+    val scope = rememberCoroutineScope()
     val channel = remember(services.mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
+    LaunchedEffect(services.bugs, services.accessibility, serial) {
+        services.bugs.status.collectLatest { status ->
+            val activeSerial = serial
+            if (!status.active || status.deviceSerial != activeSerial || activeSerial == null) {
+                latestAccessibilityRoot = null
+                return@collectLatest
+            }
+            while (true) {
+                latestAccessibilityRoot = try {
+                    services.accessibility.dump(activeSerial)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                delay(BugAccessibilitySnapshotMillis)
+            }
+        }
+    }
     LaunchedEffect(channel, services.mirror) {
         for (input in channel) {
             if (currentEnabled && currentSerial != null) {
@@ -353,24 +386,150 @@ private fun rememberMirrorInputSender(
     return remember(channel) {
         { input ->
             if (currentEnabled && currentSerial != null && currentRecordActions) {
-                val (label, detail) = mirrorInputBugText(input)
-                services.bugs.recordAction("input", label, detail)
+                when (input) {
+                    is MirrorInput.Touch -> {
+                        val now = System.currentTimeMillis()
+                        when (input.action) {
+                            MirrorTouchAction.Down -> {
+                                touchGesture = BugTouchGesture(input.x, input.y, input.x, input.y, now)
+                                tapAccessibilityLookup?.cancel()
+                                tapAccessibilityLookup = scope.async {
+                                    val activeSerial = currentSerial ?: return@async null
+                                    services.accessibility.dump(activeSerial)
+                                }
+                            }
+                            MirrorTouchAction.Move -> {
+                                touchGesture = touchGesture?.copy(lastX = input.x, lastY = input.y, moved = true)
+                            }
+                            MirrorTouchAction.Up -> {
+                                val gesture = touchGesture
+                                touchGesture = null
+                                val (label, detail) = if (gesture != null && gesture.isSwipeTo(input.x, input.y)) {
+                                    tapAccessibilityLookup?.cancel()
+                                    tapAccessibilityLookup = null
+                                    mirrorSwipeBugText(
+                                        startX = gesture.startX,
+                                        startY = gesture.startY,
+                                        endX = input.x,
+                                        endY = input.y,
+                                        durationMillis = (now - gesture.startedAtMillis).toInt().coerceAtLeast(0),
+                                    )
+                                } else {
+                                    null to null
+                                }
+                                if (label != null) {
+                                    services.bugs.recordAction("input", label, detail)
+                                } else {
+                                    val lookup = tapAccessibilityLookup
+                                    tapAccessibilityLookup = null
+                                    scope.launch {
+                                        val root = lookup?.let {
+                                            try {
+                                                withTimeoutOrNull(BugTapAccessibilityLookupMillis) { it.await() }
+                                            } catch (cancelled: CancellationException) {
+                                                throw cancelled
+                                            } catch (_: Exception) {
+                                                null
+                                            }
+                                        }
+                                            ?: currentAccessibilityRoot
+                                        val (tapLabel, tapDetail) = mirrorTapBugText(input.x, input.y, root)
+                                        services.bugs.recordAction("input", tapLabel, tapDetail)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        val (label, detail) = mirrorInputBugText(input, currentAccessibilityRoot)
+                        services.bugs.recordAction("input", label, detail)
+                    }
+                }
             }
             if (channel.trySend(input).isFailure) Unit
         }
     }
 }
 
-private fun mirrorInputBugText(input: MirrorInput): Pair<String, String?> = when (input) {
+private data class BugTouchGesture(
+    val startX: Int,
+    val startY: Int,
+    val lastX: Int,
+    val lastY: Int,
+    val startedAtMillis: Long,
+    val moved: Boolean = false,
+) {
+    fun isSwipeTo(endX: Int, endY: Int): Boolean {
+        val dx = endX - startX
+        val dy = endY - startY
+        return moved && dx * dx + dy * dy >= BugTapMaxDistancePx * BugTapMaxDistancePx
+    }
+}
+
+private const val BugAccessibilitySnapshotMillis = 1_500L
+private const val BugTapAccessibilityLookupMillis = 350L
+private const val BugTapMaxDistancePx = 24
+
+private fun mirrorInputBugText(input: MirrorInput, accessibilityRoot: AccessibilityNode?): Pair<String, String?> = when (input) {
     is MirrorInput.Touch -> "${input.action.name} ${input.x},${input.y}" to null
-    is MirrorInput.Tap -> "Tap ${input.x},${input.y}" to null
-    is MirrorInput.Swipe -> "Swipe ${input.startX},${input.startY} -> ${input.endX},${input.endY}" to "${input.durationMillis}ms"
+    is MirrorInput.Tap -> mirrorTapBugText(input.x, input.y, accessibilityRoot)
+    is MirrorInput.Swipe -> mirrorSwipeBugText(input.startX, input.startY, input.endX, input.endY, input.durationMillis)
     is MirrorInput.Key -> "Key ${input.keyCode}" to androidKeyLabel(input.keyCode)
     is MirrorInput.Text -> "Text input" to input.value.take(80)
     MirrorInput.Back -> "Back" to null
     MirrorInput.Home -> "Home" to null
     MirrorInput.Recents -> "Recents" to null
     MirrorInput.Power -> "Power" to null
+}
+
+private fun mirrorTapBugText(x: Int, y: Int, accessibilityRoot: AccessibilityNode?): Pair<String, String?> {
+    val node = accessibilityRoot?.findBestNodeAt(x, y) ?: return "Tap $x,$y" to null
+    val label = node.accessibilityBugLabel()
+    val className = node.className?.substringAfterLast('.')?.takeIf { it.isNotBlank() }
+    val title = buildString {
+        append("Tap")
+        if (label != null) append(" \"").append(label.take(80)).append("\"")
+        if (className != null) append(" [").append(className).append("]")
+    }
+    val detail = buildList {
+        add("$x,$y")
+        node.resourceId?.takeIf { it.isNotBlank() }?.let(::add)
+        node.packageName?.takeIf { it.isNotBlank() }?.let(::add)
+        node.bounds?.takeIf { it.isNotBlank() }?.let(::add)
+        node.accessibilityStateSummary()?.let(::add)
+    }.joinToString(" · ")
+    return title to detail
+}
+
+private fun mirrorSwipeBugText(startX: Int, startY: Int, endX: Int, endY: Int, durationMillis: Int): Pair<String, String?> {
+    val dx = endX - startX
+    val dy = endY - startY
+    val distance = kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toInt()
+    val direction = when {
+        kotlin.math.abs(dx) > kotlin.math.abs(dy) && dx > 0 -> "right"
+        kotlin.math.abs(dx) > kotlin.math.abs(dy) -> "left"
+        dy > 0 -> "down"
+        else -> "up"
+    }
+    return "Swipe $direction" to "${distance}px · ${durationMillis}ms · $startX,$startY -> $endX,$endY"
+}
+
+private fun AccessibilityNode.accessibilityBugLabel(): String? {
+    return listOf(text, contentDescription, hint, resourceId)
+        .firstOrNull { !it.isNullOrBlank() }
+        ?.trim()
+}
+
+private fun AccessibilityNode.accessibilityStateSummary(): String? {
+    val values = buildList {
+        if (clickable) add("clickable")
+        if (focusable) add("focusable")
+        if (scrollable) add("scrollable")
+        if (selected) add("selected")
+        if (checked) add("checked")
+        if (!enabled) add("disabled")
+    }
+    return values.takeIf { it.isNotEmpty() }?.joinToString(",")
 }
 
 private fun androidKeyLabel(keyCode: Int): String? = when (keyCode) {
@@ -380,13 +539,31 @@ private fun androidKeyLabel(keyCode: Int): String? = when (keyCode) {
 }
 
 @Composable
-private fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @Composable (MirrorFrame?) -> Unit) {
+private fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @Composable (Flow<MirrorFrame>, MirrorFrame?) -> Unit) {
     var frame by remember(mirror, resetKey) { mutableStateOf<MirrorFrame?>(null) }
     LaunchedEffect(mirror, resetKey) {
-        mirror.frames.collectLatest { frame = it.takeIf { it.width > 1 && it.height > 1 } }
+        mirror.frames.collectLatest { next ->
+            if (next.width <= 1 || next.height <= 1) {
+                // connect()/disconnect() push a 1x1 sentinel; clear the frame so the
+                // surface releases its last image instead of freezing on it.
+                frame = null
+                return@collectLatest
+            }
+            val previous = frame
+            if (
+                previous == null ||
+                previous.width != next.width ||
+                previous.height != next.height ||
+                next.frameNumber % MirrorMetadataFrameInterval == 0L
+            ) {
+                frame = next
+            }
+        }
     }
-    content(frame)
+    content(mirror.frames, frame)
 }
+
+private const val MirrorMetadataFrameInterval = 30L
 
 @Composable
 fun AndyApp(
@@ -459,12 +636,13 @@ fun AndyMirrorPopOut(
             }
         }
         Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
-            MirrorFrameContent(services.mirror, serial) { frame ->
+            MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
                 LiveDevicePane(
                     serial = serial,
                     device = null,
                     displayName = deviceName,
                     frame = frame,
+                    frameFlow = frameFlow,
                     mirrorStatus = mirrorStatus,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize(),
@@ -516,8 +694,11 @@ private fun AndyShell(
     var workspaceState by remember { mutableStateOf(WorkspaceState()) }
     var networkRulesVisible by remember { mutableStateOf(false) }
     var networkLiveVisible by remember { mutableStateOf(false) }
+    var performanceLiveVisible by remember { mutableStateOf(false) }
     var stoppingEmulatorSerial by remember { mutableStateOf<String?>(null) }
     var emulatorStopStatus by remember { mutableStateOf("") }
+    var startingEmulatorName by remember { mutableStateOf<String?>(null) }
+    var emulatorStartStatus by remember { mutableStateOf("") }
     var actionsConfig by remember { mutableStateOf(ActionsConfig()) }
     var activeRunId by remember { mutableStateOf<String?>(null) }
     val runningActions by services.actionRuns.running.collectAsState()
@@ -563,8 +744,10 @@ private fun AndyShell(
         }
     }
 
-    fun openStartedEmulator(previousSerials: Set<String>) {
+    fun openStartedEmulator(previousSerials: Set<String>, avdName: String) {
         scope.launch {
+            startingEmulatorName = avdName
+            emulatorStartStatus = "Starting $avdName..."
             repeat(60) {
                 val currentDevices = refreshDevicesNow()
                 val started = currentDevices.firstOrNull {
@@ -577,10 +760,15 @@ private fun AndyShell(
                 if (started != null) {
                     selectedSerial = started.serial
                     destination = AndyDestination.Live
+                    emulatorStartStatus = "${started.displayName} is online"
+                    startingEmulatorName = null
                     return@launch
                 }
+                emulatorStartStatus = "Starting $avdName... waiting for boot (${it + 1}/60)"
                 delay(1_000)
             }
+            emulatorStartStatus = "$avdName is still starting. Refresh devices when it finishes booting."
+            startingEmulatorName = null
         }
     }
 
@@ -666,6 +854,9 @@ private fun AndyShell(
                             Spacer(Modifier.width(8.dp))
                             FilterPill("Live", networkLiveVisible, Cyan) { networkLiveVisible = !networkLiveVisible }
                             Spacer(Modifier.width(10.dp))
+                        } else if (destination == AndyDestination.Performance) {
+                            FilterPill("Live", performanceLiveVisible, Cyan) { performanceLiveVisible = !performanceLiveVisible }
+                            Spacer(Modifier.width(10.dp))
                         }
                     },
                 )
@@ -676,12 +867,24 @@ private fun AndyShell(
                         .padding(horizontal = 18.dp, vertical = 16.dp)
                 ) {
                     when (destination) {
-                        AndyDestination.Devices -> DevicesScreen(services, devices, sdk, onRefresh = { refreshDevices() }, onLive = {
-                            selectedSerial = it
-                            destination = AndyDestination.Live
-                        }, onEmulatorStarted = { previousSerials ->
-                            openStartedEmulator(previousSerials)
-                        }, onStopEmulator = { stopEmulator(it) }, stoppingEmulatorSerial = stoppingEmulatorSerial, stopStatus = emulatorStopStatus)
+                        AndyDestination.Devices -> DevicesScreen(
+                            services,
+                            devices,
+                            sdk,
+                            onRefresh = { refreshDevices() },
+                            onLive = {
+                                selectedSerial = it
+                                destination = AndyDestination.Live
+                            },
+                            onEmulatorStarted = { previousSerials, avdName ->
+                                openStartedEmulator(previousSerials, avdName)
+                            },
+                            onStopEmulator = { stopEmulator(it) },
+                            stoppingEmulatorSerial = stoppingEmulatorSerial,
+                            stopStatus = emulatorStopStatus,
+                            startingEmulatorName = startingEmulatorName,
+                            startStatus = emulatorStartStatus,
+                        )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
                             services = services,
@@ -749,10 +952,15 @@ private fun AndyShell(
                         AndyDestination.Snapshots -> SnapshotsScreen(services.avd)
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
-                            services.metrics,
-                            selectedSerial,
-                            workspaceState.performanceProcessesPaneWidth,
+                            services = services,
+                            serial = selectedSerial,
+                            device = devices.firstOrNull { it.serial == selectedSerial },
+                            processesPaneWidth = workspaceState.performanceProcessesPaneWidth,
                             onProcessesPaneWidthChange = { width -> updateWorkspace { it.copy(performanceProcessesPaneWidth = width) } },
+                            liveVisible = performanceLiveVisible,
+                            onLiveVisibleChange = { performanceLiveVisible = it },
+                            livePaneWidth = workspaceState.performanceLivePaneWidth,
+                            onLivePaneWidthChange = { width -> updateWorkspace { it.copy(performanceLivePaneWidth = width) } },
                         )
                         AndyDestination.Design -> DesignScreen(
                             services,
@@ -1166,10 +1374,12 @@ private fun DevicesScreen(
     sdk: SdkDiscovery,
     onRefresh: () -> Unit,
     onLive: (String) -> Unit,
-    onEmulatorStarted: (Set<String>) -> Unit,
+    onEmulatorStarted: (Set<String>, String) -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
     stopStatus: String,
+    startingEmulatorName: String?,
+    startStatus: String,
 ) {
     val scope = rememberCoroutineScope()
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
@@ -1235,6 +1445,12 @@ private fun DevicesScreen(
         }
         PanelCard {
             Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
+            if (startStatus.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (startingEmulatorName != null) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                    Text(startStatus, color = if (startingEmulatorName != null) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
             if (avdStatus.isNotBlank()) Text(avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             if (stopStatus.isNotBlank()) Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             if (filteredAvds.isEmpty()) {
@@ -1275,13 +1491,14 @@ private fun DevicesScreen(
                                         avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
                                         startingAvd = null
                                         refreshAvds()
-                                        if (result.isSuccess) onEmulatorStarted(before)
+                                        if (result.isSuccess) onEmulatorStarted(before, avd.name)
                                     }
                                 },
-                                enabled = startingAvd == null,
+                                enabled = startingAvd == null && startingEmulatorName == null,
                             ) {
                                 Text(
                                     when {
+                                        startingEmulatorName == avd.name -> "Booting"
                                         startingAvd == avd.name -> "Starting"
                                         runningDevice != null -> "Live"
                                         else -> "Start"
@@ -1297,15 +1514,16 @@ private fun DevicesScreen(
                                 }
                             }
                             AvdActionsMenu(
-                                enabled = startingAvd == null,
+                                enabled = startingAvd == null && startingEmulatorName == null,
                                 onColdBoot = {
+                                    val before = devices.map { it.serial }.toSet()
                                     scope.launch {
                                         startingAvd = avd.name
                                         val result = services.avd.coldBootVirtualDevice(avd.name)
                                         avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
                                         startingAvd = null
                                         refreshAvds()
-                                        if (result.isSuccess) onEmulatorStarted(devices.map { it.serial }.toSet())
+                                        if (result.isSuccess) onEmulatorStarted(before, avd.name)
                                     }
                                 },
                                 onWipe = {
@@ -2309,7 +2527,6 @@ private fun LiveScreen(
     var clipDialogVisible by remember { mutableStateOf(false) }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
     var localControlsPaneHeight by remember(controlsPaneHeight) { mutableStateOf(controlsPaneHeight.coerceIn(170f, 360f)) }
-    val bugCaptureStatus by services.bugs.status.collectAsState(BugCaptureStatus())
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     fun sendHardware(input: MirrorInput) {
         sendMirrorInput(input)
@@ -2350,12 +2567,14 @@ private fun LiveScreen(
         }
     }
     Row(Modifier.fillMaxSize()) {
-        MirrorFrameContent(services.mirror, serial) { frame ->
+        MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             val visibleFrame = frame.takeUnless { bugDialogVisible || clipDialogVisible }
+            val visibleFrameFlow = frameFlow.takeUnless { bugDialogVisible || clipDialogVisible }
             LiveDevicePane(
                 serial = serial,
                 device = device,
                 frame = visibleFrame,
+                frameFlow = visibleFrameFlow,
                 mirrorStatus = mirrorStatus,
                 connectResult = connectResult,
                 modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight().padding(end = 6.dp),
@@ -2424,14 +2643,6 @@ private fun LiveScreen(
                         Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Text(
-                    "Bug buffer: ${bugCaptureStatus.videoFrameCount} frames · ${bugCaptureStatus.actionCount} actions · ${bugCaptureStatus.logCount} logs",
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
                 if (bugSaveStatus.isNotBlank()) {
                     Text(bugSaveStatus, color = Rust, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -2557,6 +2768,7 @@ private fun LiveDevicePane(
     device: AndroidDevice?,
     displayName: String? = device?.displayName,
     frame: MirrorFrame?,
+    frameFlow: Flow<MirrorFrame>? = null,
     mirrorStatus: String,
     connectResult: String,
     modifier: Modifier = Modifier,
@@ -2573,11 +2785,13 @@ private fun LiveDevicePane(
     zoom: Float = 1f,
     showDeviceHeader: Boolean = true,
     showChromeControls: Boolean = true,
+    showHardwareControls: Boolean = showChromeControls,
     showContainerChrome: Boolean = true,
     deviceBorderWidth: Dp = 5.dp,
     deviceCornerRadius: Dp = 10.dp,
     onHoverColor: (String) -> Unit = {},
     passThroughInput: Boolean = true,
+    onPickerClick: (String) -> Unit = {},
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
     onPower: () -> Unit = {},
@@ -2601,7 +2815,7 @@ private fun LiveDevicePane(
         containerModifier,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (showChromeControls) {
+        if (showHardwareControls) {
             LiveHardwareToolbar(
                 enabled = serial != null,
                 onPower = onPower,
@@ -2616,13 +2830,13 @@ private fun LiveDevicePane(
         }
 
         Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (showDeviceHeader) {
-                Box(Modifier.fillMaxWidth()) {
+            if (showDeviceHeader && serial != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        displayName ?: device?.serial ?: serial ?: "No device",
+                        displayName ?: device?.serial ?: serial,
                         color = TextPrimary,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.align(Alignment.Center),
+                        modifier = Modifier.weight(1f, fill = false),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -2630,7 +2844,7 @@ private fun LiveDevicePane(
                         listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
                         color = TextSecondary,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.align(Alignment.CenterEnd),
+                        modifier = Modifier.padding(start = 8.dp),
                         maxLines = 1,
                     )
                 }
@@ -2674,47 +2888,47 @@ private fun LiveDevicePane(
                             contentAlignment = Alignment.Center,
                         ) {
                             if (frame != null) {
-                                MirrorVideoSurface(
-                                    frame = frame,
-                                    modifier = Modifier.fillMaxSize(),
-                                    onInput = onInput,
-                                    onHoverColor = onHoverColor,
-                                    passThroughInput = passThroughInput,
-                                    onDevicePointClick = onDevicePointClick,
-                                    onRulerResize = onRulerResize,
-                                    overlay = MirrorOverlay(
-                                        highlightBounds = highlightBounds,
-                                        sourceWidth = sourceWidth,
-                                        sourceHeight = sourceHeight,
-                                        showGrid = gridSize != null,
-                                        gridSize = gridSize ?: 16f,
-                                        gridColor = gridColor,
-                                        showRuler = showRuler,
-                                        rulerColor = Rust,
-                                        rulerWidth = rulerWidth,
-                                        rulerHeight = rulerHeight,
-                                        rulerX = rulerX,
-                                        rulerY = rulerY,
-                                        pickerColor = pickerColor,
-                                        pickerHex = pickerHex,
-                                    ),
+                                val surfaceOverlay = MirrorOverlay(
+                                    highlightBounds = highlightBounds,
+                                    sourceWidth = sourceWidth,
+                                    sourceHeight = sourceHeight,
+                                    showGrid = gridSize != null,
+                                    gridSize = gridSize ?: 16f,
+                                    gridColor = gridColor,
+                                    showRuler = showRuler,
+                                    rulerColor = Rust,
+                                    rulerWidth = rulerWidth,
+                                    rulerHeight = rulerHeight,
+                                    rulerX = rulerX,
+                                    rulerY = rulerY,
+                                    pickerColor = pickerColor,
+                                    pickerHex = pickerHex,
                                 )
-                            } else {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
-                                    Text("embedded mirror", color = TextPrimary, fontWeight = FontWeight.Bold)
-                                    Text(mirrorStatus, color = TextSecondary, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                                    Text(connectResult.ifBlank { if (serial == null) "Select an online device" else "Connect streams H.264 in-app" }, color = TextSecondary, fontSize = 11.sp)
-                                    if (serial != null) {
-                                        Spacer(Modifier.height(12.dp))
-                                        Button(
-                                            onClick = onConnect,
-                                            colors = primaryButtonColors(),
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                                        ) {
-                                            Text("Connect", color = TextPrimary, fontSize = 12.sp)
-                                        }
-                                    }
+                                if (frameFlow != null) {
+                                    MirrorVideoSurface(
+                                        frames = frameFlow,
+                                        resetKey = serial,
+                                        modifier = Modifier.fillMaxSize(),
+                                        onInput = onInput,
+                                        onHoverColor = onHoverColor,
+                                        passThroughInput = passThroughInput,
+                                        onPickerClick = onPickerClick,
+                                        onDevicePointClick = onDevicePointClick,
+                                        onRulerResize = onRulerResize,
+                                        overlay = surfaceOverlay,
+                                    )
+                                } else {
+                                    MirrorVideoSurface(
+                                        frame = frame,
+                                        modifier = Modifier.fillMaxSize(),
+                                        onInput = onInput,
+                                        onHoverColor = onHoverColor,
+                                        passThroughInput = passThroughInput,
+                                        onPickerClick = onPickerClick,
+                                        onDevicePointClick = onDevicePointClick,
+                                        onRulerResize = onRulerResize,
+                                        overlay = surfaceOverlay,
+                                    )
                                 }
                             }
                         }
@@ -3694,9 +3908,9 @@ private fun AppsScreen(
         }
     }
 
-    fun runAppAction(label: String, packageName: String? = selected?.packageName, block: suspend () -> CommandResult) {
+    fun runAppAction(label: String, packageName: String? = selected?.packageName, appLabel: String? = selected?.label, block: suspend () -> CommandResult) {
         scope.launch {
-            packageName?.let { services.bugs.recordAction("app", label, it) }
+            packageName?.let { services.bugs.recordAction("app", "$label $it", appLabel) }
             val result = block()
             status = "$label: " + if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
             if (label == "Uninstall" || label == "Clear data") refresh()
@@ -3742,19 +3956,19 @@ private fun AppsScreen(
                 Text(app?.packageName ?: "No app selected", color = TextPrimary, fontWeight = FontWeight.Bold)
                 if (app != null && serial != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = { runAppAction("Launch", app.packageName) { apps.launch(serial, app.packageName) } }) { Text("Launch") }
-                        OutlinedButton(onClick = { runAppAction("Stop", app.packageName) { apps.stop(serial, app.packageName) } }) { Text("Stop") }
+                        Button(onClick = { runAppAction("Launch", app.packageName, app.label) { apps.launch(serial, app.packageName) } }) { Text("Launch") }
+                        OutlinedButton(onClick = { runAppAction("Stop", app.packageName, app.label) { apps.stop(serial, app.packageName) } }) { Text("Stop") }
                         OutlinedButton(onClick = {
                             pendingConfirmation = PendingConfirmation("Clear app data?", app.packageName) {
-                                runAppAction("Clear data", app.packageName) { apps.clearData(serial, app.packageName) }
+                                runAppAction("Clear data", app.packageName, app.label) { apps.clearData(serial, app.packageName) }
                             }
                         }) { Text("Clear") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { runAppAction("Reset permissions", app.packageName) { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
+                        OutlinedButton(onClick = { runAppAction("Reset permissions", app.packageName, app.label) { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
                         OutlinedButton(onClick = {
                             pendingConfirmation = PendingConfirmation("Uninstall app?", app.packageName) {
-                                runAppAction("Uninstall", app.packageName) { apps.uninstall(serial, app.packageName) }
+                                runAppAction("Uninstall", app.packageName, app.label) { apps.uninstall(serial, app.packageName) }
                             }
                         }, enabled = !app.system) { Text("Uninstall") }
                     }
@@ -4889,6 +5103,16 @@ private fun NetworkScreen(
         resetRuleForm()
     }
 
+    fun clearCapturedTraffic() {
+        scope.launch {
+            val result = proxy.clearTraffic()
+            selectedFlowId = null
+            seenFlowIds = emptySet()
+            flashingTrafficKeys.clear()
+            status = if (result.isSuccess) result.stdout else result.stderr
+        }
+    }
+
     fun editRule(ruleId: String) {
         val rule = rules.firstOrNull { it.id == ruleId } ?: return
         ruleName = rule.name
@@ -4949,16 +5173,17 @@ private fun NetworkScreen(
                             proxyStatus = result.stdout
                         }
                     }) { Text("Stop") }
-	                    Text(
-	                        if (setupExpanded) "Hide setup" else "Show setup",
-	                        color = Rust,
-	                        fontSize = 12.sp,
-	                        fontWeight = FontWeight.Medium,
-	                        modifier = Modifier.clickable {
-	                            setupManuallyToggled = true
-	                            setupExpanded = !setupExpanded
-	                        },
-	                    )
+                    OutlinedButton(onClick = ::clearCapturedTraffic) { Text("Clear traffic") }
+                    Text(
+                        if (setupExpanded) "Hide setup" else "Show setup",
+                        color = Rust,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable {
+                            setupManuallyToggled = true
+                            setupExpanded = !setupExpanded
+                        },
+                    )
                 }
                 val proxyStarted = proxyStatus.contains("listening on")
                 val caText = when {
@@ -5064,15 +5289,6 @@ private fun NetworkScreen(
                                     }
                                 },
                             ) { Text("Prepare phone CA") }
-                            OutlinedButton(onClick = {
-                                scope.launch {
-                                    val result = proxy.clearTraffic()
-                                    selectedFlowId = null
-                                    seenFlowIds = emptySet()
-                                    flashingTrafficKeys.clear()
-                                    status = if (result.isSuccess) result.stdout else result.stderr
-                                }
-                            }) { Text("Clear traffic") }
                         }
                         SetupChecklist(setupRequirements)
                         SetupChecklist(networkStatusRequirements)
@@ -5237,7 +5453,7 @@ private fun NetworkScreen(
             Column(Modifier.width(420.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (liveVisible && rulesVisible) {
                     var livePanelHeight by remember { mutableStateOf(300f) }
-                    NetworkLivePanel(
+                    DeviceLivePanel(
                         services = services,
                         serial = serial,
                         device = device,
@@ -5270,7 +5486,7 @@ private fun NetworkScreen(
                         modifier = Modifier.fillMaxWidth().weight(1f)
                     )
                 } else if (liveVisible) {
-                    NetworkLivePanel(
+                    DeviceLivePanel(
                         services = services,
                         serial = serial,
                         device = device,
@@ -6102,7 +6318,7 @@ private fun quoteJsonPreview(value: String): String {
 }
 
 @Composable
-private fun NetworkLivePanel(services: AndyServices, serial: String?, device: AndroidDevice?, modifier: Modifier = Modifier) {
+private fun DeviceLivePanel(services: AndyServices, serial: String?, device: AndroidDevice?, modifier: Modifier = Modifier, showChromeControls: Boolean = true) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
@@ -6122,14 +6338,16 @@ private fun NetworkLivePanel(services: AndyServices, serial: String?, device: An
         connectResult = ""
         connect()
     }
-    MirrorFrameContent(services.mirror, serial) { frame ->
+    MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
         LiveDevicePane(
             serial = serial,
             device = device,
             frame = frame,
+            frameFlow = frameFlow,
             mirrorStatus = mirrorStatus,
             connectResult = connectResult,
             modifier = modifier,
+            showChromeControls = showChromeControls,
             onInput = sendMirrorInput,
             onConnect = ::connect,
         )
@@ -6152,61 +6370,134 @@ private fun <T> List<T>.swapItems(first: Int, second: Int): List<T> {
 }
 
 @Composable
-private fun PerformanceScreen(metrics: MetricsService, serial: String?, processesPaneWidth: Float, onProcessesPaneWidthChange: (Float) -> Unit) {
+private fun PerformanceScreen(
+    services: AndyServices,
+    serial: String?,
+    device: AndroidDevice?,
+    processesPaneWidth: Float,
+    onProcessesPaneWidthChange: (Float) -> Unit,
+    liveVisible: Boolean,
+    onLiveVisibleChange: (Boolean) -> Unit,
+    livePaneWidth: Float,
+    onLivePaneWidthChange: (Float) -> Unit,
+) {
     var samples by remember { mutableStateOf<List<PerformanceSample>>(emptyList()) }
     var localProcessesPaneWidth by remember(processesPaneWidth) { mutableStateOf(processesPaneWidth) }
+    var localLivePaneWidth by remember(livePaneWidth) { mutableStateOf(livePaneWidth) }
     LaunchedEffect(serial) {
         samples = emptyList()
-        if (serial != null) metrics.stream(serial, null).collectLatest { samples = (samples + it).takeLast(60) }
+        if (serial != null) services.metrics.stream(serial, null).collectLatest { samples = (samples + it).takeLast(60) }
     }
     val latest = samples.lastOrNull()
     val recentFrames = samples.flatMap { it.frameRenderTimes }.takeLast(60)
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Toolbar("Performance", "process CPU/memory · frame render time · battery")
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            MetricCard("CPU", latest?.cpuPercent?.let { "${it.toInt()}%" } ?: "-")
-            MetricCard("Memory", latest?.memoryMb?.let { "${it.toInt()} MB" } ?: "-")
-            MetricCard("Frames green", recentFrames.takeIf { it.isNotEmpty() }?.let { frames -> "${frames.count { it.millis <= 16.6f }}/${frames.size}" } ?: "-")
-            MetricCard("Battery", latest?.batteryPercent?.let { "$it%" } ?: "-")
-        }
-        Row(Modifier.fillMaxSize()) {
-            Column(Modifier.width(localProcessesPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TableHeader(listOf("PID" to 80.dp, "CPU" to 70.dp, "MEM" to 90.dp, "PROCESS" to 1.dp))
-                LazyColumn {
-                    items(latest?.processes.orEmpty()) { process ->
-                        TableRow {
-                            MonoCell(process.pid, 80.dp, TextSecondary)
-                            MonoCell(process.cpuPercent?.let { "%.1f%%".format(it) } ?: "-", 70.dp, if ((process.cpuPercent ?: 0f) > 10f) Rust else TextPrimary)
-                            MonoCell(process.memoryMb?.let { "%.1f".format(it) } ?: "-", 90.dp, TextSecondary)
-                            MonoCell(process.name, 1.dp, TextPrimary, Modifier.weight(1f))
+    val cpuSeries = samples.map { it.cpuPercent ?: 0f }
+    val memorySeries = samples.map { it.memoryMb ?: 0f }
+    val networkSeries = samples.map { (it.networkRxKbps ?: 0f) + (it.networkTxKbps ?: 0f) }
+    val fpsSeries = samples.map { it.fps ?: 0f }
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Toolbar("Performance", "process CPU/memory · network · frame render time")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PerformanceChartCard(
+                    title = "CPU",
+                    valueText = latest?.cpuPercent?.let { "${it.toInt()}" } ?: "-",
+                    unitText = "%",
+                    caption = "4 cores · avg ${cpuSeries.takeIf { it.isNotEmpty() }?.average()?.toInt() ?: 0}%",
+                    values = cpuSeries,
+                    maxValue = 100f,
+                    lineColor = Rust,
+                    modifier = Modifier.weight(1f),
+                )
+                PerformanceChartCard(
+                    title = "Memory",
+                    valueText = latest?.memoryMb?.let { "${it.toInt()}" } ?: "-",
+                    unitText = "MB",
+                    caption = "peak ${memorySeries.maxOrNull()?.toInt() ?: 0} MB",
+                    values = memorySeries,
+                    maxValue = (memorySeries.maxOrNull() ?: 0f).coerceAtLeast(256f) * 1.15f,
+                    lineColor = Cyan,
+                    modifier = Modifier.weight(1f),
+                )
+                PerformanceChartCard(
+                    title = "Network",
+                    valueText = latest?.let { ((it.networkRxKbps ?: 0f) + (it.networkTxKbps ?: 0f)).toInt().toString() } ?: "-",
+                    unitText = "KB/s",
+                    caption = "down ${latest?.networkRxKbps?.toInt() ?: 0} · up ${latest?.networkTxKbps?.toInt() ?: 0} KB/s",
+                    values = networkSeries,
+                    maxValue = (networkSeries.maxOrNull() ?: 0f).coerceAtLeast(64f) * 1.15f,
+                    lineColor = Green,
+                    modifier = Modifier.weight(1f),
+                )
+                PerformanceChartCard(
+                    title = "FPS",
+                    valueText = latest?.fps?.toInt()?.toString() ?: "Idle",
+                    unitText = if (latest?.fps != null) "fps" else "",
+                    caption = recentFrames.takeIf { it.isNotEmpty() }?.let { frames -> "${frames.size} frames sampled · ${frames.count { it.millis <= 16.6f }} green" } ?: "No active rendering",
+                    values = fpsSeries,
+                    maxValue = (fpsSeries.maxOrNull() ?: 60f).coerceAtLeast(60f) * 1.1f,
+                    lineColor = Yellow,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(Modifier.fillMaxWidth().weight(1f)) {
+                Column(Modifier.width(localProcessesPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TableHeader(listOf("PID" to 80.dp, "CPU" to 70.dp, "MEM" to 90.dp, "PROCESS" to 1.dp))
+                    LazyColumn {
+                        items(latest?.processes.orEmpty()) { process ->
+                            TableRow {
+                                MonoCell(process.pid, 80.dp, TextSecondary)
+                                MonoCell(process.cpuPercent?.let { "%.1f%%".format(it) } ?: "-", 70.dp, if ((process.cpuPercent ?: 0f) > 10f) Rust else TextPrimary)
+                                MonoCell(process.memoryMb?.let { "%.1f".format(it) } ?: "-", 90.dp, TextSecondary)
+                                MonoCell(process.name, 1.dp, TextPrimary, Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+                PaneDivider(
+                    onDrag = { dragX -> localProcessesPaneWidth = (localProcessesPaneWidth + dragX).coerceIn(360f, 1300f) },
+                    onDragEnd = { onProcessesPaneWidthChange(localProcessesPaneWidth) },
+                )
+                PanelCard(Modifier.fillMaxSize().padding(start = 6.dp).weight(1f)) {
+                    Text("Frame rendering", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text("Green <= 16.6 ms, red is slower than 60 fps.", color = TextSecondary, fontSize = 12.sp)
+                    Canvas(Modifier.fillMaxWidth().height(190.dp)) {
+                        val frames = recentFrames
+                        val barWidth = if (frames.isEmpty()) size.width else size.width / frames.size
+                        frames.forEachIndexed { index, frame ->
+                            val height = (frame.millis.coerceIn(0f, 50f) / 50f) * size.height
+                            drawRect(
+                                color = if (frame.millis <= 16.6f) Green else Red,
+                                topLeft = Offset(index * barWidth, size.height - height),
+                                size = androidx.compose.ui.geometry.Size((barWidth - 1f).coerceAtLeast(1f), height),
+                            )
+                        }
+                    }
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                        items(recentFrames) { frame ->
+                            Text("${frame.label}  ${"%.2f".format(frame.millis)} ms", color = if (frame.millis <= 16.6f) Green else Red, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                     }
                 }
             }
-            PaneDivider(
-                onDrag = { dragX -> localProcessesPaneWidth = (localProcessesPaneWidth + dragX).coerceIn(360f, 1300f) },
-                onDragEnd = { onProcessesPaneWidthChange(localProcessesPaneWidth) },
-            )
-            PanelCard(Modifier.fillMaxSize().padding(start = 6.dp)) {
-                Text("Frame rendering", color = TextPrimary, fontWeight = FontWeight.Bold)
-                Text("Green <= 16.6 ms, red is slower than 60 fps.", color = TextSecondary, fontSize = 12.sp)
-                Canvas(Modifier.fillMaxWidth().height(190.dp)) {
-                    val frames = recentFrames
-                    val barWidth = if (frames.isEmpty()) size.width else size.width / frames.size
-                    frames.forEachIndexed { index, frame ->
-                        val height = (frame.millis.coerceIn(0f, 50f) / 50f) * size.height
-                        drawRect(
-                            color = if (frame.millis <= 16.6f) Green else Red,
-                            topLeft = Offset(index * barWidth, size.height - height),
-                            size = androidx.compose.ui.geometry.Size((barWidth - 1f).coerceAtLeast(1f), height),
-                        )
-                    }
-                }
-                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                    items(recentFrames) { frame ->
-                        Text("${frame.label}  ${"%.2f".format(frame.millis)} ms", color = if (frame.millis <= 16.6f) Green else Red, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                    }
-                }
+        }
+        AnimatedVisibility(
+            visible = liveVisible,
+            modifier = Modifier.fillMaxHeight(),
+            enter = expandHorizontally(animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)),
+            exit = shrinkHorizontally(animationSpec = tween(220)) + fadeOut(animationSpec = tween(160)),
+        ) {
+            Row(Modifier.fillMaxHeight()) {
+                PaneDivider(
+                    onDrag = { dragX -> localLivePaneWidth = (localLivePaneWidth - dragX).coerceIn(220f, 700f) },
+                    onDragEnd = { onLivePaneWidthChange(localLivePaneWidth) },
+                )
+                DeviceLivePanel(
+                    services = services,
+                    serial = serial,
+                    device = device,
+                    modifier = Modifier.width(localLivePaneWidth.dp).fillMaxHeight(),
+                    showChromeControls = false,
+                )
             }
         }
     }
@@ -6218,17 +6509,25 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
     var status by remember { mutableStateOf("Design overlays") }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
-    var grid by remember { mutableStateOf(true) }
-    var ruler by remember { mutableStateOf(true) }
+    var grid by remember { mutableStateOf(false) }
+    var ruler by remember { mutableStateOf(false) }
     var gridSize by remember { mutableStateOf("16") }
     var rulerX by remember { mutableStateOf("540") }
     var rulerY by remember { mutableStateOf("960") }
     var color by remember { mutableStateOf(Cyan) }
-    var pickerEnabled by remember { mutableStateOf(true) }
+    var pickerEnabled by remember { mutableStateOf(false) }
     var pickedColor by remember { mutableStateOf("#------") }
+    var pickerToast by remember { mutableStateOf<String?>(null) }
     var zoom by remember { mutableStateOf("1.0") }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(760f)) }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    LaunchedEffect(pickerToast) {
+        if (pickerToast != null) {
+            delay(1800)
+            pickerToast = null
+        }
+    }
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
@@ -6239,11 +6538,12 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
         }
     }
     Row(Modifier.fillMaxSize()) {
-        MirrorFrameContent(services.mirror, serial) { frame ->
+        MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             LiveDevicePane(
                 serial = serial,
                 device = device,
                 frame = frame,
+                frameFlow = frameFlow,
                 mirrorStatus = mirrorStatus,
                 connectResult = connectResult,
                 modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight(),
@@ -6258,7 +6558,12 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
                 onHoverColor = { hex ->
                     if (pickerEnabled) pickedColor = hex
                 },
-                passThroughInput = true,
+                passThroughInput = !pickerEnabled,
+                onPickerClick = { hex ->
+                    pickedColor = hex
+                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(hex))
+                    pickerToast = "Copied $hex"
+                },
                 onRulerResize = { x, y ->
                     rulerX = x.toInt().toString()
                     rulerY = y.toInt().toString()
@@ -6272,6 +6577,7 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
                 },
             )
         }
+        Spacer(Modifier.width(6.dp))
         PaneDivider(
             onDrag = { dragX -> localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(640f, 1900f) },
             onDragEnd = { onDevicePaneWidthChange(localDevicePaneWidth) },
@@ -6317,10 +6623,40 @@ private fun DesignScreen(services: AndyServices, serial: String?, device: Androi
                 }
             }
             Text("Color picker", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text("Under pointer $pickedColor · swatch ${color.toHex()}", color = if (pickerEnabled) TextPrimary else TextSecondary)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(18.dp)
+                        .background(pickedColor.toColorOrNull() ?: Color.Transparent, RoundedCornerShape(4.dp))
+                        .border(1.dp, Border, RoundedCornerShape(4.dp))
+                )
+                Text("Under pointer $pickedColor · swatch ${color.toHex()}", color = if (pickerEnabled) TextPrimary else TextSecondary)
+            }
+            AnimatedVisibility(
+                visible = pickerToast != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Box(
+                    Modifier
+                        .background(Rust.copy(alpha = 0.18f), RoundedCornerShape(AndyRadius.Pill))
+                        .border(1.dp, Rust.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.Pill))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(pickerToast.orEmpty(), color = Rust, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
             Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         }
     }
+}
+
+private fun String.toColorOrNull(): Color? {
+    if (!matches(Regex("""#[0-9A-Fa-f]{6}"""))) return null
+    return Color(
+        red = substring(1, 3).toInt(16),
+        green = substring(3, 5).toInt(16),
+        blue = substring(5, 7).toInt(16),
+    )
 }
 
 private fun Color.toHex(): String {
@@ -6354,7 +6690,7 @@ private fun AccessibilityScreen(
     state: AccessibilityState = remember { AccessibilityState() }
 ) {
     val scope = rememberCoroutineScope()
-    var localTreePaneWidth by remember(treePaneWidth) { mutableStateOf(treePaneWidth.coerceIn(420f, 760f)) }
+    var localTreePaneWidth by remember(treePaneWidth) { mutableStateOf(treePaneWidth.coerceIn(420f, 1400f)) }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
     val sendMirrorInput = rememberMirrorInputSender(services, serial, enabled = !state.interactionMode)
@@ -6478,19 +6814,22 @@ private fun AccessibilityScreen(
                     AccessibilityDetails(state.selectedNode)
                 }
             }
+            Spacer(Modifier.width(6.dp))
             PaneDivider(
-                onDrag = { dragX -> localTreePaneWidth = (localTreePaneWidth + dragX).coerceIn(360f, 920f) },
+                onDrag = { dragX -> localTreePaneWidth = (localTreePaneWidth + dragX).coerceIn(360f, 1600f) },
                 onDragEnd = { onTreePaneWidthChange(localTreePaneWidth) },
             )
-            MirrorFrameContent(services.mirror, serial) { frame ->
+            MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
                 LiveDevicePane(
                     serial = serial,
                     device = device,
                     frame = frame,
+                    frameFlow = frameFlow,
                     mirrorStatus = mirrorStatus,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize().padding(start = 6.dp),
                     highlightBounds = state.hoveredBounds,
+                    showHardwareControls = false,
                     passThroughInput = !state.interactionMode,
                     onDevicePointClick = { x, y ->
                         state.root?.findBestNodeAt(x, y)?.let {
@@ -6683,6 +7022,9 @@ private fun BugsScreen(bugs: BugService) {
     var playbackStartFrameIndex by remember { mutableStateOf(0) }
     var isInspectingPlayback by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var stepsPaneWidth by remember { mutableStateOf(380f) }
+    var bugDetailsPaneWidth by remember { mutableStateOf(320f) }
+    val expandedStepIds = remember { mutableStateMapOf<String, Boolean>() }
     val stepsListState = rememberLazyListState()
 
     fun refreshReports() {
@@ -6705,6 +7047,7 @@ private fun BugsScreen(bugs: BugService) {
         isInspectingPlayback = false
         playbackFrameCount = id?.let { bugs.bugVideoFrameCount(it) } ?: 0
         isReplaying = false
+        expandedStepIds.clear()
     }
     LaunchedEffect(selectedId, playbackFrameCount, playbackFrameIndex, isReplaying) {
         val id = selectedId ?: return@LaunchedEffect
@@ -6827,7 +7170,7 @@ private fun BugsScreen(bugs: BugService) {
                 }
                 if (status.isNotBlank()) Text(status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PanelCard(Modifier.width(380.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.width(stepsPaneWidth.dp).fillMaxHeight()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Text("${report.actions.size} events", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
@@ -6838,25 +7181,51 @@ private fun BugsScreen(bugs: BugService) {
                             }
                             itemsIndexed(report.actions) { index, action ->
                                 val active = index == activeActionIndex
-                                Row(
+                                val expanded = expandedStepIds[action.id] == true
+                                Column(
                                     Modifier.fillMaxWidth()
+                                        .animateContentSize()
                                         .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
                                         .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+                                        .clickable { expandedStepIds[action.id] = !expanded }
                                         .padding(horizontal = 6.dp, vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    Text("${index + 1}", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(22.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(action.label, color = if (active) AndyColors.Neutral100 else TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        action.detail?.let { Text(it, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(if (expanded) "v" else ">", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(10.dp))
+                                        Text("${index + 1}", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(22.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(action.label, color = if (active) AndyColors.Neutral100 else TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            action.detail?.let { Text(it, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                        }
+                                        Text(relativeSeconds(action.timestampMillis, report.windowEndedAtMillis), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                                     }
-                                    Text(relativeSeconds(action.timestampMillis, report.windowEndedAtMillis), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                                    AnimatedVisibility(visible = expanded) {
+                                        Column(
+                                            Modifier.fillMaxWidth()
+                                                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
+                                                .padding(horizontal = 8.dp, vertical = 7.dp),
+                                            verticalArrangement = Arrangement.spacedBy(5.dp),
+                                        ) {
+                                            BugStepExpandedRow("label", action.label)
+                                            action.detail?.takeIf { it.isNotBlank() }?.let { BugStepExpandedRow("detail", it) }
+                                            BugStepExpandedRow("kind", action.kind)
+                                            BugStepExpandedRow("time", "${formatMillis(action.timestampMillis)}  ${relativeSeconds(action.timestampMillis, report.windowEndedAtMillis)}")
+                                            BugStepExpandedRow("id", action.id)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    PanelCard(Modifier.weight(1f).fillMaxHeight()) {
+                    PaneDivider(
+                        onDrag = { dragX -> stepsPaneWidth = (stepsPaneWidth + dragX).coerceIn(260f, 1_400f) },
+                    )
+                    PanelCard(Modifier.weight(1f).widthIn(min = 96.dp).fillMaxHeight()) {
                         Text("VIDEO", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(
@@ -6912,7 +7281,10 @@ private fun BugsScreen(bugs: BugService) {
                             }
                         }
                     }
-                    PanelCard(Modifier.width(320.dp).fillMaxHeight()) {
+                    PaneDivider(
+                        onDrag = { dragX -> bugDetailsPaneWidth = (bugDetailsPaneWidth - dragX).coerceIn(220f, 900f) },
+                    )
+                    PanelCard(Modifier.width(bugDetailsPaneWidth.dp).fillMaxHeight()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterPill("Details", selectedTab == "Details", Rust) { selectedTab = "Details" }
                             FilterPill("Logcat", selectedTab == "Logcat", Rust) { selectedTab = "Logcat" }
@@ -6934,20 +7306,38 @@ private fun BugsScreen(bugs: BugService) {
                                 Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))
                             }
                         } else {
-                            SelectionContainer {
-                                Text(
-                                    logcat.ifBlank { "<no logcat captured>" },
-                                    color = TextPrimary,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.fillMaxSize().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp).verticalScroll(rememberScrollState()),
-                                )
-                            }
+                            BugLogcatView(logcat, Modifier.fillMaxSize())
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BugLogcatView(logcat: String, modifier: Modifier = Modifier) {
+    BugLogcatTextSurface(logcat, modifier.background(Color.Black, RoundedCornerShape(AndyRadius.R3)))
+}
+
+@Composable
+private fun BugStepExpandedRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            label,
+            color = TextSecondary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            modifier = Modifier.width(46.dp),
+            maxLines = 1,
+        )
+        Text(
+            value,
+            color = TextPrimary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -7006,7 +7396,8 @@ private fun activeBugPointerEvent(actions: List<BugAction>, playbackMillis: Long
 
 private fun parseBugActionPoint(action: BugAction): Pair<Int, Int>? {
     if (action.kind != "input") return null
-    val match = Regex("""(\d+),(\d+)""").find(action.label) ?: return null
+    val text = listOfNotNull(action.label, action.detail).joinToString(" ")
+    val match = Regex("""(\d+),(\d+)""").find(text) ?: return null
     val x = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
     val y = match.groupValues.getOrNull(2)?.toIntOrNull() ?: return null
     return x to y
@@ -7212,6 +7603,51 @@ private fun MetricCard(label: String, value: String) {
     PanelCard(Modifier.width(170.dp).height(96.dp)) {
         Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold)
         Text(value, color = TextPrimary, fontSize = 26.sp, fontFamily = MonoFont)
+    }
+}
+
+@Composable
+private fun PerformanceChartCard(
+    title: String,
+    valueText: String,
+    unitText: String,
+    caption: String,
+    values: List<Float>,
+    maxValue: Float,
+    lineColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    PanelCard(modifier.height(190.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(title.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(valueText, color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = MonoFont)
+                if (unitText.isNotEmpty()) {
+                    Text(" ${unitText.lowercase()}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
+                }
+            }
+        }
+        Canvas(Modifier.fillMaxWidth().weight(1f)) {
+            if (values.size < 2) return@Canvas
+            val safeMax = maxValue.takeIf { it > 0f } ?: 1f
+            val stepX = size.width / (values.size - 1)
+            val points = values.mapIndexed { index, value ->
+                Offset(index * stepX, size.height - (value.coerceIn(0f, safeMax) / safeMax) * size.height)
+            }
+            val linePath = androidx.compose.ui.graphics.Path().apply {
+                moveTo(points.first().x, points.first().y)
+                points.drop(1).forEach { lineTo(it.x, it.y) }
+            }
+            val fillPath = androidx.compose.ui.graphics.Path().apply {
+                addPath(linePath)
+                lineTo(points.last().x, size.height)
+                lineTo(points.first().x, size.height)
+                close()
+            }
+            drawPath(fillPath, brush = Brush.verticalGradient(listOf(lineColor.copy(alpha = 0.32f), lineColor.copy(alpha = 0.02f))))
+            drawPath(linePath, color = lineColor, style = Stroke(width = 2f))
+        }
+        Text(caption.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
     }
 }
 
@@ -7655,6 +8091,7 @@ private fun SettingsScreen(
     val scope = rememberCoroutineScope()
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
     val clientOptions = remember { services.mcp.getClients() }
+    val toolNames = remember { services.mcp.getToolNames() }
     var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
     var dropdownExpanded by remember { mutableStateOf(false) }
     var operationStatus by remember { mutableStateOf<String?>(null) }
@@ -7732,6 +8169,28 @@ private fun SettingsScreen(
                 Text("Server Status:", color = TextSecondary, fontSize = 12.sp)
                 GlowingDot(mcpRunning)
                 Text(mcpStatus, color = if (mcpRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        PanelCard {
+            Text("Available Tools", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text("${toolNames.size} MCP tool calls exposed by Andy", color = TextSecondary, fontSize = 12.sp)
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                toolNames.sorted().forEach { tool ->
+                    Box(
+                        Modifier
+                            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Pill))
+                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Pill))
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    }
+                }
             }
         }
 

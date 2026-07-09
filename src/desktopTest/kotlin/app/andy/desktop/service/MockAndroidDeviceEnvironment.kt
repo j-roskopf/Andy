@@ -34,6 +34,7 @@ internal class MockAndroidDeviceEnvironment {
     var chromeFlagsResult: CommandResult = CommandResult.success()
     var remountResult: CommandResult = CommandResult.success("remount succeeded")
     var persistedCaInstalled: Boolean = false
+    var keepStoppedEmulatorInAdbAsOffline: Boolean = false
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -91,6 +92,10 @@ internal class MockAndroidDeviceEnvironment {
         return File(avdHome, "Pixel_8_API_36.avd/snapshots/$name")
     }
 
+    fun hardwareQemuLockPath(name: String = "Pixel_8_API_36"): File {
+        return File(avdHome, "$name.avd/hardware-qemu.ini.lock")
+    }
+
     private fun toolName(name: String, windowsExtension: String): String {
         val os = System.getProperty("os.name")
         return if (os.startsWith("Windows", ignoreCase = true)) "$name.$windowsExtension" else name
@@ -143,7 +148,16 @@ internal class MockAndroidDeviceEnvironment {
 
     private fun runEmu(serial: String, args: List<String>): CommandResult {
         return when (args) {
-            listOf("kill") -> CommandResult.success("OK")
+            listOf("kill") -> {
+                // Most kills remove the emulator from adb immediately; some leave a stale offline serial briefly.
+                adbDevicesOutput = adbDevicesOutput.lineSequence()
+                    .mapNotNull { line ->
+                        if (!line.trimStart().startsWith("$serial\t")) return@mapNotNull line
+                        if (keepStoppedEmulatorInAdbAsOffline) "$serial\toffline" else null
+                    }
+                    .joinToString("\n")
+                CommandResult.success("OK")
+            }
             listOf("avd", "snapshot", "list") -> CommandResult.success("default_boot\nmanual\n")
             listOf("avd", "snapshot", "save", "manual") -> CommandResult.success("OK")
             listOf("avd", "snapshot", "load", "manual") -> CommandResult.success("OK")

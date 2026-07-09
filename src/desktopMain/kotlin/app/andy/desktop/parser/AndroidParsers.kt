@@ -40,6 +40,26 @@ object AndroidParsers {
         return Regex("""level:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)?.toIntOrNull()
     }
 
+    fun parseNetworkTotals(output: String): Pair<Long, Long>? {
+        var rxBytes = 0L
+        var txBytes = 0L
+        var found = false
+        output.lineSequence().forEach { line ->
+            val separatorIndex = line.indexOf(':')
+            if (separatorIndex <= 0) return@forEach
+            val iface = line.substring(0, separatorIndex).trim()
+            if (iface.isBlank() || iface == "lo" || iface.startsWith("face")) return@forEach
+            val values = line.substring(separatorIndex + 1).trim().split(Regex("\\s+"))
+            if (values.size < 9) return@forEach
+            val rx = values[0].toLongOrNull() ?: return@forEach
+            val tx = values[8].toLongOrNull() ?: return@forEach
+            rxBytes += rx
+            txBytes += tx
+            found = true
+        }
+        return if (found) rxBytes to txBytes else null
+    }
+
     fun parseWmSize(output: String): String? {
         return Regex("""Physical size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)
     }
@@ -284,11 +304,16 @@ object AndroidParsers {
                 val intended = parts.getOrNull(intendedIndex)?.toLongOrNull() ?: return@mapNotNull null
                 val completed = parts.getOrNull(completedIndex)?.toLongOrNull() ?: return@mapNotNull null
                 val millis = (completed - intended) / 1_000_000f
-                millis.takeIf { it > 0f && it < 10_000f }
+                if (millis > 0f && millis < 10_000f) intended to millis else null
             }
             .toList()
+            .sortedBy { (intended, _) -> intended }
             .takeLast(120)
-        return rows.mapIndexed { index, millis -> FrameRenderMetric("#${index + 1}", millis) }
+        return rows.mapIndexed { index, (intended, millis) ->
+            val previousIntended = rows.getOrNull(index - 1)?.first
+            val vsyncGapMillis = previousIntended?.let { (intended - it) / 1_000_000f }?.takeIf { it > 0f && it < 2_000f }
+            FrameRenderMetric("#${index + 1}", millis, vsyncGapMillis)
+        }
     }
 
     fun parseAccessibilityXml(xml: String): AccessibilityNode? {

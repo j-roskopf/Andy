@@ -2,13 +2,16 @@ package app.andy.desktop.service
 
 import app.andy.desktop.updates.SimpleJsonParser
 import app.andy.model.AndroidDevice
+import app.andy.model.AccessibilityNode
 import app.andy.model.BugAction
 import app.andy.model.BugArtifact
 import app.andy.model.BugCaptureDraft
 import app.andy.model.BugCaptureStatus
 import app.andy.model.BugReport
 import app.andy.model.LogLevel
+import app.andy.service.AccessibilityService
 import app.andy.service.BugService
+import app.andy.service.DeviceService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MirrorEngine
@@ -42,6 +45,8 @@ class DesktopBugService(
     private val mirror: MirrorEngine,
     private val logcat: LogcatService,
     private val homeDir: File = File(System.getProperty("user.home")),
+    private val devices: DeviceService? = null,
+    private val accessibility: AccessibilityService? = null,
 ) : BugService {
     override val status = MutableStateFlow(BugCaptureStatus())
 
@@ -55,6 +60,7 @@ class DesktopBugService(
     private var captureStartedAtMillis: Long = 0L
     private var frameJob: Job? = null
     private var logJob: Job? = null
+    private var screenJob: Job? = null
     private var lastFrameSampledAtMillis: Long = 0L
 
     private val bugsDir: File get() = File(homeDir, ".andy/bugs")
@@ -101,6 +107,11 @@ class DesktopBugService(
                 }
             }
             .launchIn(scope)
+        screenJob = devices?.let { deviceService ->
+            scope.launch {
+                pollForegroundScreens(serial, deviceService, accessibility)
+            }
+        }
     }
 
     override suspend fun stopCapture() {
@@ -108,6 +119,8 @@ class DesktopBugService(
         frameJob = null
         logJob?.cancel()
         logJob = null
+        screenJob?.cancel()
+        screenJob = null
         synchronized(lock) {
             captureSerial = null
             captureDevice = null
@@ -117,19 +130,51 @@ class DesktopBugService(
     }
 
     override fun recordAction(kind: String, label: String, detail: String?) {
+        appendAction(kind, label, detail)
+    }
+
+    private fun appendAction(kind: String, label: String, detail: String? = null, timestampMillis: Long = System.currentTimeMillis()) {
         val serial = captureSerial ?: return
-        val now = System.currentTimeMillis()
         synchronized(lock) {
             actions += BugAction(
-                id = "action-$now-${actions.size + 1}",
-                timestampMillis = now,
+                id = "action-$timestampMillis-${actions.size + 1}",
+                timestampMillis = timestampMillis,
                 kind = kind,
                 label = label,
                 detail = detail,
             )
-            trimLocked(now)
+            trimLocked(timestampMillis)
             publishStatusLocked("Recording last 30s for $serial")
         }
+    }
+
+    private suspend fun pollForegroundScreens(serial: String, devices: DeviceService, accessibility: AccessibilityService?) {
+        var previous: ForegroundScreen? = null
+        while (currentCoroutineContext().isActive) {
+            val screen = readForegroundScreen(serial, devices, accessibility)
+            if (screen != null) {
+                val last = previous
+                when {
+                    last == null -> appendAction("screen", "Screen ${screen.shortActivityName}", screen.detail)
+                    last.packageName != screen.packageName -> appendAction("screen", "Launch ${screen.packageName}", screen.detail)
+                    last.activityName != screen.activityName || last.fragments != screen.fragments ->
+                        appendAction("screen", "Screen ${screen.shortActivityName}", screen.detail)
+                    last.semanticSignature != null && last.semanticSignature != screen.semanticSignature ->
+                        appendAction("screen", "Screen ${screen.semanticTitle ?: screen.shortActivityName}", screen.detail)
+                }
+                previous = screen
+            }
+            delay(SCREEN_POLL_MILLIS)
+        }
+    }
+
+    private suspend fun readForegroundScreen(serial: String, devices: DeviceService, accessibility: AccessibilityService?): ForegroundScreen? {
+        val activity = devices.shell(serial, listOf("dumpsys", "activity", "activities"))
+        val window = devices.shell(serial, listOf("dumpsys", "window", "windows"))
+        val activityOutput = activity.stdout.takeIf { activity.isSuccess }.orEmpty()
+        val windowOutput = window.stdout.takeIf { window.isSuccess }.orEmpty()
+        val semantic = accessibility?.dump(serial)?.toScreenSemantics()
+        return parseForegroundScreen(activityOutput, windowOutput, semantic)
     }
 
     override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = withContext(Dispatchers.IO) {
@@ -365,6 +410,21 @@ class DesktopBugService(
 
     private data class TimestampedFrame(val timestampMillis: Long, val frame: MirrorFrame)
     private data class TimestampedLogLine(val timestampMillis: Long, val line: String)
+    private data class ForegroundScreen(
+        val packageName: String,
+        val activityName: String,
+        val fragments: List<String>,
+        val semanticTitle: String?,
+        val semanticSignature: String?,
+    ) {
+        val shortActivityName: String get() = activityName.substringAfterLast('.')
+        val detail: String get() = buildList {
+            add("$packageName/$activityName")
+            if (fragments.isNotEmpty()) add("fragments: ${fragments.joinToString(", ")}")
+            if (!semanticTitle.isNullOrBlank()) add("content: $semanticTitle")
+        }.joinToString(" · ")
+    }
+
     private data class BugSnapshot(
         val serial: String,
         val device: AndroidDevice?,
@@ -377,7 +437,65 @@ class DesktopBugService(
     companion object {
         private const val WINDOW_MILLIS = 30_000L
         private const val BUG_VIDEO_FRAME_RATE = 15.0
+        private const val SCREEN_POLL_MILLIS = 3_000L
+
+        private fun parseForegroundScreen(activityOutput: String, windowOutput: String, semantic: ScreenSemantics?): ForegroundScreen? {
+            val combined = "$activityOutput\n$windowOutput"
+            val component = listOf(
+                Regex("""topResumedActivity=.*?\s([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)"""),
+                Regex("""mResumedActivity=.*?\s([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)"""),
+                Regex("""mFocusedApp=.*?\s([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)"""),
+                Regex("""mCurrentFocus=.*?\s([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)"""),
+            ).firstNotNullOfOrNull { pattern ->
+                pattern.find(combined)?.let { match ->
+                    match.groupValues[1] to match.groupValues[2].trimEnd('}', ')')
+                }
+            } ?: return null
+            val packageName = component.first
+            val rawActivity = component.second
+            val activityName = when {
+                rawActivity.startsWith(".") -> packageName + rawActivity
+                rawActivity.contains(".") -> rawActivity
+                else -> "$packageName.$rawActivity"
+            }
+            val fragments = Regex("""#\d+:\s+([A-Za-z0-9_.$]+)\{""")
+                .findAll(activityOutput)
+                .map { it.groupValues[1].substringAfterLast('.') }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .take(4)
+                .toList()
+            return ForegroundScreen(packageName, activityName, fragments, semantic?.title, semantic?.signature)
+        }
     }
+}
+
+private data class ScreenSemantics(
+    val title: String?,
+    val signature: String?,
+)
+
+private fun AccessibilityNode.toScreenSemantics(): ScreenSemantics {
+    val labels = flattenForScreenSemantics()
+        .filter { node -> node.visible && node.enabled }
+        .mapNotNull { node ->
+            listOf(node.text, node.contentDescription, node.hint, node.resourceId)
+                .firstOrNull { !it.isNullOrBlank() }
+                ?.trim()
+                ?.takeIf { it.length in 2..120 }
+        }
+        .filterNot { it.matches(Regex("""\d{1,2}:\d{2}""")) }
+        .distinct()
+        .take(8)
+        .toList()
+    return ScreenSemantics(
+        title = labels.firstOrNull(),
+        signature = labels.takeIf { it.isNotEmpty() }?.joinToString("|"),
+    )
+}
+
+private fun AccessibilityNode.flattenForScreenSemantics(): List<AccessibilityNode> {
+    return listOf(this) + children.flatMap { it.flattenForScreenSemantics() }
 }
 
 internal object BugJson {

@@ -8,6 +8,7 @@ import app.andy.model.VirtualDeviceType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AndroidParsersTest {
@@ -249,5 +250,48 @@ class AndroidParsersTest {
 
         assertEquals(1, frames.size)
         assertEquals(6.94415f, frames[0].millis)
+    }
+
+    @Test
+    fun parsesFrameStatsVsyncGapForFpsCalculation() {
+        val output = """
+            Flags,IntendedVsync,Vsync,OldestInputEvent,NewestInputEvent,HandleInputStart,AnimationStart,PerformTraversalsStart,DrawStart,SyncQueued,SyncStart,IssueDrawCommandsStart,SwapBuffers,FrameCompleted,DequeueBufferDuration,QueueBufferDuration,GpuCompleted
+            0,1000000000,1000000000,0,0,0,0,0,0,0,0,0,0,1010000000,0,0,0
+            0,1016666666,1016666666,0,0,0,0,0,0,0,0,0,0,1030000000,0,0,0
+            0,1033333333,1033333333,0,0,0,0,0,0,0,0,0,0,1045000000,0,0,0
+        """.trimIndent()
+
+        val frames = AndroidParsers.parseFrameStats(output)
+
+        assertEquals(3, frames.size)
+        assertNull(frames[0].vsyncGapMillis)
+        assertEquals(16.666666f, frames[1].vsyncGapMillis)
+        assertEquals(16.666667f, frames[2].vsyncGapMillis)
+        val fps = frames.mapNotNull { it.vsyncGapMillis }.let { gaps -> 1000f / (gaps.sum() / gaps.size) }
+        assertTrue(fps in 59f..61f)
+    }
+
+    @Test
+    fun parsesNetworkTotalsExcludingLoopback() {
+        val output = """
+            Inter-|   Receive                                                |  Transmit
+             face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+                lo:  140223    2534    0    0    0     0          0         0   140223    2534    0    0    0     0       0          0
+              eth0:   83535     364    0    0    0     0          0         0    43458     362    0    0    0     0       0          0
+             wlan0:  937773    3948    0    0    0     0          0         0   510544    3000    0    0    0     0       0          0
+        """.trimIndent()
+
+        val totals = AndroidParsers.parseNetworkTotals(output)
+
+        assertNotNull(totals)
+        assertEquals(83535L + 937773L, totals!!.first)
+        assertEquals(43458L + 510544L, totals.second)
+    }
+
+    @Test
+    fun parsesNetworkTotalsReturnsNullWhenNoInterfaces() {
+        val totals = AndroidParsers.parseNetworkTotals("cat: /proc/net/dev: Permission denied")
+
+        assertEquals(null, totals)
     }
 }

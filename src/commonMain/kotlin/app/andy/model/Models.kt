@@ -268,6 +268,8 @@ data class PerformanceSample(
     val fps: Float?,
     val batteryPercent: Int?,
     val thermalStatus: String?,
+    val networkRxKbps: Float? = null,
+    val networkTxKbps: Float? = null,
     val processes: List<ProcessMetric> = emptyList(),
     val frameRenderTimes: List<FrameRenderMetric> = emptyList(),
 )
@@ -282,6 +284,7 @@ data class ProcessMetric(
 data class FrameRenderMetric(
     val label: String,
     val millis: Float,
+    val vsyncGapMillis: Float? = null,
 )
 
 data class AccessibilityNode(
@@ -323,6 +326,7 @@ data class WorkspaceState(
     val appsListPaneWidth: Float = 520f,
     val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,
+    val performanceLivePaneWidth: Float = 320f,
     val designDevicePaneWidth: Float = 820f,
     val accessibilityTreePaneWidth: Float = 560f,
     val hostFileRoots: List<String> = emptyList(),
