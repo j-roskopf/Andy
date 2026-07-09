@@ -3309,7 +3309,8 @@ private fun unescapeJson(value: String): String {
     return builder.toString()
 }
 
-private val AndyMitmAddonSource = """
+/** Fallback when the classpath resource is missing. Phase 0 golden-tests the evaluated string. */
+internal val AndyMitmAddonSource = """
 import json
 import os
 import time

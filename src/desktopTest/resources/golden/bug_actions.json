@@ -1,0 +1,1 @@
+{"actions":[{"id":"a1","timestampMillis":2,"kind":"input","label":"Tap \"OK\"","detail":"x=1\ny=2"}, {"id":"a2","timestampMillis":3,"kind":"nav","label":"Back\\Home","detail":null}, {"id":"a3","timestampMillis":4,"kind":"note","label":"Unicode café 🐛","detail":"tab\there"}]}
