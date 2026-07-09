@@ -51,6 +51,7 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig
 import app.andy.model.ProjectAction
+import app.andy.model.ProjectNote
 import app.andy.model.RunningAction
 import app.andy.pickDirectory
 import app.andy.service.AndyServices
@@ -93,6 +94,7 @@ internal fun actionIconMarker(icon: String): String = when (icon.trim().lowercas
 
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
+private data class EditingNote(val projectId: String, val note: ProjectNote?)
 
 @Composable
 internal fun ActionsScreen(
@@ -105,8 +107,10 @@ internal fun ActionsScreen(
 ) {
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
+    var editingNote by remember { mutableStateOf<EditingNote?>(null) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var catalogPaneWidth by remember { mutableStateOf(560f) }
+    var showCompletedByProject by remember { mutableStateOf(emptyMap<String, Boolean>()) }
 
     val runningIds = remember(running) { running.map { it.runId } }
     LaunchedEffect(runningIds) {
@@ -117,7 +121,17 @@ internal fun ActionsScreen(
 
     fun upsertProject(project: ActionProject) {
         val exists = config.projects.any { it.id == project.id }
-        onConfigChange(config.copy(projects = if (exists) config.projects.map { if (it.id == project.id) project.copy(actions = it.actions) else it } else config.projects + project))
+        onConfigChange(
+            config.copy(
+                projects = if (exists) {
+                    config.projects.map {
+                        if (it.id == project.id) project.copy(actions = it.actions, notes = it.notes) else it
+                    }
+                } else {
+                    config.projects + project
+                },
+            ),
+        )
     }
 
     fun upsertAction(projectId: String, previousProjectId: String?, action: ProjectAction) {
@@ -134,14 +148,53 @@ internal fun ActionsScreen(
         )
     }
 
+    fun upsertNote(projectId: String, note: ProjectNote) {
+        onConfigChange(
+            config.copy(
+                projects = config.projects.map { project ->
+                    if (project.id == projectId) {
+                        project.copy(notes = project.notes.filterNot { it.id == note.id } + note)
+                    } else {
+                        project
+                    }
+                },
+            ),
+        )
+    }
+
+    fun updateNote(projectId: String, note: ProjectNote) {
+        onConfigChange(
+            config.copy(
+                projects = config.projects.map { project ->
+                    if (project.id == projectId) {
+                        project.copy(notes = project.notes.map { if (it.id == note.id) note else it })
+                    } else {
+                        project
+                    }
+                },
+            ),
+        )
+    }
+
+    val actionCount = config.projects.sumOf { it.actions.size }
+    val noteCount = config.projects.sumOf { it.notes.size }
+
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.width(catalogPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Toolbar("Actions", "${config.projects.size} projects / ${config.projects.sumOf { it.actions.size }} actions", onPrimary = { editingProject = EditingProject(null) }, primaryLabel = "new project")
+            Toolbar(
+                "Projects",
+                "${config.projects.size} projects / $actionCount actions / $noteCount notes",
+                onPrimary = { editingProject = EditingProject(null) },
+                primaryLabel = "new project",
+            )
             if (config.projects.isEmpty()) {
-                EmptyState("no action projects yet")
+                EmptyState("no projects yet")
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize()) {
                     items(config.projects, key = { it.id }) { project ->
+                        val showCompleted = showCompletedByProject[project.id] == true
+                        val visibleNotes = if (showCompleted) project.notes else project.notes.filterNot { it.completed }
+                        val completedCount = project.notes.count { it.completed }
                         PanelCard {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Column(Modifier.weight(1f)) {
@@ -150,8 +203,12 @@ internal fun ActionsScreen(
                                 }
                                 OutlinedButton(onClick = { editingProject = EditingProject(project) }) { Text("edit") }
                                 OutlinedButton(onClick = { editingAction = EditingAction(project.id, null) }) { Text("+ action") }
+                                OutlinedButton(onClick = { editingNote = EditingNote(project.id, null) }) { Text("+ note") }
                                 OutlinedButton(onClick = {
-                                    pendingConfirmation = PendingConfirmation("Delete project?", "${project.name} and ${project.actions.size} actions") {
+                                    pendingConfirmation = PendingConfirmation(
+                                        "Delete project?",
+                                        "${project.name}, ${project.actions.size} actions, ${project.notes.size} notes",
+                                    ) {
                                         onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
                                     }
                                 }) { Text("del") }
@@ -193,6 +250,106 @@ internal fun ActionsScreen(
                                                 modifier = Modifier.height(30.dp),
                                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                                             ) { Text(if (liveRun != null) "stop" else "run", fontSize = 11.sp) }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Notes", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                                Spacer(Modifier.weight(1f))
+                                if (completedCount > 0) {
+                                    FilterPill("show completed ($completedCount)", showCompleted, Cyan) {
+                                        showCompletedByProject = showCompletedByProject + (project.id to !showCompleted)
+                                    }
+                                    if (showCompleted) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                pendingConfirmation = PendingConfirmation(
+                                                    "Clear completed notes?",
+                                                    "$completedCount completed note(s) in ${project.name}",
+                                                ) {
+                                                    onConfigChange(
+                                                        config.copy(
+                                                            projects = config.projects.map {
+                                                                if (it.id == project.id) it.copy(notes = it.notes.filterNot { note -> note.completed }) else it
+                                                            },
+                                                        ),
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.height(30.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                        ) { Text("clear completed", fontSize = 11.sp) }
+                                    }
+                                }
+                            }
+                            if (visibleNotes.isEmpty()) {
+                                Text(
+                                    if (project.notes.isEmpty()) "no notes" else "no open notes",
+                                    color = TextSecondary,
+                                    fontFamily = MonoFont,
+                                    fontSize = 12.sp,
+                                )
+                            } else {
+                                visibleNotes.forEach { note ->
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Column(
+                                            Modifier.weight(1f)
+                                                .background(AndyColors.Neutral900.copy(alpha = 0.72f))
+                                                .border(1.dp, Color.White.copy(alpha = 0.05f))
+                                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        ) {
+                                            Text(
+                                                note.title,
+                                                color = if (note.completed) TextSecondary else TextPrimary,
+                                                fontFamily = MonoFont,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (note.body.isNotBlank()) {
+                                                Text(
+                                                    note.body,
+                                                    color = TextSecondary,
+                                                    fontFamily = MonoFont,
+                                                    fontSize = 11.sp,
+                                                    maxLines = 3,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(
+                                                onClick = { updateNote(project.id, note.copy(completed = !note.completed)) },
+                                                modifier = Modifier.height(30.dp),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                            ) { Text(if (note.completed) "undo" else "done", fontSize = 11.sp) }
+                                            OutlinedButton(
+                                                onClick = { editingNote = EditingNote(project.id, note) },
+                                                modifier = Modifier.height(30.dp),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                            ) { Text("edit", fontSize = 11.sp) }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    pendingConfirmation = PendingConfirmation("Delete note?", note.title) {
+                                                        onConfigChange(
+                                                            config.copy(
+                                                                projects = config.projects.map {
+                                                                    if (it.id == project.id) it.copy(notes = it.notes.filterNot { row -> row.id == note.id }) else it
+                                                                },
+                                                            ),
+                                                        )
+                                                    }
+                                                },
+                                                modifier = Modifier.height(30.dp),
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                            ) { Text("del", fontSize = 11.sp) }
                                         }
                                     }
                                 }
@@ -249,6 +406,12 @@ internal fun ActionsScreen(
         ActionDialog(config.projects, editing.projectId, editing.action, onDismiss = { editingAction = null }) { targetProjectId, action ->
             editingAction = null
             upsertAction(targetProjectId, editing.projectId, action)
+        }
+    }
+    editingNote?.let { editing ->
+        NoteDialog(config.projects, editing.projectId, editing.note, onDismiss = { editingNote = null }) { note ->
+            editingNote = null
+            upsertNote(editing.projectId, note)
         }
     }
     pendingConfirmation?.let { confirmation ->
@@ -334,7 +497,18 @@ private fun ProjectDialog(project: ActionProject?, existingProjects: List<Action
         },
         confirmButton = {
             Button(
-                onClick = { onSave(ActionProject(project?.id ?: nextId, name.trim(), contextDir.trim(), parseEnvLines(envText), project?.actions.orEmpty())) },
+                onClick = {
+                    onSave(
+                        ActionProject(
+                            id = project?.id ?: nextId,
+                            name = name.trim(),
+                            contextDir = contextDir.trim(),
+                            env = parseEnvLines(envText),
+                            actions = project?.actions.orEmpty(),
+                            notes = project?.notes.orEmpty(),
+                        ),
+                    )
+                },
                 enabled = name.isNotBlank() && contextDir.isNotBlank(),
                 colors = primaryButtonColors(),
             ) { Text("Save") }
@@ -399,6 +573,48 @@ private fun ActionDialog(projects: List<ActionProject>, initialProjectId: String
             Button(
                 onClick = { onSave(selectedProjectId, ProjectAction(action?.id ?: nextId, name.trim(), icon, command.trim(), cwd.trim().takeIf { it.isNotBlank() }, parseEnvLines(envText))) },
                 enabled = projects.any { it.id == selectedProjectId } && name.isNotBlank() && command.isNotBlank(),
+                colors = primaryButtonColors(),
+            ) { Text("Save") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun NoteDialog(
+    projects: List<ActionProject>,
+    projectId: String,
+    note: ProjectNote?,
+    onDismiss: () -> Unit,
+    onSave: (ProjectNote) -> Unit,
+) {
+    var title by remember(note?.id) { mutableStateOf(note?.title.orEmpty()) }
+    var body by remember(note?.id) { mutableStateOf(note?.body.orEmpty()) }
+    val noteIds = projects.flatMap { it.notes }.map { it.id }.toSet()
+    val nextId = remember(noteIds, title) { nextActionId("note", title, noteIds) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text(if (note == null) "New note" else "Edit note", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.width(660.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
+                LabeledField("Body", body, { body = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 160.dp)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        ProjectNote(
+                            id = note?.id ?: nextId,
+                            title = title.trim(),
+                            body = body.trim(),
+                            completed = note?.completed == true,
+                        ),
+                    )
+                },
+                enabled = projects.any { it.id == projectId } && title.isNotBlank(),
                 colors = primaryButtonColors(),
             ) { Text("Save") }
         },

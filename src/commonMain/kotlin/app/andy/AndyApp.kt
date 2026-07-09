@@ -34,7 +34,7 @@ enum class AndyDestination(val label: String) {
     Files("Files & data"),
     ComputerFiles("Computer Files"),
     Network("Network"),
-    Actions("Actions"),
+    Actions("Projects"),
     Snapshots("Snapshots"),
     Controls("Controls"),
     Performance("Performance"),

@@ -6,6 +6,7 @@ data class ActionProject(
     val contextDir: String,
     val env: Map<String, String> = emptyMap(),
     val actions: List<ProjectAction> = emptyList(),
+    val notes: List<ProjectNote> = emptyList(),
 )
 
 data class ProjectAction(
@@ -15,6 +16,13 @@ data class ProjectAction(
     val command: String,
     val cwd: String? = null,
     val env: Map<String, String> = emptyMap(),
+)
+
+data class ProjectNote(
+    val id: String,
+    val title: String,
+    val body: String = "",
+    val completed: Boolean = false,
 )
 
 data class ActionsConfig(
