@@ -98,6 +98,20 @@ class AvdHomeScannerTest {
     }
 
     @Test
+    fun parsesIniKeysAndValuesWithSpacesAroundEquals() {
+        val root = createTempDir("andy-avd-spaced-ini")
+        val avdHome = File(root, "avd").also { it.mkdirs() }
+        val pixel = File(avdHome, "Pixel_6.avd").also { it.mkdirs() }
+        File(pixel, "config.ini").writeText("hw.device.name = pixel_6\n")
+        File(avdHome, "Pixel_6.ini").writeText("path = ${pixel.absolutePath}\n")
+
+        val avds = AvdHomeScanner.listVirtualDevices(env = mapOf("ANDROID_AVD_HOME" to avdHome.absolutePath))
+
+        assertEquals(1, avds.size)
+        assertEquals(pixel.absolutePath, avds.single().path)
+    }
+
+    @Test
     fun returnsEmptyWhenAvdHomeMissing() {
         val root = createTempDir("andy-missing-avd")
         val avds = AvdHomeScanner.listVirtualDevices(

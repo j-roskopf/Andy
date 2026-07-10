@@ -39,14 +39,23 @@ actual fun Modifier.onExternalFileDrop(
 @OptIn(ExperimentalComposeUiApi::class)
 private fun DragAndDropEvent.filePaths(): List<String> {
     val data = dragData() as? DragData.FilesList ?: return emptyList()
-    return data.readFiles().mapNotNull { uriString ->
-        runCatching {
-            val uri = URI(uriString)
-            if (uri.scheme.equals("file", ignoreCase = true)) {
-                File(uri).absolutePath
-            } else {
-                uriString
-            }
-        }.getOrNull()
+    return data.readFiles().mapNotNull(::parseDroppedFilePath)
+}
+
+internal fun parseDroppedFilePath(uriString: String): String? {
+    return runCatching {
+        val uri = URI(uriString)
+        if (uri.scheme != null && uri.scheme.equals("file", ignoreCase = true)) {
+            File(uri).absolutePath
+        } else {
+            uriString
+        }
+    }.getOrElse {
+        val clean = uriString.removePrefix("file:").removePrefix("///").removePrefix("//")
+        if (File(clean).exists()) {
+            File(clean).absolutePath
+        } else {
+            null
+        }
     }
 }

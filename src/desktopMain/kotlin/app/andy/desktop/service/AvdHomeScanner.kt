@@ -73,7 +73,7 @@ object AvdHomeScanner {
             .mapNotNull { line ->
                 val trimmed = line.trim()
                 if (trimmed.isBlank() || trimmed.startsWith("#") || "=" !in trimmed) null
-                else trimmed.substringBefore("=") to trimmed.substringAfter("=")
+                else trimmed.substringBefore("=").trim() to trimmed.substringAfter("=").trim()
             }
             .toMap()
     }
