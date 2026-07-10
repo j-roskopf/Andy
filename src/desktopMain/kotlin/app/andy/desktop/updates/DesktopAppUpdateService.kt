@@ -276,10 +276,11 @@ class DesktopAppUpdateService(
                 exitProcess(0)
             }
             UpdatePlatform.LinuxDeb -> {
-                val helper = helperFile("andy-update.sh")
-                helper.writeText(linuxInstallerHelperScript(file.absolutePath, relaunchCommand))
-                helper.setExecutable(true)
-                ProcessBuilder("/bin/sh", helper.absolutePath).start()
+                launchLinuxInstaller(file, flatpak = false, relaunchCommand = relaunchCommand)
+                exitProcess(0)
+            }
+            UpdatePlatform.LinuxFlatpak -> {
+                launchLinuxInstaller(file, flatpak = true, relaunchCommand = "flatpak run com.joetr.andy")
                 exitProcess(0)
             }
             else -> {
@@ -295,6 +296,56 @@ class DesktopAppUpdateService(
     private fun helperFile(name: String): File =
         File(File(System.getProperty("java.io.tmpdir"), "andy-updates").apply { mkdirs() }, name)
 
+    private fun launchLinuxInstaller(file: File, flatpak: Boolean, relaunchCommand: String?) {
+        val insideFlatpak = !System.getenv("FLATPAK_ID").isNullOrBlank()
+        val installFile = if (insideFlatpak && flatpak) copyFlatpakBundleToHostDownloads(file) else file.absolutePath
+        val helper = helperFile("andy-update.sh")
+        helper.writeText(
+            linuxInstallerHelperScript(
+                filePath = installFile,
+                flatpak = flatpak,
+                insideFlatpak = insideFlatpak,
+                relaunchCommand = relaunchCommand,
+            ),
+        )
+        helper.setExecutable(true)
+        ProcessBuilder("/bin/sh", helper.absolutePath).start()
+    }
+
+    private fun copyFlatpakBundleToHostDownloads(sandboxFile: File): String {
+        val hostFileName = sandboxFile.name.replace(Regex("""[^A-Za-z0-9._-]"""), "_")
+        val hostPath = resolveHostDownloadsPath(hostFileName)
+        val copy = ProcessBuilder(
+            "flatpak-spawn",
+            "--host",
+            "sh",
+            "-c",
+            "cat > ${hostPath.shellQuote()}",
+        )
+            .redirectInput(sandboxFile)
+            .redirectErrorStream(true)
+            .start()
+        check(copy.waitFor() == 0) { "Couldn't copy the Flatpak update to the host Downloads folder." }
+        return hostPath
+    }
+
+    private fun resolveHostDownloadsPath(fileName: String): String {
+        val query = ProcessBuilder(
+            "flatpak-spawn",
+            "--host",
+            "sh",
+            "-c",
+            "printf '%s' \"${'$'}HOME/Downloads/$fileName\"",
+        )
+            .redirectErrorStream(true)
+            .start()
+        val hostPath = query.inputStream.bufferedReader().readText().trim()
+        check(query.waitFor() == 0 && hostPath.isNotBlank()) {
+            "Couldn't resolve the host Downloads path for the Flatpak update."
+        }
+        return hostPath
+    }
+
     private fun progressFraction(downloadedBytes: Long, totalBytes: Long?): Float? =
         totalBytes
             ?.takeIf { it > 0L }
@@ -308,6 +359,7 @@ private fun currentDesktopUpdatePlatform(): UpdatePlatform {
     return when {
         "win" in os -> UpdatePlatform.Windows
         "mac" in os -> UpdatePlatform.MacOs
+        System.getenv("FLATPAK_ID") == "com.joetr.andy" -> UpdatePlatform.LinuxFlatpak
         "linux" in os -> UpdatePlatform.LinuxDeb
         else -> UpdatePlatform.Other
     }
@@ -368,6 +420,7 @@ internal fun selectUpdateAsset(
     return when (platform) {
         UpdatePlatform.MacOs -> firstWithExtension(".dmg", ".pkg")
         UpdatePlatform.Windows -> firstWithExtension(".msi")
+        UpdatePlatform.LinuxFlatpak -> firstWithExtension(".flatpak")
         UpdatePlatform.LinuxDeb -> firstWithExtension(".deb")
         else -> null
     }
@@ -400,16 +453,23 @@ internal fun macPkgInstallerHelperScript(pkgPath: String): String {
 
 internal fun linuxInstallerHelperScript(
     filePath: String,
+    flatpak: Boolean,
+    insideFlatpak: Boolean,
     relaunchCommand: String?,
 ): String {
-    val installCommand = "pkexec sh -c ${(("dpkg -i " + filePath.shellQuote()) + " || apt-get install -f -y").shellQuote()}"
+    val installCommand = if (flatpak) {
+        "flatpak install --user -y ${filePath.shellQuote()} || flatpak install -y ${filePath.shellQuote()}"
+    } else {
+        "pkexec sh -c ${(("dpkg -i " + filePath.shellQuote()) + " || apt-get install -f -y").shellQuote()}"
+    }
     val relaunchBackground = relaunchCommand?.let { command ->
         "(sh -c ${command.shellQuote()} >/dev/null 2>&1 &)"
     } ?: "(sh -c 'andy' >/dev/null 2>&1 &)"
+    val hostPrefix = if (insideFlatpak) "flatpak-spawn --host " else ""
     return """
         #!/bin/sh
         sleep 1
-        sh -c ${(installCommand + " && " + relaunchBackground).shellQuote()}
+        ${hostPrefix}sh -c ${(installCommand + " && " + relaunchBackground).shellQuote()}
     """.trimIndent() + "\n"
 }
 

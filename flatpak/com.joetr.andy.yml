@@ -1,0 +1,43 @@
+app-id: com.joetr.andy
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: Andy
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  # Compose Desktop uses AWT on Linux. X11 remains necessary on Wayland sessions.
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  # Android devices are connected through USB via adb.
+  - --device=all
+  # Andy reads and writes SDK, AVD, project, and user-selected host files. It also
+  # runs the user's Android SDK tools from their installed location.
+  - --filesystem=host
+  - --talk-name=org.freedesktop.Flatpak
+  - --talk-name=org.freedesktop.secrets
+
+modules:
+  - name: andy
+    buildsystem: simple
+    build-commands:
+      - install -d /app/bin /app/lib/andy
+      - cp -a andy/. /app/lib/andy/
+      - ln -s /app/lib/andy/bin/Andy /app/bin/Andy
+      - install -Dm644 com.joetr.andy.desktop /app/share/applications/com.joetr.andy.desktop
+      - install -Dm644 com.joetr.andy.metainfo.xml /app/share/metainfo/com.joetr.andy.metainfo.xml
+      - install -Dm644 com.joetr.andy.png /app/share/icons/hicolor/512x512/apps/com.joetr.andy.png
+    sources:
+      - type: dir
+        path: ../build/compose/binaries/main-release/app/Andy
+        dest: andy
+      - type: file
+        path: com.joetr.andy.desktop
+      - type: file
+        path: com.joetr.andy.metainfo.xml
+      - type: file
+        path: ../src/desktopMain/resources/icons/andy.png
+        dest-filename: com.joetr.andy.png
