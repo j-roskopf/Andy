@@ -11,10 +11,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,12 +25,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LocalTextStyle
@@ -45,6 +48,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,15 +92,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-
-private data class SetupRequirement(
-    val label: String,
-    val ok: Boolean,
-    val readyText: String,
-    val missingText: String,
-    val installCommand: String? = null,
-)
-
 
 private val DebugNetworkSecurityConfigSnippet = """
 res/xml/network_security_config.xml
@@ -410,36 +406,10 @@ internal fun NetworkScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             PanelCard(Modifier.animateContentSize()) {
+                val clipboardManager = LocalClipboardManager.current
+                var configCopied by remember { mutableStateOf(false) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    TextField(
-                        portText,
-                        {
-                            portText = it.filter(Char::isDigit).take(5)
-                            it.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let(onPortChange)
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(86.dp).height(54.dp),
-                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-                        colors = fieldColors(),
-                    )
-                    Button(onClick = {
-                        persistPort()
-                        scope.launch {
-                            proxy.ensureCertificateAuthority()
-                            val result = proxy.start(currentPort, rules, currentStartOptions())
-                            val message = if (result.isSuccess) result.stdout else result.stderr
-                            state.status = message
-                            if (result.isSuccess) state.proxyStatus = message
-                        }
-                    }) { Text("Start") }
-                    OutlinedButton(onClick = {
-                        scope.launch {
-                            val result = proxy.stop()
-                            state.status = result.stdout
-                            state.proxyStatus = result.stdout
-                        }
-                    }) { Text("Stop") }
                     OutlinedButton(onClick = ::clearCapturedTraffic) { Text("Clear traffic") }
                     Text(
                         if (state.setupExpanded) "Hide setup" else "Show setup",
@@ -482,88 +452,204 @@ internal fun NetworkScreen(
                     state.routeDiagnostics?.proxyConfigured == false -> "Proxy route needs repair"
                     else -> "No VPN route issue detected"
                 }
-                val setupRequirements = listOf(
-                    SetupRequirement(
-                        label = "Android SDK platform-tools",
-                        ok = sdk.hasAdb,
-                        readyText = "ADB is available through Andy's SDK selection",
-                        missingText = "Install Android Studio or command-line tools",
-                    ),
-                    SetupRequirement(
-                        label = "scrcpy-server",
-                        ok = true,
-                        readyText = "Bundled with Andy for embedded mirroring",
-                        missingText = "Packaged builds include scrcpy-server",
-                    ),
-                    SetupRequirement(
-                        label = "mitmproxy",
-                        ok = state.engineReady,
-                        readyText = state.engineStatus,
-                        missingText = "Required for Network capture and rewrite rules",
-                        installCommand = "brew install mitmproxy",
-                    ),
-                )
-                val networkStatusRequirements = listOf(
-                    SetupRequirement(
-                        label = "Proxy Status",
-                        ok = proxyStarted,
-                        readyText = "Listening on port $currentPort",
-                        missingText = "Click Start to start",
-                    ),
-                    SetupRequirement(
-                        label = "CA Trust",
-                        ok = serial != null && (state.caInstalled || state.proxyTrafficObservedForDevice),
-                        readyText = caText,
-                        missingText = caText,
-                    ),
-                    SetupRequirement(
-                        label = "Device Proxy Routing",
-                        ok = serial != null && state.proxyConfigured,
-                        readyText = configText,
-                        missingText = configText,
-                    ),
-                    SetupRequirement(
-                        label = "VPN / Route",
-                        ok = serial != null &&
-                            state.routeDiagnostics?.vpnActive != true &&
-                            state.routeDiagnostics?.routeUsesVpn != true &&
-                            (
-                                state.routeDiagnostics?.hostProxyBypassLooksSafe != false ||
-                                    state.routeDiagnostics?.hostUpstreamProxy.orEmpty().let { upstream ->
-                                        upstream.contains("127.0.0.1") || upstream.contains("localhost")
-                                    }
-                            ),
-                        readyText = routeText,
-                        missingText = routeText,
-                    ),
-                )
+                val routeOk = serial != null &&
+                    state.routeDiagnostics?.vpnActive != true &&
+                    state.routeDiagnostics?.routeUsesVpn != true &&
+                    (
+                        state.routeDiagnostics?.hostProxyBypassLooksSafe != false ||
+                            state.routeDiagnostics?.hostUpstreamProxy.orEmpty().let { upstream ->
+                                upstream.contains("127.0.0.1") || upstream.contains("localhost")
+                            }
+                    )
                 val showRouteWarning = state.routeDiagnostics?.hasBlockingIssue == true && proxyStarted && !state.proxyTrafficObservedForDevice
+                val proxyHostDisplay = state.proxyHost.ifBlank { "this Mac's LAN IP" }
                 AnimatedVisibility(state.setupExpanded) {
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 360.dp)
+                            .heightIn(max = 480.dp)
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        @OptIn(ExperimentalLayoutApi::class)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            SetupStepCard(
+                                step = 1,
+                                title = "Install mitmproxy",
+                                ok = state.engineReady,
+                                instruction = if (state.engineReady) {
+                                    state.engineStatus
+                                } else {
+                                    "Required for Network capture and rewrite rules. Install on the host, then Andy will start mitmdump automatically."
+                                },
+                                modifier = Modifier.widthIn(min = 260.dp).weight(1f),
+                            ) {
+                                Text("brew install mitmproxy", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                            }
+                            SetupStepCard(
+                                step = 2,
+                                title = "Add network security config",
+                                ok = null,
+                                instruction = "Debug builds must trust user CAs. Add the XML below as res/xml/network_security_config.xml, then reference it in AndroidManifest.xml with android:networkSecurityConfig=\"@xml/network_security_config\".",
+                                modifier = Modifier.widthIn(min = 320.dp).weight(1f),
+                            ) {
+                                SelectionContainer {
+                                    Text(
+                                        DebugNetworkSecurityConfigSnippet,
+                                        color = TextPrimary,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp,
+                                    )
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedButton(onClick = {
+                                        clipboardManager.setText(AnnotatedString(DebugNetworkSecurityConfigSnippet))
+                                        configCopied = true
+                                        state.status = "Network security config copied to clipboard"
+                                    }) { Text("Copy") }
+                                    if (configCopied) {
+                                        Text("Copied", color = Green, fontSize = 11.sp)
+                                    }
+                                }
+                                Text(
+                                    "Use this only in debug builds that trust user CAs. Certificate pinning and arbitrary third-party app bypass are out of scope.",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                )
+                            }
+                            SetupStepCard(
+                                step = 3,
+                                title = "Start / stop HTTP proxy",
+                                ok = proxyStarted,
+                                instruction = if (proxyStarted) {
+                                    "Listening on port $currentPort"
+                                } else {
+                                    "Andy runs mitmdump on this port. Click Start to begin capturing HTTPS traffic."
+                                },
+                                modifier = Modifier.widthIn(min = 260.dp).weight(1f),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    TextField(
+                                        portText,
+                                        {
+                                            portText = it.filter(Char::isDigit).take(5)
+                                            it.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let(onPortChange)
+                                        },
+                                        singleLine = true,
+                                        modifier = Modifier.width(86.dp).height(54.dp),
+                                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+                                        colors = fieldColors(),
+                                    )
+                                    Button(onClick = {
+                                        persistPort()
+                                        scope.launch {
+                                            proxy.ensureCertificateAuthority()
+                                            val result = proxy.start(currentPort, rules, currentStartOptions())
+                                            val message = if (result.isSuccess) result.stdout else result.stderr
+                                            state.status = message
+                                            if (result.isSuccess) state.proxyStatus = message
+                                        }
+                                    }) { Text("Start") }
+                                    OutlinedButton(onClick = {
+                                        scope.launch {
+                                            val result = proxy.stop()
+                                            state.status = result.stdout
+                                            state.proxyStatus = result.stdout
+                                        }
+                                    }) { Text("Stop") }
+                                }
+                            }
+                            SetupStepCard(
+                                step = 4,
+                                title = "Install cert to device",
+                                ok = null,
+                                instruction = "One-time step per device (Andy's CA lasts ~10 years unless you wipe the emulator/device or regenerate ~/.andy/proxy). System CA (root) installs into the system trust store and requires adb root (emulator). Prepare phone CA only pushes the cert to Downloads and opens Security settings — you must still manually complete the CA install on the device (Settings > Security > Install a certificate > CA certificate).",
+                                modifier = Modifier.widthIn(min = 260.dp).weight(1f),
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        enabled = serial != null,
+                                        onClick = {
+                                            if (serial != null) scope.launch {
+                                                val result = proxy.installSystemCertificateAuthority(serial)
+                                                state.status = if (result.isSuccess) result.stdout else result.stderr
+                                                state.caInstalled = proxy.isCertificateInstalled(serial)
+                                            }
+                                        },
+                                    ) { Text("System CA (root)") }
+                                    OutlinedButton(
+                                        enabled = serial != null,
+                                        onClick = {
+                                            if (serial != null) scope.launch {
+                                                proxy.ensureCertificateAuthority()
+                                                val result = proxy.prepareUserCertificateInstall(serial)
+                                                state.status = if (result.isSuccess) result.stdout else result.stderr
+                                            }
+                                        },
+                                    ) { Text("Prepare phone CA") }
+                                }
+                            }
+                            SetupStepCard(
+                                step = 5,
+                                title = "Configure device proxy",
+                                ok = serial != null && state.proxyConfigured,
+                                instruction = "$configText. Sets Android's global http_proxy to $proxyHostDisplay:$currentPort so device traffic routes through Andy.",
+                                modifier = Modifier.widthIn(min = 260.dp).weight(1f),
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        enabled = serial != null,
+                                        onClick = {
+                                            if (serial != null) scope.launch {
+                                                val host = proxy.resolveDeviceProxyHost(serial)
+                                                state.proxyHost = host
+                                                val result = proxy.configureDeviceProxy(serial, host, currentPort)
+                                                state.status = if (result.isSuccess) result.stdout else result.stderr
+                                                state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                                state.routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
+                                            }
+                                        },
+                                    ) { Text("Configure device proxy") }
+                                    OutlinedButton(
+                                        enabled = serial != null,
+                                        onClick = {
+                                            if (serial != null) scope.launch {
+                                                val result = proxy.clearDeviceProxy(serial)
+                                                state.status = if (result.isSuccess) result.stdout else result.stderr
+                                                val host = proxy.resolveDeviceProxyHost(serial)
+                                                state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
+                                            }
+                                        },
+                                    ) { Text("Clear proxy") }
+                                }
+                            }
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                         ) {
-                            OutlinedButton(
-                                enabled = serial != null,
-                                onClick = {
-                                    if (serial != null) scope.launch {
-                                        val host = proxy.resolveDeviceProxyHost(serial)
-                                        state.proxyHost = host
-                                        val result = proxy.configureDeviceProxy(serial, host, currentPort)
-                                        state.status = if (result.isSuccess) result.stdout else result.stderr
-                                        state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                                        state.routeDiagnostics = proxy.diagnoseDeviceProxyRoute(serial, host, currentPort)
-                                    }
-                                },
-                            ) { Text("Configure device proxy") }
+                            GlowingDot(routeOk, Modifier.padding(top = 2.dp))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("VPN / Route", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(routeText, color = if (routeOk) Green else Red, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
                             OutlinedButton(
                                 enabled = serial != null,
                                 onClick = {
@@ -600,40 +686,7 @@ internal fun NetworkScreen(
                                     }
                                 },
                             ) { Text("Open VPN settings") }
-                            OutlinedButton(
-                                enabled = serial != null,
-                                onClick = {
-                                    if (serial != null) scope.launch {
-                                        val result = proxy.clearDeviceProxy(serial)
-                                        state.status = if (result.isSuccess) result.stdout else result.stderr
-                                        val host = proxy.resolveDeviceProxyHost(serial)
-                                        state.proxyConfigured = proxy.isDeviceProxyConfigured(serial, host, currentPort)
-                                    }
-                                },
-                            ) { Text("Clear proxy") }
-                            OutlinedButton(
-                                enabled = serial != null,
-                                onClick = {
-                                    if (serial != null) scope.launch {
-                                        val result = proxy.installSystemCertificateAuthority(serial)
-                                        state.status = if (result.isSuccess) result.stdout else result.stderr
-                                        state.caInstalled = proxy.isCertificateInstalled(serial)
-                                    }
-                                },
-                            ) { Text("System CA (root)") }
-                            OutlinedButton(
-                                enabled = serial != null,
-                                onClick = {
-                                    if (serial != null) scope.launch {
-                                        proxy.ensureCertificateAuthority()
-                                        val result = proxy.prepareUserCertificateInstall(serial)
-                                        state.status = if (result.isSuccess) result.stdout else result.stderr
-                                    }
-                                },
-                            ) { Text("Prepare phone CA") }
                         }
-                        SetupChecklist(setupRequirements)
-                        SetupChecklist(networkStatusRequirements)
                         CorporateUpstreamSettings(
                             sslInsecure = state.sslInsecure,
                             upstreamTrustedCaPath = state.upstreamTrustedCaPath,
@@ -685,20 +738,10 @@ internal fun NetworkScreen(
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Text("Debug app config", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                        Text(
-                            DebugNetworkSecurityConfigSnippet,
-                            color = TextPrimary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            lineHeight = 13.sp,
-                            maxLines = 12,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text("Use this only in debug builds that trust user CAs. Certificate pinning and arbitrary third-party app bypass are out of scope.", color = TextSecondary, fontSize = 12.sp)
                     }
                 }
             }
+
             NetworkDiagnosisStrip(state.diagnoses)
             Column(
                 Modifier
@@ -1077,39 +1120,34 @@ private fun InstallStepsCard(title: String, steps: List<String>, modifier: Modif
 }
 
 @Composable
-private fun SetupChecklist(requirements: List<SetupRequirement>, modifier: Modifier = Modifier) {
-    Row(
+private fun SetupStepCard(
+    step: Int,
+    title: String,
+    ok: Boolean?,
+    instruction: String,
+    modifier: Modifier = Modifier,
+    action: @Composable () -> Unit,
+) {
+    Column(
         modifier
-            .fillMaxWidth()
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        requirements.forEach { requirement ->
-            Row(
-                Modifier.weight(1f),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                GlowingDot(requirement.ok, Modifier.padding(top = 2.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(requirement.label, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        if (requirement.ok) requirement.readyText else requirement.missingText,
-                        color = if (requirement.ok) Green else Red,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (!requirement.ok && requirement.installCommand != null) {
-                        Text(requirement.installCommand, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("$step.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (ok != null) {
+                GlowingDot(ok)
             }
         }
+        Text(instruction, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
+        action()
     }
 }
 

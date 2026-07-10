@@ -59,6 +59,7 @@ internal class MockAndroidDeviceEnvironment {
     var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
     var hostOsName: String = "Mac OS X"
     var getpropOverrides: Map<String, String> = emptyMap()
+    val installedPackages: MutableSet<String> = mutableSetOf()
 
     init {
         File(avdHome, "Pixel_8_API_36.avd").apply {
@@ -67,6 +68,7 @@ internal class MockAndroidDeviceEnvironment {
                 """
                 AvdId=Pixel_8_API_36
                 avd.ini.displayname=Pixel_8_API_36
+                abi.type=arm64-v8a
                 image.sysdir.1=system-images/android-36/google_apis/arm64-v8a/
                 hw.device.name=Pixel 8
                 """.trimIndent(),
@@ -86,7 +88,14 @@ internal class MockAndroidDeviceEnvironment {
     fun services(): TestDesktopServices {
         return TestDesktopServices(
             devices = devices,
-            avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath },
+            avd = DesktopAvdService(
+                runner,
+                locator,
+                listAvdsFromDisk = {
+                    AvdHomeScanner.listVirtualDevices(env = mapOf("ANDROID_AVD_HOME" to avdHome.absolutePath))
+                },
+                resolveAvdHome = { avdHome },
+            ) { store.load().selectedSdkPath },
             mirror = DesktopMirrorEngine(runner, devices),
             logcat = DesktopLogcatService(runner, devices),
             intents = DesktopIntentService(runner, devices),
@@ -199,11 +208,25 @@ internal class MockAndroidDeviceEnvironment {
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "remount" -> remountResult
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "reboot" -> CommandResult.success()
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "uninstall" -> CommandResult.success("Success")
+            command.getOrNull(1) == "-s" && command.getOrNull(3) == "install" -> runInstall(command.drop(4))
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "pull" -> CommandResult.success("1 file pulled")
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "push" -> CommandResult.success("1 file pushed")
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "forward" -> CommandResult.success()
             else -> CommandResult.failure("Unexpected adb command: ${command.joinToString(" ")}")
         }
+    }
+
+    private fun runInstall(args: List<String>): CommandResult {
+        val replace = args.firstOrNull() == "-r"
+        val apkPath = if (replace) args.getOrNull(1) else args.firstOrNull()
+        if (apkPath.isNullOrBlank()) {
+            return CommandResult.failure("No APK path supplied")
+        }
+        if (!replace && installedPackages.contains(apkPath)) {
+            return CommandResult.failure("Failure [INSTALL_FAILED_ALREADY_EXISTS]")
+        }
+        installedPackages.add(apkPath)
+        return CommandResult.success("Success")
     }
 
     private fun runEmu(serial: String, args: List<String>): CommandResult {

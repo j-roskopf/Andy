@@ -33,7 +33,7 @@ internal data class ProxyRuleDto(
 @Serializable
 internal data class MitmproxyFlowLineDto(
     val type: String,
-    val id: String,
+    val id: String? = null,
     val startedAtMillis: Long? = null,
     val completedAtMillis: Long? = null,
     val method: String? = null,
@@ -52,12 +52,18 @@ internal data class MitmproxyFlowLineDto(
     val sni: String? = null,
     val peer: String? = null,
     val reason: String? = null,
+    val sha256: String? = null,
+    val version: Int? = null,
+    val count: Long? = null,
 )
 
 internal sealed interface MitmproxyEvent {
     data class Exchange(val exchange: NetworkExchange) : MitmproxyEvent
     data class ClientConnected(val id: String, val peer: String?, val atMillis: Long) : MitmproxyEvent
     data class ClientDisconnected(val id: String, val peer: String?, val atMillis: Long) : MitmproxyEvent
+    data class AddonHello(val sha256: String?, val version: Int?, val atMillis: Long) : MitmproxyEvent
+    data class EventsDropped(val count: Long) : MitmproxyEvent
+    data class AddonError(val id: String, val error: String?, val atMillis: Long) : MitmproxyEvent
 }
 
 internal object ProxyRuleJson {
@@ -76,22 +82,36 @@ internal fun parseMitmproxyEvent(line: String): MitmproxyEvent? {
         ProxyJsonFormat.decodeFromString(MitmproxyFlowLineDto.serializer(), line)
     }.getOrNull() ?: return null
     return when (dto.type) {
-        "flow", "tls_failed" -> MitmproxyEvent.Exchange(dto.toNetworkExchange())
+        "flow", "tls_failed" -> {
+            val id = dto.id ?: return null
+            MitmproxyEvent.Exchange(dto.toNetworkExchange(id))
+        }
         "client_connected" -> MitmproxyEvent.ClientConnected(
-            id = dto.id,
+            id = dto.id ?: return null,
             peer = dto.peer,
             atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
         )
         "client_disconnected" -> MitmproxyEvent.ClientDisconnected(
-            id = dto.id,
+            id = dto.id ?: return null,
             peer = dto.peer,
+            atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
+        )
+        "addon_hello" -> MitmproxyEvent.AddonHello(
+            sha256 = dto.sha256,
+            version = dto.version,
+            atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
+        )
+        "events_dropped" -> MitmproxyEvent.EventsDropped(count = dto.count ?: 0L)
+        "addon_error" -> MitmproxyEvent.AddonError(
+            id = dto.id ?: "addon-error",
+            error = dto.error,
             atMillis = dto.startedAtMillis ?: System.currentTimeMillis(),
         )
         else -> null
     }
 }
 
-private fun MitmproxyFlowLineDto.toNetworkExchange(): NetworkExchange {
+private fun MitmproxyFlowLineDto.toNetworkExchange(id: String): NetworkExchange {
     val host = sni ?: url?.removePrefix("https://")?.substringBefore('/') ?: "unknown-host"
     val synthesizedError = when {
         type != "tls_failed" -> error

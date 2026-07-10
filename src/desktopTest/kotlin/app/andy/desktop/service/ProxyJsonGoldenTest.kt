@@ -129,6 +129,20 @@ class ProxyJsonGoldenTest {
     }
 
     @Test
+    fun parseAddonHelloAndEventsDropped() {
+        val hello = parseMitmproxyEvent(
+            """{"type":"addon_hello","sha256":"abc","version":1,"startedAtMillis":3}""",
+        )
+        assertIs<MitmproxyEvent.AddonHello>(hello)
+        assertEquals("abc", hello.sha256)
+        assertEquals(1, hello.version)
+
+        val dropped = parseMitmproxyEvent("""{"type":"events_dropped","count":12}""")
+        assertIs<MitmproxyEvent.EventsDropped>(dropped)
+        assertEquals(12L, dropped.count)
+    }
+
+    @Test
     fun nonFlowLinesAreIgnored() {
         assertNull(parseMitmproxyFlowLine("""{"type":"status","ok":true}"""))
         assertNull(parseMitmproxyFlowLine("not json"))

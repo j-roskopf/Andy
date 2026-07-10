@@ -271,6 +271,69 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun addonHelloMismatchAndDroppedEventsPublishWarnings() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val service = DesktopProxyService(
+            env.runner,
+            env.devices,
+            mitmdumpExecutable = { "/usr/bin/mitmdump" },
+            processStarter = { _, _, _ ->
+                MockProxyProcess(
+                    stdoutText = """
+                        {"type":"addon_hello","sha256":"deadbeef","version":1,"startedAtMillis":1}
+                        {"type":"events_dropped","count":7}
+                        {"type":"addon_error","id":"err-1","startedAtMillis":2,"error":"response hook: boom"}
+                        {"type":"flow","id":"flow-1","startedAtMillis":2,"completedAtMillis":3,"durationMillis":1,"method":"GET","url":"https://example.test/","statusCode":200,"contentType":null,"sizeBytes":0,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":null,"error":null,"tlsStatus":"tls","matchedRuleId":null}
+                    """.trimIndent(),
+                )
+            },
+            hostOsName = { env.hostOsName },
+        )
+
+        assertTrue(service.start(8888, emptyList()).isSuccess)
+        val warnings = withTimeout(2_000) {
+            service.warnings.first { list ->
+                list.any { it.kind == ProxyWarningKind.AddonMismatch } &&
+                    list.any { it.kind == ProxyWarningKind.CaptureDropped } &&
+                    list.any { it.kind == ProxyWarningKind.AddonError }
+            }
+        }
+        assertTrue(warnings.any { it.message.contains("deadbeef") })
+        assertTrue(warnings.any { it.message.contains("7") })
+        assertTrue(warnings.any { it.message.contains("response hook: boom") })
+        withTimeout(2_000) {
+            service.exchanges.first { it.any { exchange -> exchange.id == "flow-1" } }
+        }
+        service.stop()
+        Unit
+    }
+
+    @Test
+    fun exchangePublicationIsThrottledToLatestSnapshot() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val lines = (1..40).joinToString("\n") { index ->
+            """{"type":"flow","id":"flow-$index","startedAtMillis":$index,"completedAtMillis":$index,"durationMillis":0,"method":"GET","url":"https://example.test/$index","statusCode":200,"contentType":null,"sizeBytes":0,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":null,"error":null,"tlsStatus":"tls","matchedRuleId":null}"""
+        }
+        val service = DesktopProxyService(
+            env.runner,
+            env.devices,
+            mitmdumpExecutable = { "/usr/bin/mitmdump" },
+            processStarter = { _, _, _ -> MockProxyProcess(stdoutText = lines) },
+            hostOsName = { env.hostOsName },
+        )
+
+        assertTrue(service.start(8888, emptyList()).isSuccess)
+        val exchanges = withTimeout(3_000) {
+            service.exchanges.first { it.size >= 40 }
+        }
+        assertEquals(40, exchanges.size)
+        assertEquals("flow-1", exchanges.first().id)
+        assertEquals("flow-40", exchanges.last().id)
+        service.stop()
+        Unit
+    }
+
+    @Test
     fun routeDiagnosticsFlagsDetectedMacCorporateProxy() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val services = env.services()

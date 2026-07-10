@@ -13,6 +13,7 @@ import app.andy.ui.theme.TextSecondary
 internal data class PendingConfirmation(
     val title: String,
     val message: String,
+    val confirmLabel: String = "Confirm",
     val onConfirm: () -> Unit,
 )
 
@@ -23,7 +24,7 @@ internal fun ConfirmationDialog(confirmation: PendingConfirmation, onDismiss: ()
         containerColor = Panel,
         title = { Text(confirmation.title, color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = { Text(confirmation.message, color = TextSecondary) },
-        confirmButton = { Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = Red)) { Text("Confirm") } },
+        confirmButton = { Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = Red)) { Text(confirmation.confirmLabel) } },
         dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

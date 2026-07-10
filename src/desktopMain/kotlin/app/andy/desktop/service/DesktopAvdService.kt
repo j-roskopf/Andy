@@ -8,6 +8,7 @@ import app.andy.model.DeviceKind
 import app.andy.model.EmulatorSnapshot
 import app.andy.model.SystemImage
 import app.andy.model.VirtualDevice
+import app.andy.model.VirtualDeviceType
 import app.andy.service.AvdService
 import app.andy.service.CommandResult
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,8 @@ import kotlin.math.roundToInt
 class DesktopAvdService(
     private val runner: CommandRunner,
     private val locator: SdkLocator,
+    private val listAvdsFromDisk: () -> List<VirtualDevice> = { AvdHomeScanner.listVirtualDevices() },
+    private val resolveAvdHome: () -> File = { AvdHomeScanner.avdHome() },
     private val preferredSdkPath: suspend () -> String? = { null },
 ) : AvdService {
     private fun getDirectorySize(dir: File): Long {
@@ -77,15 +80,19 @@ class DesktopAvdService(
     }
 
     override suspend fun listVirtualDevices(): List<VirtualDevice> {
-        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
-        val avds = AndroidParsers.parseAvdList(runner.run(listOf(avdManager, "list", "avd"), 20).stdout)
+        val avds = listAvdsFromDisk()
         val running = runningEmulatorNames()
         return avds.map { avd ->
-            val config = loadAvdConfig(avd).orEmpty()
+            val config = avd.config.ifEmpty { loadAvdConfig(avd).orEmpty() }
             avd.copy(
                 running = running.any { namesMatch(it, avd.name) },
-                apiLevel = avd.apiLevel ?: Regex("""android-(\d+)""").find(config["image.sysdir.1"].orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(),
-                deviceType = AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config),
+                apiLevel = avd.apiLevel
+                    ?: Regex("""android-(\d+)""").find(config["image.sysdir.1"].orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull(),
+                deviceType = if (avd.deviceType != VirtualDeviceType.Unknown) {
+                    avd.deviceType
+                } else {
+                    AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config)
+                },
                 config = config,
             )
         }
@@ -450,7 +457,7 @@ class DesktopAvdService(
         val path = avd.path?.let(::File) ?: return null
         return listOf(
             File(path.parentFile, "${avd.name}.ini"),
-            File(File(System.getProperty("user.home"), ".android/avd"), "${avd.name}.ini"),
+            File(resolveAvdHome(), "${avd.name}.ini"),
         ).firstOrNull { it.exists() }
     }
 

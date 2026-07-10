@@ -64,6 +64,7 @@ interface AppService {
     suspend fun clearData(serial: String, packageName: String): CommandResult
     suspend fun resetPermissions(serial: String, packageName: String): CommandResult
     suspend fun uninstall(serial: String, packageName: String): CommandResult
+    suspend fun install(serial: String, apkPath: String, replace: Boolean = false): CommandResult
     suspend fun listPermissions(serial: String, packageName: String): List<AndroidPermission>
     suspend fun listActivities(serial: String, packageName: String): List<AndroidActivity>
     suspend fun getIcon(serial: String, packageName: String): ByteArray?

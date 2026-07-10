@@ -42,6 +42,9 @@ data class ProxyWarning(
 enum class ProxyWarningKind {
     ClientTlsFailure,
     UpstreamTlsFailure,
+    CaptureDropped,
+    AddonMismatch,
+    AddonError,
     Other,
 }
 
@@ -163,15 +166,17 @@ fun diagnoseNetworkTraffic(
     val successfulAny = exchanges.any { it.error == null && (it.statusCode != null || it.method != "TLS") }
     if (successfulHttps || (successfulAny && exchanges.none { it.error != null })) {
         val chaining = routeDiagnostics?.hostUpstreamProxy
-        return listOf(
-            NetworkDiagnosis(
-                mode = null,
-                severity = NetworkDiagnosisSeverity.Green,
-                title = if (chaining != null) "Capturing traffic (chaining through $chaining)" else "Capturing traffic",
-                detail = "HTTPS flows are reaching Andy and completing successfully.",
-                fix = "",
-            ),
-        )
+        return (
+            listOf(
+                NetworkDiagnosis(
+                    mode = null,
+                    severity = NetworkDiagnosisSeverity.Green,
+                    title = if (chaining != null) "Capturing traffic (chaining through $chaining)" else "Capturing traffic",
+                    detail = "HTTPS flows are reaching Andy and completing successfully.",
+                    fix = "",
+                ),
+            ) + addonOperationalDiagnoses(warnings)
+            ).distinctBy { it.mode to it.title }
     }
 
     val diagnoses = mutableListOf<NetworkDiagnosis>()
@@ -209,34 +214,7 @@ fun diagnoseNetworkTraffic(
         )
     }
 
-    if (!caInstalled && exchanges.none { it.tlsStatus == "tls" && it.error == null }) {
-        diagnoses += NetworkDiagnosis(
-            mode = NetworkFailureMode.CaNotInstalled,
-            severity = NetworkDiagnosisSeverity.Red,
-            title = "Andy CA is not installed as a system trust",
-            detail = "Without system (or verified user) CA trust, HTTPS clients will reject Andy's MITM certificate and produce no decryptable traffic.",
-            fix = "Use System CA (root) on a writable emulator, or Prepare phone CA and finish the install on-device for debug apps that trust user CAs.",
-        )
-    }
-
-    val routeIssues = routeDiagnostics?.issues.orEmpty()
     val noHttpTraffic = exchanges.none { it.method != "TLS" }
-    if (noHttpTraffic && (routeIssues.isNotEmpty() || !proxyConfigured || clientConnectionsObserved == 0)) {
-        val detail = when {
-            routeIssues.isNotEmpty() -> routeIssues.joinToString(" ")
-            !proxyConfigured -> "Android's global HTTP proxy is not pointed at Andy."
-            clientConnectionsObserved == 0 -> "No TCP client has connected to mitmdump yet — traffic is not reaching Andy (VPN, proxy override, or QUIC/UDP)."
-            else -> "Clients connected but no HTTP request was captured — the app may bypass the proxy or use QUIC/HTTP3."
-        }
-        diagnoses += NetworkDiagnosis(
-            mode = NetworkFailureMode.NotRouted,
-            severity = NetworkDiagnosisSeverity.Red,
-            title = "No client traffic is reaching Andy",
-            detail = detail,
-            fix = "Repair proxy route, disable/split-tunnel VPN, remove app-level Proxy.NO_PROXY, and force HTTP/1.1 if the app prefers QUIC.",
-        )
-    }
-
     if (noHttpTraffic && clientConnectionsObserved > 0 && tlsFailed.isEmpty() && upstreamErrors.isEmpty()) {
         diagnoses += NetworkDiagnosis(
             mode = NetworkFailureMode.UnsupportedProtocol,
@@ -246,6 +224,8 @@ fun diagnoseNetworkTraffic(
             fix = "Disable Private DNS / QUIC in the debug app or force HTTP/1.1 for the endpoints you need to inspect.",
         )
     }
+
+    diagnoses += addonOperationalDiagnoses(warnings)
 
     if (diagnoses.isEmpty()) {
         diagnoses += NetworkDiagnosis(
@@ -257,4 +237,37 @@ fun diagnoseNetworkTraffic(
         )
     }
     return diagnoses.distinctBy { it.mode to it.title }
+}
+
+/** Surfaced from mitm addon stdout events so Python-side failures stay visible even when capture works. */
+internal fun addonOperationalDiagnoses(warnings: List<ProxyWarning>): List<NetworkDiagnosis> {
+    val diagnoses = mutableListOf<NetworkDiagnosis>()
+    warnings.filter { it.kind == ProxyWarningKind.AddonError }.takeLast(3).forEach { warning ->
+        diagnoses += NetworkDiagnosis(
+            mode = null,
+            severity = NetworkDiagnosisSeverity.Amber,
+            title = "mitm addon error",
+            detail = warning.message,
+            fix = "Traffic may still flow; Stop/Start the proxy if capture looks wrong. Check Proxy stderr for details.",
+        )
+    }
+    warnings.lastOrNull { it.kind == ProxyWarningKind.CaptureDropped }?.let { warning ->
+        diagnoses += NetworkDiagnosis(
+            mode = null,
+            severity = NetworkDiagnosisSeverity.Amber,
+            title = "Network capture dropped events",
+            detail = warning.message,
+            fix = "Proxied traffic was not blocked. Andy may be missing some rows in the traffic list under load.",
+        )
+    }
+    warnings.lastOrNull { it.kind == ProxyWarningKind.AddonMismatch }?.let { warning ->
+        diagnoses += NetworkDiagnosis(
+            mode = null,
+            severity = NetworkDiagnosisSeverity.Amber,
+            title = "mitm addon version mismatch",
+            detail = warning.message,
+            fix = "Stop/Start the proxy from this Andy build, and quit any duplicate Andy/mitmdump instances.",
+        )
+    }
+    return diagnoses
 }

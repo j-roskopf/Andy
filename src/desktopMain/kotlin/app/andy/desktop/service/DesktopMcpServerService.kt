@@ -137,7 +137,7 @@ class DesktopMcpServerService(
         "create_avd", "clone_avd", "delete_avd", "start_emulator", "stop_emulator",
         "install_system_image", "tap", "swipe", "input_text", "press_key",
         "screenshot", "ui_dump", "list_apps", "launch_app", "stop_app",
-        "clear_app_data", "uninstall_app", "list_permissions", "list_activities",
+        "clear_app_data", "uninstall_app", "install_app", "list_permissions", "list_activities",
         "send_intent", "file_list_dir", "file_pull", "file_push", "file_delete",
         "start_network_proxy", "list_network_mock_rules", "upsert_network_mock_rule",
         "set_network_mock_rules", "delete_network_mock_rule", "stop_network_proxy",
@@ -566,6 +566,26 @@ class DesktopMcpServerService(
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
             val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.uninstall(resolved, packageName)
+            CallToolResult(
+                content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
+                isError = !result.isSuccess
+            )
+        }
+
+        mcpServer.registerTool(
+            "install_app",
+            "Install an APK onto the device",
+            mapOf(
+                "apkPath" to stringProp("Local path to the APK file"),
+                "replace" to boolProp("Replace an existing installation (adb install -r)"),
+                "serial" to stringProp("Optional target device serial")
+            ),
+            listOf("apkPath")
+        ) { args ->
+            val apkPath = args["apkPath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("apkPath is required")
+            val replace = args["replace"]?.jsonPrimitive?.booleanOrNull ?: false
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = apps.install(resolved, apkPath, replace)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
                 isError = !result.isSuccess

@@ -91,17 +91,18 @@ class NetworkDiagnosisTest {
     }
 
     @Test
-    fun notRoutedWhenNoClientConnected() {
+    fun idleTabDoesNotShowPrematureCaOrRoutingErrors() {
         val diagnoses = diagnoseNetworkTraffic(
             proxyStarted = true,
-            caInstalled = true,
+            caInstalled = false,
             proxyConfigured = false,
             routeDiagnostics = NetworkRouteDiagnostics(
                 expectedProxy = "10.0.2.2:8888",
                 configuredProxy = null,
                 proxyConfigured = false,
-                vpnActive = false,
-                issues = listOf("Android global proxy is not set; expected 10.0.2.2:8888."),
+                vpnActive = true,
+                vpnName = "epc.tmobile.com",
+                issues = listOf("A VPN is active (epc.tmobile.com); it can bypass Android's global HTTP proxy."),
             ),
             exchanges = emptyList(),
             warnings = emptyList(),
@@ -110,6 +111,67 @@ class NetworkDiagnosisTest {
             upstreamTrustedCaPath = null,
         )
 
-        assertTrue(diagnoses.any { it.mode == NetworkFailureMode.NotRouted && it.severity == NetworkDiagnosisSeverity.Red })
+        assertTrue(diagnoses.none { it.mode == NetworkFailureMode.NotRouted })
+        assertTrue(diagnoses.none { it.mode == NetworkFailureMode.CaNotInstalled })
+        assertTrue(diagnoses.any { it.title == "Waiting for traffic" })
+    }
+
+    @Test
+    fun addonErrorsSurfaceAlongsideHealthyCapture() {
+        val diagnoses = diagnoseNetworkTraffic(
+            proxyStarted = true,
+            caInstalled = true,
+            proxyConfigured = true,
+            routeDiagnostics = null,
+            exchanges = listOf(
+                NetworkExchange(
+                    id = "flow-ok",
+                    flowId = "flow-ok",
+                    startedAtMillis = 1,
+                    completedAtMillis = 2,
+                    method = "GET",
+                    url = "https://example.test/",
+                    statusCode = 200,
+                    contentType = "application/json",
+                    sizeBytes = 2,
+                    durationMillis = 1,
+                    requestHeaders = emptyMap(),
+                    responseHeaders = emptyMap(),
+                    requestBodyPreview = null,
+                    responseBodyPreview = "{}",
+                    error = null,
+                    tlsStatus = "tls",
+                    matchedRuleId = null,
+                ),
+            ),
+            warnings = listOf(
+                ProxyWarning(
+                    id = "w1",
+                    atMillis = 3,
+                    kind = ProxyWarningKind.AddonError,
+                    message = "response hook: NameError: x",
+                ),
+                ProxyWarning(
+                    id = "w2",
+                    atMillis = 4,
+                    kind = ProxyWarningKind.CaptureDropped,
+                    message = "Network capture dropped 3 event(s) under load; proxied traffic was not blocked.",
+                ),
+                ProxyWarning(
+                    id = "w3",
+                    atMillis = 5,
+                    kind = ProxyWarningKind.AddonMismatch,
+                    message = "Running mitm addon SHA-256 deadbeef does not match Andy's resource abc.",
+                ),
+            ),
+            clientConnectionsObserved = 1,
+            sslInsecure = false,
+            upstreamTrustedCaPath = null,
+        )
+
+        assertTrue(diagnoses.any { it.severity == NetworkDiagnosisSeverity.Green && it.title.contains("Capturing") })
+        assertTrue(diagnoses.any { it.title == "mitm addon error" && it.detail.contains("NameError") })
+        assertTrue(diagnoses.any { it.title == "Network capture dropped events" })
+        assertTrue(diagnoses.any { it.title == "mitm addon version mismatch" })
     }
 }

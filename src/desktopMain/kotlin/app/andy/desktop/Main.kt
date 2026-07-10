@@ -76,7 +76,17 @@ fun main() {
             LaunchedEffect(window) {
                 configureMacTitleBar(window)
             }
-            MenuBar {}
+            MenuBar {
+                Menu("Go") {
+                    AndyDestination.entries.forEach { destination ->
+                        Item(
+                            destination.label,
+                            shortcut = destination.menuShortcut(),
+                            onClick = { open(destination) },
+                        )
+                    }
+                }
+            }
             AndyApp(
                 services = services,
                 requestedDestination = requestedDestination,
@@ -161,3 +171,29 @@ private fun removeDockReopenHandler(listener: SystemEventListener?) {
 
 private fun isMacOs(): Boolean =
     System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
+
+/** Cmd/Ctrl+1–0 for the first ten pages; letter shortcuts for the rest. */
+private fun AndyDestination.menuShortcut(): KeyShortcut {
+    val meta = isMacOs()
+    val ctrl = !isMacOs()
+    return when (this) {
+        AndyDestination.Devices -> KeyShortcut(Key.One, meta = meta, ctrl = ctrl)
+        AndyDestination.Catalog -> KeyShortcut(Key.Two, meta = meta, ctrl = ctrl)
+        AndyDestination.Live -> KeyShortcut(Key.Three, meta = meta, ctrl = ctrl)
+        AndyDestination.Apps -> KeyShortcut(Key.Four, meta = meta, ctrl = ctrl)
+        AndyDestination.Logcat -> KeyShortcut(Key.Five, meta = meta, ctrl = ctrl)
+        AndyDestination.Intents -> KeyShortcut(Key.Six, meta = meta, ctrl = ctrl)
+        AndyDestination.Files -> KeyShortcut(Key.Seven, meta = meta, ctrl = ctrl)
+        AndyDestination.ComputerFiles -> KeyShortcut(Key.Eight, meta = meta, ctrl = ctrl)
+        AndyDestination.Network -> KeyShortcut(Key.Nine, meta = meta, ctrl = ctrl)
+        AndyDestination.Actions -> KeyShortcut(Key.Zero, meta = meta, ctrl = ctrl)
+        AndyDestination.Snapshots -> KeyShortcut(Key.S, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Controls -> KeyShortcut(Key.C, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Performance -> KeyShortcut(Key.P, meta = meta, ctrl = ctrl, shift = true)
+        // Shift+D is already used by the mirror pop-out "Show controls" toggle.
+        AndyDestination.Design -> KeyShortcut(Key.E, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Accessibility -> KeyShortcut(Key.A, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Bugs -> KeyShortcut(Key.B, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Settings -> KeyShortcut(Key.Comma, meta = meta, ctrl = ctrl)
+    }
+}

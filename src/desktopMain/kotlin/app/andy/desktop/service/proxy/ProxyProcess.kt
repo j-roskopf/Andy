@@ -49,6 +49,7 @@ class RealProxyProcess(command: List<String>, directory: File, environment: Map<
 }
 
 internal const val MaxNetworkExchanges = 20_000
+internal const val ExchangePublishIntervalMs = 100L
 
 internal fun findMitmdumpExecutable(): String? {
     val pathCandidates = System.getenv("PATH").orEmpty()
