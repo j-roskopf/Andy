@@ -189,7 +189,7 @@ internal fun DesignScreen(
                 OutlinedButton(onClick = {
                     scope.launch {
                         val path = pickFiles(allowMultiple = false).firstOrNull() ?: return@launch
-                        val canLoad = withContext(Dispatchers.Default) { loadImageBitmap(path) != null }
+                        val canLoad = withContext(Dispatchers.IO) { loadImageBitmap(path) != null }
                         if (canLoad) {
                             referenceImagePath = path
                             status = "Image overlay: ${path.fileName()}"

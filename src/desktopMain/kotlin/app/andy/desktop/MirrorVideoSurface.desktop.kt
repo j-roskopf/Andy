@@ -29,6 +29,7 @@ import java.io.File
 import javax.imageio.ImageIO
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
+import java.util.concurrent.CompletableFuture
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
@@ -105,6 +106,7 @@ private class MirrorPanel : JPanel() {
     private var overlay: MirrorOverlay = MirrorOverlay()
     private var referenceImagePath: String? = null
     private var referenceImage: BufferedImage? = null
+    private var referenceImageRequestId = 0L
     var onInput: (MirrorInput) -> Unit = {}
     var onHoverColor: (String) -> Unit = {}
     var onPickerClick: (String) -> Unit = {}
@@ -269,8 +271,20 @@ private class MirrorPanel : JPanel() {
         if (overlay == next) return
         if (referenceImagePath != next.referenceImagePath) {
             referenceImagePath = next.referenceImagePath
-            referenceImage = next.referenceImagePath?.let { path ->
-                runCatching { ImageIO.read(File(path)) }.getOrNull()
+            val requestId = ++referenceImageRequestId
+            val path = next.referenceImagePath
+            referenceImage = null
+            if (path != null) {
+                CompletableFuture.supplyAsync {
+                    runCatching { ImageIO.read(File(path)) }.getOrNull()
+                }.thenAccept { loadedImage ->
+                    SwingUtilities.invokeLater {
+                        if (referenceImageRequestId == requestId && referenceImagePath == path) {
+                            referenceImage = loadedImage
+                            repaint()
+                        }
+                    }
+                }
             }
         }
         overlay = next
