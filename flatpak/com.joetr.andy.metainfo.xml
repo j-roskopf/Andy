@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.joetr.andy</id>
+  <name>Andy</name>
+  <summary>Android emulator and device companion</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Andy is a desktop companion for Android developers that manages devices and emulators, provides live mirroring, and helps inspect and control Android apps.</p>
+  </description>
+  <launchable type="desktop-id">com.joetr.andy.desktop</launchable>
+  <categories>
+    <category>Development</category>
+    <category>Utility</category>
+  </categories>
+  <developer_name>j-roskopf</developer_name>
+</component>

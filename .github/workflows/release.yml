@@ -115,7 +115,9 @@ jobs:
       - name: Install packaging tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y fakeroot xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo apt-get install -y fakeroot flatpak flatpak-builder xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -126,8 +128,33 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Linux DEB
-        run: xvfb-run -a ./gradlew packageReleaseDeb -Pandy.versionName=${{ needs.version.outputs.version }}
+      - name: Build Linux packages
+        run: >
+          xvfb-run -a ./gradlew
+          packageReleaseDeb
+          createReleaseDistributable
+          -Pandy.versionName=${{ needs.version.outputs.version }}
+
+      - name: Build Linux Flatpak bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          (
+            cd flatpak
+            flatpak-builder \
+              --force-clean \
+              --repo="${GITHUB_WORKSPACE}/flatpak-repo" \
+              "${GITHUB_WORKSPACE}/flatpak-build" \
+              com.joetr.andy.yml
+          )
+          flatpak build-bundle \
+            flatpak-repo \
+            "release-artifacts/Andy-${VERSION}.flatpak" \
+            com.joetr.andy \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
 
       - name: Collect Linux release artifacts
         shell: bash
@@ -137,6 +164,11 @@ jobs:
           deb="$(find build -name '*.deb' -print -quit)"
           if [[ -z "${deb}" ]]; then
             echo "::error::Could not find Linux DEB release artifact"
+            exit 1
+          fi
+          flatpak_bundle="release-artifacts/Andy-${VERSION}.flatpak"
+          if [[ ! -f "${flatpak_bundle}" ]]; then
+            echo "::error::Could not find Linux Flatpak release artifact"
             exit 1
           fi
           cp "${deb}" "release-artifacts/Andy-${VERSION}.deb"
@@ -466,5 +498,6 @@ jobs:
           generate_release_notes: true
           files: |
             release-artifacts/**/*.deb
+            release-artifacts/**/*.flatpak
             release-artifacts/**/*.msi
             release-artifacts/**/*.dmg

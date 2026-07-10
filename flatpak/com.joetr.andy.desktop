@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Andy
+Comment=Android emulator and device companion
+Exec=Andy
+Icon=com.joetr.andy
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=Andy
