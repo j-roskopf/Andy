@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -132,17 +134,51 @@ internal fun EmptyState(text: String) {
 }
 
 @Composable
-internal fun FilterPill(text: String, selected: Boolean, color: Color, onClick: () -> Unit) {
+internal fun FilterPill(
+    text: String,
+    selected: Boolean,
+    color: Color,
+    toolbar: Boolean = false,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(AndyRadius.R2)
+    if (toolbar) {
+        OutlinedButton(
+            onClick = onClick,
+            shape = shape,
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850,
+                contentColor = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+            ),
+            border = BorderStroke(1.dp, if (selected) color.copy(alpha = 0.70f) else Border),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text.lowercase(),
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+            )
+        }
+        return
+    }
     Box(
-        Modifier.height(28.dp)
+        Modifier
+            .height(28.dp)
             .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
             .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text.lowercase(), color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, lineHeight = 14.sp)
+        Text(
+            text.lowercase(),
+            color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 10.sp,
+            lineHeight = 14.sp,
+        )
     }
 }
 

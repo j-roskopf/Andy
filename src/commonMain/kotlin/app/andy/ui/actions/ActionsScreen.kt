@@ -2,6 +2,7 @@ package app.andy.ui.actions
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,7 @@ import app.andy.ui.components.PendingConfirmation
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig
+import app.andy.model.AgentTask
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectNote
 import app.andy.model.RunningAction
@@ -67,6 +69,11 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.agents.AgentBadge
+import app.andy.ui.agents.AgentTaskDetail
+import app.andy.ui.agents.agentStatusColor
+import app.andy.ui.agents.agentStatusLabel
+import app.andy.ui.agents.formatElapsed
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -79,6 +86,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 internal fun actionIconMarker(icon: String): String = when (icon.trim().lowercase()) {
@@ -104,19 +112,52 @@ internal fun ActionsScreen(
     activeRunId: String?,
     onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
+    onCreateAgentTask: (ActionProject) -> Unit,
+    agentTasks: List<AgentTask>,
+    active: Boolean = true,
 ) {
+    val scope = rememberCoroutineScope()
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var editingNote by remember { mutableStateOf<EditingNote?>(null) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var catalogPaneWidth by remember { mutableStateOf(560f) }
     var showCompletedByProject by remember { mutableStateOf(emptyMap<String, Boolean>()) }
+    var selectedAgentTaskId by remember { mutableStateOf<String?>(null) }
+    var knownAgentTaskIds by remember { mutableStateOf<Set<String>?>(null) }
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(active) {
+        if (!active) {
+            editingProject = null
+            editingAction = null
+            editingNote = null
+            pendingConfirmation = null
+        }
+    }
 
     val runningIds = remember(running) { running.map { it.runId } }
     LaunchedEffect(runningIds) {
         if (activeRunId == null || running.none { it.runId == activeRunId }) {
             onActiveRunIdChange(running.lastOrNull()?.runId)
         }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1_000)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    LaunchedEffect(agentTasks) {
+        val currentIds = agentTasks.mapTo(linkedSetOf()) { it.id }
+        val knownIds = knownAgentTaskIds
+        if (knownIds != null) {
+            agentTasks.filter { it.id !in knownIds }
+                .maxByOrNull { it.createdAtMillis }
+                ?.let { selectedAgentTaskId = it.id }
+        }
+        knownAgentTaskIds = currentIds
+        if (selectedAgentTaskId != null && selectedAgentTaskId !in currentIds) selectedAgentTaskId = null
     }
 
     fun upsertProject(project: ActionProject) {
@@ -195,12 +236,15 @@ internal fun ActionsScreen(
                         val showCompleted = showCompletedByProject[project.id] == true
                         val visibleNotes = if (showCompleted) project.notes else project.notes.filterNot { it.completed }
                         val completedCount = project.notes.count { it.completed }
+                        val projectChats = agentTasks.filter { it.projectId == project.id }
+                            .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
                         PanelCard {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Column(Modifier.weight(1f)) {
                                     Text(project.name, color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(project.contextDir, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
+                                OutlinedButton(onClick = { onCreateAgentTask(project) }) { Text("agent") }
                                 OutlinedButton(onClick = { editingProject = EditingProject(project) }) { Text("edit") }
                                 OutlinedButton(onClick = { editingAction = EditingAction(project.id, null) }) { Text("+ action") }
                                 OutlinedButton(onClick = { editingNote = EditingNote(project.id, null) }) { Text("+ note") }
@@ -252,6 +296,20 @@ internal fun ActionsScreen(
                                             ) { Text(if (liveRun != null) "stop" else "run", fontSize = 11.sp) }
                                         }
                                     }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text("Chats", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                            if (projectChats.isEmpty()) {
+                                Text("no agent chats yet", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                            } else {
+                                projectChats.forEach { task ->
+                                    ProjectChatRow(
+                                        task = task,
+                                        selected = task.id == selectedAgentTaskId,
+                                        nowMillis = nowMillis,
+                                        onOpen = { selectedAgentTaskId = task.id },
+                                    )
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -361,36 +419,68 @@ internal fun ActionsScreen(
         }
         PaneDivider(onDrag = { dragX -> catalogPaneWidth = (catalogPaneWidth + dragX).coerceIn(420f, 900f) })
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val selectedAgentTask = agentTasks.firstOrNull { it.id == selectedAgentTaskId }
             val activeRun = running.firstOrNull { it.runId == activeRunId }
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (running.isEmpty()) {
-                    Text("no running actions", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
-                } else {
-                    running.forEach { run ->
-                        FilterPill("${actionIconMarker(run.icon)} ${run.actionName}", run.runId == activeRunId, actionStatusColor(run.status)) { onActiveRunIdChange(run.runId) }
+            if (selectedAgentTask != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { selectedAgentTaskId = null }) { Text("action output") }
+                    Text("project chat", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                }
+                PanelCard(Modifier.fillMaxSize()) {
+                    AgentTaskDetail(
+                        services = services,
+                        task = selectedAgentTask,
+                        nowMillis = nowMillis,
+                        onDelete = { task ->
+                            val removesWorktree = task.worktreePath != null
+                            pendingConfirmation = PendingConfirmation(
+                                "Delete chat?",
+                                buildString {
+                                    append(task.title)
+                                    if (task.isActive) append(" — it is still running and will be stopped")
+                                    if (removesWorktree) append(" — its worktree and branch will be removed (uncommitted work is lost)")
+                                },
+                            ) {
+                                scope.launch {
+                                    services.agentRuns.delete(task.id, removeWorktree = removesWorktree)
+                                    selectedAgentTaskId = null
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            } else {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (running.isEmpty()) {
+                        Text("select a project chat or run an action", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                    } else {
+                        running.forEach { run ->
+                            FilterPill("${actionIconMarker(run.icon)} ${run.actionName}", run.runId == activeRunId, actionStatusColor(run.status)) { onActiveRunIdChange(run.runId) }
+                        }
                     }
                 }
-            }
-            PanelCard(Modifier.fillMaxSize()) {
-                if (activeRun == null) {
-                    EmptyState("run an action to see output")
-                } else {
-                    val lines by services.actionRuns.output(activeRun.runId).collectAsState()
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Column(Modifier.weight(1f)) {
-                            Text(activeRun.actionName, color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text("${activeRun.cwd}  $ ${activeRun.command}", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                PanelCard(Modifier.fillMaxSize()) {
+                    if (activeRun == null) {
+                        EmptyState("select a project chat or run an action")
+                    } else {
+                        val lines by services.actionRuns.output(activeRun.runId).collectAsState()
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(activeRun.actionName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Text("${activeRun.cwd}  $ ${activeRun.command}", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            StatusTag(activeRun.status.name, actionStatusColor(activeRun.status))
+                            if (activeRun.status == ActionRunStatus.Running) {
+                                Button(onClick = { services.actionRuns.stop(activeRun.runId) }, colors = ButtonDefaults.buttonColors(containerColor = Rust)) { Text("Stop") }
+                            }
+                            OutlinedButton(onClick = {
+                                services.actionRuns.clear(activeRun.runId)
+                                onActiveRunIdChange(running.firstOrNull { it.runId != activeRun.runId }?.runId)
+                            }) { Text("Clear") }
                         }
-                        StatusTag(activeRun.status.name, actionStatusColor(activeRun.status))
-                        if (activeRun.status == ActionRunStatus.Running) {
-                            Button(onClick = { services.actionRuns.stop(activeRun.runId) }, colors = ButtonDefaults.buttonColors(containerColor = Rust)) { Text("Stop") }
-                        }
-                        OutlinedButton(onClick = {
-                            services.actionRuns.clear(activeRun.runId)
-                            onActiveRunIdChange(running.firstOrNull { it.runId != activeRun.runId }?.runId)
-                        }) { Text("Clear") }
+                        ActionConsole(lines, Modifier.fillMaxSize())
                     }
-                    ActionConsole(lines, Modifier.fillMaxSize())
                 }
             }
         }
@@ -428,6 +518,33 @@ private fun actionStatusColor(status: ActionRunStatus): Color = when (status) {
     ActionRunStatus.Exited -> Cyan
     ActionRunStatus.Failed -> Red
     ActionRunStatus.Stopped -> Rust
+}
+
+@Composable
+private fun ProjectChatRow(
+    task: AgentTask,
+    selected: Boolean,
+    nowMillis: Long,
+    onOpen: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .background(if (selected) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f))
+            .border(1.dp, if (selected) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border)
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        AgentBadge(task.agent)
+        Column(Modifier.weight(1f)) {
+            Text(task.title, color = TextPrimary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            formatElapsed(task.startedAtMillis, task.finishedAtMillis, nowMillis)?.let {
+                Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            }
+        }
+        StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
+    }
 }
 
 @Composable
@@ -643,4 +760,3 @@ private fun nextActionId(prefix: String, label: String, existing: Set<String>): 
     }
     return id
 }
-

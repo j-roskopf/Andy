@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,6 +78,54 @@ internal fun TextField(
                     Box(Modifier.graphicsLayer(alpha = 0.62f)) {
                         placeholder()
                     }
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+/** Variant for callers that need to preserve or set the caret position explicitly. */
+@Composable
+internal fun TextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    readOnly: Boolean = false,
+    textStyle: TextStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, color = TextPrimary),
+    singleLine: Boolean = false,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    minLines: Int = 1,
+    placeholder: @Composable (() -> Unit)? = null,
+    colors: TextFieldColors = fieldColors(),
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+) {
+    val enabledAlpha = if (enabled) 1f else 0.48f
+    val effectiveTextStyle = textStyle.copy(fontFamily = MonoFont, color = if (textStyle.color == Color.Unspecified) TextPrimary else textStyle.color)
+    @Suppress("UNUSED_VARIABLE")
+    val retainedColorsForCallSiteCompatibility = colors
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
+            .background(AndyColors.Neutral900.copy(alpha = 0.62f * enabledAlpha), shape)
+            .border(1.dp, AndyColors.Neutral100.copy(alpha = 0.18f * enabledAlpha), shape),
+        enabled = enabled,
+        readOnly = readOnly,
+        textStyle = effectiveTextStyle,
+        singleLine = singleLine,
+        maxLines = maxLines,
+        minLines = minLines,
+        cursorBrush = SolidColor(Rust),
+        decorationBox = { innerTextField ->
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
+            ) {
+                if (value.text.isEmpty() && placeholder != null) {
+                    Box(Modifier.graphicsLayer(alpha = 0.62f)) { placeholder() }
                 }
                 innerTextField()
             }

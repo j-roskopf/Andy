@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -99,21 +101,23 @@ internal fun Sidebar(
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
             .padding(horizontal = horizontalPadding, vertical = AndySpace.S3),
     ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
-            ) {
-                AndyRobotIcon(Modifier.size(28.dp))
-                if (labelAlpha > 0.01f) {
-                    Column {
-                        Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                        Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
-                    }
+        Row(
+            Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
+        ) {
+            AndyRobotIcon(Modifier.size(28.dp))
+            if (labelAlpha > 0.01f) {
+                Column {
+                    Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
                 }
             }
-            WorkspaceSidebarToggle(expanded = expanded, onClick = { onExpandedChange(!expanded) })
+        }
+        WorkspaceSidebarToggle(expanded = expanded, onClick = { onExpandedChange(!expanded) })
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+        ) {
             AndyDestination.entries.forEach { item ->
                 val active = item == current
                 Row(
@@ -144,7 +148,6 @@ internal fun Sidebar(
                 }
             }
         }
-        Spacer(Modifier.weight(1f))
         AnimatedVisibility(
             visible = expanded,
             enter = expandHorizontally(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
@@ -270,6 +273,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.ComputerFiles -> "//"
     AndyDestination.Network -> "~~"
     AndyDestination.Actions -> "|>"
+    AndyDestination.Agents -> "@>"
     AndyDestination.Snapshots -> "[]"
     AndyDestination.Controls -> "+-"
     AndyDestination.Performance -> "/^"

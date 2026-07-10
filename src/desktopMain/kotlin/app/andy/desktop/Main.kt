@@ -187,6 +187,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.ComputerFiles -> KeyShortcut(Key.Eight, meta = meta, ctrl = ctrl)
         AndyDestination.Network -> KeyShortcut(Key.Nine, meta = meta, ctrl = ctrl)
         AndyDestination.Actions -> KeyShortcut(Key.Zero, meta = meta, ctrl = ctrl)
+        AndyDestination.Agents -> KeyShortcut(Key.G, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Snapshots -> KeyShortcut(Key.S, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Controls -> KeyShortcut(Key.C, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Performance -> KeyShortcut(Key.P, meta = meta, ctrl = ctrl, shift = true)

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/desktopMain/resources/icons/andy.png" alt="Andy logo" width="128">
+</p>
+
 # Andy
 
 Andy is a desktop companion for Android developers.
