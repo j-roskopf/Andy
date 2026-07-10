@@ -295,6 +295,31 @@ class DesktopServicesMockDeviceTest {
         assertTrue(env.ran("avd", "snapshot", "delete", "manual"))
         assertTrue(env.ran("delete", "avd", "-n", "Pixel_8_API_36"))
         assertTrue(env.ran("-s", "emulator-5554", "emu", "kill"))
+        assertFalse(
+            env.commands.any { command ->
+                command.any { it.contains("avdmanager") } && command.takeLast(2) == listOf("list", "avd")
+            },
+            "listVirtualDevices should discover AVDs from disk without avdmanager",
+        )
+    }
+
+    @Test
+    fun listVirtualDevicesDoesNotInvokeAvdManager() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        val avds = services.avd.listVirtualDevices()
+
+        assertEquals("Pixel_8_API_36", avds.single().name)
+        assertEquals(36, avds.single().apiLevel)
+        assertEquals("arm64-v8a", avds.single().abi)
+        assertTrue(avds.single().running)
+        assertFalse(
+            env.commands.any { command ->
+                command.any { it.contains("avdmanager") } && command.takeLast(2) == listOf("list", "avd")
+            },
+        )
+        assertTrue(env.ran("devices", "-l"))
     }
 
     @Test
@@ -431,6 +456,9 @@ class DesktopServicesMockDeviceTest {
         val cleared = services.apps.clearData("emulator-5554", "com.example.app")
         val reset = services.apps.resetPermissions("emulator-5554", "com.example.app")
         val uninstalled = services.apps.uninstall("emulator-5554", "com.example.app")
+        val installed = services.apps.install("emulator-5554", "/tmp/app.apk")
+        val reinstallConflict = services.apps.install("emulator-5554", "/tmp/app.apk")
+        val reinstalled = services.apps.install("emulator-5554", "/tmp/app.apk", replace = true)
         val permissions = services.apps.listPermissions("emulator-5554", "com.example.app")
         val activities = services.apps.listActivities("emulator-5554", "com.example.app")
 
@@ -474,7 +502,9 @@ class DesktopServicesMockDeviceTest {
         assertEquals(false, apps.first { it.packageName == "com.example.app" }.system)
         assertEquals(false, apps.first { it.packageName == "com.disabled.app" }.enabled)
         assertTrue(apps.first { it.packageName == "com.android.settings" }.system)
-        assertTrue(listOf(launched, stopped, cleared, reset, uninstalled).all { it.isSuccess })
+        assertTrue(listOf(launched, stopped, cleared, reset, uninstalled, installed, reinstalled).all { it.isSuccess })
+        assertFalse(reinstallConflict.isSuccess)
+        assertTrue(reinstallConflict.stderr.contains("INSTALL_FAILED_ALREADY_EXISTS"))
         assertEquals(listOf(true, false), permissions.map { it.granted })
         assertEquals(listOf(".MainActivity", "com.example.app.SettingsActivity"), activities.map { it.name })
 

@@ -26,7 +26,9 @@ import app.andy.ui.actions.ActionsScreen
 import app.andy.ui.apps.AppsScreen
 import app.andy.ui.bugs.BugsScreen
 import app.andy.ui.catalog.CatalogScreen
+import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
+import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.PlaceholderScreen
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.controls.ControlsScreen
@@ -202,7 +204,8 @@ internal fun AndyShell(
                                 onPopOutMirror(state.selectedSerial, selectedDevice?.displayName ?: state.selectedSerial)
                             },
                             selectedPackage = state.workspaceState.selectedPackage,
-                            onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } }
+                            onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
+                            transfer = state.transfer,
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -220,7 +223,12 @@ internal fun AndyShell(
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } }
                         )
                         AndyDestination.Intents -> IntentsScreen(services, state.selectedSerial)
-                        AndyDestination.Files -> FilesScreen(services.files, state.selectedSerial)
+                        AndyDestination.Files -> FilesScreen(
+                            files = services.files,
+                            apps = services.apps,
+                            serial = state.selectedSerial,
+                            transfer = state.transfer,
+                        )
                         AndyDestination.ComputerFiles -> HostFilesScreen(
                             service = services.hostFiles,
                             workspaceState = state.workspaceState,
@@ -296,6 +304,18 @@ internal fun AndyShell(
                 update = update,
                 onDismiss = { services.updates.respondToInstallConfirmation(false) },
                 onConfirm = { services.updates.respondToInstallConfirmation(true) }
+            )
+        }
+        state.transfer.confirmationTitle?.let { title ->
+            ConfirmationDialog(
+                confirmation = PendingConfirmation(
+                    title = title,
+                    message = state.transfer.confirmationMessage,
+                    confirmLabel = "Replace",
+                    onConfirm = { state.transfer.acceptConfirmation() },
+                ),
+                onDismiss = { state.transfer.dismissConfirmation() },
+                onConfirm = { state.transfer.acceptConfirmation() },
             )
         }
     }

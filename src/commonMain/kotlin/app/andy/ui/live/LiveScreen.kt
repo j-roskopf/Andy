@@ -38,10 +38,14 @@ import app.andy.model.AndroidDevice
 import app.andy.model.BugCaptureDraft
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.onExternalFileDrop
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorVideoConfig
+import app.andy.transfer.DeviceTransferCoordinator
+import app.andy.transfer.LocalDropKind
+import app.andy.transfer.classifyLocalPaths
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.HorizontalPaneDivider
@@ -62,6 +66,18 @@ import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+private fun transferStatusColor(status: String): Color = when {
+    status.startsWith("App installed") ||
+        status.startsWith("App replaced") ||
+        status.startsWith("Installed ") ||
+        status.startsWith("Replaced ") -> Green
+    status.contains("failed", ignoreCase = true) ||
+        status.contains("rejected", ignoreCase = true) ||
+        status.contains("not allowed", ignoreCase = true) -> Rust
+    status == "Cancelled" || status.startsWith("Wait for") -> Yellow
+    else -> TextSecondary
+}
+
 @Composable
 internal fun LiveScreen(
     services: AndyServices,
@@ -79,6 +95,7 @@ internal fun LiveScreen(
     onPopOutMirror: () -> Unit,
     selectedPackage: String?,
     onSelectedPackageChange: (String?) -> Unit,
+    transfer: DeviceTransferCoordinator,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -96,6 +113,23 @@ internal fun LiveScreen(
     fun sendHardware(input: MirrorInput) {
         sendMirrorInput(input)
     }
+    fun handleApkDrop(paths: List<String>) {
+        if (serial == null) {
+            liveActionStatus = "Select an online device"
+            return
+        }
+        when (classifyLocalPaths(paths)) {
+            LocalDropKind.Empty -> Unit
+            LocalDropKind.Apks -> {
+                transfer.tryStart(scope, "Installing…") {
+                    installAll(services.apps, serial, paths)
+                }
+            }
+            LocalDropKind.Files, LocalDropKind.Mixed -> {
+                liveActionStatus = "Live accepts APK files only — drop rejected"
+            }
+        }
+    }
     fun runLiveAction(label: String, block: suspend () -> CommandResult) {
         if (serial == null) {
             liveActionStatus = "Select an online device"
@@ -105,6 +139,9 @@ internal fun LiveScreen(
             val result = block()
             liveActionStatus = "$label: " + if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
         }
+    }
+    LaunchedEffect(transfer.status) {
+        if (transfer.status.isNotBlank()) liveActionStatus = transfer.status
     }
     fun applyPreset(size: String, mbps: String, fps: String = "60") {
         maxSize = size
@@ -142,7 +179,11 @@ internal fun LiveScreen(
                 frameFlow = visibleFrameFlow,
                 mirrorStatus = mirrorStatus,
                 connectResult = connectResult,
-                modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight().padding(end = 6.dp),
+                modifier = Modifier
+                    .width(localDevicePaneWidth.dp)
+                    .fillMaxHeight()
+                    .padding(end = 6.dp)
+                    .onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
                 onPower = { sendHardware(MirrorInput.Power) },
                 onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
                 onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
@@ -191,10 +232,21 @@ internal fun LiveScreen(
                     }
                 }
                 Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
+                    if (transfer.busy) {
+                        OutlinedButton(onClick = { transfer.cancel() }) { Text("Cancel transfer") }
+                    }
                     if (liveActionStatus.isNotBlank()) {
-                        Text(liveActionStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            liveActionStatus,
+                            color = transferStatusColor(liveActionStatus),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = if (liveActionStatus.startsWith("App installed") || liveActionStatus.startsWith("App replaced") || liveActionStatus.startsWith("Installed ") || liveActionStatus.startsWith("Replaced ")) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -19,10 +19,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.LinkedHashMap
 import java.util.UUID
+import kotlin.coroutines.coroutineContext
 
 class DesktopProxyService(
     private val runner: CommandRunner,
@@ -45,6 +48,11 @@ class DesktopProxyService(
     private var process: ProxyProcess? = null
     private var stdoutJob: Job? = null
     private var stderrJob: Job? = null
+    private var publishJob: Job? = null
+    private val exchangeLock = Any()
+    private val exchangeById = LinkedHashMap<String, NetworkExchange>()
+    @Volatile private var exchangesDirty = false
+    private val expectedAddonSha256: String by lazy { MitmAddon.getAddonSourceSha256() }
 
     override suspend fun detectMitmproxy(): CommandResult = withContext(Dispatchers.IO) {
         val executable = mitmdumpExecutable()
@@ -92,6 +100,14 @@ class DesktopProxyService(
                     "--set", "confdir=${proxyDir.absolutePath}",
                     "-s", addonFile.absolutePath,
                     "--set", "termlog_verbosity=warn",
+                    // Defer upstream dial until after ClientHello so server_connect
+                    // can remap unreachable IPv6 literals using SNI (NCEI, etc.).
+                    "--set", "connection_strategy=lazy",
+                    // Passthrough Android network-validation hosts so generate_204
+                    // succeeds with system CAs. MITM on these marks the network
+                    // PARTIAL_CONNECTIVITY and can make apps feel offline/slow.
+                    "--set",
+                    "ignore_hosts=^(.+\\.)?(google\\.com|gstatic\\.com|googleapis\\.com|googleusercontent\\.com):443$",
                 ),
             )
             if (options.sslInsecure) {
@@ -125,6 +141,10 @@ class DesktopProxyService(
     }
 
     override suspend fun clearTraffic(): CommandResult = withContext(Dispatchers.IO) {
+        synchronized(exchangeLock) {
+            exchangeById.clear()
+            exchangesDirty = false
+        }
         exchanges.value = emptyList()
         warnings.value = emptyList()
         clientConnectionCount.value = 0
@@ -139,8 +159,10 @@ class DesktopProxyService(
     private fun stopCurrentProcess(updateStatus: Boolean) {
         stdoutJob?.cancel()
         stderrJob?.cancel()
+        publishJob?.cancel()
         stdoutJob = null
         stderrJob = null
+        publishJob = null
         process?.destroy()
         process = null
         if (updateStatus) status.value = "Proxy stopped"
@@ -666,20 +688,19 @@ class DesktopProxyService(
     }
 
     private fun pumpProcess(proxyProcess: ProxyProcess) {
+        publishJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            while (coroutineContext.isActive) {
+                publishExchangesIfDirty()
+                delay(ExchangePublishIntervalMs)
+            }
+        }
         stdoutJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             proxyProcess.stdout.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
                     when (val event = parseMitmproxyEvent(line)) {
                         is MitmproxyEvent.Exchange -> {
                             val exchange = event.exchange
-                            exchanges.update { current ->
-                                val index = current.indexOfFirst { it.id == exchange.id }
-                                if (index >= 0) {
-                                    current.toMutableList().also { it[index] = exchange }
-                                } else {
-                                    (current + exchange).takeLast(MaxNetworkExchanges)
-                                }
-                            }
+                            upsertExchange(exchange)
                             if (isClientTlsRejectionError(exchange.error) || exchange.method == "TLS") {
                                 pushWarning(
                                     ProxyWarningKind.ClientTlsFailure,
@@ -697,10 +718,34 @@ class DesktopProxyService(
                             clientConnectionCount.update { it + 1 }
                         }
                         is MitmproxyEvent.ClientDisconnected -> Unit
+                        is MitmproxyEvent.AddonHello -> {
+                            val reported = event.sha256?.lowercase()
+                            if (reported != null && reported != expectedAddonSha256) {
+                                pushWarning(
+                                    ProxyWarningKind.AddonMismatch,
+                                    "Running mitm addon SHA-256 $reported does not match Andy's resource $expectedAddonSha256. Stop/Start the proxy (or quit duplicate Andy instances).",
+                                )
+                            }
+                        }
+                        is MitmproxyEvent.EventsDropped -> {
+                            if (event.count > 0) {
+                                pushWarning(
+                                    ProxyWarningKind.CaptureDropped,
+                                    "Network capture dropped ${event.count} event(s) under load; proxied traffic was not blocked.",
+                                )
+                            }
+                        }
+                        is MitmproxyEvent.AddonError -> {
+                            pushWarning(
+                                ProxyWarningKind.AddonError,
+                                event.error?.takeIf { it.isNotBlank() } ?: "mitm addon error",
+                            )
+                        }
                         null -> Unit
                     }
                 }
             }
+            publishExchangesIfDirty()
             if (process === proxyProcess && !proxyProcess.isAlive()) status.value = "mitmdump exited"
         }
         stderrJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
@@ -716,6 +761,30 @@ class DesktopProxyService(
                 }
             }
         }
+    }
+
+    private fun upsertExchange(exchange: NetworkExchange) {
+        synchronized(exchangeLock) {
+            if (exchangeById.containsKey(exchange.id)) {
+                exchangeById[exchange.id] = exchange
+            } else {
+                exchangeById[exchange.id] = exchange
+                while (exchangeById.size > MaxNetworkExchanges) {
+                    val oldest = exchangeById.keys.firstOrNull() ?: break
+                    exchangeById.remove(oldest)
+                }
+            }
+            exchangesDirty = true
+        }
+    }
+
+    private fun publishExchangesIfDirty() {
+        val snapshot = synchronized(exchangeLock) {
+            if (!exchangesDirty) return
+            exchangesDirty = false
+            exchangeById.values.toList()
+        }
+        exchanges.value = snapshot
     }
 
     private fun classifyStderrWarning(line: String): Pair<ProxyWarningKind, String>? {

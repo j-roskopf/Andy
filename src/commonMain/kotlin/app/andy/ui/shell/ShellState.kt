@@ -18,6 +18,7 @@ import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
+import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.accessibility.AccessibilityState
 import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
@@ -67,6 +68,7 @@ internal class ShellState(
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
     val accessibilityState = AccessibilityState()
+    val transfer = DeviceTransferCoordinator()
 
     fun setDestination(value: AndyDestination) {
         destination = value

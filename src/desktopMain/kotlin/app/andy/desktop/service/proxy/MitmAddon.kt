@@ -1,5 +1,7 @@
 package app.andy.desktop.service.proxy
 
+import java.security.MessageDigest
+
 /**
  * Loads the mitmproxy addon from the classpath resource `proxy/andy_mitm_addon.py`.
  * The resource is the sole source of truth; missing resource fails clearly.
@@ -18,4 +20,10 @@ object MitmAddon {
 
     /** Returns the addon source as UTF-8 text. */
     fun getAddonSourceText(): String = getAddonSource().toString(Charsets.UTF_8)
+
+    /** SHA-256 hex digest of the classpath addon source. */
+    fun getAddonSourceSha256(): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(getAddonSource())
+        return digest.joinToString("") { "%02x".format(it) }
+    }
 }

@@ -142,6 +142,19 @@ class DesktopAppService(
         return runner.run(listOf(adb, "-s", serial, "uninstall", packageName), 60)
     }
 
+    override suspend fun install(serial: String, apkPath: String, replace: Boolean): CommandResult {
+        val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
+        val command = buildList {
+            add(adb)
+            add("-s")
+            add(serial)
+            add("install")
+            if (replace) add("-r")
+            add(apkPath)
+        }
+        return runner.run(command, 180)
+    }
+
     override suspend fun listPermissions(serial: String, packageName: String): List<AndroidPermission> {
         val output = devices.shell(serial, listOf("dumpsys", "package", packageName)).stdout
         return AndroidParsers.parsePackagePermissions(output)
