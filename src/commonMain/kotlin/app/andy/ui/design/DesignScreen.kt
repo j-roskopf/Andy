@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +89,7 @@ internal fun DesignScreen(
     var pickedColor by remember { mutableStateOf("#------") }
     var pickerToast by remember { mutableStateOf<String?>(null) }
     var referenceImagePath by remember { mutableStateOf<String?>(null) }
+    var referenceImageKey by remember { mutableLongStateOf(0L) }
     var referenceImageOpacity by remember { mutableFloatStateOf(0.5f) }
     var zoom by remember { mutableStateOf("1.0") }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(760f)) }
@@ -126,6 +128,7 @@ internal fun DesignScreen(
                 pickerColor = color.takeIf { pickerEnabled },
                 pickerHex = pickedColor,
                 referenceImagePath = referenceImagePath,
+                referenceImageKey = referenceImageKey,
                 referenceImageOpacity = referenceImageOpacity,
                 zoom = zoom.toFloatOrNull()?.coerceIn(0.5f, 4f) ?: 1f,
                 onHoverColor = { hex ->
@@ -192,6 +195,7 @@ internal fun DesignScreen(
                         val canLoad = withContext(Dispatchers.IO) { loadImageBitmap(path) != null }
                         if (canLoad) {
                             referenceImagePath = path
+                            referenceImageKey++
                             status = "Image overlay: ${path.fileName()}"
                         } else {
                             status = "Couldn't load ${path.fileName()} as an image"

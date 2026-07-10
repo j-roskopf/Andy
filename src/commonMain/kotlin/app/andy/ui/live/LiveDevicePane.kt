@@ -93,6 +93,7 @@ internal fun LiveDevicePane(
     pickerColor: Color? = null,
     pickerHex: String? = null,
     referenceImagePath: String? = null,
+    referenceImageKey: Long = 0L,
     referenceImageOpacity: Float = 0.5f,
     zoom: Float = 1f,
     showDeviceHeader: Boolean = true,
@@ -216,6 +217,7 @@ internal fun LiveDevicePane(
                                     pickerColor = pickerColor,
                                     pickerHex = pickerHex,
                                     referenceImagePath = referenceImagePath,
+                                    referenceImageKey = referenceImageKey,
                                     referenceImageOpacity = referenceImageOpacity,
                                 )
                                 if (frameFlow != null) {

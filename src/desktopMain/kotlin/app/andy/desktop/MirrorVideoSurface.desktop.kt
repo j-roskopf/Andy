@@ -269,7 +269,7 @@ private class MirrorPanel : JPanel() {
 
     fun setOverlay(next: MirrorOverlay) {
         if (overlay == next) return
-        if (referenceImagePath != next.referenceImagePath) {
+        if (referenceImagePath != next.referenceImagePath || overlay.referenceImageKey != next.referenceImageKey) {
             referenceImagePath = next.referenceImagePath
             val requestId = ++referenceImageRequestId
             val path = next.referenceImagePath
