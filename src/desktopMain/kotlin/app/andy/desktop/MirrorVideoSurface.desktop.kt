@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.Color
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorTouchAction
+import java.awt.AlphaComposite
 import java.awt.Point
 import java.awt.BasicStroke
 import java.awt.Cursor
@@ -24,6 +25,8 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 import java.awt.geom.Ellipse2D
+import java.io.File
+import javax.imageio.ImageIO
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import kotlin.math.roundToInt
@@ -100,6 +103,8 @@ private class MirrorPanel : JPanel() {
     private var image: BufferedImage? = null
     private var frameNumber: Long = -1
     private var overlay: MirrorOverlay = MirrorOverlay()
+    private var referenceImagePath: String? = null
+    private var referenceImage: BufferedImage? = null
     var onInput: (MirrorInput) -> Unit = {}
     var onHoverColor: (String) -> Unit = {}
     var onPickerClick: (String) -> Unit = {}
@@ -262,6 +267,12 @@ private class MirrorPanel : JPanel() {
 
     fun setOverlay(next: MirrorOverlay) {
         if (overlay == next) return
+        if (referenceImagePath != next.referenceImagePath) {
+            referenceImagePath = next.referenceImagePath
+            referenceImage = next.referenceImagePath?.let { path ->
+                runCatching { ImageIO.read(File(path)) }.getOrNull()
+            }
+        }
         overlay = next
         repaint()
     }
@@ -300,6 +311,19 @@ private class MirrorPanel : JPanel() {
     }
 
     private fun paintOverlay(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect) {
+        referenceImage?.let { image ->
+            val imageGraphics = g2.create() as Graphics2D
+            try {
+                imageGraphics.clipRect(rect.x, rect.y, rect.width, rect.height)
+                imageGraphics.composite = AlphaComposite.getInstance(
+                    AlphaComposite.SRC_OVER,
+                    overlay.referenceImageOpacity.coerceIn(0f, 1f),
+                )
+                imageGraphics.drawImage(image, rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, 0, 0, image.width, image.height, null)
+            } finally {
+                imageGraphics.dispose()
+            }
+        }
         if (overlay.showGrid && overlay.gridSize >= 2f) {
             val color = overlay.gridColor.toAwtColor(alphaOverride = 0.28f)
             g2.color = color
