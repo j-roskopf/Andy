@@ -18,10 +18,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
+import app.andy.loadImageBitmap
+import app.andy.pickFiles
 import app.andy.service.AndyServices
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.FormRow
@@ -57,8 +62,10 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun DesignScreen(
@@ -81,6 +88,9 @@ internal fun DesignScreen(
     var pickerEnabled by remember { mutableStateOf(false) }
     var pickedColor by remember { mutableStateOf("#------") }
     var pickerToast by remember { mutableStateOf<String?>(null) }
+    var referenceImagePath by remember { mutableStateOf<String?>(null) }
+    var referenceImageKey by remember { mutableLongStateOf(0L) }
+    var referenceImageOpacity by remember { mutableFloatStateOf(0.5f) }
     var zoom by remember { mutableStateOf("1.0") }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(760f)) }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
@@ -117,6 +127,9 @@ internal fun DesignScreen(
                 gridColor = color.copy(alpha = 0.38f),
                 pickerColor = color.takeIf { pickerEnabled },
                 pickerHex = pickedColor,
+                referenceImagePath = referenceImagePath,
+                referenceImageKey = referenceImageKey,
+                referenceImageOpacity = referenceImageOpacity,
                 zoom = zoom.toFloatOrNull()?.coerceIn(0.5f, 4f) ?: 1f,
                 onHoverColor = { hex ->
                     if (pickerEnabled) pickedColor = hex
@@ -174,6 +187,49 @@ internal fun DesignScreen(
                     }) { Text("+") }
                 }
             }
+            Text("Reference image", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        val path = pickFiles(allowMultiple = false).firstOrNull() ?: return@launch
+                        val canLoad = withContext(Dispatchers.IO) { loadImageBitmap(path) != null }
+                        if (canLoad) {
+                            referenceImagePath = path
+                            referenceImageKey++
+                            status = "Image overlay: ${path.fileName()}"
+                        } else {
+                            status = "Couldn't load ${path.fileName()} as an image"
+                        }
+                    }
+                }) {
+                    Text(if (referenceImagePath == null) "Upload image" else "Replace image")
+                }
+                if (referenceImagePath != null) {
+                    OutlinedButton(onClick = {
+                        referenceImagePath = null
+                        status = "Image overlay removed"
+                    }) { Text("Remove image") }
+                }
+            }
+            if (referenceImagePath != null) {
+                Text(referenceImagePath.orEmpty().fileName(), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Opacity", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(62.dp))
+                    Slider(
+                        value = referenceImageOpacity,
+                        onValueChange = { referenceImageOpacity = it },
+                        valueRange = 0f..1f,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${(referenceImageOpacity * 100).toInt()}%",
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        modifier = Modifier.width(46.dp),
+                    )
+                }
+            }
             Text("Grid color", color = TextPrimary, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 listOf(Cyan, Rust, Green, Yellow, Red, Color.White).forEach { swatch ->
@@ -228,3 +284,5 @@ private fun Color.toHex(): String {
     val b = (blue * 255).toInt().coerceIn(0, 255)
     return "#%02X%02X%02X".format(r, g, b)
 }
+
+private fun String.fileName(): String = substringAfterLast('/').substringAfterLast('\\')

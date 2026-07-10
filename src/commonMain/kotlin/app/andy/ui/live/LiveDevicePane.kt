@@ -92,6 +92,9 @@ internal fun LiveDevicePane(
     gridColor: Color = Color.White.copy(alpha = 0.14f),
     pickerColor: Color? = null,
     pickerHex: String? = null,
+    referenceImagePath: String? = null,
+    referenceImageKey: Long = 0L,
+    referenceImageOpacity: Float = 0.5f,
     zoom: Float = 1f,
     showDeviceHeader: Boolean = true,
     showChromeControls: Boolean = true,
@@ -213,6 +216,9 @@ internal fun LiveDevicePane(
                                     rulerY = rulerY,
                                     pickerColor = pickerColor,
                                     pickerHex = pickerHex,
+                                    referenceImagePath = referenceImagePath,
+                                    referenceImageKey = referenceImageKey,
+                                    referenceImageOpacity = referenceImageOpacity,
                                 )
                                 if (frameFlow != null) {
                                     MirrorVideoSurface(

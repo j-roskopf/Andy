@@ -49,4 +49,7 @@ data class MirrorOverlay(
     val rulerY: Float = 0.5f,
     val pickerColor: Color? = null,
     val pickerHex: String? = null,
+    val referenceImagePath: String? = null,
+    val referenceImageKey: Long = 0L,
+    val referenceImageOpacity: Float = 0.5f,
 )
