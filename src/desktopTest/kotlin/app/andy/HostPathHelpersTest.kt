@@ -30,8 +30,8 @@ class HostPathHelpersTest {
     @Test
     fun parseDroppedFilePathFallsBackForUnescapedSpaces() {
         val file = File.createTempFile("andy drop", ".apk").also { it.deleteOnExit() }
-        val raw = "file:${file.absolutePath}"
-        assertEquals(file.absolutePath, parseDroppedFilePath(raw))
+        assertEquals(file.absolutePath, parseDroppedFilePath("file:${file.absolutePath}"))
+        assertEquals(file.absolutePath, parseDroppedFilePath("file://${file.absolutePath}"))
     }
 
     @Test

@@ -51,7 +51,7 @@ internal fun parseDroppedFilePath(uriString: String): String? {
             uriString
         }
     }.getOrElse {
-        val clean = uriString.removePrefix("file:").removePrefix("///").removePrefix("//")
+        val clean = uriString.removePrefix("file://").removePrefix("file:")
         if (File(clean).exists()) {
             File(clean).absolutePath
         } else {

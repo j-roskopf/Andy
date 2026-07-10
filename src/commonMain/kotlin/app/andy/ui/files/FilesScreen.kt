@@ -102,10 +102,23 @@ internal fun FilesScreen(
 
     fun selectRow(index: Int, file: DeviceFile, meta: Boolean, shift: Boolean) {
         when {
-            shift && anchorIndex != null && anchorIndex!! in rows.indices -> {
-                val from = minOf(anchorIndex!!, index)
-                val to = maxOf(anchorIndex!!, index)
-                selectedPaths = rows.slice(from..to).map { it.path }.toSet()
+            shift -> {
+                val anchor = anchorIndex
+                when {
+                    anchor != null && anchor in rows.indices -> {
+                        val from = minOf(anchor, index)
+                        val to = maxOf(anchor, index)
+                        selectedPaths = rows.slice(from..to).map { it.path }.toSet()
+                    }
+                    meta -> {
+                        selectedPaths = if (file.path in selectedPaths) selectedPaths - file.path else selectedPaths + file.path
+                        anchorIndex = index
+                    }
+                    else -> {
+                        selectedPaths = setOf(file.path)
+                        anchorIndex = index
+                    }
+                }
             }
             meta -> {
                 selectedPaths = if (file.path in selectedPaths) selectedPaths - file.path else selectedPaths + file.path
