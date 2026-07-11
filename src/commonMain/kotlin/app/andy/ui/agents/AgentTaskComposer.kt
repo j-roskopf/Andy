@@ -1,5 +1,11 @@
 package app.andy.ui.agents
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -101,6 +107,8 @@ internal fun AgentTaskComposer(
 
     val directory = projectContext?.contextDir
         ?: customDirectory.takeIf { usesCustomDirectory && it.isNotBlank() }
+    val selectedCliAvailable = cliStatuses.any { it.kind == agent && it.available }
+    val showModelSection = providerChosenInComposer && selectedCliAvailable
     val selectedModel = AgentModelCatalog.option(agent, modelId)
     val usesCustomModel = modelId == CUSTOM_MODEL_ID
     val slashCommand = findComposerSlashCommand(prompt)
@@ -126,8 +134,10 @@ internal fun AgentTaskComposer(
 
     LaunchedEffect(lastUsedAgent, cliStatuses) {
         if (!providerChosenInComposer) {
-            val fallback = cliStatuses.firstOrNull { it.available }?.kind ?: AgentKind.ClaudeCode
-            agent = lastUsedAgent?.takeIf { preferred -> cliStatuses.any { it.kind == preferred && it.available } } ?: fallback
+            val preferred = lastUsedAgent?.takeIf { preferred ->
+                cliStatuses.any { it.kind == preferred && it.available }
+            }
+            agent = preferred ?: cliStatuses.firstOrNull { it.available }?.kind ?: AgentKind.ClaudeCode
         }
     }
 
@@ -175,7 +185,11 @@ internal fun AgentTaskComposer(
                     AgentKind.entries.forEach { kind ->
                         val status = cliStatuses.firstOrNull { it.kind == kind }
                         if (status?.available == true) {
-                            FilterPill("${agentMonogram(kind)} ${kind.label}", agent == kind, agentColor(kind)) {
+                            FilterPill(
+                                "${agentMonogram(kind)} ${kind.label}",
+                                providerChosenInComposer && agent == kind,
+                                agentColor(kind),
+                            ) {
                                 providerChosenInComposer = true
                                 agent = kind
                             }
@@ -189,48 +203,56 @@ internal fun AgentTaskComposer(
                         }
                     }
                 }
-                cliStatuses.firstOrNull { it.kind == agent }?.version?.let { version ->
-                    Text(version, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                }
 
-                Text("Model", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("provider default", modelId == null, Cyan) { modelId = null }
-                    AgentModelCatalog.options(agent).forEach { option ->
-                        FilterPill(option.label, modelId == option.id, agentColor(agent)) { modelId = option.id }
-                    }
-                    FilterPill("custom", usesCustomModel, Rust) { modelId = CUSTOM_MODEL_ID }
-                }
-                if (usesCustomModel) {
-                    LabeledField(
-                        "Exact model / variant",
-                        customModel,
-                        { customModel = it },
-                        Modifier.fillMaxWidth(),
-                        placeholder = "passed to ${agent.cliName} exactly",
-                    )
-                    Text("Custom variants are passed as-is, so Andy does not add a reasoning or speed suffix.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                } else if (selectedModel != null) {
-                    Text("Reasoning", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterPill("provider default", reasoningEffort == null, Cyan) { reasoningEffort = null }
-                        selectedModel.efforts.forEach { effort ->
-                            FilterPill(effort.label, reasoningEffort == effort, Rust) { reasoningEffort = effort }
+                AnimatedVisibility(
+                    visible = showModelSection,
+                    enter = fadeIn(tween(180)) + expandVertically(tween(220)),
+                    exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        cliStatuses.firstOrNull { it.kind == agent }?.version?.let { version ->
+                            Text(version, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                        }
+                        Text("Model", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterPill("provider default", modelId == null, Cyan) { modelId = null }
+                            AgentModelCatalog.options(agent).forEach { option ->
+                                FilterPill(option.label, modelId == option.id, agentColor(agent)) { modelId = option.id }
+                            }
+                            FilterPill("custom", usesCustomModel, Rust) { modelId = CUSTOM_MODEL_ID }
+                        }
+                        if (usesCustomModel) {
+                            LabeledField(
+                                "Exact model / variant",
+                                customModel,
+                                { customModel = it },
+                                Modifier.fillMaxWidth(),
+                                placeholder = "passed to ${agent.cliName} exactly",
+                            )
+                            Text("Custom variants are passed as-is, so Andy does not add a reasoning or speed suffix.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                        } else if (selectedModel != null) {
+                            Text("Reasoning", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterPill("provider default", reasoningEffort == null, Cyan) { reasoningEffort = null }
+                                selectedModel.efforts.forEach { effort ->
+                                    FilterPill(effort.label, reasoningEffort == effort, Rust) { reasoningEffort = effort }
+                                }
+                            }
+                            if (selectedModel.supportsFastMode) {
+                                FilterPill("fast", fastMode, Green) { fastMode = !fastMode }
+                            }
+                            Text(
+                                when (agent) {
+                                    AgentKind.Cursor -> "Cursor receives the selected provider variant, e.g. Grok 4.5 High Fast. Availability follows your Cursor account."
+                                    AgentKind.Antigravity -> "Antigravity receives its model plus level as one variant; its installed CLI/account remains authoritative."
+                                    else -> "The selected model and reasoning level are passed directly to the ${agent.label} CLI."
+                                },
+                                color = TextSecondary,
+                                fontFamily = MonoFont,
+                                fontSize = 10.sp,
+                            )
                         }
                     }
-                    if (selectedModel.supportsFastMode) {
-                        FilterPill("fast", fastMode, Green) { fastMode = !fastMode }
-                    }
-                    Text(
-                        when (agent) {
-                            AgentKind.Cursor -> "Cursor receives the selected provider variant, e.g. Grok 4.5 High Fast. Availability follows your Cursor account."
-                            AgentKind.Antigravity -> "Antigravity receives its model plus level as one variant; its installed CLI/account remains authoritative."
-                            else -> "The selected model and reasoning level are passed directly to the ${agent.label} CLI."
-                        },
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
-                    )
                 }
 
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -367,7 +389,7 @@ internal fun AgentTaskComposer(
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
                 )
-                if (agent == AgentKind.ClaudeCode) {
+                if (showModelSection && agent == AgentKind.ClaudeCode) {
                     LabeledField("Max budget USD (optional)", budgetText, { budgetText = it }, Modifier.fillMaxWidth(), placeholder = "e.g. 2.50")
                 }
             }

@@ -28,7 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -160,13 +160,27 @@ internal fun Sidebar(
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("v${app.andy.updates.AndyBuildInfo.versionName}  h.264 embedded", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                Text(
+                    "v${app.andy.updates.AndyBuildInfo.versionName}",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "h.264 embedded",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
                 StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
+                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
                 StatusRow("Proxy CA", "local", true)
                 StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
 
-                Divider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+                HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
 
                 val updateText = when (updateState) {
                     AppUpdateState.Idle -> "Check for updates"

@@ -38,13 +38,12 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import app.andy.rememberCopyText
 import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentSkill
@@ -81,7 +80,7 @@ internal fun AgentTaskDetail(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val clipboardManager = LocalClipboardManager.current
+    val copyText = rememberCopyText()
     val events by services.agentRuns.events(task.id).collectAsState()
     val availableSkills by services.agentRuns.availableSkills.collectAsState()
     var followUp by remember(task.id) { mutableStateOf("") }
@@ -184,7 +183,7 @@ internal fun AgentTaskDetail(
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
             ) { Text(if (showOriginalPrompt) "hide original prompt" else "original prompt", fontSize = 11.sp) }
             OutlinedButton(
-                onClick = { clipboardManager.setText(AnnotatedString(task.prompt)) },
+                onClick = { copyText(task.prompt) },
                 modifier = Modifier.height(30.dp),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
             ) { Text("copy prompt", fontSize = 11.sp) }
@@ -342,7 +341,7 @@ internal fun AgentTaskDetail(
                     OutlinedButton(
                         onClick = {
                             services.agentRuns.interactiveResumeCommand(task.id)?.let {
-                                clipboardManager.setText(AnnotatedString(it))
+                                copyText(it)
                                 copiedHint = true
                             }
                             scope.launch { services.agentRuns.openInTerminal(task.id) }
@@ -377,7 +376,7 @@ internal fun AgentTaskDetail(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("worktree ${task.branchName.orEmpty()}", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     OutlinedButton(
-                        onClick = { clipboardManager.setText(AnnotatedString(task.worktreePath.orEmpty())) },
+                        onClick = { copyText(task.worktreePath.orEmpty()) },
                         modifier = Modifier.height(28.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     ) { Text("copy path", fontSize = 10.sp) }
@@ -385,7 +384,7 @@ internal fun AgentTaskDetail(
                         onClick = {
                             val branch = task.branchName ?: return@OutlinedButton
                             val originDir = task.originDir ?: return@OutlinedButton
-                            clipboardManager.setText(AnnotatedString("git -C '$originDir' merge '$branch'"))
+                            copyText("git -C '$originDir' merge '$branch'")
                         },
                         modifier = Modifier.height(28.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),

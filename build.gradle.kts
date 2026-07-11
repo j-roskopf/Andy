@@ -105,6 +105,9 @@ kotlin {
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
                 implementation("com.google.zxing:core:3.5.3")
+                // Native tray (StatusNotifier on Linux). Compose AWT tray is broken on
+                // Wayland; dorkbox needs libayatana-appindicator which isn't always present.
+                implementation("io.github.kdroidfilter:composenativetray:1.3.3")
 
                 // MCP and Ktor Server Dependencies
                 implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")

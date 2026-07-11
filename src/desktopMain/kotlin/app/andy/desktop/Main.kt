@@ -10,7 +10,6 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
-import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -20,6 +19,7 @@ import app.andy.AndyDestination
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import app.andy.desktop.service.createDesktopServices
+import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
 import java.awt.Color
@@ -47,28 +47,38 @@ fun main() {
             requestedDestination = destination
             visible = true
         }
+        fun quitApp() {
+            runBlocking { services.mirror.disconnect() }
+            exitApplication()
+        }
         DisposableEffect(Unit) {
             val listener = installDockReopenHandler { visible = true }
             onDispose { removeDockReopenHandler(listener) }
         }
+        // Compose Multiplatform AWT Tray is broken on Wayland (white icon, dead menu).
+        // ComposeNativeTray uses StatusNotifier / native backends instead.
         Tray(
-            icon = appIcon,
+            icon = Res.drawable.andy_robot,
             tooltip = "Andy",
-            menu = {
+            primaryAction = { visible = true },
+        ) {
+            Item(label = "Show Andy") { visible = true }
+            Item(label = "Quit") {
+                dispose()
+                quitApp()
+            }
+            Divider()
+            SubMenu(label = "Go") {
                 AndyDestination.entries.filter { it != AndyDestination.Bugs }.forEach { destination ->
-                    Item(destination.label, onClick = { open(destination) })
+                    Item(label = destination.label) { open(destination) }
                 }
-                Item("Show Andy", onClick = { visible = true })
-                Item("Quit", onClick = {
-                    runBlocking { services.mirror.disconnect() }
-                    exitApplication()
-                })
-            },
-        )
-        if (visible) Window(
-            onCloseRequest = {
-                visible = false
-            },
+            }
+        }
+        // Keep the Window composed while hidden. Removing it from composition when
+        // closed would exit the application (ComposeNativeTray does not hold it open).
+        Window(
+            onCloseRequest = { visible = false },
+            visible = visible,
             state = windowState,
             title = "Andy",
             icon = appIcon,

@@ -35,7 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerMoveFilter
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -252,7 +253,8 @@ internal fun AccessibilityNodeRow(
     Row(
         Modifier.widthIn(min = 900.dp)
             .background(if (active) Rust.copy(alpha = 0.22f) else Color.Transparent, RoundedCornerShape(4.dp))
-            .pointerMoveFilter(onEnter = { onHover(node.bounds); false }, onExit = { onHover(null); false })
+            .onPointerEvent(PointerEventType.Enter) { onHover(node.bounds) }
+            .onPointerEvent(PointerEventType.Exit) { onHover(null) }
             .clickable { onSelect(node) }
             .padding(start = (row.depth * 12).dp, top = 2.dp, bottom = 2.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically

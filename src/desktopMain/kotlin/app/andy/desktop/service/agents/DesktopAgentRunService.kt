@@ -430,9 +430,10 @@ class DesktopAgentRunService(
         historyLoaded.remove(taskId)
         _tasks.update { list -> list.filterNot { it.id == taskId } }
         store.deleteTranscript(taskId)
-        if (removeWorktree && task.worktreePath != null) {
+        val worktreePath = task.worktreePath
+        if (removeWorktree && worktreePath != null) {
             task.originDir?.let { originDir ->
-                withContext(Dispatchers.IO) { worktrees.remove(originDir, task.worktreePath!!, task.branchName) }
+                withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
             }
         }
         persist()

@@ -33,7 +33,6 @@ import app.andy.ui.catalog.CatalogScreen
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.PendingConfirmation
-import app.andy.ui.components.PlaceholderScreen
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.controls.ControlsScreen
 import app.andy.ui.design.DesignScreen
@@ -318,7 +317,6 @@ internal fun AndyShell(
                             onUpdateWorkspace = { state.updateWorkspace(it) },
                             services = services
                         )
-                        else -> PlaceholderScreen(state.destination.label)
                     }
                 }
             }
