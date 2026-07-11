@@ -15,8 +15,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -26,7 +24,6 @@ import app.andy.service.AndyServices
 import app.andy.ui.accessibility.AccessibilityScreen
 import app.andy.ui.actions.ActionsScreen
 import app.andy.ui.agents.AgentsScreen
-import app.andy.ui.agents.AgentTaskComposer
 import app.andy.ui.apps.AppsScreen
 import app.andy.ui.bugs.BugsScreen
 import app.andy.ui.catalog.CatalogScreen
@@ -44,7 +41,6 @@ import app.andy.ui.live.LiveScreen
 import app.andy.ui.logcat.LogcatScreen
 import app.andy.ui.network.NetworkScreen
 import app.andy.model.ProxyStartOptions
-import app.andy.model.ActionProject
 import app.andy.ui.network.shouldAutoStartProxy
 import app.andy.ui.performance.PerformanceScreen
 import app.andy.ui.settings.SettingsScreen
@@ -57,7 +53,6 @@ import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Ink
 import app.andy.ui.theme.Rust
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
 @Composable
@@ -69,12 +64,9 @@ internal fun AndyShell(
     contentTopPadding: androidx.compose.ui.unit.Dp,
 ) {
     val state = rememberShellState(services)
-    val scope = rememberCoroutineScope()
     val runningActions by services.actionRuns.running.collectAsState()
     val agentTasks by services.agentRuns.tasks.collectAsState()
-    val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
     val pendingUpdateInstallConfirmation by services.updates.pendingInstallConfirmation.collectAsState()
-    var agentProjectContext by remember { androidx.compose.runtime.mutableStateOf<ActionProject?>(null) }
 
     LaunchedEffect(Unit) {
         state.initialize()
@@ -175,9 +167,6 @@ internal fun AndyShell(
                 ) {
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents
-                    LaunchedEffect(actionsActive) {
-                        if (!actionsActive) agentProjectContext = null
-                    }
                     RetainedDestination(active = actionsActive) {
                         ActionsScreen(
                             services = services,
@@ -186,7 +175,6 @@ internal fun AndyShell(
                             activeRunId = state.activeRunId,
                             onActiveRunIdChange = { state.setActiveRunId(it) },
                             onConfigChange = { state.persistActionsConfig(it) },
-                            onCreateAgentTask = { project -> agentProjectContext = project },
                             agentTasks = agentTasks,
                             active = actionsActive,
                         )
@@ -338,20 +326,6 @@ internal fun AndyShell(
                 ),
                 onDismiss = { state.transfer.dismissConfirmation() },
                 onConfirm = { state.transfer.acceptConfirmation() },
-            )
-        }
-        agentProjectContext?.let { project ->
-            AgentTaskComposer(
-                services = services,
-                cliStatuses = agentCliStatuses,
-                projectContext = project,
-                onDismiss = { agentProjectContext = null },
-                onSubmit = { draft ->
-                    agentProjectContext = null
-                    scope.launch {
-                        services.agentRuns.createAndStart(draft)
-                    }
-                },
             )
         }
     }
