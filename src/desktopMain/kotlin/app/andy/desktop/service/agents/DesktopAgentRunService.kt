@@ -867,9 +867,7 @@ class DesktopAgentRunService(
         handles.remove(taskId)
         if (status == AgentTaskStatus.Completed && queuedFollowUp != null) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
-            scope.launch {
-                resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
-            }
+            resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
         } else {
             scope.launch { persist() }
         }
