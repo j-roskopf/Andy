@@ -41,4 +41,13 @@ class AgentTranscriptTest {
 
         assertEquals(text, parseChatMarkdown(text).text)
     }
+
+    @Test
+    fun rendersUppercaseHttpLinksAsClickableLinkAnnotations() {
+        val markdown = parseChatMarkdown("See [API docs](HTTPS://WWW.EXAMPLE.COM/API).")
+
+        assertEquals("See API docs.", markdown.text)
+        val link = markdown.getLinkAnnotations(0, markdown.length).single().item as LinkAnnotation.Url
+        assertEquals("HTTPS://WWW.EXAMPLE.COM/API", link.url)
+    }
 }

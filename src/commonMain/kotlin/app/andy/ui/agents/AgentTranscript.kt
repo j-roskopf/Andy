@@ -403,7 +403,7 @@ internal fun parseChatMarkdown(text: String): AnnotatedString = buildAnnotatedSt
     append(text.substring(currentIndex))
 }
 
-private val MarkdownLinkPattern = Regex("""\[([^\]\n]+)]\((https?://[^\s)]+)\)""")
+private val MarkdownLinkPattern = Regex("""\[([^\]\n]+)]\((https?://[^\s)]+)\)""", RegexOption.IGNORE_CASE)
 
 @Composable
 private fun ToolBlock(
