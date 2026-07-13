@@ -10,13 +10,6 @@ Andy is a desktop companion for Android developers.
 
 [Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
 
-### Runtime Requirements
-
-- Android SDK platform tools for device and emulator access.
-- mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
-- scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
-- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
-
 ## Features
 
 ### Devices
@@ -107,27 +100,43 @@ Very rudimentary file browsing / editing.
 
 The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state and the matching Linux/Windows baseline contract.
 
-| Devices | Catalog | Live mirror |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-devices-populated.png" alt="Andy devices screen" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-catalog-images.png" alt="Andy system image catalog" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-live-mirror.png" alt="Andy live mirror" width="320"> |
-| Apps | Logcat | Intents |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-apps-details.png" alt="Andy app details" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-logcat-stream.png" alt="Andy logcat" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-intents-draft.png" alt="Andy intent draft" width="320"> |
-| Files | Computer Files | Network |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="320"> |
-| Projects | Project actions | Project notes |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-populated.png" alt="Andy projects" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-actions.png" alt="Andy project actions" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-notes.png" alt="Andy project notes" width="320"> |
-| Agents | Snapshots | |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="320"> | |
-| Controls | Performance | Design |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="320"> |
-| Accessibility | Bug Capture | Settings |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="320"> |
-| Mirror pop-out | | |
-| --- | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="320"> | | |
+| Devices | Catalog |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-devices-populated.png" alt="Andy devices screen" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-catalog-images.png" alt="Andy system image catalog" width="480"> |
+| Live mirror | Apps |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-live-mirror.png" alt="Andy live mirror" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-apps-details.png" alt="Andy app details" width="480"> |
+| Logcat | Intents |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-logcat-stream.png" alt="Andy logcat" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-intents-draft.png" alt="Andy intent draft" width="480"> |
+| Files | Computer Files |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="480"> |
+| Network | Projects |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-populated.png" alt="Andy projects" width="480"> |
+| Project actions | Project notes |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-actions.png" alt="Andy project actions" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-notes.png" alt="Andy project notes" width="480"> |
+| Agents | Snapshots |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="480"> |
+| Controls | Performance |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="480"> |
+| Design | Accessibility |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> |
+| Bug Capture | Settings |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> |
+| Mirror pop-out | |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> | |
+
+### Runtime Requirements
+
+- Android SDK platform tools for device and emulator access.
+- mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
+- scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
+- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
