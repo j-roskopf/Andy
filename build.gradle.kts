@@ -239,8 +239,75 @@ val stripMacReleaseFfmpegExecutables by tasks.registering {
     }
 }
 
-val resignMacReleaseApp by tasks.registering {
+val hardenMacReleasePty4jSpawnHelper by tasks.registering {
     dependsOn(stripMacReleaseFfmpegExecutables)
+
+    val signingIdentity = providers.gradleProperty("compose.desktop.mac.signing.identity")
+    val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
+
+    onlyIf {
+        System.getProperty("os.name").contains("mac", ignoreCase = true) &&
+            !signingIdentity.orNull.isNullOrBlank()
+    }
+
+    doLast {
+        val releaseAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app").get().asFile
+        val pty4jJars = fileTree(releaseAppDir) {
+            include("**/Contents/app/pty4j-*.jar")
+        }.files
+        val identity = signingIdentity.get()
+        val keychainArgs = signingKeychain.orNull
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf("--keychain", it) }
+            .orEmpty()
+        val helperEntry = "resources/com/pty4j/native/darwin/pty4j-unix-spawn-helper"
+
+        fun runCommand(command: List<String>, workingDirectory: File? = null) {
+            val builder = ProcessBuilder(command).inheritIO()
+            workingDirectory?.let(builder::directory)
+            val exitCode = builder.start().waitFor()
+            if (exitCode != 0) {
+                error("Command failed with exit code $exitCode: ${command.joinToString(" ")}")
+            }
+        }
+
+        pty4jJars.forEach { jarFile ->
+            ZipFile(jarFile).use { source ->
+                if (source.getEntry(helperEntry) == null) return@forEach
+            }
+
+            val extractionDir = temporaryDir.resolve(jarFile.nameWithoutExtension).apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            val replacement = temporaryDir.resolve("${jarFile.name}.signed")
+            replacement.delete()
+
+            runCommand(listOf("unzip", "-q", jarFile.absolutePath, "-d", extractionDir.absolutePath))
+            val helper = extractionDir.resolve(helperEntry)
+            check(helper.isFile) { "Could not extract $helperEntry from ${jarFile.name}" }
+            helper.setExecutable(true)
+            runCommand(
+                listOf(
+                    "codesign",
+                    "--force",
+                    "--options",
+                    "runtime",
+                    "--timestamp",
+                    "--sign",
+                    identity,
+                ) + keychainArgs + helper.absolutePath
+            )
+            runCommand(listOf("codesign", "--verify", "--strict", "--verbose=2", helper.absolutePath))
+            runCommand(listOf("zip", "-qry", replacement.absolutePath, "."), extractionDir)
+            replacement.copyTo(jarFile, overwrite = true)
+            logger.lifecycle("Signed the hardened-runtime Pty4J spawn helper in ${jarFile.name}")
+        }
+    }
+}
+
+val resignMacReleaseApp by tasks.registering {
+    dependsOn(hardenMacReleasePty4jSpawnHelper)
 
     val signingIdentity = providers.gradleProperty("compose.desktop.mac.signing.identity")
     val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
