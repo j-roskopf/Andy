@@ -74,6 +74,51 @@ class DesktopActionConfigStoreTest {
     }
 
     @Test
+    fun doesNotReseedDeletedStarterProjectWhenPersonalConfigurationExists() = runBlocking {
+        val dir = createTempDirectory("andy-actions-no-reseed").toFile()
+        val workspace = dir.resolve("workspace").apply { mkdirs() }
+        val homeConfig = dir.resolve("home/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "proj-other"
+                name = "Other"
+                contextDir = "/tmp/other"
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+        val starter = workspace.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "andy"
+                name = "Andy"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "record"
+                projectId = "andy"
+                name = "Record screenshots"
+                icon = "test"
+                command = "./gradlew recordRoborazziDesktop"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
+
+        assertEquals(listOf("proj-other"), loaded.projects.map { it.id })
+        assertFalse(loaded.projects.any { it.name == "Andy" })
+    }
+
+    @Test
     fun mergesScreenshotStarterActionIntoExistingPersonalProject() = runBlocking {
         val dir = createTempDirectory("andy-actions-merge").toFile()
         val workspace = dir.resolve("workspace").apply { mkdirs() }
