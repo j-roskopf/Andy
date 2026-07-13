@@ -38,7 +38,7 @@ class DesktopAppUpdateServiceTest {
     fun macInstallerDoesNotRelaunchAndy() {
         val script = macPkgInstallerHelperScript("/tmp/Andy-1.2.3.pkg")
 
-        assertTrue(script.contains("open -W '/tmp/Andy-1.2.3.pkg'"))
+        assertTrue(script.contains("exec /usr/bin/open -W '/tmp/Andy-1.2.3.pkg'"))
         assertTrue(!script.contains("open -a Andy"))
     }
 }

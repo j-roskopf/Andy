@@ -125,7 +125,9 @@ internal fun AndyShell(
             Sidebar(
                 current = state.destination,
                 deviceCount = state.devices.size,
-                hasUnreadAgentTasks = agentTasks.any { it.unread },
+                // Project chats are owned by Actions. Keep their unread state out of
+                // the standalone Agent destination.
+                hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
                 hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
                 onSelect = state::setDestination,
                 expanded = state.workspaceState.workspaceSidebarExpanded,

@@ -37,7 +37,9 @@ fun main() {
     application {
         val services = remember { createDesktopServices() }
         val agentTasks by services.agentRuns.tasks.collectAsState()
-        val unreadCount = agentTasks.count { it.unread }
+        // The dock, tray, and window title are the Agent inbox. Project chat
+        // notifications remain visible on the Actions destination instead.
+        val unreadCount = agentTasks.count { it.unread && it.projectId == null }
         val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }

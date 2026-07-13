@@ -44,6 +44,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -130,7 +136,7 @@ internal fun AgentTranscript(
                                 authorColor = Rust,
                                 alignEnd = true,
                             ) {
-                                Text(prompt, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                                MarkdownMessageText(prompt, lineHeight = 18.sp)
                             }
                         }
                     }
@@ -230,7 +236,7 @@ private fun TranscriptEvent(
             authorColor = Cyan,
             alignEnd = false,
         ) {
-            Text(event.text, color = TextPrimary, fontSize = 13.sp, lineHeight = 19.sp)
+            MarkdownMessageText(event.text, lineHeight = 19.sp)
         }
         is AgentEvent.Thinking -> ThinkingStep(event.text)
         is AgentEvent.UserMessage -> ChatMessageBubble(
@@ -239,7 +245,7 @@ private fun TranscriptEvent(
             alignEnd = true,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(event.text, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                MarkdownMessageText(event.text, lineHeight = 18.sp)
                 if (event.skills.isNotEmpty()) {
                     DisableSelection {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -291,7 +297,7 @@ private fun TranscriptEvent(
                     formatTokens(event.inputTokens, event.outputTokens)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
                 }
                 event.finalText?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                    MarkdownMessageText(it, lineHeight = 18.sp)
                 }
                 if (event.success) completedContent?.invoke()
             }
@@ -360,6 +366,44 @@ private fun ChatMessageBubble(
         }
     }
 }
+
+/**
+ * Renders safe inline markdown that is common in agent replies. URLs are kept
+ * as Compose [LinkAnnotation]s so the platform handles opening them, while
+ * malformed or unsupported markdown stays visible as the original text.
+ */
+@Composable
+private fun MarkdownMessageText(
+    text: String,
+    lineHeight: androidx.compose.ui.unit.TextUnit,
+) {
+    val annotated = remember(text) { parseChatMarkdown(text) }
+    Text(annotated, color = TextPrimary, fontSize = 13.sp, lineHeight = lineHeight)
+}
+
+internal fun parseChatMarkdown(text: String): AnnotatedString = buildAnnotatedString {
+    var currentIndex = 0
+    MarkdownLinkPattern.findAll(text).forEach { match ->
+        append(text.substring(currentIndex, match.range.first))
+        val label = match.groupValues[1]
+        val url = match.groupValues[2]
+        withLink(
+            LinkAnnotation.Url(
+                url = url,
+                styles = TextLinkStyles(
+                    style = SpanStyle(color = Cyan, textDecoration = TextDecoration.Underline),
+                    hoveredStyle = SpanStyle(color = Cyan.copy(alpha = 0.78f)),
+                ),
+            ),
+        ) {
+            append(label)
+        }
+        currentIndex = match.range.last + 1
+    }
+    append(text.substring(currentIndex))
+}
+
+private val MarkdownLinkPattern = Regex("""\[([^\]\n]+)]\((https?://[^\s)]+)\)""")
 
 @Composable
 private fun ToolBlock(

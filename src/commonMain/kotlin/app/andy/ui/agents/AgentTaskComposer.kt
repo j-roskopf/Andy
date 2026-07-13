@@ -214,6 +214,7 @@ private class AgentTaskComposerFormState(
     var attachMcp by mutableStateOf(false)
     var autonomy by mutableStateOf(AgentAutonomy.Standard)
     var sandboxMode by mutableStateOf<AgentSandboxMode?>(null)
+    var planMode by mutableStateOf(false)
     var modelId by mutableStateOf<String?>(null)
     var customModel by mutableStateOf("")
     var reasoningEffort by mutableStateOf<AgentReasoningEffort?>(null)
@@ -247,6 +248,7 @@ private class AgentTaskComposerFormState(
         // Leave the sandbox unset unless it was explicitly saved. This lets the
         // provider derive it from whichever autonomy level the user chooses.
         sandboxMode = defaults?.sandboxMode
+        planMode = defaults?.planMode == true
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
@@ -379,6 +381,7 @@ private class AgentTaskComposerForm(
             attachAndyMcp = state.attachMcp,
             autonomy = state.autonomy,
             sandboxMode = state.sandboxMode,
+            planMode = state.planMode,
             model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
             reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
             fastMode = if (state.usesCustomModel) false else state.fastMode,
@@ -636,6 +639,7 @@ private fun AgentChatComposer(
                     FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
                 }
             }
+            FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
             Box {
                 val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
                 FilterPill(
@@ -926,6 +930,15 @@ private fun AgentTaskComposerFields(
             fontFamily = MonoFont,
             fontSize = 10.sp,
         )
+        FilterPill("plan mode", state.planMode, Green) { state.planMode = !state.planMode }
+        if (state.planMode) {
+            Text(
+                "Plan mode takes precedence: ${state.agent.label} analyzes and proposes changes without editing the workspace.",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+            )
+        }
         Text(
             "${state.agent.label} ${state.agent.sandboxControlLabel()}",
             color = TextSecondary,

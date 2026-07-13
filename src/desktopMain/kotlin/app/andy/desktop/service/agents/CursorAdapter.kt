@@ -5,9 +5,9 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
+import app.andy.model.followUpPromptForCli
 import app.andy.model.modelForCli
 import app.andy.model.promptForCli
-import app.andy.model.promptWithImageHints
 
 class CursorAdapter : AgentCliAdapter {
     override val kind = AgentKind.Cursor
@@ -20,7 +20,7 @@ class CursorAdapter : AgentCliAdapter {
         add("--output-format"); add("stream-json")
         task.modelForCli()?.let { add("--model"); add(it) }
         addSandboxMode(task)
-        if (task.autonomy == AgentAutonomy.Full) add("--force")
+        if (!task.planMode && task.autonomy == AgentAutonomy.Full) add("--force")
         add(task.promptForCli())
     }
 
@@ -33,8 +33,8 @@ class CursorAdapter : AgentCliAdapter {
             add("--resume"); add(chatId)
             task.modelForCli()?.let { add("--model"); add(it) }
             addSandboxMode(task)
-            if (task.autonomy == AgentAutonomy.Full) add("--force")
-            add(promptWithImageHints(followUp, imagePaths))
+            if (!task.planMode && task.autonomy == AgentAutonomy.Full) add("--force")
+            add(task.followUpPromptForCli(followUp, imagePaths))
         }
     }
 
@@ -51,6 +51,10 @@ class CursorAdapter : AgentCliAdapter {
 }
 
 private fun MutableList<String>.addSandboxMode(task: AgentTask) {
+    if (task.planMode) {
+        add("--mode"); add("plan"); add("--sandbox"); add("enabled")
+        return
+    }
     when (task.sandboxMode) {
         AgentSandboxMode.ReadOnly -> { add("--mode"); add("plan"); add("--sandbox"); add("enabled") }
         AgentSandboxMode.WorkspaceWrite -> { add("--sandbox"); add("enabled") }

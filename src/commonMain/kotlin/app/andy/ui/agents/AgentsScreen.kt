@@ -90,8 +90,11 @@ internal fun AgentsScreen(
         }
     }
 
-    val ordered = remember(tasks) {
-        tasks.sortedWith(
+    // Chats started from a project stay with that project instead of appearing
+    // in the standalone Agent inbox as well.
+    val agentTasks = remember(tasks) { tasks.filter { it.projectId == null } }
+    val ordered = remember(agentTasks) {
+        agentTasks.sortedWith(
             compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis },
         )
     }
@@ -105,7 +108,7 @@ internal fun AgentsScreen(
         Column(Modifier.width(listPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Toolbar(
                 "Agent sessions",
-                "${tasks.size} sessions / $runningCount active / ${availableAgents.size} ready",
+                "${agentTasks.size} sessions / $runningCount active / ${availableAgents.size} ready",
                 onPrimary = { showComposer = true },
                 primaryLabel = "new task",
             )

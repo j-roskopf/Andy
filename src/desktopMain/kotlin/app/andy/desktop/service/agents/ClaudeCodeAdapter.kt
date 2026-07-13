@@ -5,9 +5,9 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
+import app.andy.model.followUpPromptForCli
 import app.andy.model.modelForCli
 import app.andy.model.promptForCli
-import app.andy.model.promptWithImageHints
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -51,7 +51,7 @@ class ClaudeCodeAdapter : AgentCliAdapter {
                 add("--mcp-config")
                 add("""{"mcpServers":{"andy":{"type":"http","url":"$it"}}}""")
             }
-            add(promptWithImageHints(followUp, imagePaths))
+            add(task.followUpPromptForCli(followUp, imagePaths))
         }
     }
 
@@ -67,6 +67,10 @@ class ClaudeCodeAdapter : AgentCliAdapter {
 }
 
 private fun MutableList<String>.addClaudePermissionMode(task: AgentTask) {
+    if (task.planMode) {
+        add("--permission-mode"); add("plan")
+        return
+    }
     when (task.sandboxMode) {
         AgentSandboxMode.ReadOnly -> { add("--permission-mode"); add("plan") }
         AgentSandboxMode.WorkspaceWrite -> { add("--permission-mode"); add("acceptEdits") }

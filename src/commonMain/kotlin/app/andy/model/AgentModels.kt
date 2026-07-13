@@ -172,6 +172,8 @@ data class AgentTask(
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     /** Explicit provider sandbox/permission choice. Null preserves the legacy mapping from [autonomy]. */
     val sandboxMode: AgentSandboxMode? = null,
+    /** Ask the provider to inspect and propose work without making changes. */
+    val planMode: Boolean = false,
     /** Null keeps the provider's own default model. */
     val model: String? = null,
     /** Null keeps the provider's own default reasoning level. */
@@ -308,6 +310,7 @@ data class AgentTaskDraft(
     val attachAndyMcp: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
+    val planMode: Boolean = false,
     val model: String? = null,
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
@@ -324,6 +327,7 @@ data class AgentProviderDefaults(
     val fastMode: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
+    val planMode: Boolean = false,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
@@ -418,6 +422,7 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     fastMode = fastMode,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
+    planMode = planMode,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
@@ -429,6 +434,7 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     fastMode = fastMode,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
+    planMode = planMode,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
@@ -451,6 +457,7 @@ fun AgentTask.modelConfigurationLabel(): String = buildList {
     model?.let(::add) ?: add("provider default")
     reasoningEffort?.let { add(it.label) }
     if (fastMode) add("fast")
+    if (planMode) add("plan")
 }.joinToString(" · ")
 
 /** Text-only CLIs receive image paths without rewriting stored user messages. */
@@ -484,7 +491,21 @@ fun promptWithGoalHint(text: String, goal: String?): String = goal?.takeIf { it.
     "$text\n\nPersistent task goal: $activeGoal\nKeep this goal in mind throughout the task."
 } ?: text
 
-fun AgentTask.promptForCli(): String = promptWithImageHints(promptWithGoalHint(promptWithSkillHints(prompt, skills), goal), imagePaths)
+private fun promptWithPlanModeHint(text: String, planMode: Boolean): String = if (planMode) {
+    "$text\n\nPlan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, apply patches, or run commands that modify the workspace."
+} else {
+    text
+}
+
+fun AgentTask.promptForCli(): String = promptWithImageHints(
+    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(prompt, skills), planMode), goal),
+    imagePaths,
+)
+
+fun AgentTask.followUpPromptForCli(text: String, imagePaths: List<String>): String = promptWithImageHints(
+    promptWithPlanModeHint(text, planMode),
+    imagePaths,
+)
 
 private data class TokenPrice(val inputUsdPerMillion: Double, val outputUsdPerMillion: Double)
 

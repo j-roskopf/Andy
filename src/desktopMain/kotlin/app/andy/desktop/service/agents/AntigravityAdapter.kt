@@ -39,6 +39,10 @@ class AntigravityAdapter : AgentCliAdapter {
 }
 
 private fun MutableList<String>.addAntigravityPermissionMode(task: AgentTask) {
+    if (task.planMode) {
+        add("--mode"); add("plan"); add("--sandbox")
+        return
+    }
     when (task.sandboxMode) {
         AgentSandboxMode.ReadOnly -> { add("--mode"); add("plan"); add("--sandbox") }
         AgentSandboxMode.WorkspaceWrite -> { add("--mode"); add("accept-edits") }
