@@ -43,14 +43,19 @@ fun main() {
         val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
+        var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutSerial by remember { mutableStateOf<String?>(null) }
         var popOutDeviceName by remember { mutableStateOf<String?>(null) }
         var popOutControlsVisible by remember { mutableStateOf(false) }
-        val popOutToggleShortcut = KeyShortcut(Key.D, ctrl = !isMacOs(), meta = isMacOs(), shift = true)
+        val popOutMirrorShortcut = KeyShortcut(Key.D, ctrl = !isMacOs(), meta = isMacOs(), shift = true)
         val appIcon = painterResource(Res.drawable.andy_robot)
         fun open(destination: AndyDestination) {
             requestedDestination = destination
             visible = true
+        }
+        fun openPopOutMirror() {
+            visible = true
+            requestPopOutMirror = true
         }
         fun quitApp() {
             runBlocking { services.mirror.disconnect() }
@@ -104,11 +109,20 @@ fun main() {
                         )
                     }
                 }
+                Menu("View") {
+                    Item(
+                        "Pop Out Mirror",
+                        shortcut = popOutMirrorShortcut,
+                        onClick = { openPopOutMirror() },
+                    )
+                }
             }
             AndyApp(
                 services = services,
                 requestedDestination = requestedDestination,
                 onDestinationConsumed = { requestedDestination = null },
+                requestPopOutMirror = requestPopOutMirror,
+                onPopOutMirrorRequestConsumed = { requestPopOutMirror = false },
                 onPopOutMirror = { serial, name ->
                     popOutSerial = serial
                     popOutDeviceName = name
@@ -130,7 +144,7 @@ fun main() {
                             text = "Show controls",
                             checked = popOutControlsVisible,
                             onCheckedChange = { popOutControlsVisible = it },
-                            shortcut = popOutToggleShortcut,
+                            shortcut = popOutMirrorShortcut,
                         )
                     }
                 }
@@ -218,7 +232,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.Snapshots -> KeyShortcut(Key.S, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Controls -> KeyShortcut(Key.C, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Performance -> KeyShortcut(Key.P, meta = meta, ctrl = ctrl, shift = true)
-        // Shift+D is already used by the mirror pop-out "Show controls" toggle.
+        // Shift+D is already used by View → Pop Out Mirror / Show controls.
         AndyDestination.Design -> KeyShortcut(Key.E, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Accessibility -> KeyShortcut(Key.A, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Bugs -> KeyShortcut(Key.B, meta = meta, ctrl = ctrl, shift = true)

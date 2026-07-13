@@ -60,6 +60,8 @@ internal fun AndyShell(
     services: AndyServices,
     requestedDestination: AndyDestination?,
     onDestinationConsumed: () -> Unit,
+    requestPopOutMirror: Boolean,
+    onPopOutMirrorRequestConsumed: () -> Unit,
     onPopOutMirror: (String?, String?) -> Unit,
     contentTopPadding: androidx.compose.ui.unit.Dp,
 ) {
@@ -82,6 +84,16 @@ internal fun AndyShell(
             state.setDestination(it)
             onDestinationConsumed()
         }
+    }
+
+    LaunchedEffect(requestPopOutMirror) {
+        if (!requestPopOutMirror) return@LaunchedEffect
+        val serial = state.selectedSerial
+        if (serial != null) {
+            val selectedDevice = state.devices.firstOrNull { it.serial == serial }
+            onPopOutMirror(serial, selectedDevice?.displayName ?: serial)
+        }
+        onPopOutMirrorRequestConsumed()
     }
 
     LaunchedEffect(state.workspaceState.mcpServerEnabled, state.workspaceState.mcpServerPort) {

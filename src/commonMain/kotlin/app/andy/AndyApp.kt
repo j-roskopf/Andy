@@ -50,11 +50,21 @@ fun AndyApp(
     services: AndyServices,
     requestedDestination: AndyDestination? = null,
     onDestinationConsumed: () -> Unit = {},
+    requestPopOutMirror: Boolean = false,
+    onPopOutMirrorRequestConsumed: () -> Unit = {},
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
 ) {
     AndyTheme {
-        AndyShell(services, requestedDestination, onDestinationConsumed, onPopOutMirror, contentTopPadding)
+        AndyShell(
+            services = services,
+            requestedDestination = requestedDestination,
+            onDestinationConsumed = onDestinationConsumed,
+            requestPopOutMirror = requestPopOutMirror,
+            onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
+            onPopOutMirror = onPopOutMirror,
+            contentTopPadding = contentTopPadding,
+        )
     }
 }
 

@@ -140,3 +140,6 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
 - scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
 - Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
+
+### Icon Attribution
+<a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>
