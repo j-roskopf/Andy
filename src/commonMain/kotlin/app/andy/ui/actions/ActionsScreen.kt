@@ -412,14 +412,16 @@ private fun ProjectCockpit(
                         val sessions = agentTasks.filter { it.projectId == project.id }
                         scope.launch {
                             sessions.forEach { task ->
-                                services.agentRuns.delete(task.id, task.worktreePath != null)
+                                runCatching {
+                                    services.agentRuns.delete(task.id, task.worktreePath != null)
+                                }
                             }
+                            if (selectedProjectId == project.id) {
+                                selectedProjectId = null
+                                selectedTaskId = null
+                            }
+                            onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
                         }
-                        if (selectedProjectId == project.id) {
-                            selectedProjectId = null
-                            selectedTaskId = null
-                        }
-                        onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
                     }
                 }
             },

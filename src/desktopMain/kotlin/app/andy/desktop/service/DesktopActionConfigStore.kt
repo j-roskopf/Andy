@@ -24,7 +24,7 @@ class DesktopActionConfigStore(
                     .resolveRelativeProjectPaths(source.parentFile?.parentFile ?: File(System.getProperty("user.dir")))
             }
             ?: ActionsConfig()
-        val personalFileExists = file.exists()
+        val personalFileExists = file.isFile
         val personal = if (!personalFileExists) {
             ActionsConfig()
         } else {
