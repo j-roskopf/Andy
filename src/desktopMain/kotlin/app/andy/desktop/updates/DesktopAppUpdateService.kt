@@ -275,11 +275,7 @@ class DesktopAppUpdateService(
                 // Keep the helper fully detached from Andy. In particular, it
                 // must only hand the archive to macOS and never share the
                 // app's streams or run a follow-up relaunch command.
-                ProcessBuilder("/bin/sh", helper.absolutePath)
-                    .redirectInput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                    .start()
+                macInstallerProcessBuilder(helper.absolutePath).start()
                 exitProcess(0)
             }
             UpdatePlatform.LinuxDeb -> {
@@ -458,6 +454,13 @@ internal fun macPkgInstallerHelperScript(pkgPath: String): String {
         exec /usr/bin/open -W ${pkgPath.shellQuote()}
     """.trimIndent() + "\n"
 }
+
+internal fun macInstallerProcessBuilder(helperPath: String): ProcessBuilder =
+    // Redirect.DISCARD is WRITE-typed and cannot be used for stdin.
+    ProcessBuilder("/bin/sh", helperPath)
+        .redirectInput(File("/dev/null"))
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
 
 internal fun linuxInstallerHelperScript(
     filePath: String,
