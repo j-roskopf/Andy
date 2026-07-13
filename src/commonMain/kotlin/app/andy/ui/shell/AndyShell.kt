@@ -88,8 +88,11 @@ internal fun AndyShell(
 
     LaunchedEffect(requestPopOutMirror) {
         if (!requestPopOutMirror) return@LaunchedEffect
-        val selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial }
-        onPopOutMirror(state.selectedSerial, selectedDevice?.displayName ?: state.selectedSerial)
+        val serial = state.selectedSerial
+        if (serial != null) {
+            val selectedDevice = state.devices.firstOrNull { it.serial == serial }
+            onPopOutMirror(serial, selectedDevice?.displayName ?: serial)
+        }
         onPopOutMirrorRequestConsumed()
     }
 
