@@ -86,6 +86,7 @@ internal fun rawIfNotBlank(line: String, nowMillis: Long): List<AgentEvent> {
  */
 internal fun parseClaudeStyleObject(obj: JsonObject, nowMillis: Long): List<AgentEvent>? {
     return when (obj.stringOrNull("type")) {
+        "rate_limit_event", "rate_limits.updated" -> parseQuotaUpdate(obj, nowMillis)
         "system" -> {
             if (obj.stringOrNull("subtype") == "init") {
                 listOf(
@@ -111,9 +112,9 @@ internal fun parseClaudeStyleObject(obj: JsonObject, nowMillis: Long): List<Agen
             }
         }
         "thinking" -> {
-            // Claude's thinking deltas are visible CLI output. Render them as the
-            // same readable live dialog rather than exposing the transport JSON.
-            if (obj.stringOrNull("subtype") == "delta") parseStreamDelta(obj, nowMillis) else emptyList()
+            // Claude and Cursor expose reasoning as a separate stream. Keep that
+            // distinction so the transcript can render it as a process step.
+            if (obj.stringOrNull("subtype") == "delta") parseStreamDelta(obj, nowMillis, isThinking = true) else emptyList()
         }
         "user" -> parseToolResults(obj.objectOrNull("message")?.get("content") as? JsonArray, nowMillis)
         "tool_call" -> parseCursorStyleToolCall(obj, nowMillis) ?: run {
@@ -140,12 +141,18 @@ internal fun parseClaudeStyleObject(obj: JsonObject, nowMillis: Long): List<Agen
     }
 }
 
-private fun parseStreamDelta(obj: JsonObject, nowMillis: Long): List<AgentEvent> {
+private fun parseStreamDelta(obj: JsonObject, nowMillis: Long, isThinking: Boolean = false): List<AgentEvent> {
     val text = obj.stringOrNull("text")
         ?: obj.objectOrNull("delta")?.stringOrNull("text")
         ?: return emptyList()
     return text.takeIf { it.isNotEmpty() }?.let {
-        listOf(AgentEvent.AssistantText(nowMillis, it, isStreamDelta = true))
+        listOf(
+            if (isThinking) {
+                AgentEvent.Thinking(nowMillis, it, isStreamDelta = true)
+            } else {
+                AgentEvent.AssistantText(nowMillis, it, isStreamDelta = true)
+            },
+        )
     }.orEmpty()
 }
 

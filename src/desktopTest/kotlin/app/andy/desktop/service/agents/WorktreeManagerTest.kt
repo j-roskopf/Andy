@@ -37,6 +37,15 @@ class WorktreeManagerTest {
             assertEquals(3, summary.additions)
             assertEquals(0, summary.deletions)
             assertTrue(summary.files.none { it.path == "already-dirty.kt" || it.path == "existing-untracked.txt" })
+
+            val cleanDiff = assertNotNull(manager.fileDiff(repo.absolutePath, "clean.kt"))
+            assertEquals(1, cleanDiff.additions)
+            assertTrue(cleanDiff.lines.any { it.text == "two" })
+
+            val createdDiff = assertNotNull(manager.fileDiff(repo.absolutePath, "agent-created.kt"))
+            assertTrue(createdDiff.isNewFile)
+            assertEquals(2, createdDiff.additions)
+            assertEquals(listOf("first", "second"), createdDiff.lines.map { it.text })
         } finally {
             repo.deleteRecursively()
         }

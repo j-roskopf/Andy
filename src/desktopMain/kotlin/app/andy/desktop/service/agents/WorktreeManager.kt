@@ -1,8 +1,11 @@
 package app.andy.desktop.service.agents
 
+import app.andy.domain.diffForNewFile
+import app.andy.domain.parseUnifiedDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
+import app.andy.model.AgentFileDiff
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -69,6 +72,31 @@ class WorktreeManager(
             changes[path] = AgentFileChange(path, additions = lines, deletions = 0)
         }
         return AgentChangeSummary(changes.values.sortedBy { it.path })
+    }
+
+    /** Unified diff for a single path relative to [dir], for inline review. */
+    fun fileDiff(dir: String, relativePath: String): AgentFileDiff? {
+        if (!isGitRepo(dir) || relativePath.isBlank()) return null
+        if (relativePath in untrackedPaths(dir)) {
+            val file = File(dir, relativePath)
+            if (!file.isFile) return AgentFileDiff(path = relativePath, lines = emptyList(), isNewFile = true)
+            val content = runCatching { file.readText() }.getOrElse { return null }
+            return diffForNewFile(relativePath, content)
+        }
+        val result = git(
+            dir,
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "-U3",
+            "HEAD",
+            "--",
+            relativePath,
+        )
+        if (result.exitCode != 0) return null
+        if (result.output.isBlank()) return AgentFileDiff(path = relativePath, lines = emptyList())
+        return parseUnifiedDiff(result.output, relativePath)
     }
 
     fun mergeCommand(originDir: String, branch: String): String =

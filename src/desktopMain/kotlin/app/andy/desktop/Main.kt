@@ -4,6 +4,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
@@ -35,6 +36,8 @@ fun main() {
     installRuntimeAppIcon()
     application {
         val services = remember { createDesktopServices() }
+        val agentTasks by services.agentRuns.tasks.collectAsState()
+        val unreadCount = agentTasks.count { it.unread }
         val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
@@ -55,11 +58,14 @@ fun main() {
             val listener = installDockReopenHandler { visible = true }
             onDispose { removeDockReopenHandler(listener) }
         }
+        LaunchedEffect(unreadCount) {
+            updateDockBadge(unreadCount)
+        }
         // Compose Multiplatform AWT Tray is broken on Wayland (white icon, dead menu).
         // ComposeNativeTray uses StatusNotifier / native backends instead.
         Tray(
             icon = Res.drawable.andy_robot,
-            tooltip = "Andy",
+            tooltip = if (unreadCount > 0) "Andy ($unreadCount unread)" else "Andy",
             primaryAction = { visible = true },
         ) {
             Item(label = "Show Andy") { visible = true }
@@ -80,7 +86,7 @@ fun main() {
             onCloseRequest = { visible = false },
             visible = visible,
             state = windowState,
-            title = "Andy",
+            title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
         ) {
             LaunchedEffect(window) {
@@ -150,6 +156,15 @@ private fun installRuntimeAppIcon() {
         if (Taskbar.isTaskbarSupported() && Taskbar.getTaskbar().isSupported(Taskbar.Feature.ICON_IMAGE)) {
             Taskbar.getTaskbar().iconImage = image
         }
+    }
+}
+
+private fun updateDockBadge(count: Int) {
+    if (!Taskbar.isTaskbarSupported()) return
+    val taskbar = Taskbar.getTaskbar()
+    if (!taskbar.isSupported(Taskbar.Feature.ICON_BADGE_NUMBER)) return
+    runCatching {
+        taskbar.setIconBadge(if (count > 0) count.toString() else null)
     }
 }
 

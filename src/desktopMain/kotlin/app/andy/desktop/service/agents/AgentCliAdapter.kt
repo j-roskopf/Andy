@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentTask
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -83,6 +84,54 @@ internal fun compactProviderJson(obj: JsonObject, nowMillis: Long): AgentEvent.T
         summary = summary,
         detail = "The provider sent structured metadata that does not need action.",
         isError = false,
+    )
+}
+
+/**
+ * Claude Code, Cursor, and newer Codex builds all use variations of this event.
+ * Keep every field optional: providers routinely add windows before they expose a percentage.
+ */
+internal fun parseQuotaUpdate(obj: JsonObject, nowMillis: Long): List<AgentEvent> {
+    val info = obj.objectOrNull("rate_limit_info")
+        ?: obj.objectOrNull("rate_limits")
+        ?: obj.objectOrNull("limit")
+        ?: obj
+    val rawLabel = info.stringOrNull("rateLimitType")
+        ?: info.stringOrNull("window")
+        ?: info.stringOrNull("limit_type")
+        ?: "usage"
+    val remainingPercent = listOf("remaining_percentage", "remainingPercent", "remaining_pct")
+        .firstNotNullOfOrNull { key -> info.doubleOrNull(key) }
+    val usedPercent = listOf("utilization", "utilization_percentage", "used_percentage", "usedPercent", "percentage")
+        .firstNotNullOfOrNull { key -> info.doubleOrNull(key) }
+    val remaining = (remainingPercent ?: usedPercent?.let { 100.0 - it })
+        ?.takeIf { it in 0.0..100.0 }
+        ?.div(100.0)
+        ?.toFloat()
+    val resetAt = listOf("resetsAt", "reset_at", "resetAt")
+        .firstNotNullOfOrNull { key -> info.longOrNull(key) }
+    val status = info.stringOrNull("status")?.humanizeEventValue()
+    val window = AgentQuotaWindow(
+        label = rawLabel.humanizeEventValue().ifBlank { "usage" },
+        remainingFraction = remaining,
+        resetAtMillis = resetAt,
+        detail = status,
+    )
+    val summary = listOfNotNull(
+        status?.replaceFirstChar(Char::uppercase),
+        "${window.label} window",
+        remaining?.let { "${(it * 100).toInt()}% left" },
+        resetAt?.let { millis -> (millis - nowMillis).takeIf { it > 0 }?.let(::formatRemainingTime)?.let { "resets in $it" } },
+    ).joinToString(" · ").ifBlank { "quota updated" }
+    return listOf(
+        AgentEvent.ToolResult(
+            nowMillis,
+            "rate limit",
+            summary,
+            "Provider quota metadata updated.",
+            isError = false,
+            quotaWindows = listOf(window),
+        ),
     )
 }
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -38,6 +38,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +74,7 @@ import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
@@ -78,63 +85,64 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun AgentTaskComposer(
-    services: AndyServices,
-    cliStatuses: List<AgentCliStatus>,
-    projectContext: ActionProject? = null,
-    onDismiss: () -> Unit,
-    onSubmit: (AgentTaskDraft) -> Unit,
-) {
-    val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Panel,
-        title = { Text("New agent task", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            AgentTaskComposerFields(
-                form = form,
-                showProjectHeader = false,
-                showContextPicker = true,
-                modifier = Modifier.width(720.dp).heightIn(max = 640.dp).verticalScroll(rememberScrollState()),
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSubmit(form.buildDraft()) },
-                enabled = form.canSubmit,
-                colors = primaryButtonColors(),
-            ) { Text("Start") }
-        },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
 internal fun AgentTaskComposerPane(
     services: AndyServices,
     cliStatuses: List<AgentCliStatus>,
-    projectContext: ActionProject,
+    projectContext: ActionProject?,
     onSubmit: (AgentTaskDraft) -> Unit,
+    onCancel: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
+    var showOptions by remember(projectContext?.id) { mutableStateOf(false) }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        AgentTaskComposerFields(
-            form = form,
-            showProjectHeader = true,
-            showContextPicker = false,
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Button(
-                onClick = {
-                    onSubmit(form.buildDraft())
-                    form.clearPrompt()
-                },
-                enabled = form.canSubmit,
-                colors = primaryButtonColors(),
-            ) { Text("Start chat") }
+        if (showOptions) {
+            AgentTaskComposerFields(
+                form = form,
+                showProjectHeader = projectContext != null,
+                showContextPicker = projectContext == null,
+                showAgentControls = false,
+                showModelControls = false,
+                showPrompt = false,
+                modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            )
+        } else {
+            Column(
+                Modifier.fillMaxWidth().weight(1f).padding(horizontal = 48.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    AgentMark(form.state.agent)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            projectContext?.let { "Make progress in ${it.name}" } ?: "Give an agent its next move",
+                            color = TextPrimary,
+                            fontFamily = DisplayFont,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 28.sp,
+                        )
+                        Text(
+                            "Write the outcome you want. Add context, an image, or a / skill when it helps.",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            }
         }
+        AgentChatComposer(
+            form = form,
+            showOptions = showOptions,
+            onShowOptionsChange = { showOptions = it },
+            onCancel = onCancel,
+            onSubmit = {
+                onSubmit(form.buildDraft())
+                form.clearPrompt()
+            },
+        )
     }
 }
 
@@ -158,6 +166,8 @@ private class AgentTaskComposerFormState(
     var fastMode by mutableStateOf(false)
     var budgetText by mutableStateOf("")
     var directoryIsGitRepo by mutableStateOf(false)
+    /** Last agent whose provider defaults were seeded into this draft; avoids clobbering restored drafts. */
+    var defaultsSeededForAgent: AgentKind? = null
 
     val prompt: String get() = promptValue.text
     val usesCustomModel: Boolean get() = modelId == CUSTOM_MODEL_ID
@@ -194,14 +204,18 @@ private fun rememberAgentTaskComposerForm(
 ): AgentTaskComposerForm {
     val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
     val lastUsedAgent by services.agentRuns.lastUsedAgent.collectAsState()
-    val availableSkills by services.agentRuns.availableSkills.collectAsState()
     val scope = rememberCoroutineScope()
-    val state = remember(projectContext?.id) {
+    val formsByProject = remember { mutableMapOf<String?, AgentTaskComposerFormState>() }
+    val projectKey = projectContext?.id
+    val state = formsByProject.getOrPut(projectKey) {
         AgentTaskComposerFormState(cliStatuses.firstOrNull { it.available }?.kind ?: AgentKind.ClaudeCode)
     }
 
     val directory = projectContext?.contextDir
         ?: state.customDirectory.takeIf { state.usesCustomDirectory && it.isNotBlank() }
+    val availableSkills by remember(state.agent, directory) {
+        services.agentRuns.skills(state.agent, directory)
+    }.collectAsState()
     val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.available }
     val showModelSection = state.providerChosenInComposer && selectedCliAvailable
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId)
@@ -219,7 +233,7 @@ private fun rememberAgentTaskComposerForm(
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         cliStatuses.any { it.kind == state.agent && it.available }
 
-    LaunchedEffect(lastUsedAgent, cliStatuses, projectContext?.id) {
+    LaunchedEffect(lastUsedAgent, cliStatuses, projectKey) {
         if (!state.providerChosenInComposer) {
             val preferred = lastUsedAgent?.takeIf { preferred ->
                 cliStatuses.any { it.kind == preferred && it.available }
@@ -233,8 +247,14 @@ private fun rememberAgentTaskComposerForm(
         }
     }
 
-    LaunchedEffect(state.agent, providerDefaults[state.agent], projectContext?.id) {
-        state.applyProviderDefaults(providerDefaults[state.agent], state.agent)
+    // Apply defaults when the agent changes, or once for a newly created project draft.
+    // Do not re-apply merely because we navigated back to an existing draft.
+    LaunchedEffect(state, state.agent, providerDefaults[state.agent]) {
+        val agent = state.agent
+        if (state.defaultsSeededForAgent != agent) {
+            state.applyProviderDefaults(providerDefaults[agent], agent)
+            state.defaultsSeededForAgent = agent
+        }
     }
 
     LaunchedEffect(directory, state.useWorktree) {
@@ -309,10 +329,241 @@ private class AgentTaskComposerForm(
 }
 
 @Composable
+private fun AgentChatComposer(
+    form: AgentTaskComposerForm,
+    showOptions: Boolean,
+    onShowOptionsChange: (Boolean) -> Unit,
+    onCancel: (() -> Unit)?,
+    onSubmit: () -> Unit,
+) {
+    val state = form.state
+    var agentMenuExpanded by remember { mutableStateOf(false) }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
+    var effortMenuExpanded by remember { mutableStateOf(false) }
+    val canSubmit = form.canSubmit
+
+    fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
+
+    Column(
+        Modifier.fillMaxWidth()
+            .background(Panel, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, if (state.imageDragActive) Cyan else Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(Modifier.fillMaxWidth()) {
+            TextField(
+                state.promptValue,
+                {
+                    state.promptValue = it
+                    state.skillMenuDismissed = false
+                },
+                singleLine = false,
+                minLines = 3,
+                maxLines = 7,
+                modifier = Modifier.fillMaxWidth()
+                    .heightIn(min = 94.dp, max = 180.dp)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        if (event.key == Key.Tab && form.matchingSkills.isNotEmpty()) {
+                            selectSkill(form.matchingSkills.first())
+                            return@onPreviewKeyEvent true
+                        }
+                        if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                        if (event.isShiftPressed) return@onPreviewKeyEvent false
+                        if (canSubmit) onSubmit()
+                        true
+                    }
+                    .onImageFilesDropped(
+                        onFiles = { dropped -> state.imagePaths = (state.imagePaths + dropped).distinct() },
+                        onDragActiveChange = { active -> state.imageDragActive = active },
+                    ),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
+                colors = fieldColors(),
+                placeholder = {
+                    Text(
+                        if (state.imageDragActive) "release to attach image" else "What should ${state.agent.label} work on?",
+                        color = if (state.imageDragActive) Cyan else TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 13.sp,
+                    )
+                },
+            )
+            DropdownMenu(
+                expanded = form.slashCommand != null && !state.skillMenuDismissed,
+                onDismissRequest = { state.skillMenuDismissed = true },
+                modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                properties = PopupProperties(focusable = false),
+            ) {
+                Text(
+                    if (form.matchingSkills.isEmpty()) {
+                        "no ${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                    } else {
+                        "${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                    },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                )
+                form.matchingSkills.forEach { skill ->
+                    DropdownMenuItem(
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                skill.description.takeIf { it.isNotBlank() }?.let { description ->
+                                    Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                }
+                            }
+                        },
+                        onClick = { selectSkill(skill) },
+                    )
+                }
+            }
+        }
+
+        if (state.usesCustomModel) {
+            TextField(
+                state.customModel,
+                { state.customModel = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
+                colors = fieldColors(),
+                placeholder = { Text("custom model or variant", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp) },
+            )
+        }
+
+        if (form.selectedSkills.isNotEmpty() || state.imagePaths.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                form.selectedSkills.forEach { skill ->
+                    FilterPill("/${skill.name} ×", true, Cyan) {
+                        state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
+                    }
+                }
+                state.imagePaths.forEach { path ->
+                    FilterPill("${imageFileName(path)} ×", false, Cyan) {
+                        state.imagePaths = state.imagePaths.filterNot { it == path }
+                    }
+                }
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box {
+                FilterPill(
+                    state.agent.label,
+                    true,
+                    agentColor(state.agent),
+                    leadingContent = { AgentPillIcon(state.agent) },
+                ) {
+                    agentMenuExpanded = true
+                }
+                DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
+                    form.cliStatuses.filter { it.available }.forEach { status ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    AgentPillIcon(status.kind)
+                                    Text(status.kind.label, color = TextPrimary)
+                                }
+                            },
+                            onClick = {
+                                state.providerChosenInComposer = true
+                                state.agent = status.kind
+                                agentMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+            Box {
+                val modelLabel = when {
+                    state.usesCustomModel -> "custom"
+                    form.selectedModel != null -> form.selectedModel.label
+                    else -> "model: default"
+                }
+                FilterPill(modelLabel, state.modelId != null, agentColor(state.agent)) { modelMenuExpanded = true }
+                DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("provider default", color = TextPrimary) },
+                        onClick = {
+                            state.modelId = null
+                            modelMenuExpanded = false
+                        },
+                    )
+                    AgentModelCatalog.options(state.agent).forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label, color = TextPrimary) },
+                            onClick = {
+                                state.modelId = option.id
+                                modelMenuExpanded = false
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("custom", color = TextPrimary) },
+                        onClick = {
+                            state.modelId = CUSTOM_MODEL_ID
+                            modelMenuExpanded = false
+                        },
+                    )
+                }
+            }
+            form.selectedModel?.let { selectedModel ->
+                Box {
+                    val effortLabel = state.reasoningEffort?.label ?: "effort: default"
+                    FilterPill(effortLabel, state.reasoningEffort != null, Rust) { effortMenuExpanded = true }
+                    DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("provider default", color = TextPrimary) },
+                            onClick = {
+                                state.reasoningEffort = null
+                                effortMenuExpanded = false
+                            },
+                        )
+                        selectedModel.efforts.forEach { effort ->
+                            DropdownMenuItem(
+                                text = { Text(effort.label, color = TextPrimary) },
+                                onClick = {
+                                    state.reasoningEffort = effort
+                                    effortMenuExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+                if (selectedModel.supportsFastMode) {
+                    FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            AgentQuotaMenu(services = form.services, agent = state.agent)
+            OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
+                Text(if (showOptions) "hide options" else "options", fontSize = 11.sp)
+            }
+            onCancel?.let { cancel ->
+                OutlinedButton(onClick = cancel) { Text("cancel", fontSize = 11.sp) }
+            }
+            Button(onClick = onSubmit, enabled = canSubmit, colors = primaryButtonColors()) {
+                Text("start", fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun AgentTaskComposerFields(
     form: AgentTaskComposerForm,
     showProjectHeader: Boolean,
     showContextPicker: Boolean,
+    showAgentControls: Boolean = true,
+    showModelControls: Boolean = true,
+    showPrompt: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val state = form.state
@@ -325,32 +576,35 @@ private fun AgentTaskComposerFields(
             }
         }
 
-        Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            AgentKind.entries.forEach { kind ->
-                val status = form.cliStatuses.firstOrNull { it.kind == kind }
-                if (status?.available == true) {
-                    FilterPill(
-                        "${agentMonogram(kind)} ${kind.label}",
-                        state.providerChosenInComposer && state.agent == kind,
-                        agentColor(kind),
-                    ) {
-                        state.providerChosenInComposer = true
-                        state.agent = kind
+        if (showAgentControls) {
+            Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                AgentKind.entries.forEach { kind ->
+                    val status = form.cliStatuses.firstOrNull { it.kind == kind }
+                    if (status?.available == true) {
+                        FilterPill(
+                            kind.label,
+                            state.providerChosenInComposer && state.agent == kind,
+                            agentColor(kind),
+                            leadingContent = { AgentPillIcon(kind) },
+                        ) {
+                            state.providerChosenInComposer = true
+                            state.agent = kind
+                        }
+                    } else {
+                        Text(
+                            "${kind.label} — not found",
+                            color = TextSecondary.copy(alpha = 0.6f),
+                            fontFamily = MonoFont,
+                            fontSize = 11.sp,
+                        )
                     }
-                } else {
-                    Text(
-                        "${kind.label} — not found",
-                        color = TextSecondary.copy(alpha = 0.6f),
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                    )
                 }
             }
         }
 
         AnimatedVisibility(
-            visible = form.showModelSection,
+            visible = showModelControls && form.showModelSection,
             enter = fadeIn(tween(180)) + expandVertically(tween(220)),
             exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
         ) {
@@ -400,7 +654,7 @@ private fun AgentTaskComposerFields(
             }
         }
 
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (showPrompt) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Prompt", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
             Box {
                 TextField(
@@ -429,7 +683,7 @@ private fun AgentTaskComposerFields(
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     colors = fieldColors(),
                     placeholder = {
-                        Text("type / for skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
+                        Text("type / for ${state.agent.label} skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
                     },
                 )
                 DropdownMenu(
@@ -440,9 +694,9 @@ private fun AgentTaskComposerFields(
                 ) {
                     Text(
                         if (form.matchingSkills.isEmpty()) {
-                            "no skills matching /${form.slashCommand?.query.orEmpty()}"
+                            "no ${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
                         } else {
-                            "skills matching /${form.slashCommand?.query.orEmpty()}"
+                            "${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
                         },
                         color = TextSecondary,
                         fontFamily = MonoFont,
@@ -475,11 +729,11 @@ private fun AgentTaskComposerFields(
                 }
             }
         }
-        if (state.imageDragActive) {
+        if (showPrompt && state.imageDragActive) {
             Text("release to attach image", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-        } else if (state.imagePaths.isEmpty()) {
+        } else if (showPrompt && state.imagePaths.isEmpty()) {
             Text("drop image files onto the prompt to attach them", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-        } else {
+        } else if (showPrompt) {
             Text("Attached images", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.imagePaths.forEach { path ->

@@ -52,6 +52,8 @@ class DesktopAgentTaskStoreTest {
             totalCostUsd = 0.42,
             inputTokens = 100,
             outputTokens = 200,
+            contextTokens = 120_000,
+            contextWindowTokens = 272_000,
         )
         store.save(AgentStoreState(tasks = listOf(task), binaryOverrides = mapOf("codex" to "/bin/codex"), maxConcurrent = 4))
         val loaded = store.load()

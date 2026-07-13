@@ -49,6 +49,7 @@ import app.andy.model.SdkDiscovery
 import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
 import app.andy.ui.components.StatusRow
+import app.andy.ui.agents.UnreadDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -64,6 +65,8 @@ import org.jetbrains.compose.resources.painterResource
 internal fun Sidebar(
     current: AndyDestination,
     deviceCount: Int,
+    hasUnreadAgentTasks: Boolean,
+    hasUnreadProjectAgentTasks: Boolean,
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -145,6 +148,10 @@ internal fun Sidebar(
                         if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 11.sp)
                         if (item == AndyDestination.Logcat) Text("live", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 10.sp)
                     }
+                    if (
+                        (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
+                        (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
+                    ) UnreadDot()
                 }
             }
         }

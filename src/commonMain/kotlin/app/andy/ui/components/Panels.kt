@@ -163,6 +163,7 @@ internal fun FilterPill(
     selected: Boolean,
     color: Color,
     toolbar: Boolean = false,
+    leadingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(AndyRadius.R2)
@@ -177,12 +178,15 @@ internal fun FilterPill(
             border = BorderStroke(1.dp, if (selected) color.copy(alpha = 0.70f) else Border),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Text(
-                text.lowercase(),
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                leadingContent?.invoke()
+                Text(
+                    text.lowercase(),
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                )
+            }
         }
         return
     }
@@ -195,14 +199,17 @@ internal fun FilterPill(
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text.lowercase(),
-            color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
-            fontFamily = MonoFont,
-            fontWeight = FontWeight.Medium,
-            fontSize = 10.sp,
-            lineHeight = 14.sp,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            leadingContent?.invoke()
+            Text(
+                text.lowercase(),
+                color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+            )
+        }
     }
 }
 

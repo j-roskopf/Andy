@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
+import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentSkill
@@ -18,6 +19,7 @@ data class AgentStoreState(
     val tasks: List<AgentTask> = emptyList(),
     val binaryOverrides: Map<String, String> = emptyMap(),
     val providerDefaults: Map<AgentKind, AgentProviderDefaults> = emptyMap(),
+    val quotaAccess: AgentQuotaAccess = AgentQuotaAccess(),
     val lastUsedAgent: AgentKind? = null,
     val maxConcurrent: Int = 8,
 )
@@ -59,8 +61,16 @@ private data class AgentsFileDto(
     val maxConcurrent: Int = 8,
     @TomlInline val binaries: Map<String, String> = emptyMap(),
     val providerDefaults: List<AgentProviderDefaultsDto> = emptyList(),
+    val quotaAccess: AgentQuotaAccessDto = AgentQuotaAccessDto(),
     val lastUsedAgent: String = "",
     val tasks: List<AgentTaskDto> = emptyList(),
+)
+
+@Serializable
+private data class AgentQuotaAccessDto(
+    val claudeAccountAccess: Boolean = false,
+    val cursorAccountAccess: Boolean = false,
+    val antigravityAccountAccess: Boolean = false,
 )
 
 @Serializable
@@ -109,12 +119,20 @@ private data class AgentTaskDto(
     val costIsEstimated: Boolean = false,
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
+    val contextTokens: Long = 0,
+    val contextWindowTokens: Long = 0,
+    val unread: Boolean = false,
 )
 
 private fun AgentsFileDto.toModel(): AgentStoreState = AgentStoreState(
     tasks = tasks.mapNotNull { it.toModel() },
     binaryOverrides = binaries,
     providerDefaults = providerDefaults.mapNotNull { it.toModel() }.toMap(),
+    quotaAccess = AgentQuotaAccess(
+        claudeAccountAccess = quotaAccess.claudeAccountAccess,
+        cursorAccountAccess = quotaAccess.cursorAccountAccess,
+        antigravityAccountAccess = quotaAccess.antigravityAccountAccess,
+    ),
     lastUsedAgent = AgentKind.entries.firstOrNull { it.name == lastUsedAgent },
     maxConcurrent = maxConcurrent.coerceIn(1, 64),
 )
@@ -174,6 +192,9 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         costIsEstimated = costIsEstimated,
         inputTokens = inputTokens.takeIf { it > 0 },
         outputTokens = outputTokens.takeIf { it > 0 },
+        contextTokens = contextTokens.takeIf { it > 0 },
+        contextWindowTokens = contextWindowTokens.takeIf { it > 0 },
+        unread = unread,
     )
 }
 
@@ -193,6 +214,11 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             maxBudgetUsd = defaults.maxBudgetUsd ?: 0.0,
         )
     },
+    quotaAccess = AgentQuotaAccessDto(
+        claudeAccountAccess = quotaAccess.claudeAccountAccess,
+        cursorAccountAccess = quotaAccess.cursorAccountAccess,
+        antigravityAccountAccess = quotaAccess.antigravityAccountAccess,
+    ),
     tasks = tasks.map { task ->
         AgentTaskDto(
             id = task.id,
@@ -227,6 +253,9 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             costIsEstimated = task.costIsEstimated,
             inputTokens = task.inputTokens ?: 0,
             outputTokens = task.outputTokens ?: 0,
+            contextTokens = task.contextTokens ?: 0,
+            contextWindowTokens = task.contextWindowTokens ?: 0,
+            unread = task.unread,
         )
     },
 )

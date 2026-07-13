@@ -84,11 +84,11 @@ class ClaudeCodeAdapterTest {
     }
 
     @Test
-    fun parsesStreamDeltasAsLiveAssistantText() {
+    fun parsesThinkingStreamDeltasAsThinking() {
         val delta = adapter.parseLine(
             """{"type":"thinking","subtype":"delta","text":"Checking the files...","session_id":"s-9"}""",
             4,
-        ).single() as AgentEvent.AssistantText
+        ).single() as AgentEvent.Thinking
 
         assertEquals("Checking the files...", delta.text)
         assertTrue(delta.isStreamDelta)
@@ -139,6 +139,15 @@ class CodexAdapterTest {
     }
 
     @Test
+    fun resumeKeepsTheOriginalSandboxConfiguration() {
+        val argv = adapter.buildResumeCommand("/bin/codex", task(AgentKind.Codex, sessionId = "thread-1"), "continue", emptyList(), mcpUrl = null)
+            ?: error("Codex supports resume")
+
+        assertTrue("--sandbox" !in argv)
+        assertTrue("--dangerously-bypass-approvals-and-sandbox" !in argv)
+    }
+
+    @Test
     fun parsesThreadShape() {
         val started = adapter.parseLine("""{"type":"thread.started","thread_id":"t-42"}""", 1)
         assertEquals("t-42", (started.single() as AgentEvent.SessionStarted).sessionId)
@@ -153,6 +162,17 @@ class CodexAdapterTest {
             .single() as AgentEvent.TaskResult
         assertTrue(done.success)
         assertEquals(9, done.outputTokens)
+    }
+
+    @Test
+    fun parsesContextWindowUsage() {
+        val context = adapter.parseLine(
+            """{"type":"token_count","info":{"total_token_usage":120000,"model_context_window":272000}}""",
+            5,
+        ).single() as AgentEvent.ContextUsage
+
+        assertEquals(120000, context.usedTokens)
+        assertEquals(272000, context.windowTokens)
     }
 
     @Test
@@ -185,7 +205,7 @@ class CodexAdapterTest {
     @Test
     fun resumeUsesThreadId() {
         val argv = adapter.buildResumeCommand("/bin/codex", task(AgentKind.Codex, sessionId = "t-42"), "continue", imagePaths = emptyList(), mcpUrl = null)
-        assertEquals(listOf("/bin/codex", "exec", "resume", "t-42", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "continue"), argv)
+        assertEquals(listOf("/bin/codex", "exec", "resume", "--json", "--skip-git-repo-check", "t-42", "continue"), argv)
     }
 
     @Test

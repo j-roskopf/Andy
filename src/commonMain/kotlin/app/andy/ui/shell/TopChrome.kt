@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
@@ -33,13 +32,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
 import app.andy.model.ActionProject
-import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.ProjectAction
-import app.andy.model.RunningAction
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
@@ -65,9 +62,7 @@ internal fun TopChrome(
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
     actionConfig: ActionsConfig,
-    runningActions: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
-    onStopAction: (RunningAction) -> Unit,
     proxyRunning: Boolean,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -93,9 +88,7 @@ internal fun TopChrome(
         if (hasActionRunnerControls) {
             ActionRunnerSelector(
                 config = actionConfig,
-                running = runningActions,
                 onRunAction = onRunAction,
-                onStopAction = onStopAction,
             )
             Spacer(Modifier.width(10.dp))
         }
@@ -136,9 +129,7 @@ private fun ProxyToolbarIndicator() {
 @Composable
 private fun ActionRunnerSelector(
     config: ActionsConfig,
-    running: List<RunningAction>,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
-    onStopAction: (RunningAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var projectExpanded by remember { mutableStateOf(false) }
@@ -152,10 +143,6 @@ private fun ActionRunnerSelector(
     val action = remember(project?.actions, selectedActionId) {
         project?.actions?.firstOrNull { it.id == selectedActionId } ?: project?.actions?.firstOrNull()
     }
-    val liveRun = running.firstOrNull { run ->
-        project?.id == run.projectId && action?.id == run.actionId && run.status == ActionRunStatus.Running
-    }
-
     Row(
         modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -217,18 +204,16 @@ private fun ActionRunnerSelector(
             onClick = {
                 val selectedProject = project
                 val selectedAction = action
-                if (liveRun != null) {
-                    onStopAction(liveRun)
-                } else if (selectedProject != null && selectedAction != null) {
+                if (selectedProject != null && selectedAction != null) {
                     onRunAction(selectedProject, selectedAction)
                 }
             },
-            enabled = liveRun != null || (project != null && action != null),
-            colors = if (liveRun != null) ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100) else primaryButtonColors(),
+            enabled = project != null && action != null,
+            colors = primaryButtonColors(),
             shape = RoundedCornerShape(AndyRadius.R2),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Text(if (liveRun != null) "stop" else "run", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("run", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

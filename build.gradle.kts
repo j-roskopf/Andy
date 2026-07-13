@@ -85,10 +85,10 @@ kotlin {
         val commonMain by getting {
             kotlin.srcDir(generateAndyBuildInfo)
             dependencies {
-                implementation(compose.runtime)
-                implementation(compose.foundation)
-                implementation(compose.material3)
-                implementation(compose.components.resources)
+                implementation("org.jetbrains.compose.runtime:runtime:1.11.1")
+                implementation("org.jetbrains.compose.foundation:foundation:1.11.1")
+                implementation("org.jetbrains.compose.material3:material3:1.9.0")
+                implementation("org.jetbrains.compose.components:components-resources:1.11.1")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
             }
         }
@@ -104,6 +104,9 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
+                implementation("org.jetbrains.jediterm:jediterm-core:3.73")
+                implementation("org.jetbrains.jediterm:jediterm-ui:3.73")
+                implementation("org.jetbrains.pty4j:pty4j:0.13.12")
                 implementation("com.google.zxing:core:3.5.3")
                 // Native tray (StatusNotifier on Linux). Compose AWT tray is broken on
                 // Wayland; dorkbox needs libayatana-appindicator which isn't always present.

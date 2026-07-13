@@ -125,6 +125,8 @@ internal fun AndyShell(
             Sidebar(
                 current = state.destination,
                 deviceCount = state.devices.size,
+                hasUnreadAgentTasks = agentTasks.any { it.unread },
+                hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
                 onSelect = state::setDestination,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
@@ -143,9 +145,7 @@ internal fun AndyShell(
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                     actionConfig = state.actionsConfig,
-                    runningActions = runningActions,
                     onRunAction = { project, action -> state.runAction(project, action) },
-                    onStopAction = { run -> state.stopAction(run) },
                     proxyRunning = proxyRunning,
                     actions = {
                         if (state.destination == AndyDestination.Network) {
@@ -173,6 +173,7 @@ internal fun AndyShell(
                             config = state.actionsConfig,
                             running = runningActions,
                             activeRunId = state.activeRunId,
+                            terminalRunId = state.terminalRunId,
                             onActiveRunIdChange = { state.setActiveRunId(it) },
                             onConfigChange = { state.persistActionsConfig(it) },
                             agentTasks = agentTasks,

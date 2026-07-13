@@ -126,8 +126,100 @@ data class AgentTask(
     val costIsEstimated: Boolean = false,
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
+    /** Tokens currently retained in the agent's active context window, when the provider reports it. */
+    val contextTokens: Long? = null,
+    /** Maximum active-context capacity reported by the provider for this chat. */
+    val contextWindowTokens: Long? = null,
+    /** True after an agent finishes until the chat is opened (or marked read). */
+    val unread: Boolean = false,
 ) {
     val isActive: Boolean get() = status == AgentTaskStatus.Queued || status == AgentTaskStatus.Running
+}
+
+/** A provider-reported account limit window. Percentages are absent when a CLI only reports its reset time. */
+data class AgentQuotaWindow(
+    val label: String,
+    val remainingFraction: Float? = null,
+    val resetAtMillis: Long? = null,
+    val detail: String? = null,
+)
+
+enum class AgentQuotaSource(val label: String) {
+    ProviderQuery("account query"),
+    ProviderEvent("agent event"),
+}
+
+/** Explicit consent for provider-specific local account sources. All sensitive sources default off. */
+data class AgentQuotaAccess(
+    val claudeAccountAccess: Boolean = false,
+    val cursorAccountAccess: Boolean = false,
+    val antigravityAccountAccess: Boolean = false,
+) {
+    fun allows(agent: AgentKind): Boolean = when (agent) {
+        AgentKind.Codex -> true
+        AgentKind.ClaudeCode -> claudeAccountAccess
+        AgentKind.Cursor -> cursorAccountAccess
+        AgentKind.Antigravity -> antigravityAccountAccess
+    }
+
+    fun withAccess(agent: AgentKind, enabled: Boolean): AgentQuotaAccess = when (agent) {
+        AgentKind.Codex -> this
+        AgentKind.ClaudeCode -> copy(claudeAccountAccess = enabled)
+        AgentKind.Cursor -> copy(cursorAccountAccess = enabled)
+        AgentKind.Antigravity -> copy(antigravityAccountAccess = enabled)
+    }
+}
+
+/** The newest live quota data seen from each provider while Andy is running. */
+data class AgentProviderQuota(
+    val windows: List<AgentQuotaWindow>,
+    val updatedAtMillis: Long,
+    val source: AgentQuotaSource = AgentQuotaSource.ProviderEvent,
+    val accountLabel: String? = null,
+    val lifetimeTokens: Long? = null,
+    /** Provider-reported daily token buckets, oldest to newest, when that account API exposes them. */
+    val providerTokenDays: List<Long> = emptyList(),
+)
+
+/** Local activity summary used alongside a provider's live account limits. */
+data class AgentUsageOverview(
+    val runsLast24Hours: Int,
+    val runsLast30Days: Int,
+    val tokensLast24Hours: Long,
+    val tokensLast30Days: Long,
+    val costLast24Hours: Double,
+    val costLast30Days: Double,
+    val topModel: String?,
+    /** Seven oldest-to-newest daily token totals, for the compact activity histogram. */
+    val tokenDays: List<Long>,
+)
+
+fun agentUsageOverview(tasks: List<AgentTask>, agent: AgentKind, nowMillis: Long): AgentUsageOverview {
+    val providerTasks = tasks.filter { it.agent == agent }
+    val day = 24L * 60L * 60L * 1000L
+    fun tokens(task: AgentTask): Long = (task.inputTokens ?: 0L) + (task.outputTokens ?: 0L)
+    fun cost(task: AgentTask): Double = task.totalCostUsd ?: 0.0
+    fun inWindow(windowMillis: Long): List<AgentTask> = providerTasks.filter { it.createdAtMillis >= nowMillis - windowMillis }
+    val last24 = inWindow(day)
+    val last30 = inWindow(day * 30)
+    val topModel = last30
+        .groupingBy { it.model ?: "provider default" }
+        .eachCount()
+        .maxByOrNull { it.value }
+        ?.key
+    return AgentUsageOverview(
+        runsLast24Hours = last24.size,
+        runsLast30Days = last30.size,
+        tokensLast24Hours = last24.sumOf(::tokens),
+        tokensLast30Days = last30.sumOf(::tokens),
+        costLast24Hours = last24.sumOf(::cost),
+        costLast30Days = last30.sumOf(::cost),
+        topModel = topModel,
+        tokenDays = (6 downTo 0).map { offset ->
+            val end = nowMillis - offset * day
+            providerTasks.filter { it.createdAtMillis in (end - day) until end }.sumOf(::tokens)
+        },
+    )
 }
 
 data class AgentTaskDraft(
@@ -176,6 +268,24 @@ data class AgentChangeSummary(val files: List<AgentFileChange>) {
     val additions: Int get() = files.sumOf { it.additions }
     val deletions: Int get() = files.sumOf { it.deletions }
 }
+
+enum class DiffLineKind { Context, Addition, Deletion }
+
+data class DiffLine(
+    val kind: DiffLineKind,
+    val text: String,
+    val oldLineNumber: Int? = null,
+    val newLineNumber: Int? = null,
+)
+
+data class AgentFileDiff(
+    val path: String,
+    val lines: List<DiffLine>,
+    val additions: Int = lines.count { it.kind == DiffLineKind.Addition },
+    val deletions: Int = lines.count { it.kind == DiffLineKind.Deletion },
+    val isBinary: Boolean = false,
+    val isNewFile: Boolean = false,
+)
 
 fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     model = model,
@@ -290,7 +400,15 @@ sealed interface AgentEvent {
         val skills: List<AgentSkill> = emptyList(),
     ) : AgentEvent
     data class ToolCall(override val atMillis: Long, val toolName: String, val summary: String, val detail: String = summary) : AgentEvent
-    data class ToolResult(override val atMillis: Long, val toolName: String?, val summary: String, val detail: String = summary, val isError: Boolean) : AgentEvent
+    data class ToolResult(
+        override val atMillis: Long,
+        val toolName: String?,
+        val summary: String,
+        val detail: String = summary,
+        val isError: Boolean,
+        /** Optional live provider-limit metadata, kept with its transcript row. */
+        val quotaWindows: List<AgentQuotaWindow> = emptyList(),
+    ) : AgentEvent
     data class TaskError(override val atMillis: Long, val message: String) : AgentEvent
     data class TaskResult(
         override val atMillis: Long,
@@ -301,6 +419,13 @@ sealed interface AgentEvent {
         val inputTokens: Long? = null,
         val outputTokens: Long? = null,
         val durationMs: Long? = null,
+    ) : AgentEvent
+
+    /** A live snapshot of the active conversation context, distinct from per-turn billing usage. */
+    data class ContextUsage(
+        override val atMillis: Long,
+        val usedTokens: Long? = null,
+        val windowTokens: Long? = null,
     ) : AgentEvent
 
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */

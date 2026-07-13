@@ -2,31 +2,40 @@ package app.andy.ui.agents
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.agent_antigravity
+import app.andy.andy.generated.resources.agent_claude
+import app.andy.andy.generated.resources.agent_codex
+import app.andy.andy.generated.resources.agent_cursor
 import app.andy.model.AgentKind
 import app.andy.model.AgentTaskStatus
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
-import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextSecondary
+import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.painterResource
 
-internal fun agentMonogram(kind: AgentKind): String = when (kind) {
-    AgentKind.ClaudeCode -> "CL"
-    AgentKind.Codex -> "CX"
-    AgentKind.Cursor -> "CU"
-    AgentKind.Antigravity -> "AG"
+private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
+    AgentKind.ClaudeCode -> Res.drawable.agent_claude
+    AgentKind.Codex -> Res.drawable.agent_codex
+    AgentKind.Cursor -> Res.drawable.agent_cursor
+    AgentKind.Antigravity -> Res.drawable.agent_antigravity
 }
 
 internal fun agentColor(kind: AgentKind): Color = when (kind) {
@@ -52,16 +61,45 @@ internal fun agentStatusLabel(status: AgentTaskStatus): String = when (status) {
 
 @Composable
 internal fun AgentBadge(kind: AgentKind, modifier: Modifier = Modifier) {
-    Text(
-        agentMonogram(kind),
-        color = agentColor(kind),
-        fontFamily = MonoFont,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
+    Box(
         modifier = modifier
             .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R2))
             .border(1.dp, agentColor(kind).copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.R2))
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+            .padding(5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(agentIconResource(kind)),
+            contentDescription = kind.label,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+@Composable
+internal fun AgentMark(kind: AgentKind, modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(agentIconResource(kind)),
+        contentDescription = kind.label,
+        modifier = modifier.size(32.dp),
+    )
+}
+
+@Composable
+internal fun AgentPillIcon(kind: AgentKind, modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(agentIconResource(kind)),
+        contentDescription = null,
+        modifier = modifier.size(16.dp),
+    )
+}
+
+@Composable
+internal fun UnreadDot(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(6.dp)
+            .background(Cyan, CircleShape),
     )
 }
 

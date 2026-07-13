@@ -3,8 +3,12 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
+import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentProviderQuota
+import app.andy.model.AgentQuotaSource
+import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -20,6 +24,8 @@ import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +45,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 private const val MAX_EVENTS_IN_MEMORY = 3000
+private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
 
 class DesktopAgentRunService(
     private val scope: CoroutineScope,
@@ -62,14 +69,22 @@ class DesktopAgentRunService(
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses
 
+    private val _providerQuotas = MutableStateFlow<Map<AgentKind, AgentProviderQuota>>(emptyMap())
+    override val providerQuotas: StateFlow<Map<AgentKind, AgentProviderQuota>> = _providerQuotas
+
+    private val _quotaAccess = MutableStateFlow(AgentQuotaAccess())
+    override val quotaAccess: StateFlow<AgentQuotaAccess> = _quotaAccess
+
     private val _providerDefaults = MutableStateFlow<Map<AgentKind, AgentProviderDefaults>>(emptyMap())
     override val providerDefaults: StateFlow<Map<AgentKind, AgentProviderDefaults>> = _providerDefaults
 
     private val _lastUsedAgent = MutableStateFlow<AgentKind?>(null)
     override val lastUsedAgent: StateFlow<AgentKind?> = _lastUsedAgent
 
-    private val _availableSkills = MutableStateFlow<List<AgentSkill>>(emptyList())
-    override val availableSkills: StateFlow<List<AgentSkill>> = _availableSkills
+    private data class SkillScope(val agent: AgentKind, val directory: String?)
+
+    private val skillFlows = ConcurrentHashMap<SkillScope, MutableStateFlow<List<AgentSkill>>>()
+    private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
@@ -77,6 +92,8 @@ class DesktopAgentRunService(
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
     private val persistMutex = Mutex()
+    private val quotaRefreshMutex = Mutex()
+    private val quotaProbe = ProviderQuotaProbe()
     private val ready = CompletableDeferred<Unit>()
     private var binaryOverrides: Map<String, String> = emptyMap()
     private lateinit var slots: Semaphore
@@ -92,15 +109,35 @@ class DesktopAgentRunService(
                 .groupBy { it.agent }
                 .mapValues { (_, tasks) -> tasks.maxBy { it.createdAtMillis }.providerDefaults() }
             _providerDefaults.value = recoveredDefaults + state.providerDefaults
+            _quotaAccess.value = state.quotaAccess
             _lastUsedAgent.value = state.lastUsedAgent
                 ?: state.tasks.maxByOrNull { it.createdAtMillis }?.agent
             storedMaxConcurrent = state.maxConcurrent
             slots = Semaphore(state.maxConcurrent)
             _tasks.value = state.tasks
             ready.complete(Unit)
-            _availableSkills.value = withContext(Dispatchers.IO) { discoverLocalSkills() }
+            scope.launch(Dispatchers.IO) { restoreProviderQuotas(state.tasks) }
             refreshCliStatuses()
+            refreshProviderQuotas()
+            while (isActive) {
+                delay(PROVIDER_QUOTA_REFRESH_MILLIS)
+                refreshProviderQuotas()
+            }
         }
+    }
+
+    override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = SkillScope(agent, normalizedDirectory)
+        val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
+        if (loadedSkillScopes.add(skillScope)) {
+            scope.launch(Dispatchers.IO) {
+                flow.value = discoverSkills(agent, normalizedDirectory)
+            }
+        }
+        return flow
     }
 
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
@@ -124,7 +161,9 @@ class DesktopAgentRunService(
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
             imagePaths = draft.imagePaths,
-            skills = draft.skills.filter { skill -> _availableSkills.value.any { it.path == skill.path } },
+            skills = draft.skills.filter { skill ->
+                skills(draft.agent, draft.directory).value.any { it.path == skill.path }
+            },
             maxBudgetUsd = draft.maxBudgetUsd,
             status = AgentTaskStatus.Queued,
             // Claude accepts a caller-assigned session id; pre-assigning means resume
@@ -198,11 +237,20 @@ class DesktopAgentRunService(
         _lastUsedAgent.value = task.agent
 
         val now = System.currentTimeMillis()
-        val selectedSkills = skills.filter { skill -> _availableSkills.value.any { it.path == skill.path } }
+        val skillDirectory = task.worktreePath ?: task.cwd
+        val selectedSkills = skills.filter { skill ->
+            this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
+        }
         val followUpForCli = promptWithSkillHints(followUp, selectedSkills)
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills)))
         writeAndyTranscriptLine(taskId, followUp, selectedSkills, now)
-        val queued = task.copy(status = AgentTaskStatus.Queued, exitCode = null, errorMessage = null, finishedAtMillis = null)
+        val queued = task.copy(
+            status = AgentTaskStatus.Queued,
+            exitCode = null,
+            errorMessage = null,
+            finishedAtMillis = null,
+            unread = false,
+        )
         upsertTask(queued)
         scope.launch { persist() }
         launchRun(queued) { resumeAdapter, binary, mcpUrl ->
@@ -231,6 +279,9 @@ class DesktopAgentRunService(
             costIsEstimated = false,
             inputTokens = null,
             outputTokens = null,
+            contextTokens = null,
+            contextWindowTokens = null,
+            unread = false,
         )
         store.deleteTranscript(taskId)
         eventFlows[taskId]?.value = emptyList()
@@ -333,6 +384,15 @@ class DesktopAgentRunService(
                                     }
                                 }
                                 is AgentEvent.TaskResult -> lastResult = event
+                                is AgentEvent.ContextUsage -> updateTask(taskId) { current ->
+                                    current.copy(
+                                        contextTokens = event.usedTokens ?: current.contextTokens,
+                                        contextWindowTokens = event.windowTokens ?: current.contextWindowTokens,
+                                    )
+                                }
+                                is AgentEvent.ToolResult -> event.quotaWindows.takeIf { it.isNotEmpty() }?.let { windows ->
+                                    updateQuota(task.agent, windows, event.atMillis)
+                                }
                                 is AgentEvent.TaskError -> lastError = event.message
                                 is AgentEvent.AssistantText -> {
                                     lastAssistantText = if (event.isStreamDelta) {
@@ -503,9 +563,6 @@ class DesktopAgentRunService(
     }
 
     override suspend fun openSkill(path: String): CommandResult = withContext(Dispatchers.IO) {
-        if (_availableSkills.value.none { it.path == path }) {
-            return@withContext CommandResult.failure("skill is no longer available")
-        }
         val skillFile = File(path)
         if (!skillFile.isFile) return@withContext CommandResult.failure("skill file no longer exists")
         val osName = System.getProperty("os.name")?.lowercase().orEmpty()
@@ -535,13 +592,48 @@ class DesktopAgentRunService(
         worktrees.changeSummary(cwd, task.changeBaselinePaths)
     }
 
+    override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = withContext(Dispatchers.IO) {
+        val task = currentTask(taskId) ?: return@withContext null
+        val cwd = task.cwd ?: return@withContext null
+        worktrees.fileDiff(cwd, relativePath)
+    }
+
     override suspend fun refreshCliStatuses() {
         ready.await()
         val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
         _cliStatuses.value = statuses
     }
 
+    override suspend fun refreshProviderQuotas() {
+        ready.await()
+        quotaRefreshMutex.withLock {
+            val fetched = withContext(Dispatchers.IO) {
+                _cliStatuses.value.mapNotNull { status ->
+                    status.binaryPath?.let { binary -> quotaProbe.query(status.kind, binary, _quotaAccess.value) }
+                }
+            }
+            if (fetched.isNotEmpty()) {
+                _providerQuotas.update { current -> current + fetched.toMap() }
+            }
+        }
+    }
+
     override suspend fun isGitRepo(dir: String): Boolean = withContext(Dispatchers.IO) { worktrees.isGitRepo(dir) }
+
+    override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) {
+        if (agent == AgentKind.Codex) return
+        _quotaAccess.update { it.withAccess(agent, enabled) }
+        if (!enabled) {
+            quotaProbe.clearAccountAccess(agent)
+            _providerQuotas.update { current ->
+                current.filterNot { (kind, quota) -> kind == agent && quota.source == AgentQuotaSource.ProviderQuery }
+            }
+        }
+        scope.launch {
+            persist()
+            if (enabled) refreshProviderQuotas()
+        }
+    }
 
     private suspend fun prepareMcp(agent: AgentKind): String? {
         val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
@@ -587,6 +679,39 @@ class DesktopAgentRunService(
         flow.update { existing ->
             coalesceStreamDeltas(existing, events).takeLast(MAX_EVENTS_IN_MEMORY)
         }
+    }
+
+    private fun updateQuota(agent: AgentKind, windows: List<app.andy.model.AgentQuotaWindow>, updatedAtMillis: Long) {
+        if (windows.isEmpty()) return
+        _providerQuotas.update { current ->
+            current + (agent to AgentProviderQuota(windows, updatedAtMillis, source = AgentQuotaSource.ProviderEvent))
+        }
+    }
+
+    /** Recover the latest CLI-emitted limit for each provider without touching provider credentials or network APIs. */
+    private fun restoreProviderQuotas(tasks: List<AgentTask>) {
+        val restored = linkedMapOf<AgentKind, AgentProviderQuota>()
+        tasks.sortedByDescending { it.createdAtMillis }.forEach { task ->
+            if (task.agent in restored) return@forEach
+            val adapter = adapters[task.agent] ?: return@forEach
+            val file = store.transcriptFile(task.id)
+            if (!file.isFile) return@forEach
+            var latest: Pair<List<app.andy.model.AgentQuotaWindow>, Long>? = null
+            runCatching {
+                file.useLines { lines ->
+                    lines.forEach { line ->
+                        adapter.parseLine(line, task.createdAtMillis)
+                            .filterIsInstance<AgentEvent.ToolResult>()
+                            .lastOrNull { it.quotaWindows.isNotEmpty() }
+                            ?.let { result -> latest = result.quotaWindows to result.atMillis }
+                    }
+                }
+            }
+            latest?.let { (windows, atMillis) ->
+                restored[task.agent] = AgentProviderQuota(windows, atMillis, source = AgentQuotaSource.ProviderEvent)
+            }
+        }
+        if (restored.isNotEmpty()) _providerQuotas.value = restored
     }
 
     private fun List<AgentEvent>.withEstimatedCosts(task: AgentTask): List<AgentEvent> = map { event ->
@@ -640,6 +765,20 @@ class DesktopAgentRunService(
         return AgentEvent.UserMessage(objectValue.longOrNull("atMillis") ?: 0L, text, skills)
     }
 
+    override fun markRead(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.unread) return
+        updateTask(taskId) { it.copy(unread = false) }
+        scope.launch { persist() }
+    }
+
+    override fun markUnread(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.unread) return
+        updateTask(taskId) { it.copy(unread = true) }
+        scope.launch { persist() }
+    }
+
     private fun finishTask(taskId: String, status: AgentTaskStatus, exitCode: Int?, error: String?) {
         updateTask(taskId) { task ->
             if (task.isActive) {
@@ -648,6 +787,7 @@ class DesktopAgentRunService(
                     exitCode = exitCode,
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
+                    unread = true,
                 )
             } else {
                 task
@@ -664,6 +804,7 @@ class DesktopAgentRunService(
                     tasks = _tasks.value,
                     binaryOverrides = binaryOverrides,
                     providerDefaults = _providerDefaults.value,
+                    quotaAccess = _quotaAccess.value,
                     lastUsedAgent = _lastUsedAgent.value,
                     maxConcurrent = storedMaxConcurrent,
                 ),
@@ -679,18 +820,51 @@ class DesktopAgentRunService(
         return File(if (osName.contains("win")) "NUL" else "/dev/null")
     }
 
-    private fun discoverLocalSkills(): List<AgentSkill> {
+    /**
+     * Each CLI has its own discovery contract. Do not merge these roots: a skill in
+     * one provider's directory is not necessarily visible to another provider.
+     */
+    private fun discoverSkills(agent: AgentKind, directory: String?): List<AgentSkill> {
         val home = System.getProperty("user.home") ?: return emptyList()
-        val roots = listOf(
-            File(home, ".codex/skills"),
-            File(home, ".agents/skills"),
-            File(home, ".codex/plugins/cache"),
-        )
+        val workspace = directory?.let(::File)?.takeIf(File::isDirectory)
+        val roots = when (agent) {
+            // Codex desktop also exposes portable Agent Skills installed under
+            // ~/.agents/skills (for example, skills installed by `npx skills`).
+            AgentKind.Codex -> {
+                val codexHome = System.getenv("CODEX_HOME")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::File)
+                    ?: File(home, ".codex")
+                listOf(
+                    File(codexHome, "skills"),
+                    File(home, ".agents/skills"),
+                    File(codexHome, "plugins/cache"),
+                )
+            }
+            // Claude gives personal skills precedence over the project directory.
+            AgentKind.ClaudeCode -> listOfNotNull(
+                File(home, ".claude/skills"),
+                workspace?.let { File(it, ".claude/skills") },
+            )
+            // Cursor supports both its own and portable Agent Skills locations at
+            // workspace and user scope; workspace entries take precedence.
+            AgentKind.Cursor -> listOfNotNull(
+                workspace?.let { File(it, ".cursor/skills") },
+                workspace?.let { File(it, ".agents/skills") },
+                File(home, ".cursor/skills"),
+                File(home, ".agents/skills"),
+            )
+            // Antigravity CLI loads workspace Agent Skills and its own global root.
+            AgentKind.Antigravity -> listOfNotNull(
+                workspace?.let { File(it, ".agents/skills") },
+                File(home, ".gemini/antigravity-cli/skills"),
+            )
+        }
         val discovered = linkedMapOf<String, AgentSkill>()
         roots.forEach { root ->
             if (!root.isDirectory) return@forEach
             root.walkTopDown()
-                .maxDepth(7)
+                .maxDepth(8)
                 .filter { file -> file.name == "SKILL.md" && file.isFile }
                 .take(200)
                 .forEach { file ->

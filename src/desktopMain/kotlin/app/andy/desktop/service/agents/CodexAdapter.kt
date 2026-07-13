@@ -37,17 +37,15 @@ class CodexAdapter : AgentCliAdapter {
         return buildList {
             add(binary)
             add("exec")
-            add("resume"); add(threadId)
+            add("resume")
             add("--json")
             imagePaths.forEach { path -> add("--image"); add(path) }
             add("--skip-git-repo-check")
             task.modelForCli()?.let { add("--model"); add(it) }
             task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
-            when (task.autonomy) {
-                AgentAutonomy.ReadOnly -> { add("--sandbox"); add("read-only") }
-                AgentAutonomy.Standard -> { add("--sandbox"); add("workspace-write") }
-                AgentAutonomy.Full -> add("--dangerously-bypass-approvals-and-sandbox")
-            }
+            // `codex exec resume` restores the original session's sandbox and rejects
+            // sandbox flags in current CLI builds.
+            add(threadId)
             add(promptWithImageHints(followUp, imagePaths))
         }
     }
@@ -68,6 +66,8 @@ class CodexAdapter : AgentCliAdapter {
     /** Current `codex exec --json` schema: thread.* / turn.* / item.* events. */
     private fun parseThreadShape(obj: JsonObject, nowMillis: Long): List<AgentEvent>? {
         return when (obj.stringOrNull("type")) {
+            "rate_limit_event", "rate_limits.updated" -> parseQuotaUpdate(obj, nowMillis)
+            "token_count", "context_window" -> parseContextUsage(obj, nowMillis)
             "thread.started" -> listOf(AgentEvent.SessionStarted(nowMillis, obj.stringOrNull("thread_id"), model = null))
             "turn.started" -> emptyList()
             "item.started", "item.updated", "item.completed" -> {
@@ -166,9 +166,26 @@ class CodexAdapter : AgentCliAdapter {
             "task_complete" -> listOf(
                 AgentEvent.TaskResult(nowMillis, success = true, finalText = msg.stringOrNull("last_agent_message")),
             )
+            "token_count", "context_window" -> parseContextUsage(msg, nowMillis)
             "error" -> listOf(AgentEvent.TaskError(nowMillis, msg.stringOrNull("message") ?: "error"))
-            "task_started", "token_count" -> emptyList()
+            "task_started" -> emptyList()
             else -> emptyList()
+        }
+    }
+
+    /**
+     * Codex reports this separately from `turn.completed.usage`: it describes the
+     * conversation currently in memory, including the model's active-window cap.
+     * Keep the alternate field names so both the legacy and thread JSONL formats work.
+     */
+    private fun parseContextUsage(obj: JsonObject, nowMillis: Long): List<AgentEvent> {
+        val usage = obj.objectOrNull("info") ?: obj.objectOrNull("usage") ?: obj
+        val used = listOf("total_token_usage", "total_tokens", "context_tokens")
+            .firstNotNullOfOrNull(usage::longOrNull)
+        val window = listOf("model_context_window", "context_window_tokens", "context_window")
+            .firstNotNullOfOrNull(usage::longOrNull)
+        return if (used == null && window == null) emptyList() else {
+            listOf(AgentEvent.ContextUsage(nowMillis, usedTokens = used, windowTokens = window))
         }
     }
 }

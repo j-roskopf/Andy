@@ -21,11 +21,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,7 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,9 +70,16 @@ import kotlinx.coroutines.launch
 internal fun AgentTranscript(
     events: List<AgentEvent>,
     isActive: Boolean,
+    agentLabel: String = "agent",
+    headerContent: (@Composable () -> Unit)? = null,
+    originalPrompt: String? = null,
+    completedContent: (@Composable () -> Unit)? = null,
     onSkillOpen: (AgentSkill) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val displayEvents = remember(events) { transcriptDisplayEvents(events) }
+    val originalPromptVisible = originalPrompt?.takeIf { it.isNotBlank() }
+    val latestTaskResultIndex = displayEvents.indexOfLast { it is AgentEvent.TaskResult }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var stickToBottom by remember { mutableStateOf(true) }
@@ -83,9 +92,10 @@ internal fun AgentTranscript(
     }
     // Stream deltas replace the final item in place, so size alone does not
     // change while a long assistant message is growing.
-    LaunchedEffect(events.lastOrNull(), isActive, stickToBottom) {
-        if (stickToBottom && (events.isNotEmpty() || isActive)) {
-            listState.scrollToItem(if (isActive) events.size else events.lastIndex)
+    val transcriptItemCount = displayEvents.size + (if (headerContent != null) 1 else 0) + (if (originalPromptVisible != null) 1 else 0) + if (isActive) 1 else 0
+    LaunchedEffect(displayEvents.lastOrNull(), headerContent != null, originalPromptVisible, isActive, stickToBottom) {
+        if (stickToBottom && transcriptItemCount > 0) {
+            listState.scrollToItem(transcriptItemCount - 1)
         }
     }
     LaunchedEffect(listState) {
@@ -96,28 +106,52 @@ internal fun AgentTranscript(
                 if (atBottom) stickToBottom = true
             }
     }
-    Box(modifier.background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))) {
-        if (events.isEmpty() && !isActive) {
+    Box(
+        modifier
+            .background(AndyColors.Neutral900.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R4))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4)),
+    ) {
+        if (events.isEmpty() && originalPromptVisible == null && !isActive) {
             EmptyState("waiting for agent output")
         } else {
             LazyColumn(
-                Modifier.fillMaxSize().padding(10.dp).padding(end = 8.dp),
+                Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp).padding(end = 8.dp),
                 state = listState,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                headerContent?.let { header ->
+                    item(key = "task-header") { header() }
+                }
+                originalPromptVisible?.let { prompt ->
+                    item(key = "original-prompt") {
+                        SelectionContainer {
+                            ChatMessageBubble(
+                                author = "you",
+                                authorColor = Rust,
+                                alignEnd = true,
+                            ) {
+                                Text(prompt, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                            }
+                        }
+                    }
+                }
                 itemsIndexed(
-                    events,
+                    displayEvents,
                     key = { index, event -> transcriptEventKey(index, event) },
                 ) { index, event ->
-                    TranscriptEvent(
-                        event = event,
-                        eventKey = transcriptEventKey(index, event),
-                        expandedToolKeys = expandedToolKeys,
-                        onToolExpandedChange = { key, expanded ->
-                            expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
-                        },
-                        onSkillOpen = onSkillOpen,
-                    )
+                    SelectionContainer {
+                        TranscriptEvent(
+                            event = event,
+                            eventKey = transcriptEventKey(index, event),
+                            expandedToolKeys = expandedToolKeys,
+                            agentLabel = agentLabel,
+                            completedContent = if (index == latestTaskResultIndex) completedContent else null,
+                            onToolExpandedChange = { key, expanded ->
+                                expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                            },
+                            onSkillOpen = onSkillOpen,
+                        )
+                    }
                 }
                 if (isActive) {
                     item(key = "agent-thinking") { AgentThinkingIndicator() }
@@ -135,6 +169,16 @@ internal fun AgentTranscript(
             )
         }
     }
+}
+
+/**
+ * Providers commonly emit the final response once as an assistant message and
+ * again in their completion record. The completion record owns that response
+ * in the transcript so it is visible once, with its completed state.
+ */
+internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> = events.filterIndexed { index, event ->
+    val completion = events.getOrNull(index + 1) as? AgentEvent.TaskResult
+    event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
 }
 
 @Composable
@@ -167,47 +211,48 @@ private fun TranscriptEvent(
     event: AgentEvent,
     eventKey: String,
     expandedToolKeys: Set<String>,
+    agentLabel: String,
+    completedContent: (@Composable () -> Unit)?,
     onToolExpandedChange: (String, Boolean) -> Unit,
     onSkillOpen: (AgentSkill) -> Unit,
 ) {
     when (event) {
-        is AgentEvent.SessionStarted -> Text(
-            "session started${event.model?.let { " · $it" }.orEmpty()}",
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-        )
-        is AgentEvent.AssistantText -> Text(
-            event.text,
-            color = TextPrimary,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
-            modifier = Modifier.padding(vertical = 2.dp),
-        )
-        is AgentEvent.Thinking -> Text(
-            event.text,
-            color = TextSecondary,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-            fontStyle = FontStyle.Italic,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-        is AgentEvent.UserMessage -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("you", color = Rust, fontFamily = MonoFont, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        is AgentEvent.SessionStarted -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Text(
+                "${event.model ?: agentLabel}  session started",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+            )
+        }
+        is AgentEvent.AssistantText -> ChatMessageBubble(
+            author = agentLabel,
+            authorColor = Cyan,
+            alignEnd = false,
+        ) {
+            Text(event.text, color = TextPrimary, fontSize = 13.sp, lineHeight = 19.sp)
+        }
+        is AgentEvent.Thinking -> ThinkingStep(event.text)
+        is AgentEvent.UserMessage -> ChatMessageBubble(
+            author = "you",
+            authorColor = Rust,
+            alignEnd = true,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(event.text, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
                 if (event.skills.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        event.skills.forEach { skill ->
-                            Text(
-                                "/${skill.name}",
-                                color = Cyan,
-                                fontFamily = MonoFont,
-                                fontSize = 11.sp,
-                                textDecoration = TextDecoration.Underline,
-                                modifier = Modifier.clickable { onSkillOpen(skill) },
-                            )
+                    DisableSelection {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            event.skills.forEach { skill ->
+                                Text(
+                                    "/${skill.name}",
+                                    color = Cyan,
+                                    fontFamily = MonoFont,
+                                    fontSize = 11.sp,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier.clickable { onSkillOpen(skill) },
+                                )
+                            }
                         }
                     }
                 }
@@ -232,28 +277,27 @@ private fun TranscriptEvent(
             color = if (event.isError) Red else TextSecondary,
         )
         is AgentEvent.TaskError -> Text(event.message, color = Red, fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 16.sp)
-        is AgentEvent.TaskResult -> Column(
-            Modifier.fillMaxWidth()
-                .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R2))
-                .border(1.dp, (if (event.success) Green else Red).copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R2))
-                .padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        is AgentEvent.TaskResult -> ChatMessageBubble(
+            author = if (event.success) "completed" else "failed",
+            authorColor = if (event.success) Green else Red,
+            alignEnd = false,
+            borderColor = (if (event.success) Green else Red).copy(alpha = 0.38f),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (event.success) "done" else "failed",
-                    color = if (event.success) Green else Red,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-                formatCost(event.costUsd, event.costIsEstimated)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
-                formatTokens(event.inputTokens, event.outputTokens)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
-            }
-            event.finalText?.takeIf { it.isNotBlank() }?.let {
-                Text(it, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    formatCost(event.costUsd, event.costIsEstimated)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+                    formatTokens(event.inputTokens, event.outputTokens)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+                }
+                event.finalText?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                if (event.success) completedContent?.invoke()
             }
         }
+        // The header owns this live status; a transcript row would only add noise.
+        is AgentEvent.ContextUsage -> Unit
         is AgentEvent.Raw -> Text(
             event.line,
             color = TextSecondary.copy(alpha = 0.75f),
@@ -261,6 +305,59 @@ private fun TranscriptEvent(
             fontSize = 11.sp,
             lineHeight = 14.sp,
         )
+    }
+}
+
+@Composable
+private fun ThinkingStep(text: String) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(AndyColors.Neutral850.copy(alpha = 0.46f), RoundedCornerShape(AndyRadius.R2))
+            .border(1.dp, Cyan.copy(alpha = 0.18f), RoundedCornerShape(AndyRadius.R2))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("···", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text("thinking", color = Cyan.copy(alpha = 0.82f), fontFamily = MonoFont, fontSize = 10.sp)
+        }
+        Text(
+            text,
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ChatMessageBubble(
+    author: String,
+    authorColor: Color,
+    alignEnd: Boolean,
+    borderColor: Color = Border,
+    content: @Composable () -> Unit,
+) {
+    Box(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .widthIn(max = if (alignEnd) 720.dp else 860.dp)
+                .fillMaxWidth()
+                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart)
+                .background(
+                    if (alignEnd) AndyColors.OrangeSubtle.copy(alpha = 0.72f) else AndyColors.Neutral850.copy(alpha = 0.90f),
+                    RoundedCornerShape(AndyRadius.R4),
+                )
+                .border(1.dp, borderColor, RoundedCornerShape(AndyRadius.R4))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Text(author, color = authorColor, fontFamily = MonoFont, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            content()
+        }
     }
 }
 
@@ -286,7 +383,6 @@ private fun ToolBlock(
                     Modifier
                         .background(AndyColors.Neutral850.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.R2))
                         .border(1.dp, Border.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.R2))
-                        .clickable { onExpandedChange(!expanded) }
                 } else {
                     Modifier
                 },
@@ -294,24 +390,32 @@ private fun ToolBlock(
             .padding(horizontal = if (expandable) 8.dp else 0.dp, vertical = if (expandable) 5.dp else 0.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Top) {
-            Text(
-                if (expandable) if (expanded) "v" else ">" else marker,
-                color = color,
-                fontFamily = MonoFont,
-                fontSize = 12.sp,
-                modifier = if (expandable) Modifier.width(10.dp) else Modifier,
-            )
-            Text(
-                headline.ifBlank { name.orEmpty() },
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-                maxLines = if (expanded) Int.MAX_VALUE else 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+        DisableSelection {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .then(if (expandable) Modifier.clickable { onExpandedChange(!expanded) } else Modifier),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    if (expandable) if (expanded) "v" else ">" else marker,
+                    color = color,
+                    fontFamily = MonoFont,
+                    fontSize = 12.sp,
+                    modifier = if (expandable) Modifier.width(10.dp) else Modifier,
+                )
+                Text(
+                    headline.ifBlank { name.orEmpty() },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         AnimatedVisibility(visible = expanded && body.isNotBlank()) {
             Column(
