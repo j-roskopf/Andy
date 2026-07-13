@@ -486,7 +486,8 @@ fun AgentTask.modelForCli(): String? = model?.let { selected ->
                 if (effort != null && catalog?.efforts?.isNotEmpty() == true) {
                     append('-').append(effort.cliValue)
                 }
-                if (fastMode) append("-fast")
+                // Catalog options gate -fast; custom exact slugs stay unadorned.
+                if (fastMode && catalog?.supportsFastMode == true) append("-fast")
             }
         }
         AgentKind.Antigravity -> reasoningEffort?.let { "$selected (${it.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }})" } ?: selected
@@ -560,7 +561,7 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
     val price = when (agent) {
         AgentKind.Codex -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)
         AgentKind.Cursor -> when {
-            model.equals("auto", ignoreCase = true) -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 6.0)
+            model?.equals("auto", ignoreCase = true) == true -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 6.0)
             model?.contains("opus", ignoreCase = true) == true -> TokenPrice(inputUsdPerMillion = 5.0, outputUsdPerMillion = 25.0)
             model?.contains("gpt", ignoreCase = true) == true || model?.contains("sol", ignoreCase = true) == true ->
                 TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)

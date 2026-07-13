@@ -440,6 +440,30 @@ class CursorAdapterTest {
     }
 
     @Test
+    fun dropsPersistedFastModeWhenCatalogNoLongerSupportsIt() {
+        val configured = task(AgentKind.Cursor).copy(
+            model = "Gemini 3.1 Pro",
+            reasoningEffort = null,
+            fastMode = true,
+        )
+        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
+        assertTrue("--model" in argv && "gemini-3.1-pro" in argv)
+        assertTrue("gemini-3.1-pro-fast" !in argv)
+    }
+
+    @Test
+    fun customCursorSlugDoesNotAppendFastSuffix() {
+        val configured = task(AgentKind.Cursor).copy(
+            model = "my-custom-model",
+            reasoningEffort = null,
+            fastMode = true,
+        )
+        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
+        assertTrue("--model" in argv && "my-custom-model" in argv)
+        assertTrue("my-custom-model-fast" !in argv)
+    }
+
+    @Test
     fun explicitSandboxModeUsesCursorSandboxFlags() {
         val disabled = adapter.buildCommand(
             "/bin/cursor-agent",
