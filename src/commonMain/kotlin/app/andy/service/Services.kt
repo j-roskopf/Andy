@@ -188,6 +188,17 @@ interface AgentRunService {
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
     )
+    /** Holds a follow-up until the active run completes successfully. */
+    fun queueFollowUp(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String> = emptyList(),
+        skills: List<AgentSkill> = emptyList(),
+    )
+    /** Removes an unsent follow-up at [queueIndex]. */
+    fun removeQueuedFollowUp(taskId: String, queueIndex: Int)
+    /** Updates Andy's persisted task goal; providers receive it with subsequent prompts. */
+    fun updateGoal(taskId: String, goal: String?)
     suspend fun delete(taskId: String, removeWorktree: Boolean)
     /** Clears the unread indicator for a finished chat (e.g. when opened). */
     fun markRead(taskId: String)

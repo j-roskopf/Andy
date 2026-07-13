@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.modelForCli
 import app.andy.model.promptForCli
@@ -26,11 +27,7 @@ class ClaudeCodeAdapter : AgentCliAdapter {
         task.vendorSessionId?.let { add("--session-id"); add(it) }
         task.modelForCli()?.let { add("--model"); add(it) }
         task.reasoningEffort?.let { add("--effort"); add(it.cliValue) }
-        when (task.autonomy) {
-            AgentAutonomy.ReadOnly -> { add("--permission-mode"); add("plan") }
-            AgentAutonomy.Standard -> { add("--permission-mode"); add("acceptEdits") }
-            AgentAutonomy.Full -> add("--dangerously-skip-permissions")
-        }
+        addClaudePermissionMode(task)
         task.maxBudgetUsd?.let { add("--max-budget-usd"); add(it.toString()) }
         mcpUrl?.let {
             add("--mcp-config")
@@ -49,11 +46,7 @@ class ClaudeCodeAdapter : AgentCliAdapter {
             add("--resume"); add(sessionId)
             task.modelForCli()?.let { add("--model"); add(it) }
             task.reasoningEffort?.let { add("--effort"); add(it.cliValue) }
-            when (task.autonomy) {
-                AgentAutonomy.ReadOnly -> { add("--permission-mode"); add("plan") }
-                AgentAutonomy.Standard -> { add("--permission-mode"); add("acceptEdits") }
-                AgentAutonomy.Full -> add("--dangerously-skip-permissions")
-            }
+            addClaudePermissionMode(task)
             mcpUrl?.let {
                 add("--mcp-config")
                 add("""{"mcpServers":{"andy":{"type":"http","url":"$it"}}}""")
@@ -70,6 +63,19 @@ class ClaudeCodeAdapter : AgentCliAdapter {
     override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> {
         val obj = parseJsonObject(line) ?: return rawIfNotBlank(line, nowMillis)
         return parseClaudeStyleObject(obj, nowMillis) ?: rawIfNotBlank(line, nowMillis)
+    }
+}
+
+private fun MutableList<String>.addClaudePermissionMode(task: AgentTask) {
+    when (task.sandboxMode) {
+        AgentSandboxMode.ReadOnly -> { add("--permission-mode"); add("plan") }
+        AgentSandboxMode.WorkspaceWrite -> { add("--permission-mode"); add("acceptEdits") }
+        AgentSandboxMode.None -> add("--dangerously-skip-permissions")
+        null -> when (task.autonomy) {
+            AgentAutonomy.ReadOnly -> { add("--permission-mode"); add("plan") }
+            AgentAutonomy.Standard -> { add("--permission-mode"); add("acceptEdits") }
+            AgentAutonomy.Full -> add("--dangerously-skip-permissions")
+        }
     }
 }
 

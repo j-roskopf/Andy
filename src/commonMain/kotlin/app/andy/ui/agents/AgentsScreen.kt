@@ -70,14 +70,14 @@ internal fun AgentsScreen(
     val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
     var projects by remember { mutableStateOf<List<ActionProject>>(emptyList()) }
     var selectedTaskId by remember { mutableStateOf<String?>(null) }
-    var showComposer by remember { mutableStateOf(false) }
+    var showComposer by remember { mutableStateOf(true) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var listPaneWidth by remember { mutableStateOf(420f) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(active) {
         if (!active) {
-            showComposer = false
+            showComposer = true
             pendingConfirmation = null
         }
     }
@@ -99,7 +99,7 @@ internal fun AgentsScreen(
     val activeTasks = remember(ordered) { ordered.filter { it.isActive } }
     val completedTasks = remember(ordered) { ordered.filterNot { it.isActive } }
     val runningCount = activeTasks.size
-    val availableAgents = cliStatuses.filter { it.available }
+    val availableAgents = cliStatuses.filter { it.ready }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.width(listPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {

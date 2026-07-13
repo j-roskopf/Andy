@@ -199,6 +199,90 @@ class AgentRetryTest {
     }
 }
 
+class AgentQueuedFollowUpTest {
+    @Test
+    fun startsQueuedFollowUpAfterTheCurrentRunCompletes() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-queue", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            val service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "queue test",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            withTimeout(10_000) {
+                while (service.tasks.value.first { it.id == task.id }.vendorSessionId == null) delay(25)
+            }
+
+            service.queueFollowUp(task.id, "second message")
+            service.queueFollowUp(task.id, "third message")
+            assertEquals(
+                listOf("second message", "third message"),
+                service.tasks.value.first { it.id == task.id }.queuedFollowUps.map { it.text },
+            )
+
+            withTimeout(10_000) {
+                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+            }
+            val finished = service.tasks.value.first { it.id == task.id }
+            assertEquals(AgentTaskStatus.Completed, finished.status)
+            assertTrue(finished.queuedFollowUps.isEmpty())
+            assertTrue(
+                service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().map { it.text } == listOf("second message", "third message"),
+            )
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+}
+
+private class QueueTestAdapter : AgentCliAdapter {
+    override val kind = AgentKind.Codex
+    override val supportsHeadlessResume = true
+    override val supportsStreamJson = false
+
+    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
+        listOf(binary, "-c", "printf 'session\\n'; sleep 1")
+
+    override fun buildResumeCommand(
+        binary: String,
+        task: AgentTask,
+        followUp: String,
+        imagePaths: List<String>,
+        mcpUrl: String?,
+    ): List<String> = listOf(binary, "-c", "printf 'resumed\\n'")
+
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
+
+    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> = when (line) {
+        "session" -> listOf(AgentEvent.SessionStarted(nowMillis, "queue-test-session", null))
+        "resumed" -> listOf(AgentEvent.AssistantText(nowMillis, "queued response"))
+        else -> emptyList()
+    }
+}
+
 private class FakeMcp : McpServerService {
     override val status = MutableStateFlow("stopped")
     override val running = MutableStateFlow(false)

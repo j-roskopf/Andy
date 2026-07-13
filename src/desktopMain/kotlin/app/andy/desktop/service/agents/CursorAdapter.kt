@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.modelForCli
 import app.andy.model.promptForCli
@@ -18,6 +19,7 @@ class CursorAdapter : AgentCliAdapter {
         add("-p")
         add("--output-format"); add("stream-json")
         task.modelForCli()?.let { add("--model"); add(it) }
+        addSandboxMode(task)
         if (task.autonomy == AgentAutonomy.Full) add("--force")
         add(task.promptForCli())
     }
@@ -30,6 +32,7 @@ class CursorAdapter : AgentCliAdapter {
             add("--output-format"); add("stream-json")
             add("--resume"); add(chatId)
             task.modelForCli()?.let { add("--model"); add(it) }
+            addSandboxMode(task)
             if (task.autonomy == AgentAutonomy.Full) add("--force")
             add(promptWithImageHints(followUp, imagePaths))
         }
@@ -44,5 +47,14 @@ class CursorAdapter : AgentCliAdapter {
         val obj = parseJsonObject(line) ?: return rawIfNotBlank(line, nowMillis)
         // cursor-agent's stream-json mimics Claude Code's schema.
         return parseClaudeStyleObject(obj, nowMillis) ?: rawIfNotBlank(line, nowMillis)
+    }
+}
+
+private fun MutableList<String>.addSandboxMode(task: AgentTask) {
+    when (task.sandboxMode) {
+        AgentSandboxMode.ReadOnly -> { add("--mode"); add("plan"); add("--sandbox"); add("enabled") }
+        AgentSandboxMode.WorkspaceWrite -> { add("--sandbox"); add("enabled") }
+        AgentSandboxMode.None -> { add("--sandbox"); add("disabled") }
+        null -> Unit // Preserve the CLI/config default for tasks created before explicit sandbox support.
     }
 }

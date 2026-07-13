@@ -4,6 +4,7 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentReasoningEffort
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.estimatedTokenCostUsd
 import kotlin.test.Test
@@ -38,6 +39,17 @@ class ClaudeCodeAdapterTest {
     @Test
     fun fullAutonomySkipsPermissions() {
         val argv = adapter.buildCommand("/bin/claude", task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full), mcpUrl = null)
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun explicitPermissionModeOverridesAutonomy() {
+        val argv = adapter.buildCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
         assertTrue("--dangerously-skip-permissions" in argv)
         assertTrue("--permission-mode" !in argv)
     }
@@ -129,6 +141,15 @@ class CodexAdapterTest {
     fun buildsExecCommandWithSandbox() {
         val argv = adapter.buildCommand("/bin/codex", task(AgentKind.Codex), mcpUrl = null)
         assertEquals(listOf("/bin/codex", "exec", "--json", "-C", "/tmp/repo", "--skip-git-repo-check", "--sandbox", "workspace-write", "do the thing"), argv)
+    }
+
+    @Test
+    fun explicitNoSandboxOverridesAutonomy() {
+        val configured = task(AgentKind.Codex).copy(sandboxMode = AgentSandboxMode.None)
+        val argv = adapter.buildCommand("/bin/codex", configured, mcpUrl = null)
+
+        assertTrue("--dangerously-bypass-approvals-and-sandbox" in argv)
+        assertTrue("--sandbox" !in argv)
     }
 
     @Test
@@ -269,6 +290,16 @@ class AntigravityAdapterTest {
     }
 
     @Test
+    fun explicitPermissionModeOverridesAutonomy() {
+        val argv = adapter.buildCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+    }
+
+    @Test
     fun selectedModelAndLevelBecomeAntigravityVariant() {
         val configured = task(AgentKind.Antigravity).copy(model = "Gemini 3.5 Flash", reasoningEffort = AgentReasoningEffort.High)
         val argv = adapter.buildCommand("/bin/agy", configured, mcpUrl = null)
@@ -288,6 +319,24 @@ class CursorAdapterTest {
         )
         val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
         assertTrue("--model" in argv && "Grok 4.5 High Fast" in argv)
+    }
+
+    @Test
+    fun explicitSandboxModeUsesCursorSandboxFlags() {
+        val disabled = adapter.buildCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--sandbox" in disabled && "disabled" in disabled)
+
+        val readOnly = adapter.buildCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor).copy(sandboxMode = AgentSandboxMode.ReadOnly),
+            mcpUrl = null,
+        )
+        assertTrue("--mode" in readOnly && "plan" in readOnly)
+        assertTrue("--sandbox" in readOnly && "enabled" in readOnly)
     }
 
     @Test
