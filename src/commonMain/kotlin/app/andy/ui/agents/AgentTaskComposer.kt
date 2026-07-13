@@ -239,7 +239,7 @@ private class AgentTaskComposerFormState(
         val catalogModel = AgentModelCatalog.option(agent, savedModel)
         modelId = when {
             savedModel == null -> null
-            catalogModel != null -> savedModel
+            catalogModel != null -> catalogModel.id
             else -> CUSTOM_MODEL_ID
         }
         customModel = if (catalogModel == null) savedModel.orEmpty() else ""
@@ -330,10 +330,15 @@ private fun rememberAgentTaskComposerForm(
         if (!state.directoryIsGitRepo) state.useWorktree = false
     }
     LaunchedEffect(state.agent, state.modelId) {
-        if (state.usesCustomModel || selectedModel?.efforts?.contains(state.reasoningEffort) != true) {
-            state.reasoningEffort = null
+        val model = selectedModel
+        when {
+            state.usesCustomModel || model == null || model.efforts.isEmpty() -> state.reasoningEffort = null
+            state.reasoningEffort !in model.efforts -> {
+                // Cursor encodes effort in the model slug; leaving it unset yields invalid ids like cursor-grok-4.5.
+                state.reasoningEffort = if (state.agent == AgentKind.Cursor) model.preferredEffort() else null
+            }
         }
-        if (selectedModel?.supportsFastMode != true) state.fastMode = false
+        if (model?.supportsFastMode != true) state.fastMode = false
     }
 
     return AgentTaskComposerForm(
@@ -618,7 +623,9 @@ private fun AgentChatComposer(
                     Box {
                         FilterPill(state.reasoningEffort?.label ?: "effort", state.reasoningEffort != null, Rust) { effortMenuExpanded = true }
                         DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                            DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                            if (state.agent != AgentKind.Cursor) {
+                                DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                            }
                             selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
                         }
                     }
@@ -728,11 +735,15 @@ private fun AgentTaskComposerFields(
                     )
                     Text("Custom variants are passed as-is, so Andy does not add a reasoning or speed suffix.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 } else if (form.selectedModel != null) {
-                    Text("Reasoning", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterPill("provider default", state.reasoningEffort == null, Cyan) { state.reasoningEffort = null }
-                        form.selectedModel.efforts.forEach { effort ->
-                            FilterPill(effort.label, state.reasoningEffort == effort, Rust) { state.reasoningEffort = effort }
+                    if (form.selectedModel.efforts.isNotEmpty()) {
+                        Text("Reasoning", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (state.agent != AgentKind.Cursor) {
+                                FilterPill("provider default", state.reasoningEffort == null, Cyan) { state.reasoningEffort = null }
+                            }
+                            form.selectedModel.efforts.forEach { effort ->
+                                FilterPill(effort.label, state.reasoningEffort == effort, Rust) { state.reasoningEffort = effort }
+                            }
                         }
                     }
                     if (form.selectedModel.supportsFastMode) {
@@ -740,7 +751,7 @@ private fun AgentTaskComposerFields(
                     }
                     Text(
                         when (state.agent) {
-                            AgentKind.Cursor -> "Cursor receives the selected provider variant, e.g. Grok 4.5 High Fast. Availability follows your Cursor account."
+                            AgentKind.Cursor -> "Cursor receives the selected provider variant, e.g. cursor-grok-4.5-high-fast. Availability follows your Cursor account."
                             AgentKind.Antigravity -> "Antigravity receives its model plus level as one variant; its installed CLI/account remains authoritative."
                             else -> "The selected model and reasoning level are passed directly to the ${state.agent.label} CLI."
                         },
