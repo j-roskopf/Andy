@@ -35,6 +35,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
@@ -106,8 +107,8 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
     ) {
         Row(
             Modifier.heightIn(min = 22.dp)
-                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.Pill))
-                .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.Pill))
+                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.R2))
+                .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R2))
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -127,22 +128,34 @@ internal fun PlaceholderScreen(name: String) {
 
 @Composable
 internal fun Toolbar(title: String, subtitle: String, onPrimary: (() -> Unit)? = null, primaryLabel: String = "Run") {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 23.sp)
-            Text(subtitle.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+    Row(Modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height(30.dp)
+                    .background(Rust, RoundedCornerShape(AndyRadius.R2)),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(title, color = AndyColors.Neutral100, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 22.sp)
+                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp)
+            }
         }
-        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel.lowercase(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
 
 @Composable
-internal fun PanelCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun PanelCard(
+    modifier: Modifier = Modifier,
+    accent: Color? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val shape = RoundedCornerShape(AndyRadius.R3)
     Column(
         modifier
             .background(AndyColors.Neutral800.copy(alpha = 0.82f), shape)
-            .border(1.dp, Border, shape)
+            .border(1.dp, accent?.copy(alpha = 0.58f) ?: Border, shape)
             .noiseGridOverlay(0.025f)
             .padding(AndySpace.S4),
         verticalArrangement = Arrangement.spacedBy(10.dp),
