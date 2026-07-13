@@ -178,7 +178,7 @@ internal fun AgentTaskDetail(
                 followUpImagePaths = emptyList()
                 return
             }
-            sendOrQueue(remainder, emptyList())
+            sendOrQueue(remainder, selectedSkills.filter { remainder.referencesSkill(it) })
         } else {
             sendOrQueue(followUp.trim(), selectedSkills)
         }
