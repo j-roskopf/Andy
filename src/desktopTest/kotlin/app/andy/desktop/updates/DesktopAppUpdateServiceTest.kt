@@ -41,4 +41,13 @@ class DesktopAppUpdateServiceTest {
         assertTrue(script.contains("exec /usr/bin/open -W '/tmp/Andy-1.2.3.pkg'"))
         assertTrue(!script.contains("open -a Andy"))
     }
+
+    @Test
+    fun macInstallerDetachesWithoutUsingDiscardForStdin() {
+        val builder = macInstallerProcessBuilder("/tmp/andy-update.sh")
+
+        assertEquals(java.io.File("/dev/null"), builder.redirectInput().file())
+        assertEquals(ProcessBuilder.Redirect.DISCARD, builder.redirectOutput())
+        assertEquals(ProcessBuilder.Redirect.DISCARD, builder.redirectError())
+    }
 }
