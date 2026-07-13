@@ -239,74 +239,6 @@ val stripMacReleaseFfmpegExecutables by tasks.registering {
     }
 }
 
-val resignMacReleaseApp by tasks.registering {
-    dependsOn("hardenMacReleasePty4jSpawnHelper")
-
-    val signingIdentity = providers.gradleProperty("compose.desktop.mac.signing.identity")
-    val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
-
-    onlyIf {
-        System.getProperty("os.name").contains("mac", ignoreCase = true) &&
-            !signingIdentity.orNull.isNullOrBlank()
-    }
-
-    doLast {
-        val releaseAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app").get().asFile
-        val apps = releaseAppDir.listFiles { file -> file.isDirectory && file.extension == "app" }.orEmpty()
-        val identity = signingIdentity.get()
-        val keychainArgs = signingKeychain.orNull
-            ?.takeIf { it.isNotBlank() }
-            ?.let { listOf("--keychain", it) }
-            .orEmpty()
-
-        val entitlementsFile = temporaryDir.resolve("entitlements.plist")
-        entitlementsFile.writeText(
-            """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>com.apple.security.cs.allow-jit</key>
-                <true/>
-                <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-                <true/>
-                <key>com.apple.security.cs.disable-library-validation</key>
-                <true/>
-            </dict>
-            </plist>
-            """.trimIndent()
-        )
-
-        fun runCommand(command: List<String>) {
-            val exitCode = ProcessBuilder(command)
-                .inheritIO()
-                .start()
-                .waitFor()
-            if (exitCode != 0) {
-                error("Command failed with exit code $exitCode: ${command.joinToString(" ")}")
-            }
-        }
-
-        apps.forEach { app ->
-            runCommand(
-                listOf(
-                    "codesign",
-                    "--force",
-                    "--deep",
-                    "--options",
-                    "runtime",
-                    "--entitlements",
-                    entitlementsFile.absolutePath,
-                    "--timestamp",
-                    "--sign",
-                    identity,
-                ) + keychainArgs + app.absolutePath
-            )
-            runCommand(listOf("codesign", "--verify", "--deep", "--strict", "--verbose=2", app.absolutePath))
-        }
-    }
-}
-
 val hardenMacReleasePty4jSpawnHelper by tasks.registering {
     dependsOn(stripMacReleaseFfmpegExecutables)
 
@@ -370,6 +302,74 @@ val hardenMacReleasePty4jSpawnHelper by tasks.registering {
             runCommand(listOf("zip", "-qry", replacement.absolutePath, "."), extractionDir)
             replacement.copyTo(jarFile, overwrite = true)
             logger.lifecycle("Signed the hardened-runtime Pty4J spawn helper in ${jarFile.name}")
+        }
+    }
+}
+
+val resignMacReleaseApp by tasks.registering {
+    dependsOn(hardenMacReleasePty4jSpawnHelper)
+
+    val signingIdentity = providers.gradleProperty("compose.desktop.mac.signing.identity")
+    val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
+
+    onlyIf {
+        System.getProperty("os.name").contains("mac", ignoreCase = true) &&
+            !signingIdentity.orNull.isNullOrBlank()
+    }
+
+    doLast {
+        val releaseAppDir = layout.buildDirectory.dir("compose/binaries/main-release/app").get().asFile
+        val apps = releaseAppDir.listFiles { file -> file.isDirectory && file.extension == "app" }.orEmpty()
+        val identity = signingIdentity.get()
+        val keychainArgs = signingKeychain.orNull
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf("--keychain", it) }
+            .orEmpty()
+
+        val entitlementsFile = temporaryDir.resolve("entitlements.plist")
+        entitlementsFile.writeText(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>com.apple.security.cs.allow-jit</key>
+                <true/>
+                <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+                <true/>
+                <key>com.apple.security.cs.disable-library-validation</key>
+                <true/>
+            </dict>
+            </plist>
+            """.trimIndent()
+        )
+
+        fun runCommand(command: List<String>) {
+            val exitCode = ProcessBuilder(command)
+                .inheritIO()
+                .start()
+                .waitFor()
+            if (exitCode != 0) {
+                error("Command failed with exit code $exitCode: ${command.joinToString(" ")}")
+            }
+        }
+
+        apps.forEach { app ->
+            runCommand(
+                listOf(
+                    "codesign",
+                    "--force",
+                    "--deep",
+                    "--options",
+                    "runtime",
+                    "--entitlements",
+                    entitlementsFile.absolutePath,
+                    "--timestamp",
+                    "--sign",
+                    identity,
+                ) + keychainArgs + app.absolutePath
+            )
+            runCommand(listOf("codesign", "--verify", "--deep", "--strict", "--verbose=2", app.absolutePath))
         }
     }
 }
