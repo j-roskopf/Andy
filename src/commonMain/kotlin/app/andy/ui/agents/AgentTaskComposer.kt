@@ -244,7 +244,9 @@ private class AgentTaskComposerFormState(
         reasoningEffort = defaults?.reasoningEffort
         fastMode = defaults?.fastMode == true
         autonomy = defaults?.autonomy ?: AgentAutonomy.Standard
-        sandboxMode = defaults?.sandboxMode ?: autonomy.defaultSandboxMode()
+        // Leave the sandbox unset unless it was explicitly saved. This lets the
+        // provider derive it from whichever autonomy level the user chooses.
+        sandboxMode = defaults?.sandboxMode
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
