@@ -121,11 +121,29 @@ class WorktreeManager(
 
     private fun git(dir: String, vararg args: String): GitResult = runCatching {
         val process = ProcessBuilder(listOf("git", "-C", dir) + args).redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(30, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
+        val output = readOutputWithin(process, timeoutSeconds = 30)
+        if (output == null) {
             return GitResult(-1, "git timed out")
         }
         GitResult(process.exitValue(), output)
     }.getOrElse { GitResult(-1, it.message.orEmpty()) }
+
+    /** Drains stdout in parallel so a hung Git subprocess cannot bypass the timeout. */
+    private fun readOutputWithin(process: Process, timeoutSeconds: Long): String? {
+        val output = StringBuffer()
+        val reader = Thread({
+            runCatching {
+                process.inputStream.bufferedReader().use { stream -> output.append(stream.readText()) }
+            }
+        }, "andy-git-output-reader").apply { isDaemon = true }
+        reader.start()
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor(1, TimeUnit.SECONDS)
+            reader.join(1_000)
+            return null
+        }
+        reader.join(1_000)
+        return output.toString()
+    }
 }

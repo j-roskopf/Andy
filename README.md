@@ -15,6 +15,7 @@ Andy is a desktop companion for Android developers.
 - Android SDK platform tools for device and emulator access.
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
 - scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
+- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
 
 ## Features
 
@@ -65,6 +66,14 @@ Run a debug-app HTTPS proxy backed by mitmproxy. Start and stop capture, configu
 ### Proxy Rules
 
 Create ordered network rewrite rules that match URL patterns and optional HTTP methods. Rules can change status codes, set or remove headers, and provide response bodies for debug-app testing.
+
+### Projects
+
+Organize Android work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context.
+
+### Agents
+
+Dispatch coding tasks to Claude Code, Codex, Cursor, or Antigravity from Andy. Compose prompts with images and `/` skills, choose model and autonomy, optionally isolate the run in a git worktree, and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript, review file diffs when the task finishes, and send follow-ups without leaving the desktop UI.
 
 ### Controls
 

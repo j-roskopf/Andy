@@ -40,6 +40,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -92,6 +94,7 @@ class DesktopAgentRunService(
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
     private val persistMutex = Mutex()
+    private val mcpMutex = Mutex()
     private val quotaRefreshMutex = Mutex()
     private val quotaProbe = ProviderQuotaProbe()
     private val ready = CompletableDeferred<Unit>()
@@ -318,7 +321,14 @@ class DesktopAgentRunService(
             return
         }
 
-        val mcpUrl = if (task.attachAndyMcp) prepareMcp(task.agent) else null
+        val mcpUrl = if (task.attachAndyMcp) {
+            runCatching { prepareMcp(task.agent) }.getOrElse { error ->
+                finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
+                return
+            }
+        } else {
+            null
+        }
         val argv = runCatching { argvBuilder(adapter, binary, mcpUrl) }.getOrElse {
             finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = it.message ?: "failed to build command")
             return
@@ -358,7 +368,7 @@ class DesktopAgentRunService(
 
         val transcript = store.transcriptFile(taskId)
         transcript.parentFile?.mkdirs()
-        java.io.FileWriter(transcript, true).buffered().use { writer ->
+        FileOutputStream(transcript, true).bufferedWriter(StandardCharsets.UTF_8).use { writer ->
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines ->
                     val batch = mutableListOf<AgentEvent>()
@@ -635,13 +645,14 @@ class DesktopAgentRunService(
         }
     }
 
-    private suspend fun prepareMcp(agent: AgentKind): String? {
+    private suspend fun prepareMcp(agent: AgentKind): String? = mcpMutex.withLock {
         val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
-            mcp.start(port)
+            val result = mcp.start(port)
+            check(result.isSuccess) { result.stderr.ifBlank { "server failed to start" } }
         }
-        return when (agent) {
+        when (agent) {
             // Per-invocation wiring, no config file edits.
             AgentKind.ClaudeCode -> "http://127.0.0.1:$port/mcp-http"
             AgentKind.Codex -> "http://127.0.0.1:$port/mcp"
@@ -886,10 +897,12 @@ class DesktopAgentRunService(
         val descendants = process.descendants().toList().asReversed()
         descendants.forEach { it.destroy() }
         process.destroy()
-        if (!process.waitFor(1500, TimeUnit.MILLISECONDS)) {
-            descendants.filter { it.isAlive }.forEach { it.destroyForcibly() }
-            process.destroyForcibly()
-        }
+        process.waitFor(1500, TimeUnit.MILLISECONDS)
+        (descendants + process.descendants().toList())
+            .distinct()
+            .filter { it.isAlive }
+            .forEach { it.destroyForcibly() }
+        if (process.isAlive) process.destroyForcibly()
     }
 }
 

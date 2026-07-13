@@ -28,10 +28,10 @@ class AgentCliLocator {
         val names = AgentKind.entries.joinToString(" ") { it.cliName }
         val script = "for c in $names; do printf '%s=%s\\n' \"\$c\" \"\$(command -v \"\$c\" || true)\"; done"
         val output = runCatching {
-            val process = ProcessBuilder(shell, "-lc", script).redirectErrorStream(false).start()
-            val text = process.inputStream.bufferedReader().readText()
-            process.waitFor(10, TimeUnit.SECONDS)
-            text
+            // Merge stderr too: a noisy shell profile must not fill an unread pipe
+            // and prevent the timeout from ever being reached.
+            val process = ProcessBuilder(shell, "-lc", script).redirectErrorStream(true).start()
+            readOutputWithin(process, timeoutSeconds = 10) ?: return emptyMap()
         }.getOrElse { return emptyMap() }
         return output.lines().mapNotNull { line ->
             val index = line.indexOf('=')
@@ -73,13 +73,28 @@ class AgentCliLocator {
 
     private fun probeVersion(binary: String): String? = runCatching {
         val process = ProcessBuilder(binary, "--version").redirectErrorStream(true).start()
-        val text = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(10, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            return null
-        }
+        val text = readOutputWithin(process, timeoutSeconds = 10) ?: return null
         text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.truncateForSummary(60)
     }.getOrNull()
+
+    /** Drains stdout in parallel so a hung process cannot bypass the caller's timeout. */
+    private fun readOutputWithin(process: Process, timeoutSeconds: Long): String? {
+        val output = StringBuffer()
+        val reader = Thread({
+            runCatching {
+                process.inputStream.bufferedReader().use { stream -> output.append(stream.readText()) }
+            }
+        }, "andy-cli-output-reader").apply { isDaemon = true }
+        reader.start()
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            process.waitFor(1, TimeUnit.SECONDS)
+            reader.join(1_000)
+            return null
+        }
+        reader.join(1_000)
+        return output.toString()
+    }
 }
 
 internal fun compareVersionNames(a: String, b: String): Int {

@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -649,15 +650,19 @@ private fun AgentChangeSummaryCard(
             }
         }
         displayedFiles.forEach { file ->
-            ChangedFileRow(
-                file = file,
-                expanded = expandedPath == file.path,
-                loading = loadingPath == file.path,
-                diff = diffs[file.path],
-                viewMode = viewMode,
-                onViewModeChange = onViewModeChange,
-                onToggle = { onToggleFile(file.path) },
-            )
+            // This interactive row is nested in the transcript's SelectionContainer.
+            // Opt out so the file link keeps its hand cursor rather than a text cursor.
+            DisableSelection {
+                ChangedFileRow(
+                    file = file,
+                    expanded = expandedPath == file.path,
+                    loading = loadingPath == file.path,
+                    diff = diffs[file.path],
+                    viewMode = viewMode,
+                    onViewModeChange = onViewModeChange,
+                    onToggle = { onToggleFile(file.path) },
+                )
+            }
         }
         if (remaining > 0 || showAllFiles) {
             OutlinedButton(
@@ -704,7 +709,7 @@ private fun ChangedFileRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textDecoration = TextDecoration.Underline,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).pointerHoverIcon(PointerIcon.Hand),
             )
             Text("+${file.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
             Text("-${file.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)

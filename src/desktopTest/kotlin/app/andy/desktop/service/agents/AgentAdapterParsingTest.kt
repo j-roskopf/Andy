@@ -209,6 +209,19 @@ class CodexAdapterTest {
     }
 
     @Test
+    fun resumePreservesAndyMcpConfiguration() {
+        val argv = adapter.buildResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            "continue",
+            imagePaths = emptyList(),
+            mcpUrl = "http://127.0.0.1:8565/mcp",
+        ).orEmpty()
+
+        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp\"" in argv)
+    }
+
+    @Test
     fun sendsSelectedModelAndReasoningEffort() {
         val configured = task(AgentKind.Codex).copy(model = "gpt-5.6-terra", reasoningEffort = AgentReasoningEffort.High)
         val argv = adapter.buildCommand("/bin/codex", configured, mcpUrl = null)

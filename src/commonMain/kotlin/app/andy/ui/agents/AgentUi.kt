@@ -30,6 +30,8 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextSecondary
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
+import kotlin.math.abs
+import kotlin.math.round
 
 private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
     AgentKind.ClaudeCode -> Res.drawable.agent_claude
@@ -120,9 +122,14 @@ private fun Long.pad(): String = if (this < 10) "0$this" else toString()
 
 internal fun formatCost(costUsd: Double?, estimated: Boolean = false): String? {
     val cost = costUsd ?: return null
-    val cents = (cost * 100).toInt()
-    val fraction = ((cost * 100 - cents) * 100).toInt()
-    return (if (estimated) "~$" else "$") + "${cents / 100}.${(cents % 100).toString().padStart(2, '0')}${fraction.toString().padStart(2, '0')}"
+    if (!cost.isFinite()) return null
+    val microCents = round(cost * 10_000).toLong()
+    val absolute = abs(microCents)
+    val dollars = absolute / 10_000
+    val cents = (absolute % 10_000) / 100
+    val fraction = absolute % 100
+    val sign = if (microCents < 0) "-" else ""
+    return (if (estimated) "~$" else "$") + "$sign$dollars.${cents.toString().padStart(2, '0')}${fraction.toString().padStart(2, '0')}"
 }
 
 internal fun formatTokens(input: Long?, output: Long?): String? {

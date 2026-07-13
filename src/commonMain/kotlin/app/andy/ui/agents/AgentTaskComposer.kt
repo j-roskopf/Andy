@@ -229,8 +229,10 @@ private fun rememberAgentTaskComposerForm(
     val selectedSkills = remember(state.prompt, availableSkills) {
         availableSkills.filter { skill -> state.prompt.referencesComposerSkill(skill) }
     }
+    val validBudget = state.budgetText.toMaxBudgetUsd()
     val canSubmit = state.prompt.isNotBlank() &&
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
+        (state.budgetText.isBlank() || validBudget != null) &&
         cliStatuses.any { it.kind == state.agent && it.available }
 
     LaunchedEffect(lastUsedAgent, cliStatuses, projectKey) {
@@ -314,7 +316,7 @@ private class AgentTaskComposerForm(
         fastMode = if (state.usesCustomModel) false else state.fastMode,
         imagePaths = state.imagePaths,
         skills = selectedSkills,
-        maxBudgetUsd = state.budgetText.trim().toDoubleOrNull(),
+        maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
     )
 
     fun selectSkill(skill: AgentSkill) {
@@ -810,6 +812,10 @@ private fun AgentTaskComposerFields(
 private const val CUSTOM_MODEL_ID = "__custom__"
 
 private fun imageFileName(path: String): String = path.substringAfterLast('/').substringAfterLast('\\')
+
+internal fun String.toMaxBudgetUsd(): Double? = trim()
+    .toDoubleOrNull()
+    ?.takeIf { it.isFinite() && it >= 0.0 }
 
 private data class ComposerSlashCommand(val start: Int, val end: Int, val query: String)
 

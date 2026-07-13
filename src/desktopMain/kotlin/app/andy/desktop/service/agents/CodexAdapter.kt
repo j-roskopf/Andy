@@ -45,6 +45,7 @@ class CodexAdapter : AgentCliAdapter {
             task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
             // `codex exec resume` restores the original session's sandbox and rejects
             // sandbox flags in current CLI builds.
+            mcpUrl?.let { add("-c"); add("mcp_servers.andy.url=\"$it\"") }
             add(threadId)
             add(promptWithImageHints(followUp, imagePaths))
         }
