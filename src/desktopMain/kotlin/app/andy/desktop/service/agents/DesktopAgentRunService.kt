@@ -473,7 +473,7 @@ class DesktopAgentRunService(
                     }
                     for (line in lines) {
                         writer.appendLine(line)
-                        if (task.planMode && task.agent == AgentKind.Antigravity) rawPlanOutput.appendLine(line)
+                        if (task.planMode) rawPlanOutput.appendLine(line)
                         val now = System.currentTimeMillis()
                         val events = runCatching { adapter.parseLine(line, now) }
                             .getOrElse { listOf(AgentEvent.Raw(now, line)) }

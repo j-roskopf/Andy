@@ -14,6 +14,16 @@ import kotlin.test.assertTrue
 
 class DesktopActionConfigStoreTest {
     @Test
+    fun loadsStarterActionsFromARelativePath() = runBlocking {
+        val dir = createTempDirectory("andy-actions-relative-starter").toFile()
+        val homeConfig = dir.resolve("home/actions.toml")
+
+        val loaded = DesktopActionConfigStore(homeConfig, File(".andy/actions.toml")).load()
+
+        assertEquals(File(System.getProperty("user.dir")).absolutePath, loaded.projects.single().contextDir)
+    }
+
+    @Test
     fun loadsStarterActionsWhenNoPersonalConfigurationExists() = runBlocking {
         val dir = createTempDirectory("andy-actions-starter").toFile()
         val homeConfig = dir.resolve("home/actions.toml")

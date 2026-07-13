@@ -21,7 +21,7 @@ class DesktopActionConfigStore(
             ?.takeIf { it.isFile }
             ?.let { source ->
                 decode(source).getOrElse { ActionsConfig() }
-                    .resolveRelativeProjectPaths(source.parentFile.parentFile)
+                    .resolveRelativeProjectPaths(source.parentFile?.parentFile ?: File(System.getProperty("user.dir")))
             }
             ?: ActionsConfig()
         val personal = if (!file.exists()) {
