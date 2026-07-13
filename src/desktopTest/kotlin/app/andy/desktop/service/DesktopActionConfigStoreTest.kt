@@ -85,7 +85,7 @@ class DesktopActionConfigStoreTest {
                 [[projects]]
                 id = "andy"
                 name = "My Andy checkout"
-                contextDir = "${workspace.absolutePath}"
+                contextDir = "${workspace.absolutePath.replace("\\", "\\\\")}"
                 env = { }
                 [[actions]]
                 id = "test"

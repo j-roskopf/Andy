@@ -51,23 +51,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
 
-      # Temporary bootstrap for the first renderer-specific baselines. The next
-      # commit imports these CI-generated images and removes these steps.
-      - name: Record missing Linux baselines
-        if: matrix.os == 'linux'
-        run: |
-          if ! find src/screenshotTest/roborazzi/linux -name '*.png' -print -quit | grep -q .; then
-            xvfb-run -a ./gradlew recordRoborazziDesktop
-          fi
-
-      - name: Record missing Windows baselines
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-ChildItem src/screenshotTest/roborazzi/windows -Filter *.png -ErrorAction SilentlyContinue)) {
-            ./gradlew.bat recordRoborazziDesktop
-          }
-
       - name: Run Linux checks
         if: matrix.os == 'linux'
         run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop assemble
@@ -82,7 +65,7 @@ jobs:
         run: ./gradlew.bat desktopTest verifyRoborazziDesktop assemble
 
       - name: Upload test reports
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-checks-${{ matrix.os }}-reports
@@ -93,4 +76,3 @@ jobs:
             build/reports/roborazzi/**
             build/intermediates/roborazzi/**
             build/test-results/roborazzi/**
-            src/screenshotTest/roborazzi/${{ matrix.os }}/**
