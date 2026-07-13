@@ -278,6 +278,9 @@ class DesktopAgentRunService(
         _lastUsedAgent.value = task.agent
         val now = System.currentTimeMillis()
         val implementationPrompt = implementationPromptFor(task.prompt, completedPlan)
+        val implementationBaseline = task.cwd?.let { cwd ->
+            withContext(Dispatchers.IO) { worktrees.captureChangeBaseline(cwd) }
+        }
         val implementationTask = task.copy(
             planMode = false,
             sandboxMode = AgentSandboxMode.WorkspaceWrite,
@@ -296,6 +299,8 @@ class DesktopAgentRunService(
             outputTokens = null,
             contextTokens = null,
             contextWindowTokens = null,
+            changeBaselinePaths = implementationBaseline.orEmpty(),
+            hasChangeBaseline = implementationBaseline != null,
             completedChanges = null,
             unread = false,
         )

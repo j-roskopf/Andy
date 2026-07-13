@@ -237,6 +237,8 @@ class AgentPlanHandoffTest {
                 createdAtMillis = 1,
                 finishedAtMillis = 2,
                 exitCode = 0,
+                changeBaselinePaths = listOf("stale-plan-baseline"),
+                hasChangeBaseline = true,
             )
             val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
             store.save(
@@ -278,6 +280,8 @@ class AgentPlanHandoffTest {
             assertEquals(planned.model, implementation.model)
             assertEquals(planned.skills, implementation.skills)
             assertEquals(planned.attachAndyMcp, implementation.attachAndyMcp)
+            assertTrue(!implementation.hasChangeBaseline)
+            assertTrue(implementation.changeBaselinePaths.isEmpty())
             assertTrue(launched.implementationPrompt?.contains(planned.prompt) == true)
             assertTrue(launched.implementationPrompt?.contains(completedPlan) == true)
             assertTrue(launched.implementationPrompt?.contains("Plan mode is active") == false)
