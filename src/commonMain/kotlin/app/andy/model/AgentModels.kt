@@ -174,6 +174,10 @@ data class AgentTask(
     val sandboxMode: AgentSandboxMode? = null,
     /** Ask the provider to inspect and propose work without making changes. */
     val planMode: Boolean = false,
+    /** Final response from a successful plan-mode run, retained for a fresh implementation handoff. */
+    val completedPlanText: String? = null,
+    /** Generated context used only when a completed plan starts its fresh implementation run. */
+    val implementationPrompt: String? = null,
     /** Null keeps the provider's own default model. */
     val model: String? = null,
     /** Null keeps the provider's own default reasoning level. */
@@ -192,6 +196,8 @@ data class AgentTask(
     /** Files already changed when the task began; excluded from its change summary. */
     val changeBaselinePaths: List<String> = emptyList(),
     val hasChangeBaseline: Boolean = false,
+    /** Immutable repository changes captured when this chat last finished. */
+    val completedChanges: AgentThreadChangeSnapshot? = null,
     val status: AgentTaskStatus = AgentTaskStatus.Queued,
     val vendorSessionId: String? = null,
     val createdAtMillis: Long,
@@ -398,6 +404,12 @@ data class AgentChangeSummary(val files: List<AgentFileChange>) {
     val deletions: Int get() = files.sumOf { it.deletions }
 }
 
+/** The exact change set produced by a chat, kept so later repository edits do not leak into it. */
+data class AgentThreadChangeSnapshot(
+    val summary: AgentChangeSummary,
+    val diffs: Map<String, AgentFileDiff>,
+)
+
 enum class DiffLineKind { Context, Addition, Deletion }
 
 data class DiffLine(
@@ -498,7 +510,7 @@ private fun promptWithPlanModeHint(text: String, planMode: Boolean): String = if
 }
 
 fun AgentTask.promptForCli(): String = promptWithImageHints(
-    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(prompt, skills), planMode), goal),
+    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(implementationPrompt ?: prompt, skills), planMode), goal),
     imagePaths,
 )
 

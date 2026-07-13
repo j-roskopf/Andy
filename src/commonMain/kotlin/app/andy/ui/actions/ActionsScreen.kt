@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -127,6 +128,7 @@ private fun ProjectCockpit(
     config: ActionsConfig,
     running: List<RunningAction>,
     activeRunId: String?,
+    terminalRunId: String?,
     onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
@@ -135,7 +137,7 @@ private fun ProjectCockpit(
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
     var selectedProjectId by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by remember { mutableStateOf<String?>(null) }
-    var canvas by remember { mutableStateOf(ProjectCanvas.Actions) }
+    var canvas by remember { mutableStateOf(ProjectCanvas.Sessions) }
     var workPane by remember { mutableStateOf(ProjectRightPane.Chat) }
     var query by remember { mutableStateOf("") }
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
@@ -143,11 +145,21 @@ private fun ProjectCockpit(
     var editingNote by remember { mutableStateOf<EditingNote?>(null) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     var completedNotesExpanded by remember { mutableStateOf(false) }
-    var dockWidth by remember { mutableStateOf(620f) }
+    var dockWidth by remember { mutableStateOf(680f) }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
+    var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(config.projects) {
         if (selectedProjectId !in config.projects.map { it.id }) selectedProjectId = config.projects.firstOrNull()?.id
+    }
+    LaunchedEffect(terminalRunId, running) {
+        val runId = terminalRunId ?: return@LaunchedEffect
+        if (runId == handledTerminalRunId) return@LaunchedEffect
+        val terminalRun = running.firstOrNull { it.runId == runId } ?: return@LaunchedEffect
+        selectedProjectId = terminalRun.projectId
+        selectedTaskId = null
+        workPane = ProjectRightPane.ActionOutput
+        handledTerminalRunId = runId
     }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = System.currentTimeMillis() } }
 
@@ -157,15 +169,34 @@ private fun ProjectCockpit(
         }
     }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
-    val projectTasks = project?.let { item -> agentTasks.filter { it.projectId == item.id } }.orEmpty()
+    val projectTasks = project?.let { item ->
+        agentTasks
+            .filter { it.projectId == item.id }
+            .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
+    }.orEmpty()
     fun updateProject(updated: ActionProject) = onConfigChange(config.copy(projects = config.projects.map { if (it.id == updated.id) updated else it }))
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val minimumCanvasWidth = 560.dp
-        val maximumDockWidth = (maxWidth - 250.dp - minimumCanvasWidth - 14.dp - 36.dp).coerceAtLeast(500.dp)
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        val workspacePaneWidth = 220.dp
+        val minimumCanvasWidth = 340.dp
+        val minimumDockWidth = 380.dp
+        val paneGuttersWidth = 50.dp // Three 12.dp gaps plus the 14.dp resize divider.
+        val minimumCockpitWidth = workspacePaneWidth + minimumCanvasWidth + minimumDockWidth + paneGuttersWidth
+        val availableWidth = maxWidth
+        val maximumDockWidth = (availableWidth - workspacePaneWidth - minimumCanvasWidth - paneGuttersWidth)
+            .coerceAtLeast(minimumDockWidth)
+
+        LaunchedEffect(maximumDockWidth) {
+            dockWidth = dockWidth.coerceIn(minimumDockWidth.value, maximumDockWidth.value)
+        }
+
+        Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
+            Row(
+                Modifier.width(maxOf(availableWidth, minimumCockpitWidth)).fillMaxHeight(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
         Column(
-            Modifier.width(250.dp).fillMaxHeight().background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4)).padding(12.dp),
+            Modifier.width(workspacePaneWidth).fillMaxHeight().background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4)).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Toolbar("Workspaces", "${config.projects.size} project spaces", onPrimary = { editingProject = EditingProject(null) }, primaryLabel = "New")
@@ -175,7 +206,7 @@ private fun ProjectCockpit(
                     val selected = item.id == selectedProjectId
                     Row(
                         Modifier.fillMaxWidth().background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R3))
-                            .clickable { selectedProjectId = item.id; selectedTaskId = null; canvas = ProjectCanvas.Actions }.padding(10.dp),
+                            .clickable { selectedProjectId = item.id; selectedTaskId = null; canvas = ProjectCanvas.Sessions }.padding(10.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(Modifier.width(3.dp).height(30.dp).background(if (selected) Rust else Border, RoundedCornerShape(AndyRadius.R2)))
@@ -188,7 +219,10 @@ private fun ProjectCockpit(
             }
         }
         project?.let { current ->
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                Modifier.widthIn(min = minimumCanvasWidth).weight(1f).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(current.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 28.sp)
@@ -289,7 +323,9 @@ private fun ProjectCockpit(
                     }
                 }
             }
-            PaneDivider(onDrag = { dragX -> dockWidth = (dockWidth - dragX).coerceIn(500f, maximumDockWidth.value) })
+            PaneDivider(onDrag = { dragX ->
+                dockWidth = (dockWidth - dragX).coerceIn(minimumDockWidth.value, maximumDockWidth.value)
+            })
             Column(Modifier.width(dockWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { FilterPill("Chat", workPane == ProjectRightPane.Chat, Cyan) { workPane = ProjectRightPane.Chat }; FilterPill("Terminal", workPane == ProjectRightPane.ActionOutput, Rust) { workPane = ProjectRightPane.ActionOutput } }
                 PanelCard(Modifier.fillMaxSize()) {
@@ -305,6 +341,7 @@ private fun ProjectCockpit(
             }
         } ?: EmptyState("Create a workspace to start")
     }
+        }
     }
     editingProject?.let { edit -> ProjectDialog(edit.project, config.projects, { editingProject = null }) { updated -> editingProject = null; onConfigChange(config.copy(projects = if (edit.project == null) config.projects + updated else config.projects.map { if (it.id == updated.id) updated else it })) } }
     editingAction?.let { edit -> ActionDialog(config.projects, edit.projectId, edit.action, { editingAction = null }) { projectId, action -> editingAction = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == projectId) project.copy(actions = project.actions.filterNot { it.id == action.id } + action) else project })) } }
@@ -348,6 +385,7 @@ internal fun ActionsScreen(
         config = config,
         running = running,
         activeRunId = activeRunId,
+        terminalRunId = terminalRunId,
         onActiveRunIdChange = onActiveRunIdChange,
         onConfigChange = onConfigChange,
         agentTasks = agentTasks,

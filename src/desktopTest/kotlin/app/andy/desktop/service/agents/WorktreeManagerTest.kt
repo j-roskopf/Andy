@@ -46,6 +46,13 @@ class WorktreeManagerTest {
             assertTrue(createdDiff.isNewFile)
             assertEquals(2, createdDiff.additions)
             assertEquals(listOf("first", "second"), createdDiff.lines.map { it.text })
+
+            val snapshot = assertNotNull(manager.changeSnapshot(repo.absolutePath, baseline))
+            File(repo, "later-user-edit.kt").writeText("not from this chat\n")
+            File(repo, "clean.kt").appendText("later user edit\n")
+            assertEquals(listOf("agent-created.kt", "clean.kt"), snapshot.summary.files.map { it.path })
+            assertTrue(snapshot.diffs.keys.none { it == "later-user-edit.kt" })
+            assertTrue(snapshot.diffs.getValue("clean.kt").lines.none { it.text == "later user edit" })
         } finally {
             repo.deleteRecursively()
         }

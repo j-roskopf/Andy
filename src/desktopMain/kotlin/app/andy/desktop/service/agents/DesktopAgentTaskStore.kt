@@ -10,6 +10,12 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentFileChange
+import app.andy.model.AgentFileDiff
+import app.andy.model.DiffLine
+import app.andy.model.DiffLineKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -105,6 +111,8 @@ private data class AgentTaskDto(
     val autonomy: String = AgentAutonomy.Standard.name,
     val sandboxMode: String = "",
     val planMode: Boolean = false,
+    val completedPlanText: String = "",
+    val implementationPrompt: String = "",
     val model: String = "",
     val reasoningEffort: String = "",
     val fastMode: Boolean = false,
@@ -121,6 +129,7 @@ private data class AgentTaskDto(
     val maxBudgetUsd: Double = 0.0,
     val changeBaselinePaths: List<String> = emptyList(),
     val hasChangeBaseline: Boolean = false,
+    val completedChanges: AgentThreadChangeSnapshotDto? = null,
     val status: String = AgentTaskStatus.Unknown.name,
     val vendorSessionId: String = "",
     val createdAtMillis: Long,
@@ -143,6 +152,37 @@ private data class AgentQueuedFollowUpDto(
     val imagePaths: List<String> = emptyList(),
     val skillNames: List<String> = emptyList(),
     val skillPaths: List<String> = emptyList(),
+)
+
+@Serializable
+private data class AgentThreadChangeSnapshotDto(
+    val files: List<AgentFileChangeDto> = emptyList(),
+    val diffs: List<AgentFileDiffDto> = emptyList(),
+)
+
+@Serializable
+private data class AgentFileChangeDto(
+    val path: String,
+    val additions: Int,
+    val deletions: Int,
+)
+
+@Serializable
+private data class AgentFileDiffDto(
+    val path: String,
+    val lines: List<DiffLineDto> = emptyList(),
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val isBinary: Boolean = false,
+    val isNewFile: Boolean = false,
+)
+
+@Serializable
+private data class DiffLineDto(
+    val kind: String,
+    val text: String,
+    val oldLineNumber: Int? = null,
+    val newLineNumber: Int? = null,
 )
 
 private fun AgentsFileDto.toModel(): AgentStoreState = AgentStoreState(
@@ -200,6 +240,8 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
         sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         planMode = planMode,
+        completedPlanText = completedPlanText.takeIf { it.isNotBlank() },
+        implementationPrompt = implementationPrompt.takeIf { it.isNotBlank() },
         model = model.takeIf { it.isNotBlank() },
         reasoningEffort = AgentReasoningEffort.entries.firstOrNull { it.name == reasoningEffort },
         fastMode = fastMode,
@@ -222,6 +264,7 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
         changeBaselinePaths = changeBaselinePaths,
         hasChangeBaseline = hasChangeBaseline,
+        completedChanges = completedChanges?.toModel(),
         // A task persisted as active belongs to a previous app run; its process is gone.
         status = if (persistedStatus == AgentTaskStatus.Queued || persistedStatus == AgentTaskStatus.Running) {
             AgentTaskStatus.Unknown
@@ -283,6 +326,8 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             autonomy = task.autonomy.name,
             sandboxMode = task.sandboxMode?.name.orEmpty(),
             planMode = task.planMode,
+            completedPlanText = task.completedPlanText.orEmpty(),
+            implementationPrompt = task.implementationPrompt.orEmpty(),
             model = task.model.orEmpty(),
             reasoningEffort = task.reasoningEffort?.name.orEmpty(),
             fastMode = task.fastMode,
@@ -301,6 +346,7 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             maxBudgetUsd = task.maxBudgetUsd ?: 0.0,
             changeBaselinePaths = task.changeBaselinePaths,
             hasChangeBaseline = task.hasChangeBaseline,
+            completedChanges = task.completedChanges?.toDto(),
             status = task.status.name,
             vendorSessionId = task.vendorSessionId.orEmpty(),
             createdAtMillis = task.createdAtMillis,
@@ -315,6 +361,43 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             contextTokens = task.contextTokens ?: 0,
             contextWindowTokens = task.contextWindowTokens ?: 0,
             unread = task.unread,
+        )
+    },
+)
+
+private fun AgentThreadChangeSnapshotDto.toModel(): AgentThreadChangeSnapshot = AgentThreadChangeSnapshot(
+    summary = AgentChangeSummary(files.map { AgentFileChange(it.path, it.additions, it.deletions) }),
+    diffs = diffs.associate { diff ->
+        diff.path to AgentFileDiff(
+            path = diff.path,
+            lines = diff.lines.map { line ->
+                DiffLine(
+                    kind = DiffLineKind.entries.firstOrNull { it.name == line.kind } ?: DiffLineKind.Context,
+                    text = line.text,
+                    oldLineNumber = line.oldLineNumber,
+                    newLineNumber = line.newLineNumber,
+                )
+            },
+            additions = diff.additions,
+            deletions = diff.deletions,
+            isBinary = diff.isBinary,
+            isNewFile = diff.isNewFile,
+        )
+    },
+)
+
+private fun AgentThreadChangeSnapshot.toDto(): AgentThreadChangeSnapshotDto = AgentThreadChangeSnapshotDto(
+    files = summary.files.map { AgentFileChangeDto(it.path, it.additions, it.deletions) },
+    diffs = diffs.values.map { diff ->
+        AgentFileDiffDto(
+            path = diff.path,
+            lines = diff.lines.map { line ->
+                DiffLineDto(line.kind.name, line.text, line.oldLineNumber, line.newLineNumber)
+            },
+            additions = diff.additions,
+            deletions = diff.deletions,
+            isBinary = diff.isBinary,
+            isNewFile = diff.isNewFile,
         )
     },
 )

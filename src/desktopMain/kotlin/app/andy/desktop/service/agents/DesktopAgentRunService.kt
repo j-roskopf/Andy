@@ -14,6 +14,8 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.AgentSandboxMode
 import app.andy.model.estimatedTokenCostUsd
 import app.andy.model.promptWithGoalHint
 import app.andy.model.promptWithSkillHints
@@ -267,6 +269,50 @@ class DesktopAgentRunService(
         }
     }
 
+    override suspend fun startImplementation(taskId: String) {
+        ready.await()
+        val task = currentTask(taskId) ?: return
+        val completedPlan = task.completedPlanText?.takeIf { it.isNotBlank() } ?: return
+        if (task.status != AgentTaskStatus.Completed || !task.planMode || task.isActive) return
+
+        _lastUsedAgent.value = task.agent
+        val now = System.currentTimeMillis()
+        val implementationPrompt = implementationPromptFor(task.prompt, completedPlan)
+        val implementationBaseline = task.cwd?.let { cwd ->
+            withContext(Dispatchers.IO) { worktrees.captureChangeBaseline(cwd) }
+        }
+        val implementationTask = task.copy(
+            planMode = false,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            implementationPrompt = implementationPrompt,
+            // A handoff intentionally starts a new provider thread. Claude requires a
+            // caller-assigned id while the other CLIs report one after startup.
+            vendorSessionId = if (task.agent == AgentKind.ClaudeCode) UUID.randomUUID().toString() else null,
+            status = AgentTaskStatus.Queued,
+            startedAtMillis = null,
+            finishedAtMillis = null,
+            exitCode = null,
+            errorMessage = null,
+            totalCostUsd = null,
+            costIsEstimated = false,
+            inputTokens = null,
+            outputTokens = null,
+            contextTokens = null,
+            contextWindowTokens = null,
+            changeBaselinePaths = implementationBaseline.orEmpty(),
+            hasChangeBaseline = implementationBaseline != null,
+            completedChanges = null,
+            unread = false,
+        )
+        appendEvents(taskId, listOf(AgentEvent.UserMessage(now, implementationPrompt, task.skills)))
+        writeAndyTranscriptLine(taskId, implementationPrompt, task.skills, now)
+        upsertTask(implementationTask)
+        persist()
+        launchRun(implementationTask) { adapter, binary, mcpUrl ->
+            adapter.buildCommand(binary, currentTask(taskId) ?: implementationTask, mcpUrl)
+        }
+    }
+
     override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
         val task = currentTask(taskId) ?: return
         val adapter = adapters[task.agent] ?: return
@@ -414,6 +460,7 @@ class DesktopAgentRunService(
         var lastError: String? = null
         var lastAssistantText: String? = null
         val rawTail = ArrayDeque<String>()
+        val rawPlanOutput = StringBuilder()
 
         val transcript = store.transcriptFile(taskId)
         transcript.parentFile?.mkdirs()
@@ -431,6 +478,7 @@ class DesktopAgentRunService(
                     }
                     for (line in lines) {
                         writer.appendLine(line)
+                        if (task.planMode) rawPlanOutput.appendLine(line)
                         val now = System.currentTimeMillis()
                         val events = runCatching { adapter.parseLine(line, now) }
                             .getOrElse { listOf(AgentEvent.Raw(now, line)) }
@@ -483,6 +531,14 @@ class DesktopAgentRunService(
             else -> AgentTaskStatus.Failed
         }
         val fallbackText = lastAssistantText ?: rawTail.joinToString("\n").takeIf { it.isNotBlank() }
+        val completedPlanText = if (status == AgentTaskStatus.Completed && task.planMode) {
+            result?.finalText?.takeIf { it.isNotBlank() }
+                ?: lastAssistantText?.takeIf { it.isNotBlank() }
+                ?: rawPlanOutput.toString().trim().takeIf { it.isNotBlank() }
+                ?: fallbackText
+        } else {
+            null
+        }
         if (result == null && status != AgentTaskStatus.Stopped) {
             // Adapters without structured output (or failed runs) still get a terminal event.
             appendEvents(
@@ -502,6 +558,7 @@ class DesktopAgentRunService(
                 costIsEstimated = result?.costIsEstimated ?: current.costIsEstimated,
                 inputTokens = result?.inputTokens ?: current.inputTokens,
                 outputTokens = result?.outputTokens ?: current.outputTokens,
+                completedPlanText = completedPlanText ?: current.completedPlanText,
             )
         }
         finishTask(
@@ -522,6 +579,14 @@ class DesktopAgentRunService(
         if (authIndicators.none { it in text }) return null
         val cli = currentTask(taskId)?.agent?.cliName ?: return null
         return "Not logged in — run `$cli` in a terminal and sign in, then retry"
+    }
+
+    private fun implementationPromptFor(originalRequest: String, completedPlan: String): String = buildString {
+        append("Begin implementation. Implement the completed plan below: make the edits and run the relevant verification.\n\n")
+        append("Original request:\n")
+        append(originalRequest.trim())
+        append("\n\nCompleted plan:\n")
+        append(completedPlan.trim())
     }
 
     override fun stop(taskId: String) {
@@ -646,6 +711,7 @@ class DesktopAgentRunService(
 
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
+        task.completedChanges?.let { return@withContext it.summary }
         if (!task.hasChangeBaseline) return@withContext null
         val cwd = task.cwd ?: return@withContext null
         worktrees.changeSummary(cwd, task.changeBaselinePaths)
@@ -653,6 +719,7 @@ class DesktopAgentRunService(
 
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
+        task.completedChanges?.diffs?.get(relativePath)?.let { return@withContext it }
         val cwd = task.cwd ?: return@withContext null
         worktrees.fileDiff(cwd, relativePath)
     }
@@ -851,6 +918,11 @@ class DesktopAgentRunService(
     }
 
     private fun finishTask(taskId: String, status: AgentTaskStatus, exitCode: Int?, error: String?) {
+        val completedChanges = currentTask(taskId)?.let { task ->
+            task.cwd?.takeIf { task.hasChangeBaseline }?.let { cwd ->
+                worktrees.changeSnapshot(cwd, task.changeBaselinePaths)
+            }
+        }
         updateTask(taskId) { task ->
             if (task.isActive) {
                 task.copy(
@@ -859,6 +931,7 @@ class DesktopAgentRunService(
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
                     unread = true,
+                    completedChanges = completedChanges ?: task.completedChanges,
                 )
             } else {
                 task
