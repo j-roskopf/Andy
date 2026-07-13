@@ -397,12 +397,46 @@ class CursorAdapterTest {
     @Test
     fun sendsTheSelectedFastReasoningVariant() {
         val configured = task(AgentKind.Cursor).copy(
-            model = "Grok 4.5",
+            model = "cursor-grok-4.5",
             reasoningEffort = AgentReasoningEffort.High,
             fastMode = true,
         )
         val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "Grok 4.5 High Fast" in argv)
+        assertTrue("--model" in argv && "cursor-grok-4.5-high-fast" in argv)
+    }
+
+    @Test
+    fun migratesLegacyCursorDisplayNameToCliSlug() {
+        val configured = task(AgentKind.Cursor).copy(
+            model = "Grok 4.5",
+            reasoningEffort = AgentReasoningEffort.Medium,
+            fastMode = false,
+        )
+        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
+        assertTrue("--model" in argv && "cursor-grok-4.5-medium" in argv)
+    }
+
+    @Test
+    fun defaultsGrokEffortWhenUnset() {
+        val configured = task(AgentKind.Cursor).copy(
+            model = "cursor-grok-4.5",
+            reasoningEffort = null,
+            fastMode = false,
+        )
+        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
+        assertTrue("--model" in argv && "cursor-grok-4.5-high" in argv)
+        assertTrue("cursor-grok-4.5" !in argv.filter { it.startsWith("cursor-grok") })
+    }
+
+    @Test
+    fun composerWithoutEffortDoesNotAppendSuffix() {
+        val configured = task(AgentKind.Cursor).copy(
+            model = "composer-2.5",
+            reasoningEffort = null,
+            fastMode = true,
+        )
+        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
+        assertTrue("--model" in argv && "composer-2.5-fast" in argv)
     }
 
     @Test

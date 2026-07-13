@@ -96,7 +96,11 @@ data class AgentModelOption(
     val label: String,
     val efforts: List<AgentReasoningEffort>,
     val supportsFastMode: Boolean = false,
-)
+) {
+    /** Preferred effort when the CLI requires a suffix and the user left effort unset. */
+    fun preferredEffort(): AgentReasoningEffort? =
+        efforts.firstOrNull { it == AgentReasoningEffort.High } ?: efforts.firstOrNull()
+}
 
 /**
  * A small public catalog for the four CLIs, plus an exact custom-model escape hatch
@@ -117,12 +121,12 @@ object AgentModelCatalog {
             AgentModelOption("fable", "Fable", AgentReasoningEffort.entries.toList()),
         )
         AgentKind.Cursor -> listOf(
-            AgentModelOption("Auto", "Auto", emptyList()),
-            AgentModelOption("Composer 2.5", "Composer 2.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
-            AgentModelOption("Opus 4.8", "Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
-            AgentModelOption("GPT-5.6 Sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
-            AgentModelOption("Gemini 3.1 Pro", "Gemini 3.1 Pro", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
-            AgentModelOption("Grok 4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
+            AgentModelOption("auto", "Auto", emptyList()),
+            AgentModelOption("composer-2.5", "Composer 2.5", emptyList(), supportsFastMode = true),
+            AgentModelOption("claude-opus-4-8", "Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
+            AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
+            AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
+            AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
         AgentKind.Antigravity -> listOf(
             AgentModelOption("Gemini 3.5 Flash", "Gemini 3.5 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
@@ -134,7 +138,24 @@ object AgentModelCatalog {
     }
 
     fun option(agent: AgentKind, id: String?): AgentModelOption? =
-        id?.let { modelId -> options(agent).firstOrNull { it.id == modelId } }
+        id?.let { modelId ->
+            val normalized = if (agent == AgentKind.Cursor) cursorModelBaseId(modelId) else modelId
+            options(agent).firstOrNull { it.id == normalized }
+        }
+}
+
+/**
+ * Cursor CLI model IDs are kebab-case slugs (`cursor-grok-4.5-high-fast`), not display names.
+ * Map legacy catalog labels so persisted tasks/defaults still resolve.
+ */
+internal fun cursorModelBaseId(selected: String): String = when (selected) {
+    "Auto", "auto" -> "auto"
+    "Composer 2.5", "composer-2.5" -> "composer-2.5"
+    "Opus 4.8", "claude-opus-4-8" -> "claude-opus-4-8"
+    "GPT-5.6 Sol", "gpt-5.6-sol" -> "gpt-5.6-sol"
+    "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
+    "Grok 4.5", "cursor-grok-4.5" -> "cursor-grok-4.5"
+    else -> selected
 }
 
 enum class AgentTaskStatus {
@@ -455,10 +476,18 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
 /** Provider-specific model string passed by the adapter. */
 fun AgentTask.modelForCli(): String? = model?.let { selected ->
     when (agent) {
-        AgentKind.Cursor -> buildString {
-            append(selected)
-            reasoningEffort?.let { append(' ').append(it.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }) }
-            if (fastMode) append(" Fast")
+        AgentKind.Cursor -> {
+            val base = cursorModelBaseId(selected)
+            val catalog = AgentModelCatalog.option(AgentKind.Cursor, base)
+            buildString {
+                append(base)
+                // Cursor variants bake effort into the model id; bare bases like cursor-grok-4.5 are rejected.
+                val effort = reasoningEffort ?: catalog?.preferredEffort()
+                if (effort != null && catalog?.efforts?.isNotEmpty() == true) {
+                    append('-').append(effort.cliValue)
+                }
+                if (fastMode) append("-fast")
+            }
         }
         AgentKind.Antigravity -> reasoningEffort?.let { "$selected (${it.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }})" } ?: selected
         else -> selected
@@ -531,9 +560,10 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
     val price = when (agent) {
         AgentKind.Codex -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)
         AgentKind.Cursor -> when {
-            model == "Auto" -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 6.0)
-            model?.contains("Opus", ignoreCase = true) == true -> TokenPrice(inputUsdPerMillion = 5.0, outputUsdPerMillion = 25.0)
-            model?.contains("GPT", ignoreCase = true) == true -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)
+            model.equals("auto", ignoreCase = true) -> TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 6.0)
+            model?.contains("opus", ignoreCase = true) == true -> TokenPrice(inputUsdPerMillion = 5.0, outputUsdPerMillion = 25.0)
+            model?.contains("gpt", ignoreCase = true) == true || model?.contains("sol", ignoreCase = true) == true ->
+                TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)
             else -> null
         }
         // Claude Code reports its billed total; Antigravity currently reports no token usage.
