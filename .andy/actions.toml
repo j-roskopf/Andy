@@ -1,5 +1,7 @@
-# Starter actions for running Andy from this checkout. Andy loads this only when
-# ~/.andy/actions.toml does not exist, so it never overwrites personal projects.
+# Starter actions for running Andy from this checkout.
+# Andy seeds these projects only when ~/.andy/actions.toml does not exist.
+# If that file already exists, deleted projects stay deleted; matching projects
+# still pick up any new starter actions in memory without rewriting the file.
 version = 1
 
 [[projects]]

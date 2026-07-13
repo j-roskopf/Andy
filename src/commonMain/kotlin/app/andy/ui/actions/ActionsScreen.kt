@@ -122,6 +122,9 @@ private data class EditingNote(val projectId: String, val note: ProjectNote?)
 private enum class ProjectRightPane { Chat, ActionOutput }
 private enum class ProjectCanvas { Actions, Notes, Sessions }
 
+private const val InitialSessionVisibleCount = 7
+private const val SessionVisiblePageSize = 10
+
 @Composable
 private fun ProjectCockpit(
     services: AndyServices,
@@ -143,14 +146,19 @@ private fun ProjectCockpit(
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var editingNote by remember { mutableStateOf<EditingNote?>(null) }
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     var completedNotesExpanded by remember { mutableStateOf(false) }
+    var sessionsVisibleCount by remember { mutableStateOf(InitialSessionVisibleCount) }
     var dockWidth by remember { mutableStateOf(680f) }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(config.projects) {
         if (selectedProjectId !in config.projects.map { it.id }) selectedProjectId = config.projects.firstOrNull()?.id
+    }
+    LaunchedEffect(selectedProjectId) {
+        sessionsVisibleCount = InitialSessionVisibleCount
     }
     LaunchedEffect(terminalRunId, running) {
         val runId = terminalRunId ?: return@LaunchedEffect
@@ -318,7 +326,52 @@ private fun ProjectCockpit(
                         }
                         ProjectCanvas.Sessions -> {
                             Text("Agent sessions", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-                            if (projectTasks.isEmpty()) EmptyState("Start a chat from the work dock") else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) { items(projectTasks, key = { it.id }) { task -> ProjectChatRow(task, task.id == selectedTaskId, nowMillis, onOpen = { selectedTaskId = task.id; workPane = ProjectRightPane.Chat; if (task.unread) services.agentRuns.markRead(task.id) }, onMarkUnread = { services.agentRuns.markUnread(task.id) }) } }
+                            if (projectTasks.isEmpty()) {
+                                EmptyState("Start a chat from the work dock")
+                            } else {
+                                val visibleSessions = projectTasks.take(sessionsVisibleCount)
+                                val remainingSessions = (projectTasks.size - sessionsVisibleCount).coerceAtLeast(0)
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                                    items(visibleSessions, key = { it.id }) { task ->
+                                        ProjectChatRow(
+                                            task,
+                                            task.id == selectedTaskId,
+                                            nowMillis,
+                                            onOpen = {
+                                                selectedTaskId = task.id
+                                                workPane = ProjectRightPane.Chat
+                                                if (task.unread) services.agentRuns.markRead(task.id)
+                                            },
+                                            onMarkUnread = { services.agentRuns.markUnread(task.id) },
+                                        )
+                                    }
+                                    if (remainingSessions > 0) {
+                                        item(key = "view-more-sessions") {
+                                            val nextBatch = minOf(SessionVisiblePageSize, remainingSessions)
+                                            Row(
+                                                Modifier.fillMaxWidth()
+                                                    .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
+                                                    .clickable { sessionsVisibleCount += SessionVisiblePageSize }
+                                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            ) {
+                                                Box(Modifier.width(3.dp).height(28.dp).background(Cyan.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R2)))
+                                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                                    Text("View more", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold)
+                                                    Text(
+                                                        "Show $nextBatch of $remainingSessions older session${if (remainingSessions == 1) "" else "s"}",
+                                                        color = TextSecondary,
+                                                        fontFamily = MonoFont,
+                                                        fontSize = 10.sp,
+                                                    )
+                                                }
+                                                Text("+$nextBatch", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -343,9 +396,60 @@ private fun ProjectCockpit(
     }
         }
     }
-    editingProject?.let { edit -> ProjectDialog(edit.project, config.projects, { editingProject = null }) { updated -> editingProject = null; onConfigChange(config.copy(projects = if (edit.project == null) config.projects + updated else config.projects.map { if (it.id == updated.id) updated else it })) } }
+    editingProject?.let { edit ->
+        ProjectDialog(
+            project = edit.project,
+            existingProjects = config.projects,
+            onDismiss = { editingProject = null },
+            onDelete = edit.project?.let { project ->
+                {
+                    editingProject = null
+                    pendingConfirmation = PendingConfirmation(
+                        title = "Delete workspace?",
+                        message = "Removes \"${project.name}\" and its actions, notes, and agent sessions from Andy.",
+                        confirmLabel = "Delete",
+                    ) {
+                        val sessions = agentTasks.filter { it.projectId == project.id }
+                        scope.launch {
+                            sessions.forEach { task ->
+                                runCatching {
+                                    services.agentRuns.delete(task.id, task.worktreePath != null)
+                                }
+                            }
+                            if (selectedProjectId == project.id) {
+                                selectedProjectId = null
+                                selectedTaskId = null
+                            }
+                            onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
+                        }
+                    }
+                }
+            },
+        ) { updated ->
+            editingProject = null
+            onConfigChange(
+                config.copy(
+                    projects = if (edit.project == null) {
+                        config.projects + updated
+                    } else {
+                        config.projects.map { if (it.id == updated.id) updated else it }
+                    },
+                ),
+            )
+        }
+    }
     editingAction?.let { edit -> ActionDialog(config.projects, edit.projectId, edit.action, { editingAction = null }) { projectId, action -> editingAction = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == projectId) project.copy(actions = project.actions.filterNot { it.id == action.id } + action) else project })) } }
     editingNote?.let { edit -> NoteDialog(config.projects, edit.projectId, edit.note, { editingNote = null }) { note -> editingNote = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == edit.projectId) project.copy(notes = project.notes.filterNot { it.id == note.id } + note) else project })) } }
+    pendingConfirmation?.let { confirmation ->
+        ConfirmationDialog(
+            confirmation = confirmation,
+            onDismiss = { pendingConfirmation = null },
+            onConfirm = {
+                pendingConfirmation = null
+                confirmation.onConfirm()
+            },
+        )
+    }
 }
 
 @Composable
@@ -510,7 +614,13 @@ private fun ProjectChatRow(
 }
 
 @Composable
-private fun ProjectDialog(project: ActionProject?, existingProjects: List<ActionProject>, onDismiss: () -> Unit, onSave: (ActionProject) -> Unit) {
+private fun ProjectDialog(
+    project: ActionProject?,
+    existingProjects: List<ActionProject>,
+    onDismiss: () -> Unit,
+    onDelete: (() -> Unit)? = null,
+    onSave: (ActionProject) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     var name by remember(project?.id) { mutableStateOf(project?.name.orEmpty()) }
     var contextDir by remember(project?.id) { mutableStateOf(project?.contextDir.orEmpty()) }
@@ -551,7 +661,17 @@ private fun ProjectDialog(project: ActionProject?, existingProjects: List<Action
                 colors = primaryButtonColors(),
             ) { Text("Save") }
         },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (onDelete != null) {
+                    OutlinedButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
+                    ) { Text("Delete") }
+                }
+                OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
     )
 }
 

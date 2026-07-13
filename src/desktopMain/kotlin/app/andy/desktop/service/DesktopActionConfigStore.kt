@@ -24,15 +24,19 @@ class DesktopActionConfigStore(
                     .resolveRelativeProjectPaths(source.parentFile?.parentFile ?: File(System.getProperty("user.dir")))
             }
             ?: ActionsConfig()
-        val personal = if (!file.exists()) {
+        val personalFileExists = file.isFile
+        var seedMissingProjects = !personalFileExists
+        val personal = if (!personalFileExists) {
             ActionsConfig()
         } else {
             decode(file).getOrElse {
                 file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
+                // Unreadable personal config is not an intentional project deletion.
+                seedMissingProjects = true
                 ActionsConfig()
             }
         }
-        personal.mergeMissingStarterActions(starter)
+        personal.mergeMissingStarterActions(starter, seedMissingProjects = seedMissingProjects)
     }
 
     override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
@@ -162,15 +166,26 @@ private fun ActionsConfig.resolveRelativeProjectPaths(workspace: File): ActionsC
     },
 )
 
-/** Adds checkout-provided actions without changing or persisting personal configuration. */
-private fun ActionsConfig.mergeMissingStarterActions(starter: ActionsConfig): ActionsConfig {
+/**
+ * Merges checkout-provided starter data without persisting it.
+ *
+ * Missing starter *projects* are only seeded when the user has no personal
+ * actions.toml yet. Once that file exists, deleted projects stay deleted;
+ * matching projects still receive any new starter actions in memory.
+ */
+private fun ActionsConfig.mergeMissingStarterActions(
+    starter: ActionsConfig,
+    seedMissingProjects: Boolean,
+): ActionsConfig {
     val merged = projects.toMutableList()
     starter.projects.forEach { starterProject ->
         val existingIndex = merged.indexOfFirst { project ->
             project.contextDir == starterProject.contextDir || project.id == starterProject.id
         }
         if (existingIndex < 0) {
-            merged += starterProject
+            if (seedMissingProjects) {
+                merged += starterProject
+            }
         } else {
             val existing = merged[existingIndex]
             val additions = starterProject.actions.filter { starterAction ->
