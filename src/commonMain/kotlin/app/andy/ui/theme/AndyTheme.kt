@@ -1,7 +1,9 @@
 package app.andy.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -43,6 +45,7 @@ internal object AndySpace {
     val S3 = 12.dp
     val S4 = 16.dp
     val S5 = 24.dp
+    val S6 = 32.dp
 }
 
 internal object AndyRadius {
@@ -88,13 +91,20 @@ fun AndyTheme(content: @Composable () -> Unit) {
             error = Red,
         ),
         typography = Typography(
-            displayLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 30.sp, lineHeight = 38.sp, fontWeight = FontWeight.SemiBold),
-            headlineLarge = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold),
-            titleMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
+            displayLarge = LocalTextStyle.current.copy(fontFamily = DisplayFont, fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp),
+            headlineLarge = LocalTextStyle.current.copy(fontFamily = DisplayFont, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
+            titleMedium = LocalTextStyle.current.copy(fontFamily = DisplayFont, fontSize = 15.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
             bodyMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 13.sp, lineHeight = 19.sp),
             bodySmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 16.sp),
             labelMedium = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium),
             labelSmall = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 9.sp, lineHeight = 12.sp, fontWeight = FontWeight.Medium),
+        ),
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(AndyRadius.R2),
+            small = RoundedCornerShape(AndyRadius.R3),
+            medium = RoundedCornerShape(AndyRadius.R4),
+            large = RoundedCornerShape(AndyRadius.R5),
+            extraLarge = RoundedCornerShape(18.dp),
         ),
         content = content,
     )

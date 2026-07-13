@@ -12,6 +12,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -547,11 +548,12 @@ private fun AgentChatComposer(
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
             Box {
                 FilterPill(
                     state.agent.label,
@@ -612,53 +614,30 @@ private fun AgentChatComposer(
                     )
                 }
             }
-            form.selectedModel?.let { selectedModel ->
-                Box {
-                    val effortLabel = state.reasoningEffort?.label ?: "effort: default"
-                    FilterPill(effortLabel, state.reasoningEffort != null, Rust) { effortMenuExpanded = true }
-                    DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("provider default", color = TextPrimary) },
-                            onClick = {
-                                state.reasoningEffort = null
-                                effortMenuExpanded = false
-                            },
-                        )
-                        selectedModel.efforts.forEach { effort ->
-                            DropdownMenuItem(
-                                text = { Text(effort.label, color = TextPrimary) },
-                                onClick = {
-                                    state.reasoningEffort = effort
-                                    effortMenuExpanded = false
-                                },
-                            )
+                form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                    Box {
+                        FilterPill(state.reasoningEffort?.label ?: "effort", state.reasoningEffort != null, Rust) { effortMenuExpanded = true }
+                        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                            DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                            selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
                         }
                     }
+                    if (selectedModel.supportsFastMode) FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
                 }
-                if (selectedModel.supportsFastMode) {
-                    FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
-                }
-            }
-            FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
-            Box {
-                val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
-                FilterPill(
-                    "${state.agent.sandboxControlLabel()}: ${sandbox.labelFor(state.agent)}",
-                    true,
-                    if (sandbox == AgentSandboxMode.None) Rust else Cyan,
-                ) { sandboxMenuExpanded = true }
-                DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
-                    AgentSandboxMode.entries.forEach { mode ->
-                        DropdownMenuItem(
-                            text = { Text(mode.labelFor(state.agent), color = TextPrimary) },
-                            onClick = {
-                                state.sandboxMode = mode
-                                sandboxMenuExpanded = false
-                            },
-                        )
+                FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
+                Box {
+                    val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
+                    FilterPill(sandbox.labelFor(state.agent), true, if (sandbox == AgentSandboxMode.None) Rust else Cyan) { sandboxMenuExpanded = true }
+                    DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
+                        AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
                     }
                 }
             }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             Spacer(Modifier.weight(1f))
             AgentQuotaMenu(services = form.services, agent = state.agent)
             OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
@@ -669,6 +648,7 @@ private fun AgentChatComposer(
             }
             Button(onClick = onSubmit, enabled = canSubmit, colors = primaryButtonColors()) {
                 Text("start", fontSize = 11.sp)
+            }
             }
         }
     }
