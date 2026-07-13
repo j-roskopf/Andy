@@ -119,6 +119,42 @@ class DesktopActionConfigStoreTest {
     }
 
     @Test
+    fun reseedsStarterProjectsWhenPersonalConfigurationIsCorrupt() = runBlocking {
+        val dir = createTempDirectory("andy-actions-corrupt-reseed").toFile()
+        val workspace = dir.resolve("workspace").apply { mkdirs() }
+        val homeConfig = dir.resolve("home/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText("[[projects]\nid = \"unterminated\"")
+        }
+        val starter = workspace.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "andy"
+                name = "Andy"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "record"
+                projectId = "andy"
+                name = "Record screenshots"
+                icon = "test"
+                command = "./gradlew recordRoborazziDesktop"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
+
+        assertEquals(listOf("andy"), loaded.projects.map { it.id })
+        assertTrue(File(homeConfig.absolutePath + ".corrupt").exists())
+    }
+
+    @Test
     fun mergesScreenshotStarterActionIntoExistingPersonalProject() = runBlocking {
         val dir = createTempDirectory("andy-actions-merge").toFile()
         val workspace = dir.resolve("workspace").apply { mkdirs() }

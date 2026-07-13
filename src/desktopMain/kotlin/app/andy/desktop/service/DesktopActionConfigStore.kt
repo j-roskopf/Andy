@@ -25,15 +25,18 @@ class DesktopActionConfigStore(
             }
             ?: ActionsConfig()
         val personalFileExists = file.isFile
+        var seedMissingProjects = !personalFileExists
         val personal = if (!personalFileExists) {
             ActionsConfig()
         } else {
             decode(file).getOrElse {
                 file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
+                // Unreadable personal config is not an intentional project deletion.
+                seedMissingProjects = true
                 ActionsConfig()
             }
         }
-        personal.mergeMissingStarterActions(starter, seedMissingProjects = !personalFileExists)
+        personal.mergeMissingStarterActions(starter, seedMissingProjects = seedMissingProjects)
     }
 
     override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
