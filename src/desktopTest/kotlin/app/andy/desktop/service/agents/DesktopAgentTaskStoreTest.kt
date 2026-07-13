@@ -4,6 +4,9 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentQueuedFollowUp
+import app.andy.model.AgentSandboxMode
+import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
 import java.io.File
@@ -39,9 +42,19 @@ class DesktopAgentTaskStoreTest {
             branchName = "andy/codex/fix-abc",
             attachAndyMcp = true,
             autonomy = AgentAutonomy.Full,
+            sandboxMode = AgentSandboxMode.None,
             model = "gpt-5.6-sol",
             reasoningEffort = AgentReasoningEffort.ExtraHigh,
             imagePaths = listOf("/tmp/reference.png"),
+            goal = "Ship the regression fix with coverage",
+            queuedFollowUps = listOf(
+                AgentQueuedFollowUp(
+                    text = "run the verification suite next",
+                    imagePaths = listOf("/tmp/next.png"),
+                    skills = listOf(AgentSkill("verify", "", "/tmp/verify/SKILL.md")),
+                ),
+                AgentQueuedFollowUp(text = "then summarize the results"),
+            ),
             maxBudgetUsd = 2.5,
             status = AgentTaskStatus.Completed,
             vendorSessionId = "t-99",
@@ -92,6 +105,7 @@ class DesktopAgentTaskStoreTest {
             model = "gpt-5.6-terra",
             reasoningEffort = AgentReasoningEffort.High,
             autonomy = AgentAutonomy.Full,
+            sandboxMode = AgentSandboxMode.None,
             useWorktree = true,
             attachAndyMcp = true,
             maxBudgetUsd = 4.0,

@@ -56,12 +56,21 @@ import app.andy.model.AgentCliStatus
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
+import app.andy.model.AgentNativeSlashCommand
+import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentReasoningEffort
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
+import app.andy.model.defaultSandboxMode
+import app.andy.model.descriptionFor
+import app.andy.model.labelFor
+import app.andy.model.parseAgentGoalCommand
+import app.andy.model.sandboxControlLabel
 import app.andy.onImageFilesDropped
 import app.andy.pickDirectory
+import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
@@ -94,6 +103,8 @@ internal fun AgentTaskComposerPane(
     modifier: Modifier = Modifier,
 ) {
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
+    val copyText = rememberCopyText()
+    val scope = rememberCoroutineScope()
     var showOptions by remember(projectContext?.id) { mutableStateOf(false) }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (showOptions) {
@@ -133,6 +144,11 @@ internal fun AgentTaskComposerPane(
                 }
             }
         }
+        AgentCliIssueNotices(
+            statuses = cliStatuses,
+            onCopyRepairCommand = copyText,
+            onRefresh = { scope.launch { services.agentRuns.refreshCliStatuses() } },
+        )
         AgentChatComposer(
             form = form,
             showOptions = showOptions,
@@ -143,6 +159,43 @@ internal fun AgentTaskComposerPane(
                 form.clearPrompt()
             },
         )
+    }
+}
+
+@Composable
+private fun AgentCliIssueNotices(
+    statuses: List<AgentCliStatus>,
+    onCopyRepairCommand: (String) -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        statuses.mapNotNull { status -> status.issue?.let { status to it } }.forEach { (status, issue) ->
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
+                    .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.R3))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    "${status.kind.label}: ${issue.title}",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                )
+                Text(issue.detail, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    issue.repairCommand?.let { command ->
+                        OutlinedButton(onClick = { onCopyRepairCommand(command) }) {
+                            Text("copy repair command", fontSize = 10.sp)
+                        }
+                    }
+                    OutlinedButton(onClick = onRefresh) { Text("refresh check", fontSize = 10.sp) }
+                }
+            }
+        }
     }
 }
 
@@ -160,6 +213,7 @@ private class AgentTaskComposerFormState(
     var useWorktree by mutableStateOf(false)
     var attachMcp by mutableStateOf(false)
     var autonomy by mutableStateOf(AgentAutonomy.Standard)
+    var sandboxMode by mutableStateOf<AgentSandboxMode?>(null)
     var modelId by mutableStateOf<String?>(null)
     var customModel by mutableStateOf("")
     var reasoningEffort by mutableStateOf<AgentReasoningEffort?>(null)
@@ -190,6 +244,9 @@ private class AgentTaskComposerFormState(
         reasoningEffort = defaults?.reasoningEffort
         fastMode = defaults?.fastMode == true
         autonomy = defaults?.autonomy ?: AgentAutonomy.Standard
+        // Leave the sandbox unset unless it was explicitly saved. This lets the
+        // provider derive it from whichever autonomy level the user chooses.
+        sandboxMode = defaults?.sandboxMode
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
@@ -216,10 +273,16 @@ private fun rememberAgentTaskComposerForm(
     val availableSkills by remember(state.agent, directory) {
         services.agentRuns.skills(state.agent, directory)
     }.collectAsState()
-    val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.available }
+    val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.ready }
     val showModelSection = state.providerChosenInComposer && selectedCliAvailable
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId)
     val slashCommand = findComposerSlashCommand(state.prompt)
+    val matchingCommands = slashCommand?.let { command ->
+        AgentNativeSlashCommands.forAgent(state.agent).filter { nativeCommand ->
+            nativeCommand.name.contains(command.query, ignoreCase = true) ||
+                nativeCommand.description.contains(command.query, ignoreCase = true)
+        }
+    }.orEmpty()
     val matchingSkills = slashCommand?.let { command ->
         availableSkills.filter { skill ->
             skill.name.contains(command.query, ignoreCase = true) ||
@@ -233,18 +296,18 @@ private fun rememberAgentTaskComposerForm(
     val canSubmit = state.prompt.isNotBlank() &&
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         (state.budgetText.isBlank() || validBudget != null) &&
-        cliStatuses.any { it.kind == state.agent && it.available }
+        cliStatuses.any { it.kind == state.agent && it.ready }
 
     LaunchedEffect(lastUsedAgent, cliStatuses, projectKey) {
         if (!state.providerChosenInComposer) {
             val preferred = lastUsedAgent?.takeIf { preferred ->
-                cliStatuses.any { it.kind == preferred && it.available }
+                cliStatuses.any { it.kind == preferred && it.ready }
             }
             if (preferred != null) {
                 state.agent = preferred
                 state.providerChosenInComposer = true
             } else {
-                state.agent = cliStatuses.firstOrNull { it.available }?.kind ?: AgentKind.ClaudeCode
+                state.agent = cliStatuses.firstOrNull { it.ready }?.kind ?: AgentKind.ClaudeCode
             }
         }
     }
@@ -279,6 +342,7 @@ private fun rememberAgentTaskComposerForm(
         showModelSection = showModelSection,
         selectedModel = selectedModel,
         slashCommand = slashCommand,
+        matchingCommands = matchingCommands,
         matchingSkills = matchingSkills,
         selectedSkills = selectedSkills,
         canSubmit = canSubmit,
@@ -295,6 +359,7 @@ private class AgentTaskComposerForm(
     val showModelSection: Boolean,
     val selectedModel: AgentModelOption?,
     val slashCommand: ComposerSlashCommand?,
+    val matchingCommands: List<AgentNativeSlashCommand>,
     val matchingSkills: List<AgentSkill>,
     val selectedSkills: List<AgentSkill>,
     val canSubmit: Boolean,
@@ -302,22 +367,27 @@ private class AgentTaskComposerForm(
 ) {
     fun clearPrompt() = state.clearPrompt()
 
-    fun buildDraft(): AgentTaskDraft = AgentTaskDraft(
-        title = "",
-        prompt = state.prompt.trim(),
-        agent = state.agent,
-        projectId = projectContext?.id,
-        directory = directory?.trim()?.takeIf { it.isNotBlank() },
-        useWorktree = state.useWorktree,
-        attachAndyMcp = state.attachMcp,
-        autonomy = state.autonomy,
-        model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
-        reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
-        fastMode = if (state.usesCustomModel) false else state.fastMode,
-        imagePaths = state.imagePaths,
-        skills = selectedSkills,
-        maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
-    )
+    fun buildDraft(): AgentTaskDraft {
+        val goalCommand = state.prompt.takeIf { AgentNativeSlashCommands.supportsGoal(state.agent) }?.parseAgentGoalCommand()
+        return AgentTaskDraft(
+            title = "",
+            prompt = goalCommand?.remainingPrompt?.ifBlank { goalCommand.goal.orEmpty() } ?: state.prompt.trim(),
+            agent = state.agent,
+            projectId = projectContext?.id,
+            directory = directory?.trim()?.takeIf { it.isNotBlank() },
+            useWorktree = state.useWorktree,
+            attachAndyMcp = state.attachMcp,
+            autonomy = state.autonomy,
+            sandboxMode = state.sandboxMode,
+            model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
+            reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
+            fastMode = if (state.usesCustomModel) false else state.fastMode,
+            imagePaths = state.imagePaths,
+            skills = selectedSkills,
+            goal = goalCommand?.goal,
+            maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
+        )
+    }
 
     fun selectSkill(skill: AgentSkill) {
         val command = slashCommand ?: return
@@ -325,6 +395,16 @@ private class AgentTaskComposerForm(
         state.promptValue = TextFieldValue(
             text = state.prompt.replaceRange(command.start, command.end, insertion),
             selection = TextRange(command.start + insertion.length),
+        )
+        state.skillMenuDismissed = true
+    }
+
+    fun selectCommand(command: AgentNativeSlashCommand) {
+        val slash = slashCommand ?: return
+        val insertion = "/${command.name} "
+        state.promptValue = TextFieldValue(
+            text = state.prompt.replaceRange(slash.start, slash.end, insertion),
+            selection = TextRange(slash.start + insertion.length),
         )
         state.skillMenuDismissed = true
     }
@@ -342,9 +422,11 @@ private fun AgentChatComposer(
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
+    var sandboxMenuExpanded by remember { mutableStateOf(false) }
     val canSubmit = form.canSubmit
 
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
+    fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
 
     Column(
         Modifier.fillMaxWidth()
@@ -367,8 +449,8 @@ private fun AgentChatComposer(
                     .heightIn(min = 94.dp, max = 180.dp)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        if (event.key == Key.Tab && form.matchingSkills.isNotEmpty()) {
-                            selectSkill(form.matchingSkills.first())
+                        if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
+                            form.matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(form.matchingSkills.first())
                             return@onPreviewKeyEvent true
                         }
                         if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
@@ -398,16 +480,27 @@ private fun AgentChatComposer(
                 properties = PopupProperties(focusable = false),
             ) {
                 Text(
-                    if (form.matchingSkills.isEmpty()) {
-                        "no ${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                    if (form.matchingCommands.isEmpty() && form.matchingSkills.isEmpty()) {
+                        "no ${state.agent.label} commands or skills matching /${form.slashCommand?.query.orEmpty()}"
                     } else {
-                        "${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                        "${state.agent.label} commands and skills matching /${form.slashCommand?.query.orEmpty()}"
                     },
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                 )
+                form.matchingCommands.forEach { command ->
+                    DropdownMenuItem(
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                            }
+                        },
+                        onClick = { selectCommand(command) },
+                    )
+                }
                 form.matchingSkills.forEach { skill ->
                     DropdownMenuItem(
                         text = {
@@ -466,7 +559,7 @@ private fun AgentChatComposer(
                     agentMenuExpanded = true
                 }
                 DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
-                    form.cliStatuses.filter { it.available }.forEach { status ->
+                    form.cliStatuses.filter { it.ready }.forEach { status ->
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -543,6 +636,25 @@ private fun AgentChatComposer(
                     FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
                 }
             }
+            Box {
+                val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
+                FilterPill(
+                    "${state.agent.sandboxControlLabel()}: ${sandbox.labelFor(state.agent)}",
+                    true,
+                    if (sandbox == AgentSandboxMode.None) Rust else Cyan,
+                ) { sandboxMenuExpanded = true }
+                DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
+                    AgentSandboxMode.entries.forEach { mode ->
+                        DropdownMenuItem(
+                            text = { Text(mode.labelFor(state.agent), color = TextPrimary) },
+                            onClick = {
+                                state.sandboxMode = mode
+                                sandboxMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.weight(1f))
             AgentQuotaMenu(services = form.services, agent = state.agent)
             OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
@@ -583,7 +695,7 @@ private fun AgentTaskComposerFields(
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 AgentKind.entries.forEach { kind ->
                     val status = form.cliStatuses.firstOrNull { it.kind == kind }
-                    if (status?.available == true) {
+                    if (status?.ready == true) {
                         FilterPill(
                             kind.label,
                             state.providerChosenInComposer && state.agent == kind,
@@ -595,7 +707,7 @@ private fun AgentTaskComposerFields(
                         }
                     } else {
                         Text(
-                            "${kind.label} — not found",
+                            "${kind.label} — ${if (status?.issue != null) "needs repair" else "not found"}",
                             color = TextSecondary.copy(alpha = 0.6f),
                             fontFamily = MonoFont,
                             fontSize = 11.sp,
@@ -685,7 +797,7 @@ private fun AgentTaskComposerFields(
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     colors = fieldColors(),
                     placeholder = {
-                        Text("type / for ${state.agent.label} skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
+                        Text("type / for ${state.agent.label} commands or skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
                     },
                 )
                 DropdownMenu(
@@ -695,16 +807,27 @@ private fun AgentTaskComposerFields(
                     properties = PopupProperties(focusable = false),
                 ) {
                     Text(
-                        if (form.matchingSkills.isEmpty()) {
-                            "no ${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                        if (form.matchingCommands.isEmpty() && form.matchingSkills.isEmpty()) {
+                            "no ${state.agent.label} commands or skills matching /${form.slashCommand?.query.orEmpty()}"
                         } else {
-                            "${state.agent.label} skills matching /${form.slashCommand?.query.orEmpty()}"
+                            "${state.agent.label} commands and skills matching /${form.slashCommand?.query.orEmpty()}"
                         },
                         color = TextSecondary,
                         fontFamily = MonoFont,
                         fontSize = 10.sp,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                     )
+                    form.matchingCommands.forEach { command ->
+                        DropdownMenuItem(
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                    Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                }
+                            },
+                            onClick = { form.selectCommand(command) },
+                        )
+                    }
                     form.matchingSkills.forEach { skill ->
                         DropdownMenuItem(
                             text = {
@@ -799,6 +922,26 @@ private fun AgentTaskComposerFields(
         }
         Text(
             "standard may stop when the agent needs approval; use full for unattended runs in trusted or worktree dirs",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+        )
+        Text(
+            "${state.agent.label} ${state.agent.sandboxControlLabel()}",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+        )
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AgentSandboxMode.entries.forEach { mode ->
+                FilterPill(mode.labelFor(state.agent), state.sandboxMode == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) {
+                    state.sandboxMode = mode
+                }
+            }
+        }
+        Text(
+            (state.sandboxMode ?: state.autonomy.defaultSandboxMode()).descriptionFor(state.agent),
             color = TextSecondary,
             fontFamily = MonoFont,
             fontSize = 10.sp,

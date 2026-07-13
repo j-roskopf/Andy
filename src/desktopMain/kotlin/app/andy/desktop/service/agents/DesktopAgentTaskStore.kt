@@ -5,6 +5,8 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentQueuedFollowUp
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
@@ -80,6 +82,7 @@ private data class AgentProviderDefaultsDto(
     val reasoningEffort: String = "",
     val fastMode: Boolean = false,
     val autonomy: String = AgentAutonomy.Standard.name,
+    val sandboxMode: String = "",
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
@@ -99,12 +102,20 @@ private data class AgentTaskDto(
     val branchName: String = "",
     val attachAndyMcp: Boolean = false,
     val autonomy: String = AgentAutonomy.Standard.name,
+    val sandboxMode: String = "",
     val model: String = "",
     val reasoningEffort: String = "",
     val fastMode: Boolean = false,
     val imagePaths: List<String> = emptyList(),
     val skillNames: List<String> = emptyList(),
     val skillPaths: List<String> = emptyList(),
+    val goal: String = "",
+    val queuedFollowUps: List<AgentQueuedFollowUpDto> = emptyList(),
+    /** Kept while migrating the first queue implementation's single saved item. */
+    val queuedFollowUp: String = "",
+    val queuedFollowUpImagePaths: List<String> = emptyList(),
+    val queuedFollowUpSkillNames: List<String> = emptyList(),
+    val queuedFollowUpSkillPaths: List<String> = emptyList(),
     val maxBudgetUsd: Double = 0.0,
     val changeBaselinePaths: List<String> = emptyList(),
     val hasChangeBaseline: Boolean = false,
@@ -122,6 +133,14 @@ private data class AgentTaskDto(
     val contextTokens: Long = 0,
     val contextWindowTokens: Long = 0,
     val unread: Boolean = false,
+)
+
+@Serializable
+private data class AgentQueuedFollowUpDto(
+    val text: String = "",
+    val imagePaths: List<String> = emptyList(),
+    val skillNames: List<String> = emptyList(),
+    val skillPaths: List<String> = emptyList(),
 )
 
 private fun AgentsFileDto.toModel(): AgentStoreState = AgentStoreState(
@@ -144,6 +163,7 @@ private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDef
         reasoningEffort = AgentReasoningEffort.entries.firstOrNull { it.name == reasoningEffort },
         fastMode = fastMode,
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
+        sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         useWorktree = useWorktree,
         attachAndyMcp = attachAndyMcp,
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
@@ -153,6 +173,15 @@ private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDef
 private fun AgentTaskDto.toModel(): AgentTask? {
     val agentKind = AgentKind.entries.firstOrNull { it.name == agent } ?: return null
     val persistedStatus = AgentTaskStatus.entries.firstOrNull { it.name == status } ?: AgentTaskStatus.Unknown
+    val legacyQueuedFollowUp = queuedFollowUp.takeIf { it.isNotBlank() || queuedFollowUpImagePaths.isNotEmpty() }?.let { text ->
+        AgentQueuedFollowUp(
+            text = text,
+            imagePaths = queuedFollowUpImagePaths,
+            skills = queuedFollowUpSkillNames.zip(queuedFollowUpSkillPaths)
+                .filter { (_, path) -> path.isNotBlank() }
+                .map { (name, path) -> AgentSkill(name = name, description = "", path = path) },
+        )
+    }
     return AgentTask(
         id = id,
         title = title,
@@ -166,6 +195,7 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         branchName = branchName.takeIf { it.isNotBlank() },
         attachAndyMcp = attachAndyMcp,
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
+        sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         model = model.takeIf { it.isNotBlank() },
         reasoningEffort = AgentReasoningEffort.entries.firstOrNull { it.name == reasoningEffort },
         fastMode = fastMode,
@@ -173,6 +203,18 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         skills = skillNames.zip(skillPaths).filter { (_, path) -> path.isNotBlank() }.map { (name, path) ->
             AgentSkill(name = name, description = "", path = path)
         },
+        goal = goal.takeIf { it.isNotBlank() },
+        queuedFollowUps = queuedFollowUps.mapNotNull { queued ->
+            queued.text.takeIf { it.isNotBlank() || queued.imagePaths.isNotEmpty() }?.let { text ->
+                AgentQueuedFollowUp(
+                    text = text,
+                    imagePaths = queued.imagePaths,
+                    skills = queued.skillNames.zip(queued.skillPaths)
+                    .filter { (_, path) -> path.isNotBlank() }
+                    .map { (name, path) -> AgentSkill(name = name, description = "", path = path) },
+                )
+            }
+        } + listOfNotNull(legacyQueuedFollowUp),
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
         changeBaselinePaths = changeBaselinePaths,
         hasChangeBaseline = hasChangeBaseline,
@@ -209,6 +251,7 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             reasoningEffort = defaults.reasoningEffort?.name.orEmpty(),
             fastMode = defaults.fastMode,
             autonomy = defaults.autonomy.name,
+            sandboxMode = defaults.sandboxMode?.name.orEmpty(),
             useWorktree = defaults.useWorktree,
             attachAndyMcp = defaults.attachAndyMcp,
             maxBudgetUsd = defaults.maxBudgetUsd ?: 0.0,
@@ -233,12 +276,22 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             branchName = task.branchName.orEmpty(),
             attachAndyMcp = task.attachAndyMcp,
             autonomy = task.autonomy.name,
+            sandboxMode = task.sandboxMode?.name.orEmpty(),
             model = task.model.orEmpty(),
             reasoningEffort = task.reasoningEffort?.name.orEmpty(),
             fastMode = task.fastMode,
             imagePaths = task.imagePaths,
             skillNames = task.skills.map { it.name },
             skillPaths = task.skills.map { it.path },
+            goal = task.goal.orEmpty(),
+            queuedFollowUps = task.queuedFollowUps.map { queued ->
+                AgentQueuedFollowUpDto(
+                    text = queued.text,
+                    imagePaths = queued.imagePaths,
+                    skillNames = queued.skills.map { it.name },
+                    skillPaths = queued.skills.map { it.path },
+                )
+            },
             maxBudgetUsd = task.maxBudgetUsd ?: 0.0,
             changeBaselinePaths = task.changeBaselinePaths,
             hasChangeBaseline = task.hasChangeBaseline,

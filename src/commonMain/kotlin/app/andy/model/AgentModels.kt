@@ -15,6 +15,69 @@ enum class AgentAutonomy(val label: String) {
 }
 
 /**
+ * A provider-specific execution safety choice, kept separate from the cross-provider autonomy dial.
+ * Each adapter maps the value to the most precise sandbox or permission control its CLI offers.
+ */
+enum class AgentSandboxMode(val label: String) {
+    ReadOnly("read-only"),
+    WorkspaceWrite("workspace write"),
+    None("no sandbox"),
+}
+
+fun AgentAutonomy.defaultSandboxMode(): AgentSandboxMode = when (this) {
+    AgentAutonomy.ReadOnly -> AgentSandboxMode.ReadOnly
+    AgentAutonomy.Standard -> AgentSandboxMode.WorkspaceWrite
+    AgentAutonomy.Full -> AgentSandboxMode.None
+}
+
+fun AgentKind.sandboxControlLabel(): String = when (this) {
+    AgentKind.Codex, AgentKind.Cursor -> "sandbox"
+    AgentKind.ClaudeCode, AgentKind.Antigravity -> "permissions"
+}
+
+fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
+    AgentKind.Codex -> label
+    AgentKind.ClaudeCode -> when (this) {
+        AgentSandboxMode.ReadOnly -> "plan"
+        AgentSandboxMode.WorkspaceWrite -> "accept edits"
+        AgentSandboxMode.None -> "skip permissions"
+    }
+    AgentKind.Cursor -> when (this) {
+        AgentSandboxMode.ReadOnly -> "plan + sandbox"
+        AgentSandboxMode.WorkspaceWrite -> "sandbox enabled"
+        AgentSandboxMode.None -> "sandbox disabled"
+    }
+    AgentKind.Antigravity -> when (this) {
+        AgentSandboxMode.ReadOnly -> "plan + sandbox"
+        AgentSandboxMode.WorkspaceWrite -> "accept edits"
+        AgentSandboxMode.None -> "skip permissions"
+    }
+}
+
+fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
+    AgentKind.Codex -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Codex can inspect files but cannot modify the workspace."
+        AgentSandboxMode.WorkspaceWrite -> "Codex can edit the workspace, but network access remains sandboxed."
+        AgentSandboxMode.None -> "No sandbox: Codex can use your host permissions, including network tools such as GitHub."
+    }
+    AgentKind.ClaudeCode -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Claude Code runs in plan mode."
+        AgentSandboxMode.WorkspaceWrite -> "Claude Code accepts edits while retaining permission checks."
+        AgentSandboxMode.None -> "Claude Code has no filesystem sandbox flag; this skips its permission checks."
+    }
+    AgentKind.Cursor -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Cursor runs in plan mode with its sandbox enabled."
+        AgentSandboxMode.WorkspaceWrite -> "Cursor's CLI sandbox is explicitly enabled."
+        AgentSandboxMode.None -> "Cursor's CLI sandbox is explicitly disabled."
+    }
+    AgentKind.Antigravity -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Antigravity runs in plan mode with terminal sandboxing enabled."
+        AgentSandboxMode.WorkspaceWrite -> "Antigravity accepts edits without its plan-mode sandbox."
+        AgentSandboxMode.None -> "Antigravity skips its permission checks."
+    }
+}
+
+/**
  * The effort requested from a provider. Not every provider supports every value;
  * [AgentModelCatalog] exposes only the combinations documented for its CLI.
  */
@@ -85,6 +148,13 @@ enum class AgentTaskStatus {
     Unknown,
 }
 
+/** A follow-up held until the agent's current response completes. */
+data class AgentQueuedFollowUp(
+    val text: String,
+    val imagePaths: List<String> = emptyList(),
+    val skills: List<AgentSkill> = emptyList(),
+)
+
 data class AgentTask(
     val id: String,
     val title: String,
@@ -100,6 +170,8 @@ data class AgentTask(
     val branchName: String? = null,
     val attachAndyMcp: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
+    /** Explicit provider sandbox/permission choice. Null preserves the legacy mapping from [autonomy]. */
+    val sandboxMode: AgentSandboxMode? = null,
     /** Null keeps the provider's own default model. */
     val model: String? = null,
     /** Null keeps the provider's own default reasoning level. */
@@ -110,6 +182,10 @@ data class AgentTask(
     val imagePaths: List<String> = emptyList(),
     /** Local skills selected while composing the original prompt. */
     val skills: List<AgentSkill> = emptyList(),
+    /** A durable objective Andy keeps alongside the provider session. */
+    val goal: String? = null,
+    /** Follow-ups to send in order after this task's current successful run completes. */
+    val queuedFollowUps: List<AgentQueuedFollowUp> = emptyList(),
     val maxBudgetUsd: Double? = null,
     /** Files already changed when the task began; excluded from its change summary. */
     val changeBaselinePaths: List<String> = emptyList(),
@@ -231,11 +307,13 @@ data class AgentTaskDraft(
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
+    val sandboxMode: AgentSandboxMode? = null,
     val model: String? = null,
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
     val imagePaths: List<String> = emptyList(),
     val skills: List<AgentSkill> = emptyList(),
+    val goal: String? = null,
     val maxBudgetUsd: Double? = null,
 )
 
@@ -245,6 +323,7 @@ data class AgentProviderDefaults(
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
+    val sandboxMode: AgentSandboxMode? = null,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
@@ -257,6 +336,52 @@ data class AgentSkill(
     /** Absolute path to the skill's SKILL.md, so the agent and chat link use the same source. */
     val path: String,
 )
+
+/** A command implemented by Andy rather than forwarded as literal prompt text to a provider CLI. */
+data class AgentNativeSlashCommand(
+    val name: String,
+    val description: String,
+)
+
+/**
+ * Interactive CLI slash commands are not available to the non-interactive
+ * provider runners Andy uses. Keep this list deliberately limited to commands
+ * Andy implements with equivalent, persisted behavior.
+ */
+object AgentNativeSlashCommands {
+    fun forAgent(agent: AgentKind): List<AgentNativeSlashCommand> = when (agent) {
+        AgentKind.Codex, AgentKind.ClaudeCode -> listOf(
+            AgentNativeSlashCommand("goal", "set or clear this task's persistent goal"),
+        )
+        else -> emptyList()
+    }
+
+    fun supportsGoal(agent: AgentKind): Boolean = agent == AgentKind.Codex || agent == AgentKind.ClaudeCode
+}
+
+enum class AgentGoalCommandAction { Set, Clear }
+
+data class AgentGoalCommand(
+    val action: AgentGoalCommandAction,
+    val goal: String? = null,
+    /** Any prompt text after the first command line. */
+    val remainingPrompt: String = "",
+)
+
+/** Parses Andy's native `/goal <objective>` and `/goal clear` syntax. */
+fun String.parseAgentGoalCommand(): AgentGoalCommand? {
+    val lines = trim().lines()
+    val firstLine = lines.firstOrNull()?.trim().orEmpty()
+    if (!firstLine.startsWith("/goal") || (firstLine.length > 5 && !firstLine[5].isWhitespace())) return null
+    val argument = firstLine.removePrefix("/goal").trim()
+    return if (argument.equals("clear", ignoreCase = true)) {
+        AgentGoalCommand(AgentGoalCommandAction.Clear, remainingPrompt = lines.drop(1).joinToString("\n").trim())
+    } else {
+        argument.takeIf { it.isNotBlank() }?.let { goal ->
+            AgentGoalCommand(AgentGoalCommandAction.Set, goal, lines.drop(1).joinToString("\n").trim())
+        }
+    }
+}
 
 data class AgentFileChange(
     val path: String,
@@ -292,6 +417,7 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     reasoningEffort = reasoningEffort,
     fastMode = fastMode,
     autonomy = autonomy,
+    sandboxMode = sandboxMode,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
@@ -302,6 +428,7 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     reasoningEffort = reasoningEffort,
     fastMode = fastMode,
     autonomy = autonomy,
+    sandboxMode = sandboxMode,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
@@ -352,7 +479,12 @@ fun promptWithSkillHints(text: String, skills: List<AgentSkill>): String = if (s
     }.trimEnd()
 }
 
-fun AgentTask.promptForCli(): String = promptWithImageHints(promptWithSkillHints(prompt, skills), imagePaths)
+/** Keeps an Andy-native goal visible to each provider without relying on TUI-only slash parsing. */
+fun promptWithGoalHint(text: String, goal: String?): String = goal?.takeIf { it.isNotBlank() }?.let { activeGoal ->
+    "$text\n\nPersistent task goal: $activeGoal\nKeep this goal in mind throughout the task."
+} ?: text
+
+fun AgentTask.promptForCli(): String = promptWithImageHints(promptWithGoalHint(promptWithSkillHints(prompt, skills), goal), imagePaths)
 
 private data class TokenPrice(val inputUsdPerMillion: Double, val outputUsdPerMillion: Double)
 
@@ -436,6 +568,21 @@ data class AgentCliStatus(
     val kind: AgentKind,
     val binaryPath: String? = null,
     val version: String? = null,
+    /** A setup issue detected before starting a task, phrased for the Agents UI. */
+    val issue: AgentCliIssue? = null,
 ) {
     val available: Boolean get() = binaryPath != null
+    /** Whether Andy can safely start a task with this CLI. */
+    val ready: Boolean get() = available && issue?.blocksTasks != true
 }
+
+/**
+ * An actionable local-installation problem. This deliberately holds user-facing
+ * copy instead of leaking a provider process error into a task transcript.
+ */
+data class AgentCliIssue(
+    val title: String,
+    val detail: String,
+    val repairCommand: String? = null,
+    val blocksTasks: Boolean = false,
+)

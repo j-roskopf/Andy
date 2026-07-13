@@ -6,6 +6,7 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaSource
 import app.andy.model.AgentQuotaAccess
@@ -14,6 +15,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
 import app.andy.model.estimatedTokenCostUsd
+import app.andy.model.promptWithGoalHint
 import app.andy.model.promptWithSkillHints
 import app.andy.model.providerDefaults
 import app.andy.service.ActionConfigStore
@@ -160,6 +162,7 @@ class DesktopAgentRunService(
             useWorktree = draft.useWorktree,
             attachAndyMcp = draft.attachAndyMcp,
             autonomy = draft.autonomy,
+            sandboxMode = draft.sandboxMode,
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
@@ -167,6 +170,7 @@ class DesktopAgentRunService(
             skills = draft.skills.filter { skill ->
                 skills(draft.agent, draft.directory).value.any { it.path == skill.path }
             },
+            goal = draft.goal,
             maxBudgetUsd = draft.maxBudgetUsd,
             status = AgentTaskStatus.Queued,
             // Claude accepts a caller-assigned session id; pre-assigning means resume
@@ -179,7 +183,7 @@ class DesktopAgentRunService(
         if (binary == null) {
             task = task.copy(
                 status = AgentTaskStatus.Failed,
-                errorMessage = "${task.agent.cliName} CLI not found — install it or set a binary override in ~/.andy/agents.toml",
+                errorMessage = unavailableCliMessage(task.agent),
                 finishedAtMillis = now,
             )
             upsertTask(task)
@@ -244,7 +248,7 @@ class DesktopAgentRunService(
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
-        val followUpForCli = promptWithSkillHints(followUp, selectedSkills)
+        val followUpForCli = promptWithGoalHint(promptWithSkillHints(followUp, selectedSkills), task.goal)
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills)))
         writeAndyTranscriptLine(taskId, followUp, selectedSkills, now)
         val queued = task.copy(
@@ -260,6 +264,42 @@ class DesktopAgentRunService(
             resumeAdapter.buildResumeCommand(binary, currentTask(taskId) ?: queued, followUpForCli, imagePaths, mcpUrl)
                 ?: error("resume not supported")
         }
+    }
+
+    override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
+        val task = currentTask(taskId) ?: return
+        val adapter = adapters[task.agent] ?: return
+        if (!task.isActive || !adapter.supportsHeadlessResume || task.vendorSessionId == null) return
+
+        val text = followUp.trim()
+        if (text.isBlank() && imagePaths.isEmpty()) return
+        val skillDirectory = task.worktreePath ?: task.cwd
+        val selectedSkills = skills.filter { skill ->
+            this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
+        }
+        updateTask(taskId) { current ->
+            if (!current.isActive) {
+                current
+            } else {
+                current.copy(
+                    queuedFollowUps = current.queuedFollowUps + AgentQueuedFollowUp(
+                        text = text,
+                        imagePaths = imagePaths,
+                        skills = selectedSkills,
+                    ),
+                )
+            }
+        }
+        scope.launch { persist() }
+    }
+
+    override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) {
+        val task = currentTask(taskId) ?: return
+        if (queueIndex !in task.queuedFollowUps.indices) return
+        updateTask(taskId) { current ->
+            current.copy(queuedFollowUps = current.queuedFollowUps.filterIndexed { index, _ -> index != queueIndex })
+        }
+        scope.launch { persist() }
     }
 
     override suspend fun retry(taskId: String) {
@@ -296,6 +336,14 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun updateGoal(taskId: String, goal: String?) {
+        val normalizedGoal = goal?.trim()?.takeIf { it.isNotBlank() }
+        val task = currentTask(taskId) ?: return
+        if (task.goal == normalizedGoal) return
+        updateTask(taskId) { it.copy(goal = normalizedGoal) }
+        scope.launch { persist() }
+    }
+
     private fun launchRun(task: AgentTask, argvBuilder: (AgentCliAdapter, String, String?) -> List<String>) {
         val handle = TaskHandle()
         handles[task.id] = handle
@@ -317,7 +365,7 @@ class DesktopAgentRunService(
         val adapter = adapters.getValue(task.agent)
         val binary = binaryFor(task.agent)
         if (binary == null) {
-            finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "${task.agent.cliName} CLI not found")
+            finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = unavailableCliMessage(task.agent))
             return
         }
 
@@ -668,9 +716,20 @@ class DesktopAgentRunService(
         }
     }
 
-    private fun binaryFor(agent: AgentKind): String? =
-        _cliStatuses.value.firstOrNull { it.kind == agent }?.binaryPath
-            ?: binaryOverrides[agent.cliName]?.takeIf { File(it).canExecute() }
+    private fun binaryFor(agent: AgentKind): String? {
+        val status = _cliStatuses.value.firstOrNull { it.kind == agent }
+        return when {
+            status?.ready == true -> status.binaryPath
+            status != null -> null
+            else -> binaryOverrides[agent.cliName]?.takeIf { File(it).canExecute() }
+        }
+    }
+
+    private fun unavailableCliMessage(agent: AgentKind): String {
+        val issue = _cliStatuses.value.firstOrNull { it.kind == agent }?.issue
+        return issue?.let { "${it.title}: ${it.detail}" }
+            ?: "${agent.cliName} CLI not found — install it or set a binary override in ~/.andy/agents.toml"
+    }
 
     private fun currentTask(taskId: String): AgentTask? = _tasks.value.firstOrNull { it.id == taskId }
 
@@ -804,8 +863,14 @@ class DesktopAgentRunService(
                 task
             }
         }
+        val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
         handles.remove(taskId)
-        scope.launch { persist() }
+        if (status == AgentTaskStatus.Completed && queuedFollowUp != null) {
+            updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
+            resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
+        } else {
+            scope.launch { persist() }
+        }
     }
 
     private suspend fun persist() {
@@ -863,6 +928,7 @@ class DesktopAgentRunService(
                 workspace?.let { File(it, ".cursor/skills") },
                 workspace?.let { File(it, ".agents/skills") },
                 File(home, ".cursor/skills"),
+                File(home, ".cursor/skills-cursor"),
                 File(home, ".agents/skills"),
             )
             // Antigravity CLI loads workspace Agent Skills and its own global root.

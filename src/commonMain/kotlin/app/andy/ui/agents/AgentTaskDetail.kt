@@ -65,12 +65,15 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentNativeSlashCommand
+import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import app.andy.model.modelConfigurationLabel
+import app.andy.model.parseAgentGoalCommand
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
@@ -123,10 +126,18 @@ internal fun AgentTaskDetail(
     var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
+    var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
+    var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
 
     val supportsResume = task.vendorSessionId != null && task.agent != AgentKind.Antigravity
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val slashCommand = findActiveSlashCommand(followUp)
+    val matchingCommands = slashCommand?.let { command ->
+        AgentNativeSlashCommands.forAgent(task.agent).filter { nativeCommand ->
+            nativeCommand.name.contains(command.query, ignoreCase = true) ||
+                nativeCommand.description.contains(command.query, ignoreCase = true)
+        }
+    }.orEmpty()
     val matchingSkills = slashCommand?.let { command ->
         availableSkills.filter { skill ->
             skill.name.contains(command.query, ignoreCase = true) ||
@@ -143,9 +154,34 @@ internal fun AgentTaskDetail(
         skillMenuDismissed = true
     }
 
+    fun selectCommand(command: AgentNativeSlashCommand) {
+        val slash = findActiveSlashCommand(followUp) ?: return
+        followUp = followUp.replaceRange(slash.start, slash.end, "/${command.name} ")
+        skillMenuDismissed = true
+    }
+
     fun submitFollowUp() {
         if (!supportsResume || !canSendFollowUp) return
-        services.agentRuns.resume(task.id, followUp.trim(), followUpImagePaths, selectedSkills)
+        fun sendOrQueue(message: String, skills: List<AgentSkill>) {
+            if (task.isActive) {
+                services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
+            } else {
+                services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
+            }
+        }
+        val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
+        if (goalCommand != null) {
+            services.agentRuns.updateGoal(task.id, goalCommand.goal)
+            val remainder = goalCommand.remainingPrompt
+            if (remainder.isBlank()) {
+                followUp = ""
+                followUpImagePaths = emptyList()
+                return
+            }
+            sendOrQueue(remainder, selectedSkills.filter { remainder.referencesSkill(it) })
+        } else {
+            sendOrQueue(followUp.trim(), selectedSkills)
+        }
         followUp = ""
         followUpImagePaths = emptyList()
     }
@@ -158,6 +194,10 @@ internal fun AgentTaskDetail(
         expandedDiffPath = null
         loadedFileDiffs = emptyMap()
         loadingDiffPath = null
+    }
+    LaunchedEffect(task.goal) {
+        goalEditorText = task.goal.orEmpty()
+        if (task.goal == null) goalEditorOpen = false
     }
 
     fun toggleFileDiff(path: String) {
@@ -227,7 +267,48 @@ internal fun AgentTaskDetail(
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
 
-        if (!task.isActive) {
+        if (task.queuedFollowUps.isNotEmpty()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
+                    .border(1.dp, Cyan.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.R4))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("MESSAGE QUEUE · ${task.queuedFollowUps.size}", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
+                task.queuedFollowUps.forEachIndexed { index, queuedFollowUp ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${index + 1}.", color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                queuedFollowUp.text.ifBlank { "images attached" },
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (queuedFollowUp.skills.isNotEmpty()) {
+                                Text(
+                                    queuedFollowUp.skills.joinToString("  ") { "/${it.name}" },
+                                    color = Cyan,
+                                    fontFamily = MonoFont,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = { services.agentRuns.removeQueuedFollowUp(task.id, index) },
+                            modifier = Modifier.height(26.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
+                        ) { Text("remove", fontSize = 10.sp) }
+                    }
+                }
+            }
+        }
+
+        if (!task.isActive || supportsResume) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -238,6 +319,55 @@ internal fun AgentTaskDetail(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (supportsResume) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            task.goal?.let { goal ->
+                                OutlinedButton(
+                                    onClick = { goalEditorOpen = !goalEditorOpen },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp),
+                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp),
+                                ) {
+                                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                        Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                        Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            }
+                            if (goalEditorOpen) {
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
+                                        .border(1.dp, Green.copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.R3))
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text("persistent task goal", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                    TextField(
+                                        goalEditorText,
+                                        { goalEditorText = it },
+                                        singleLine = false,
+                                        minLines = 2,
+                                        maxLines = 4,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp),
+                                        colors = fieldColors(),
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Button(
+                                            onClick = {
+                                                services.agentRuns.updateGoal(task.id, goalEditorText)
+                                                goalEditorOpen = false
+                                            },
+                                            enabled = goalEditorText.isNotBlank(),
+                                            modifier = Modifier.height(28.dp),
+                                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
+                                        ) { Text("save goal", fontSize = 10.sp) }
+                                        OutlinedButton(
+                                            onClick = { services.agentRuns.updateGoal(task.id, null) },
+                                            modifier = Modifier.height(28.dp),
+                                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
+                                        ) { Text("clear goal", fontSize = 10.sp) }
+                                    }
+                                }
+                            }
                             Box(Modifier.fillMaxWidth()) {
                             TextField(
                                 followUp,
@@ -252,8 +382,8 @@ internal fun AgentTaskDetail(
                                     .heightIn(min = 54.dp, max = 160.dp)
                                     .onPreviewKeyEvent { event ->
                                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                        if (event.key == Key.Tab && matchingSkills.isNotEmpty()) {
-                                            selectSkill(matchingSkills.first())
+                                        if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
+                                            matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(matchingSkills.first())
                                             return@onPreviewKeyEvent true
                                         }
                                         if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
@@ -276,8 +406,10 @@ internal fun AgentTaskDetail(
                                     Text(
                                         if (followUpImageDragActive) {
                                             "release to attach image"
+                                        } else if (task.isActive) {
+                                            "next message — type / for ${task.agent.label} commands or skills, enter to queue"
                                         } else {
-                                            "follow-up prompt — type / for ${task.agent.label} skills, enter to send"
+                                            "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
                                         },
                                         color = if (followUpImageDragActive) Cyan else TextSecondary,
                                         fontFamily = MonoFont,
@@ -292,16 +424,27 @@ internal fun AgentTaskDetail(
                                 properties = PopupProperties(focusable = false),
                             ) {
                                 Text(
-                                    if (matchingSkills.isEmpty()) {
-                                        "no ${task.agent.label} skills matching /${slashCommand?.query.orEmpty()}"
+                                    if (matchingCommands.isEmpty() && matchingSkills.isEmpty()) {
+                                        "no ${task.agent.label} commands or skills matching /${slashCommand?.query.orEmpty()}"
                                     } else {
-                                        "${task.agent.label} skills matching /${slashCommand?.query.orEmpty()}"
+                                        "${task.agent.label} commands and skills matching /${slashCommand?.query.orEmpty()}"
                                     },
                                     color = TextSecondary,
                                     fontFamily = MonoFont,
                                     fontSize = 10.sp,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                                 )
+                                matchingCommands.forEach { command ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                                Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        },
+                                        onClick = { selectCommand(command) },
+                                    )
+                                }
                                 matchingSkills.forEach { skill ->
                                     DropdownMenuItem(
                                         text = {
@@ -334,7 +477,7 @@ internal fun AgentTaskDetail(
                             colors = primaryButtonColors(),
                             modifier = Modifier.height(36.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                        ) { Text("send", fontSize = 11.sp) }
+                        ) { Text(if (task.isActive) "queue" else "send", fontSize = 11.sp) }
                     } else {
                         Spacer(Modifier.weight(1f))
                     }
@@ -481,6 +624,19 @@ private fun AgentTaskHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+
+        task.goal?.let { goal ->
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.R3))
+                    .border(1.dp, Green.copy(alpha = 0.38f), RoundedCornerShape(AndyRadius.R3))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
 
         AgentContextWindowIndicator(task)
 

@@ -14,11 +14,50 @@ class AgentCliLocator {
     fun locateAll(overrides: Map<String, String>): List<AgentCliStatus> {
         val fromShell = lookupViaLoginShell()
         return AgentKind.entries.map { kind ->
-            val binary = overrides[kind.cliName]?.takeIf { File(it).canExecute() }
+            val discoveredBinary = overrides[kind.cliName]?.takeIf { File(it).canExecute() }
                 ?: fromShell[kind.cliName]
                 ?: probeKnownLocations(kind)
-            AgentCliStatus(kind = kind, binaryPath = binary, version = binary?.let(::probeVersion))
+            val binary = discoveredBinary?.let(::canonicalExecutable)
+            AgentCliStatus(
+                kind = kind,
+                binaryPath = binary,
+                version = binary?.let(::probeVersion),
+                issue = discoveredBinary?.let { source -> diagnoseInstallation(kind, source, binary) },
+            )
         }
+    }
+
+    /**
+     * App launchers commonly put a symlink in ~/.local/bin. Resolving it makes
+     * providers that look for sibling helper binaries run from their real bundle.
+     */
+    private fun canonicalExecutable(path: String): String = runCatching {
+        File(path).canonicalFile.path
+    }.getOrDefault(path)
+
+    private fun diagnoseInstallation(kind: AgentKind, sourcePath: String, binaryPath: String?): app.andy.model.AgentCliIssue? {
+        if (kind != AgentKind.Codex || binaryPath == null) return null
+        // A user may deliberately point Codex at a wrapper; only inspect the
+        // packaged Codex executable whose code-mode helper contract is known.
+        if (File(binaryPath).name != AgentKind.Codex.cliName) return null
+        val bundledHost = File(File(binaryPath).parentFile, "codex-code-mode-host")
+        if (!bundledHost.canExecute()) {
+            return app.andy.model.AgentCliIssue(
+                title = "Codex installation needs repair",
+                detail = "Codex's code-mode helper is missing. Update or reinstall Codex before starting a chat.",
+                blocksTasks = true,
+            )
+        }
+
+        val sourceHost = File(File(sourcePath).parentFile, "codex-code-mode-host")
+        if (sourcePath != binaryPath && !sourceHost.canExecute()) {
+            return app.andy.model.AgentCliIssue(
+                title = "Codex Terminal link needs repair",
+                detail = "Andy will use Codex's bundled executable, but running codex in Terminal can still fail because its code-mode helper is not linked beside it.",
+                repairCommand = "ln -sf ${shellQuote(bundledHost.path)} ${shellQuote(sourceHost.path)}",
+            )
+        }
+        return null
     }
 
     private fun lookupViaLoginShell(): Map<String, String> {
