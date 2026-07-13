@@ -48,13 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.rememberCopyText
 import app.andy.ui.components.HeaderCell
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
@@ -406,7 +405,7 @@ internal fun NetworkScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             PanelCard(Modifier.animateContentSize()) {
-                val clipboardManager = LocalClipboardManager.current
+                val copyText = rememberCopyText()
                 var configCopied by remember { mutableStateOf(false) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -511,7 +510,7 @@ internal fun NetworkScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     OutlinedButton(onClick = {
-                                        clipboardManager.setText(AnnotatedString(DebugNetworkSecurityConfigSnippet))
+                                        copyText(DebugNetworkSecurityConfigSnippet)
                                         configCopied = true
                                         state.status = "Network security config copied to clipboard"
                                     }) { Text("Copy") }

@@ -4,13 +4,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
-import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -20,6 +20,7 @@ import app.andy.AndyDestination
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import app.andy.desktop.service.createDesktopServices
+import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
 import java.awt.Color
@@ -35,6 +36,8 @@ fun main() {
     installRuntimeAppIcon()
     application {
         val services = remember { createDesktopServices() }
+        val agentTasks by services.agentRuns.tasks.collectAsState()
+        val unreadCount = agentTasks.count { it.unread }
         val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
@@ -47,30 +50,43 @@ fun main() {
             requestedDestination = destination
             visible = true
         }
+        fun quitApp() {
+            runBlocking { services.mirror.disconnect() }
+            exitApplication()
+        }
         DisposableEffect(Unit) {
             val listener = installDockReopenHandler { visible = true }
             onDispose { removeDockReopenHandler(listener) }
         }
+        LaunchedEffect(unreadCount) {
+            updateDockBadge(unreadCount)
+        }
+        // Compose Multiplatform AWT Tray is broken on Wayland (white icon, dead menu).
+        // ComposeNativeTray uses StatusNotifier / native backends instead.
         Tray(
-            icon = appIcon,
-            tooltip = "Andy",
-            menu = {
+            icon = Res.drawable.andy_robot,
+            tooltip = if (unreadCount > 0) "Andy ($unreadCount unread)" else "Andy",
+            primaryAction = { visible = true },
+        ) {
+            Item(label = "Show Andy") { visible = true }
+            Item(label = "Quit") {
+                dispose()
+                quitApp()
+            }
+            Divider()
+            SubMenu(label = "Go") {
                 AndyDestination.entries.filter { it != AndyDestination.Bugs }.forEach { destination ->
-                    Item(destination.label, onClick = { open(destination) })
+                    Item(label = destination.label) { open(destination) }
                 }
-                Item("Show Andy", onClick = { visible = true })
-                Item("Quit", onClick = {
-                    runBlocking { services.mirror.disconnect() }
-                    exitApplication()
-                })
-            },
-        )
-        if (visible) Window(
-            onCloseRequest = {
-                visible = false
-            },
+            }
+        }
+        // Keep the Window composed while hidden. Removing it from composition when
+        // closed would exit the application (ComposeNativeTray does not hold it open).
+        Window(
+            onCloseRequest = { visible = false },
+            visible = visible,
             state = windowState,
-            title = "Andy",
+            title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
         ) {
             LaunchedEffect(window) {
@@ -143,6 +159,15 @@ private fun installRuntimeAppIcon() {
     }
 }
 
+private fun updateDockBadge(count: Int) {
+    if (!Taskbar.isTaskbarSupported()) return
+    val taskbar = Taskbar.getTaskbar()
+    if (!taskbar.isSupported(Taskbar.Feature.ICON_BADGE_NUMBER)) return
+    runCatching {
+        taskbar.setIconBadge(if (count > 0) count.toString() else null)
+    }
+}
+
 private fun configureMacTitleBar(window: JFrame) {
     runCatching {
         window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
@@ -187,6 +212,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.ComputerFiles -> KeyShortcut(Key.Eight, meta = meta, ctrl = ctrl)
         AndyDestination.Network -> KeyShortcut(Key.Nine, meta = meta, ctrl = ctrl)
         AndyDestination.Actions -> KeyShortcut(Key.Zero, meta = meta, ctrl = ctrl)
+        AndyDestination.Agents -> KeyShortcut(Key.G, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Snapshots -> KeyShortcut(Key.S, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Controls -> KeyShortcut(Key.C, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Performance -> KeyShortcut(Key.P, meta = meta, ctrl = ctrl, shift = true)

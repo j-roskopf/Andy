@@ -19,6 +19,8 @@ finish-args:
   - --filesystem=host
   - --talk-name=org.freedesktop.Flatpak
   - --talk-name=org.freedesktop.secrets
+  # Native StatusNotifier tray (dorkbox). Required so the tray menu works on KDE/GNOME.
+  - --talk-name=org.kde.StatusNotifierWatcher
 
 modules:
   - name: andy

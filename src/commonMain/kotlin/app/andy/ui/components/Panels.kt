@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -25,6 +27,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
@@ -65,9 +69,31 @@ internal fun Modifier.noiseGridOverlay(alpha: Float = 0.07f): Modifier = drawBeh
 
 @Composable
 internal fun StatusRow(label: String, value: String, ok: Boolean) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-        Text(value.lowercase(), color = if (ok) Green else Rust, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label.lowercase(),
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            maxLines = 1,
+            softWrap = false,
+        )
+        Text(
+            value.lowercase(),
+            color = if (ok) Green else Rust,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.End,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = false,
+        )
     }
 }
 
@@ -132,17 +158,58 @@ internal fun EmptyState(text: String) {
 }
 
 @Composable
-internal fun FilterPill(text: String, selected: Boolean, color: Color, onClick: () -> Unit) {
+internal fun FilterPill(
+    text: String,
+    selected: Boolean,
+    color: Color,
+    toolbar: Boolean = false,
+    leadingContent: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(AndyRadius.R2)
+    if (toolbar) {
+        OutlinedButton(
+            onClick = onClick,
+            shape = shape,
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850,
+                contentColor = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+            ),
+            border = BorderStroke(1.dp, if (selected) color.copy(alpha = 0.70f) else Border),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                leadingContent?.invoke()
+                Text(
+                    text.lowercase(),
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        return
+    }
     Box(
-        Modifier.height(28.dp)
+        Modifier
+            .height(28.dp)
             .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
             .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text.lowercase(), color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, lineHeight = 14.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            leadingContent?.invoke()
+            Text(
+                text.lowercase(),
+                color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+            )
+        }
     }
 }
 

@@ -33,4 +33,12 @@ class DesktopAppUpdateServiceTest {
         assertTrue(script.contains("flatpak install -y"))
         assertTrue(script.contains("flatpak run com.joetr.andy"))
     }
+
+    @Test
+    fun macInstallerDoesNotRelaunchAndy() {
+        val script = macPkgInstallerHelperScript("/tmp/Andy-1.2.3.pkg")
+
+        assertTrue(script.contains("open -W '/tmp/Andy-1.2.3.pkg'"))
+        assertTrue(!script.contains("open -a Andy"))
+    }
 }

@@ -32,8 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
 import app.andy.loadImageBitmap
 import app.andy.pickFiles
+import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.FormRow
@@ -94,7 +93,7 @@ internal fun DesignScreen(
     var zoom by remember { mutableStateOf("1.0") }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(760f)) }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
-    val clipboardManager = LocalClipboardManager.current
+    val copyText = rememberCopyText()
     LaunchedEffect(pickerToast) {
         if (pickerToast != null) {
             delay(1800)
@@ -137,7 +136,7 @@ internal fun DesignScreen(
                 passThroughInput = !pickerEnabled,
                 onPickerClick = { hex ->
                     pickedColor = hex
-                    clipboardManager.setText(AnnotatedString(hex))
+                    copyText(hex)
                     pickerToast = "Copied $hex"
                 },
                 onRulerResize = { x, y ->

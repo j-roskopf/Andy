@@ -9,13 +9,14 @@ object McpClientConfig {
         Cursor("Cursor"),
         Codex("Codex"),
         ClaudeDesktop("Claude Desktop"),
+        Antigravity("Antigravity"),
         VSCode("VS Code"),
         Windsurf("Windsurf")
     }
 
     fun getSnippet(client: ClientType, port: Int): String {
         return when (client) {
-            ClientType.ClaudeCode, ClientType.Cursor -> {
+            ClientType.ClaudeCode, ClientType.Cursor, ClientType.Antigravity -> {
                 """
                 {
                   "mcpServers": {
@@ -67,6 +68,8 @@ object McpClientConfig {
             ClientType.ClaudeCode -> File(home, ".claude.json")
             ClientType.Cursor -> File(home, ".cursor/mcp.json")
             ClientType.Codex -> File(home, ".codex/config.toml")
+            // Antigravity (IDE and agy CLI) reads MCP servers from this file.
+            ClientType.Antigravity -> File(home, ".gemini/config/mcp_config.json")
             ClientType.ClaudeDesktop -> {
                 val osName = System.getProperty("os.name")?.lowercase().orEmpty()
                 if (osName.contains("win")) {
@@ -94,7 +97,7 @@ object McpClientConfig {
             }
 
             val newContent = when (client) {
-                ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop -> {
+                ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop, ClientType.Antigravity -> {
                     mergeJson(client, currentContent, port)
                 }
                 ClientType.Codex -> {

@@ -22,7 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -369,7 +369,7 @@ internal fun HostFilesScreen(
                         Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Divider(color = Border)
+                HorizontalDivider(color = Border)
                 Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 workspaceState.recentHostFiles.forEach { recent ->
                     val recentRoot = resolveHostRootForPath(recent, workspaceState.hostFileRoots)

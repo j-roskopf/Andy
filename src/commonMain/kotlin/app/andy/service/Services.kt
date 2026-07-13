@@ -151,10 +151,57 @@ interface ActionConfigStore {
 
 interface ActionRunService {
     val running: StateFlow<List<RunningAction>>
+    /** Opens an interactive login shell rooted at the project's context directory. */
+    fun openShell(project: ActionProject): String
     fun run(project: ActionProject, action: ProjectAction): String
     fun stop(runId: String)
     fun clear(runId: String)
-    fun output(runId: String): StateFlow<List<String>>
+}
+
+interface AgentRunService {
+    val tasks: StateFlow<List<AgentTask>>
+    val cliStatuses: StateFlow<List<AgentCliStatus>>
+    /** Most recent provider-reported account limits, keyed by provider. */
+    val providerQuotas: StateFlow<Map<AgentKind, AgentProviderQuota>>
+    /** Explicit consent for provider-local account sources; disabled by default. */
+    val quotaAccess: StateFlow<AgentQuotaAccess>
+    /** Reads account information from installed provider CLIs without starting an agent task. */
+    suspend fun refreshProviderQuotas()
+    fun setQuotaAccess(agent: AgentKind, enabled: Boolean)
+    /** Last-used launch settings for each provider, used to prefill the new-task composer. */
+    val providerDefaults: StateFlow<Map<AgentKind, AgentProviderDefaults>>
+    /** Provider used most recently for a chat, used as the next composer selection. */
+    val lastUsedAgent: StateFlow<AgentKind?>
+    /**
+     * Skills this provider will load for a task rooted at [directory]. The provider's
+     * native global and workspace skill locations are discovered independently, so
+     * slash completion never offers skills from a different provider's convention.
+     */
+    fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>>
+    suspend fun createAndStart(draft: AgentTaskDraft): AgentTask
+    fun stop(taskId: String)
+    /** Starts the failed task over with its original prompt and configuration. */
+    suspend fun retry(taskId: String)
+    fun resume(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String> = emptyList(),
+        skills: List<AgentSkill> = emptyList(),
+    )
+    suspend fun delete(taskId: String, removeWorktree: Boolean)
+    /** Clears the unread indicator for a finished chat (e.g. when opened). */
+    fun markRead(taskId: String)
+    /** Marks a chat unread so list/dock badges show again. */
+    fun markUnread(taskId: String)
+    fun events(taskId: String): StateFlow<List<AgentEvent>>
+    fun interactiveResumeCommand(taskId: String): String?
+    suspend fun openInTerminal(taskId: String): CommandResult
+    suspend fun openSkill(path: String): CommandResult
+    suspend fun worktreeDiffSummary(taskId: String): String?
+    suspend fun changeSummary(taskId: String): AgentChangeSummary?
+    suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff?
+    suspend fun refreshCliStatuses()
+    suspend fun isGitRepo(dir: String): Boolean
 }
 
 data class CommandResult(
@@ -238,4 +285,5 @@ data class AndyServices(
     val mcp: McpServerService,
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
+    val agentRuns: AgentRunService,
 )

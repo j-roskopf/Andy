@@ -23,13 +23,13 @@ import app.andy.AndyDestination
 import app.andy.service.AndyServices
 import app.andy.ui.accessibility.AccessibilityScreen
 import app.andy.ui.actions.ActionsScreen
+import app.andy.ui.agents.AgentsScreen
 import app.andy.ui.apps.AppsScreen
 import app.andy.ui.bugs.BugsScreen
 import app.andy.ui.catalog.CatalogScreen
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.PendingConfirmation
-import app.andy.ui.components.PlaceholderScreen
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.controls.ControlsScreen
 import app.andy.ui.design.DesignScreen
@@ -65,6 +65,7 @@ internal fun AndyShell(
 ) {
     val state = rememberShellState(services)
     val runningActions by services.actionRuns.running.collectAsState()
+    val agentTasks by services.agentRuns.tasks.collectAsState()
     val pendingUpdateInstallConfirmation by services.updates.pendingInstallConfirmation.collectAsState()
 
     LaunchedEffect(Unit) {
@@ -124,6 +125,8 @@ internal fun AndyShell(
             Sidebar(
                 current = state.destination,
                 deviceCount = state.devices.size,
+                hasUnreadAgentTasks = agentTasks.any { it.unread },
+                hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
                 onSelect = state::setDestination,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
@@ -142,18 +145,16 @@ internal fun AndyShell(
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                     actionConfig = state.actionsConfig,
-                    runningActions = runningActions,
                     onRunAction = { project, action -> state.runAction(project, action) },
-                    onStopAction = { run -> state.stopAction(run) },
                     proxyRunning = proxyRunning,
                     actions = {
                         if (state.destination == AndyDestination.Network) {
-                            FilterPill("Rules", state.networkRulesVisible, Rust) { state.toggleNetworkRulesVisible() }
+                            FilterPill("Rules", state.networkRulesVisible, Rust, toolbar = true) { state.toggleNetworkRulesVisible() }
                             Spacer(Modifier.width(8.dp))
-                            FilterPill("Live", state.networkLiveVisible, Cyan) { state.toggleNetworkLiveVisible() }
+                            FilterPill("Live", state.networkLiveVisible, Cyan, toolbar = true) { state.toggleNetworkLiveVisible() }
                             Spacer(Modifier.width(10.dp))
                         } else if (state.destination == AndyDestination.Performance) {
-                            FilterPill("Live", state.performanceLiveVisible, Cyan) { state.togglePerformanceLiveVisible() }
+                            FilterPill("Live", state.performanceLiveVisible, Cyan, toolbar = true) { state.togglePerformanceLiveVisible() }
                             Spacer(Modifier.width(10.dp))
                         }
                     },
@@ -164,6 +165,24 @@ internal fun AndyShell(
                         .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
                         .padding(horizontal = 18.dp, vertical = 16.dp)
                 ) {
+                    val actionsActive = state.destination == AndyDestination.Actions
+                    val agentsActive = state.destination == AndyDestination.Agents
+                    RetainedDestination(active = actionsActive) {
+                        ActionsScreen(
+                            services = services,
+                            config = state.actionsConfig,
+                            running = runningActions,
+                            activeRunId = state.activeRunId,
+                            terminalRunId = state.terminalRunId,
+                            onActiveRunIdChange = { state.setActiveRunId(it) },
+                            onConfigChange = { state.persistActionsConfig(it) },
+                            agentTasks = agentTasks,
+                            active = actionsActive,
+                        )
+                    }
+                    RetainedDestination(active = agentsActive) {
+                        AgentsScreen(services = services, active = agentsActive)
+                    }
                     when (state.destination) {
                         AndyDestination.Devices -> DevicesScreen(
                             services,
@@ -253,14 +272,7 @@ internal fun AndyShell(
                                 state.updateWorkspace { it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() }) }
                             },
                         )
-                        AndyDestination.Actions -> ActionsScreen(
-                            services = services,
-                            config = state.actionsConfig,
-                            running = runningActions,
-                            activeRunId = state.activeRunId,
-                            onActiveRunIdChange = { state.setActiveRunId(it) },
-                            onConfigChange = { state.persistActionsConfig(it) },
-                        )
+                        AndyDestination.Actions, AndyDestination.Agents -> Unit
                         AndyDestination.Snapshots -> SnapshotsScreen(services.avd)
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, state.selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
@@ -294,7 +306,6 @@ internal fun AndyShell(
                             onUpdateWorkspace = { state.updateWorkspace(it) },
                             services = services
                         )
-                        else -> PlaceholderScreen(state.destination.label)
                     }
                 }
             }

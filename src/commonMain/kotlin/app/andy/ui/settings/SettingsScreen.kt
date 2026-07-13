@@ -34,13 +34,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.WorkspaceState
+import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AvailableUpdate
 import app.andy.ui.components.Button
@@ -123,7 +122,7 @@ internal fun SettingsScreen(
     var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
     var dropdownExpanded by remember { mutableStateOf(false) }
     var operationStatus by remember { mutableStateOf<String?>(null) }
-    val clipboardManager = LocalClipboardManager.current
+    val copyText = rememberCopyText()
 
     val mcpStatus by services.mcp.status.collectAsState("stopped")
     val mcpRunning by services.mcp.running.collectAsState(false)
@@ -365,7 +364,7 @@ internal fun SettingsScreen(
                 Button(
                     onClick = {
                         val snippet = services.mcp.getSnippet(selectedClientLabel, workspaceState.mcpServerPort)
-                        clipboardManager.setText(AnnotatedString(snippet))
+                        copyText(snippet)
                         operationStatus = "Snippet copied to clipboard!"
                     }
                 ) {

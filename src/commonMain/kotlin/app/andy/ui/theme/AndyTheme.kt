@@ -54,6 +54,11 @@ internal object AndyRadius {
 }
 
 internal val MonoFont = FontFamily.Monospace
+/**
+ * Human-facing workspace labels use the platform sans face; paths, commands, and
+ * runtime details stay monospaced so scanning dense developer information remains easy.
+ */
+internal val DisplayFont = FontFamily.SansSerif
 internal val Ink = AndyColors.Neutral900
 internal val Panel = AndyColors.Neutral800
 internal val PanelSoft = AndyColors.Neutral700

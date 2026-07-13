@@ -180,7 +180,7 @@ internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, on
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            FilterPill(if (expanded) "Hide" else "Show", expanded, Rust, onToggle)
+            FilterPill(if (expanded) "Hide" else "Show", expanded, Rust, onClick = onToggle)
         }
         AnimatedVisibility(expanded) {
             if (selected == null) {

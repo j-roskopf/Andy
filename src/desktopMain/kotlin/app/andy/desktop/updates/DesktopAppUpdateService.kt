@@ -447,7 +447,6 @@ internal fun macPkgInstallerHelperScript(pkgPath: String): String {
         #!/bin/sh
         sleep 1
         open -W ${pkgPath.shellQuote()}
-        open -a Andy
     """.trimIndent() + "\n"
 }
 

@@ -64,6 +64,9 @@ internal class ShellState(
     @set:JvmName("writeActiveRunId")
     var activeRunId by mutableStateOf<String?>(null)
         private set
+    @set:JvmName("writeTerminalRunId")
+    var terminalRunId by mutableStateOf<String?>(null)
+        private set
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
@@ -267,7 +270,10 @@ internal class ShellState(
     }
 
     fun runAction(project: ActionProject, action: ProjectAction) {
-        activeRunId = services.actionRuns.run(project, action)
+        val runId = services.actionRuns.run(project, action)
+        activeRunId = runId
+        terminalRunId = runId
+        destination = AndyDestination.Actions
     }
 
     fun stopAction(run: RunningAction) {

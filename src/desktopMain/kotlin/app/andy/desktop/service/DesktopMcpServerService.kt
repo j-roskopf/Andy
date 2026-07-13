@@ -123,7 +123,8 @@ class DesktopMcpServerService(
             McpClientConfig.ClientType.ClaudeCode,
             McpClientConfig.ClientType.Cursor,
             McpClientConfig.ClientType.Codex,
-            McpClientConfig.ClientType.ClaudeDesktop
+            McpClientConfig.ClientType.ClaudeDesktop,
+            McpClientConfig.ClientType.Antigravity
         )
     }
 

@@ -25,8 +25,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Divider
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -47,6 +49,7 @@ import app.andy.model.SdkDiscovery
 import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
 import app.andy.ui.components.StatusRow
+import app.andy.ui.agents.UnreadDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -62,6 +65,8 @@ import org.jetbrains.compose.resources.painterResource
 internal fun Sidebar(
     current: AndyDestination,
     deviceCount: Int,
+    hasUnreadAgentTasks: Boolean,
+    hasUnreadProjectAgentTasks: Boolean,
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -99,21 +104,23 @@ internal fun Sidebar(
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
             .padding(horizontal = horizontalPadding, vertical = AndySpace.S3),
     ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
-            ) {
-                AndyRobotIcon(Modifier.size(28.dp))
-                if (labelAlpha > 0.01f) {
-                    Column {
-                        Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                        Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
-                    }
+        Row(
+            Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
+        ) {
+            AndyRobotIcon(Modifier.size(28.dp))
+            if (labelAlpha > 0.01f) {
+                Column {
+                    Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
                 }
             }
-            WorkspaceSidebarToggle(expanded = expanded, onClick = { onExpandedChange(!expanded) })
+        }
+        WorkspaceSidebarToggle(expanded = expanded, onClick = { onExpandedChange(!expanded) })
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState()),
+        ) {
             AndyDestination.entries.forEach { item ->
                 val active = item == current
                 Row(
@@ -141,10 +148,13 @@ internal fun Sidebar(
                         if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 11.sp)
                         if (item == AndyDestination.Logcat) Text("live", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 10.sp)
                     }
+                    if (
+                        (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
+                        (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
+                    ) UnreadDot()
                 }
             }
         }
-        Spacer(Modifier.weight(1f))
         AnimatedVisibility(
             visible = expanded,
             enter = expandHorizontally(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
@@ -157,13 +167,27 @@ internal fun Sidebar(
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("v${app.andy.updates.AndyBuildInfo.versionName}  h.264 embedded", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                Text(
+                    "v${app.andy.updates.AndyBuildInfo.versionName}",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "h.264 embedded",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
                 StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "install cmdline-tools", sdk.hasEmulatorTools)
+                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
                 StatusRow("Proxy CA", "local", true)
                 StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
 
-                Divider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+                HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
 
                 val updateText = when (updateState) {
                     AppUpdateState.Idle -> "Check for updates"
@@ -270,6 +294,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.ComputerFiles -> "//"
     AndyDestination.Network -> "~~"
     AndyDestination.Actions -> "|>"
+    AndyDestination.Agents -> "@>"
     AndyDestination.Snapshots -> "[]"
     AndyDestination.Controls -> "+-"
     AndyDestination.Performance -> "/^"
