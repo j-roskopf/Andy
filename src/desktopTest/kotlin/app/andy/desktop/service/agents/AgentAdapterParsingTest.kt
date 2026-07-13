@@ -63,6 +63,18 @@ class ClaudeCodeAdapterTest {
     }
 
     @Test
+    fun planModeOverridesUnsafePermissionChoices() {
+        val argv = adapter.buildCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+
+        assertTrue("--permission-mode" in argv && "plan" in argv)
+        assertTrue("--dangerously-skip-permissions" !in argv)
+    }
+
+    @Test
     fun tellsTextOnlyCliWhereAttachedImagesLive() {
         val withImage = task(AgentKind.ClaudeCode).copy(imagePaths = listOf("/tmp/mockup.png"))
         val argv = adapter.buildCommand("/bin/claude", withImage, mcpUrl = null)
@@ -169,6 +181,19 @@ class CodexAdapterTest {
     }
 
     @Test
+    fun planModeKeepsPlanInstructionsOnFollowUps() {
+        val argv = adapter.buildResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "thread-1").copy(planMode = true),
+            "continue",
+            emptyList(),
+            mcpUrl = null,
+        ) ?: error("Codex supports resume")
+
+        assertTrue(argv.last().contains("Plan mode is active"))
+    }
+
+    @Test
     fun parsesThreadShape() {
         val started = adapter.parseLine("""{"type":"thread.started","thread_id":"t-42"}""", 1)
         assertEquals("t-42", (started.single() as AgentEvent.SessionStarted).sessionId)
@@ -251,6 +276,18 @@ class CodexAdapterTest {
     }
 
     @Test
+    fun planModeUsesReadOnlySandboxAndPlanInstructions() {
+        val argv = adapter.buildCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+
+        assertTrue("--sandbox" in argv && "read-only" in argv)
+        assertTrue(argv.last().contains("Plan mode is active"))
+    }
+
+    @Test
     fun sendsAttachedImagesWithTheNativeCodexFlag() {
         val withImage = task(AgentKind.Codex).copy(imagePaths = listOf("/tmp/mockup.png"))
         val argv = adapter.buildCommand("/bin/codex", withImage, mcpUrl = null)
@@ -305,6 +342,19 @@ class AntigravityAdapterTest {
         val argv = adapter.buildCommand("/bin/agy", configured, mcpUrl = null)
         assertTrue("--model" in argv && "Gemini 3.5 Flash (High)" in argv)
     }
+
+    @Test
+    fun planModeOverridesUnsafePermissionChoices() {
+        val argv = adapter.buildCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+
+        assertTrue("--mode" in argv && "plan" in argv)
+        assertTrue("--sandbox" in argv)
+        assertTrue("--dangerously-skip-permissions" !in argv)
+    }
 }
 
 class CursorAdapterTest {
@@ -337,6 +387,19 @@ class CursorAdapterTest {
         )
         assertTrue("--mode" in readOnly && "plan" in readOnly)
         assertTrue("--sandbox" in readOnly && "enabled" in readOnly)
+    }
+
+    @Test
+    fun planModeOverridesFullAutonomy() {
+        val argv = adapter.buildCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+
+        assertTrue("--mode" in argv && "plan" in argv)
+        assertTrue("--sandbox" in argv && "enabled" in argv)
+        assertTrue("--force" !in argv)
     }
 
     @Test

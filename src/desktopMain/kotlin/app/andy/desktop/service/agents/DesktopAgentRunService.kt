@@ -163,6 +163,7 @@ class DesktopAgentRunService(
             attachAndyMcp = draft.attachAndyMcp,
             autonomy = draft.autonomy,
             sandboxMode = draft.sandboxMode,
+            planMode = draft.planMode,
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
@@ -896,47 +897,15 @@ class DesktopAgentRunService(
         return File(if (osName.contains("win")) "NUL" else "/dev/null")
     }
 
-    /**
-     * Each CLI has its own discovery contract. Do not merge these roots: a skill in
-     * one provider's directory is not necessarily visible to another provider.
-     */
+    /** Discovers each CLI's native roots plus explicitly supported compatibility roots. */
     private fun discoverSkills(agent: AgentKind, directory: String?): List<AgentSkill> {
         val home = System.getProperty("user.home") ?: return emptyList()
         val workspace = directory?.let(::File)?.takeIf(File::isDirectory)
-        val roots = when (agent) {
-            // Codex desktop also exposes portable Agent Skills installed under
-            // ~/.agents/skills (for example, skills installed by `npx skills`).
-            AgentKind.Codex -> {
-                val codexHome = System.getenv("CODEX_HOME")
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(::File)
-                    ?: File(home, ".codex")
-                listOf(
-                    File(codexHome, "skills"),
-                    File(home, ".agents/skills"),
-                    File(codexHome, "plugins/cache"),
-                )
-            }
-            // Claude gives personal skills precedence over the project directory.
-            AgentKind.ClaudeCode -> listOfNotNull(
-                File(home, ".claude/skills"),
-                workspace?.let { File(it, ".claude/skills") },
-            )
-            // Cursor supports both its own and portable Agent Skills locations at
-            // workspace and user scope; workspace entries take precedence.
-            AgentKind.Cursor -> listOfNotNull(
-                workspace?.let { File(it, ".cursor/skills") },
-                workspace?.let { File(it, ".agents/skills") },
-                File(home, ".cursor/skills"),
-                File(home, ".cursor/skills-cursor"),
-                File(home, ".agents/skills"),
-            )
-            // Antigravity CLI loads workspace Agent Skills and its own global root.
-            AgentKind.Antigravity -> listOfNotNull(
-                workspace?.let { File(it, ".agents/skills") },
-                File(home, ".gemini/antigravity-cli/skills"),
-            )
-        }
+        val codexHome = System.getenv("CODEX_HOME")
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?: File(home, ".codex")
+        val roots = skillRootsFor(agent, workspace, File(home), codexHome)
         val discovered = linkedMapOf<String, AgentSkill>()
         roots.forEach { root ->
             if (!root.isDirectory) return@forEach
@@ -970,6 +939,46 @@ class DesktopAgentRunService(
             .forEach { it.destroyForcibly() }
         if (process.isAlive) process.destroyForcibly()
     }
+}
+
+/**
+ * Skill roots are ordered from the provider's native locations to compatible
+ * locations. Earlier roots win when two skills use the same name.
+ */
+internal fun skillRootsFor(
+    agent: AgentKind,
+    workspace: File?,
+    home: File,
+    codexHome: File = File(home, ".codex"),
+): List<File> = when (agent) {
+    // Codex desktop also exposes portable Agent Skills installed under
+    // ~/.agents/skills (for example, skills installed by `npx skills`).
+    AgentKind.Codex -> listOf(
+        File(codexHome, "skills"),
+        File(home, ".agents/skills"),
+        File(codexHome, "plugins/cache"),
+    )
+    // Claude gives personal skills precedence over the project directory.
+    AgentKind.ClaudeCode -> listOfNotNull(
+        File(home, ".claude/skills"),
+        workspace?.let { File(it, ".claude/skills") },
+    )
+    // Cursor discovers its own and portable Agent Skills at workspace and user
+    // scope. It also recognizes compatible Codex skills, so include that root
+    // after Cursor's native locations rather than hiding installed workflows.
+    AgentKind.Cursor -> listOfNotNull(
+        workspace?.let { File(it, ".cursor/skills") },
+        workspace?.let { File(it, ".agents/skills") },
+        File(home, ".cursor/skills"),
+        File(home, ".cursor/skills-cursor"),
+        File(home, ".agents/skills"),
+        File(codexHome, "skills"),
+    )
+    // Antigravity CLI loads workspace Agent Skills and its own global root.
+    AgentKind.Antigravity -> listOfNotNull(
+        workspace?.let { File(it, ".agents/skills") },
+        File(home, ".gemini/antigravity-cli/skills"),
+    )
 }
 
 private const val SKILL_SEPARATOR = "\u001F"

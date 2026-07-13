@@ -272,7 +272,14 @@ class DesktopAppUpdateService(
                 val helper = helperFile("andy-update.sh")
                 helper.writeText(macPkgInstallerHelperScript(file.absolutePath))
                 helper.setExecutable(true)
-                ProcessBuilder("/bin/sh", helper.absolutePath).start()
+                // Keep the helper fully detached from Andy. In particular, it
+                // must only hand the archive to macOS and never share the
+                // app's streams or run a follow-up relaunch command.
+                ProcessBuilder("/bin/sh", helper.absolutePath)
+                    .redirectInput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
                 exitProcess(0)
             }
             UpdatePlatform.LinuxDeb -> {
@@ -446,7 +453,9 @@ internal fun macPkgInstallerHelperScript(pkgPath: String): String {
     return """
         #!/bin/sh
         sleep 1
-        open -W ${pkgPath.shellQuote()}
+        # exec makes this a one-way handoff: once macOS opens the update
+        # archive, there is no helper shell left that could reopen Andy.
+        exec /usr/bin/open -W ${pkgPath.shellQuote()}
     """.trimIndent() + "\n"
 }
 

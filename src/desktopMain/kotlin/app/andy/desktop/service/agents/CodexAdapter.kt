@@ -5,9 +5,9 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.defaultSandboxMode
+import app.andy.model.followUpPromptForCli
 import app.andy.model.modelForCli
 import app.andy.model.promptForCli
-import app.andy.model.promptWithImageHints
 import kotlinx.serialization.json.JsonObject
 
 class CodexAdapter : AgentCliAdapter {
@@ -24,7 +24,7 @@ class CodexAdapter : AgentCliAdapter {
         add("--skip-git-repo-check")
         task.modelForCli()?.let { add("--model"); add(it) }
         task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
-        when (task.sandboxMode ?: task.autonomy.defaultSandboxMode()) {
+        when (if (task.planMode) AgentSandboxMode.ReadOnly else task.sandboxMode ?: task.autonomy.defaultSandboxMode()) {
             AgentSandboxMode.ReadOnly -> { add("--sandbox"); add("read-only") }
             AgentSandboxMode.WorkspaceWrite -> { add("--sandbox"); add("workspace-write") }
             AgentSandboxMode.None -> add("--dangerously-bypass-approvals-and-sandbox")
@@ -48,7 +48,7 @@ class CodexAdapter : AgentCliAdapter {
             // sandbox flags in current CLI builds.
             mcpUrl?.let { add("-c"); add("mcp_servers.andy.url=\"$it\"") }
             add(threadId)
-            add(promptWithImageHints(followUp, imagePaths))
+            add(task.followUpPromptForCli(followUp, imagePaths))
         }
     }
 
