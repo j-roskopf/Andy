@@ -179,6 +179,8 @@ interface AgentRunService {
      */
     fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>>
     suspend fun createAndStart(draft: AgentTaskDraft): AgentTask
+    /** Starts a fresh writable provider run from a completed plan-mode task. */
+    suspend fun startImplementation(taskId: String)
     fun stop(taskId: String)
     /** Starts the failed task over with its original prompt and configuration. */
     suspend fun retry(taskId: String)

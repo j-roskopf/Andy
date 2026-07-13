@@ -5,6 +5,7 @@ import app.andy.model.ActionsConfig
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectNote
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,10 +14,114 @@ import kotlin.test.assertTrue
 
 class DesktopActionConfigStoreTest {
     @Test
+    fun loadsStarterActionsWhenNoPersonalConfigurationExists() = runBlocking {
+        val dir = createTempDirectory("andy-actions-starter").toFile()
+        val homeConfig = dir.resolve("home/actions.toml")
+        val starter = dir.resolve("workspace/.andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "andy"
+                name = "Andy"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "record"
+                projectId = "andy"
+                name = "Record screenshots"
+                icon = "test"
+                command = "./gradlew recordRoborazziDesktop"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
+
+        assertEquals(1, loaded.projects.size)
+        assertEquals(starter.parentFile.parentFile.absolutePath, loaded.projects.single().contextDir)
+        assertEquals("./gradlew recordRoborazziDesktop", loaded.projects.single().actions.single().command)
+        assertFalse(homeConfig.exists(), "starter data must not overwrite personal configuration")
+    }
+
+    @Test
+    fun ignoresMalformedStarterActionsWithoutChangingPersonalConfiguration() = runBlocking {
+        val dir = createTempDirectory("andy-actions-invalid-starter").toFile()
+        val homeConfig = dir.resolve("home/actions.toml")
+        val starter = dir.resolve("workspace/.andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText("[[projects]\nid = \"unterminated\"")
+        }
+
+        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
+
+        assertTrue(loaded.projects.isEmpty())
+        assertFalse(homeConfig.exists(), "starter data must not overwrite personal configuration")
+        assertFalse(File(starter.absolutePath + ".corrupt").exists(), "starter data must not be renamed or copied")
+    }
+
+    @Test
+    fun mergesScreenshotStarterActionIntoExistingPersonalProject() = runBlocking {
+        val dir = createTempDirectory("andy-actions-merge").toFile()
+        val workspace = dir.resolve("workspace").apply { mkdirs() }
+        val homeConfig = dir.resolve("home/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "andy"
+                name = "My Andy checkout"
+                contextDir = "${workspace.absolutePath}"
+                env = { }
+                [[actions]]
+                id = "test"
+                projectId = "andy"
+                name = "Test"
+                icon = "test"
+                command = "./gradlew desktopTest"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+        val starter = workspace.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "andy"
+                name = "Andy"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "record"
+                projectId = "andy"
+                name = "Record screenshots"
+                icon = "test"
+                command = "./gradlew recordRoborazziDesktop"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val project = DesktopActionConfigStore(homeConfig, starter).load().projects.single()
+
+        assertEquals(2, project.actions.size)
+        assertTrue(project.actions.any { it.command == "./gradlew recordRoborazziDesktop" })
+        assertTrue(homeConfig.readText().contains("./gradlew desktopTest"), "personal config remains unchanged")
+    }
+
+    @Test
     fun roundTripsProjectsActionsAndNotes() = runBlocking {
         val dir = createTempDirectory("andy-actions-config").toFile()
         val file = dir.resolve("actions.toml")
-        val store = DesktopActionConfigStore(file)
+        val store = DesktopActionConfigStore(file, starterFile = null)
         val config = ActionsConfig(
             projects = listOf(
                 ActionProject(
@@ -100,7 +205,7 @@ class DesktopActionConfigStoreTest {
             """.trimIndent() + "\n",
         )
 
-        val loaded = DesktopActionConfigStore(file).load()
+        val loaded = DesktopActionConfigStore(file, starterFile = null).load()
         assertEquals(1, loaded.projects.size)
         val project = loaded.projects.single()
         assertEquals("proj-legacy", project.id)

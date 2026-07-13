@@ -53,16 +53,16 @@ jobs:
 
       - name: Run Linux checks
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew desktopTest assemble
+        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop assemble
 
       - name: Run macOS checks
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest assemble
+        run: ./gradlew desktopTest verifyRoborazziDesktop assemble
 
       - name: Run Windows checks
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat desktopTest assemble
+        run: ./gradlew.bat desktopTest verifyRoborazziDesktop assemble
 
       - name: Upload test reports
         if: failure()
@@ -73,4 +73,6 @@ jobs:
           path: |
             build/reports/tests/**
             build/test-results/**
-
+            build/reports/roborazzi/**
+            build/intermediates/roborazzi/**
+            build/test-results/roborazzi/**

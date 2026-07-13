@@ -4,6 +4,8 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentSandboxMode
+import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
@@ -199,6 +201,98 @@ class AgentRetryTest {
     }
 }
 
+class AgentPlanHandoffTest {
+    @Test
+    fun completedPlanStartsAFreshWritableRunWithTheOriginalRequestAndPlan() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+
+        val dir = File.createTempFile("andy-agent-plan-handoff", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val cwd = File(dir, "existing-worktree").apply { mkdirs() }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val completedPlan = "1. Add the handoff transition.\n2. Cover it with tests."
+            val planned = AgentTask(
+                id = "task-plan-handoff",
+                title = "plan the handoff",
+                prompt = "make the agent plan handoff work",
+                agent = AgentKind.Codex,
+                cwd = cwd.absolutePath,
+                originDir = dir.absolutePath,
+                useWorktree = true,
+                worktreePath = cwd.absolutePath,
+                branchName = "andy/codex/plan-handoff",
+                attachAndyMcp = true,
+                autonomy = AgentAutonomy.ReadOnly,
+                sandboxMode = AgentSandboxMode.ReadOnly,
+                planMode = true,
+                completedPlanText = completedPlan,
+                model = "gpt-5.6-terra",
+                skills = listOf(AgentSkill("verify", "", "/tmp/verify/SKILL.md")),
+                status = AgentTaskStatus.Completed,
+                vendorSessionId = "read-only-plan-thread",
+                createdAtMillis = 1,
+                finishedAtMillis = 2,
+                exitCode = 0,
+            )
+            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            store.save(
+                AgentStoreState(
+                    tasks = listOf(planned),
+                    binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath),
+                ),
+            )
+            val adapter = PlanHandoffTestAdapter()
+            val service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to adapter),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+            )
+            withTimeout(10_000) {
+                while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
+            }
+
+            service.startImplementation(planned.id)
+            withTimeout(10_000) {
+                while (adapter.freshTasks.isEmpty()) delay(25)
+            }
+            withTimeout(10_000) {
+                while (service.tasks.value.single().isActive) delay(25)
+            }
+
+            val implementation = service.tasks.value.single()
+            val launched = adapter.freshTasks.single()
+            assertEquals(AgentTaskStatus.Completed, implementation.status)
+            assertTrue(!implementation.planMode)
+            assertEquals(AgentSandboxMode.WorkspaceWrite, implementation.sandboxMode)
+            assertEquals(planned.cwd, implementation.cwd)
+            assertEquals(planned.worktreePath, implementation.worktreePath)
+            assertEquals(planned.model, implementation.model)
+            assertEquals(planned.skills, implementation.skills)
+            assertEquals(planned.attachAndyMcp, implementation.attachAndyMcp)
+            assertTrue(launched.implementationPrompt?.contains(planned.prompt) == true)
+            assertTrue(launched.implementationPrompt?.contains(completedPlan) == true)
+            assertTrue(launched.implementationPrompt?.contains("Plan mode is active") == false)
+            assertTrue(adapter.resumeCalls == 0, "implementation must never use a provider resume command")
+            assertTrue(
+                service.events(planned.id).value.filterIsInstance<AgentEvent.UserMessage>()
+                    .any { it.text.startsWith("Begin implementation.") },
+            )
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+}
+
 class AgentQueuedFollowUpTest {
     @Test
     fun startsQueuedFollowUpAfterTheCurrentRunCompletes() = runBlocking {
@@ -281,6 +375,35 @@ private class QueueTestAdapter : AgentCliAdapter {
         "resumed" -> listOf(AgentEvent.AssistantText(nowMillis, "queued response"))
         else -> emptyList()
     }
+}
+
+private class PlanHandoffTestAdapter : AgentCliAdapter {
+    override val kind = AgentKind.Codex
+    override val supportsHeadlessResume = true
+    override val supportsStreamJson = false
+    val freshTasks = mutableListOf<AgentTask>()
+    var resumeCalls = 0
+
+    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
+        freshTasks += task
+        return listOf(binary, "-c", "printf 'implementation complete\\n'")
+    }
+
+    override fun buildResumeCommand(
+        binary: String,
+        task: AgentTask,
+        followUp: String,
+        imagePaths: List<String>,
+        mcpUrl: String?,
+    ): List<String> {
+        resumeCalls += 1
+        return listOf(binary, "-c", "printf 'resumed\\n'")
+    }
+
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
+
+    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> =
+        listOf(AgentEvent.AssistantText(nowMillis, line))
 }
 
 private class FakeMcp : McpServerService {

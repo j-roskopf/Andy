@@ -2,7 +2,11 @@ package app.andy
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
@@ -46,6 +50,10 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
 ) {
+    if (isScreenshotRenderer()) {
+        ScreenshotMirrorSurface(frame, modifier, overlay)
+        return
+    }
     SwingPanel(
         modifier = modifier,
         background = Color.Black,
@@ -76,6 +84,11 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
 ) {
+    if (isScreenshotRenderer()) {
+        val frame by frames.collectAsState(initial = null)
+        ScreenshotMirrorSurface(frame, modifier, overlay)
+        return
+    }
     val panel = remember { MirrorPanel() }
     SwingPanel(
         modifier = modifier,
@@ -94,6 +107,36 @@ actual fun MirrorVideoSurface(
     LaunchedEffect(panel, frames, resetKey) {
         frames.collectLatest { frame ->
             panel.enqueueFrame(frame)
+        }
+    }
+}
+
+private fun isScreenshotRenderer(): Boolean =
+    System.getProperty("andy.screenshot.renderer") == "compose"
+
+/** Compose-only mirror for Roborazzi's off-window test scene. */
+@Composable
+private fun ScreenshotMirrorSurface(frame: MirrorFrame?, modifier: Modifier, overlay: MirrorOverlay) {
+    Canvas(modifier.background(Color.Black)) {
+        val sourceWidth = frame?.width ?: 270
+        val sourceHeight = frame?.height ?: 600
+        val scale = minOf(size.width / sourceWidth, size.height / sourceHeight)
+        val width = sourceWidth * scale
+        val height = sourceHeight * scale
+        val left = (size.width - width) / 2f
+        val top = (size.height - height) / 2f
+        drawRect(Color(0xff1a2936), topLeft = androidx.compose.ui.geometry.Offset(left, top), size = androidx.compose.ui.geometry.Size(width, height))
+        drawRect(Color(0xff30485a), topLeft = androidx.compose.ui.geometry.Offset(left + width * .08f, top + height * .12f), size = androidx.compose.ui.geometry.Size(width * .84f, height * .19f))
+        drawRect(Color(0xff406b63), topLeft = androidx.compose.ui.geometry.Offset(left + width * .08f, top + height * .38f), size = androidx.compose.ui.geometry.Size(width * .84f, height * .15f))
+        drawRect(Color(0xff675c96), topLeft = androidx.compose.ui.geometry.Offset(left + width * .08f, top + height * .60f), size = androidx.compose.ui.geometry.Size(width * .38f, height * .18f))
+        drawRect(Color(0xff8a6544), topLeft = androidx.compose.ui.geometry.Offset(left + width * .54f, top + height * .60f), size = androidx.compose.ui.geometry.Size(width * .38f, height * .18f))
+        if (overlay.showGrid) {
+            val color = if (overlay.gridColor == Color.Transparent) Color.White.copy(alpha = .25f) else overlay.gridColor
+            val step = (overlay.gridSize * scale).coerceAtLeast(8f)
+            var x = left
+            while (x <= left + width) { drawLine(color, androidx.compose.ui.geometry.Offset(x, top), androidx.compose.ui.geometry.Offset(x, top + height), 1f); x += step }
+            var y = top
+            while (y <= top + height) { drawLine(color, androidx.compose.ui.geometry.Offset(left, y), androidx.compose.ui.geometry.Offset(left + width, y), 1f); y += step }
         }
     }
 }

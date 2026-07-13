@@ -9,6 +9,12 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentFileChange
+import app.andy.model.AgentFileDiff
+import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.DiffLine
+import app.andy.model.DiffLineKind
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -44,6 +50,8 @@ class DesktopAgentTaskStoreTest {
             autonomy = AgentAutonomy.Full,
             sandboxMode = AgentSandboxMode.None,
             planMode = true,
+            completedPlanText = "1. Update the service\n2. Verify it",
+            implementationPrompt = "Begin implementation using the completed plan.",
             model = "gpt-5.6-sol",
             reasoningEffort = AgentReasoningEffort.ExtraHigh,
             imagePaths = listOf("/tmp/reference.png"),
@@ -57,6 +65,18 @@ class DesktopAgentTaskStoreTest {
                 AgentQueuedFollowUp(text = "then summarize the results"),
             ),
             maxBudgetUsd = 2.5,
+            completedChanges = AgentThreadChangeSnapshot(
+                summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", additions = 2, deletions = 1))),
+                diffs = mapOf(
+                    "src/Main.kt" to AgentFileDiff(
+                        path = "src/Main.kt",
+                        lines = listOf(
+                            DiffLine(DiffLineKind.Deletion, "old", oldLineNumber = 1),
+                            DiffLine(DiffLineKind.Addition, "new", newLineNumber = 1),
+                        ),
+                    ),
+                ),
+            ),
             status = AgentTaskStatus.Completed,
             vendorSessionId = "t-99",
             createdAtMillis = 111,

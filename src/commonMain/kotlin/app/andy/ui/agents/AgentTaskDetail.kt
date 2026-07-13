@@ -190,9 +190,9 @@ internal fun AgentTaskDetail(
         if (task.worktreePath != null) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
         }
-        changeSummary = if (task.isActive) null else services.agentRuns.changeSummary(task.id)
+        changeSummary = if (task.isActive) null else task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
         expandedDiffPath = null
-        loadedFileDiffs = emptyMap()
+        loadedFileDiffs = task.completedChanges?.diffs.orEmpty()
         loadingDiffPath = null
     }
     LaunchedEffect(task.goal) {
@@ -304,6 +304,38 @@ internal fun AgentTaskDetail(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
                         ) { Text("remove", fontSize = 10.sp) }
                     }
+                }
+            }
+        }
+
+        if (task.status == AgentTaskStatus.Completed && task.planMode) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
+                    .border(1.dp, Cyan.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.R4))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("PLAN COMPLETE", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                if (task.completedPlanText.isNullOrBlank()) {
+                    Text(
+                        "implementation unavailable — this older plan has no recoverable final response",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                    )
+                } else {
+                    Text(
+                        "Start a fresh writable run with this plan and the original request.",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                    Button(
+                        onClick = { scope.launch { services.agentRuns.startImplementation(task.id) } },
+                        colors = primaryButtonColors(),
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                    ) { Text("implement plan", fontSize = 11.sp) }
                 }
             }
         }

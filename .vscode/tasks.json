@@ -33,7 +33,21 @@
         }
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Andy: Record Desktop Screenshots",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": ["recordRoborazziDesktop"],
+      "group": "test",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
     }
   ]
 }
-

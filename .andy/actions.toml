@@ -1,0 +1,18 @@
+# Starter actions for running Andy from this checkout. Andy loads this only when
+# ~/.andy/actions.toml does not exist, so it never overwrites personal projects.
+version = 1
+
+[[projects]]
+id = "andy"
+name = "Andy"
+contextDir = "."
+env = { }
+
+[[actions]]
+id = "record-desktop-screenshots"
+projectId = "andy"
+name = "Record screenshots"
+icon = "test"
+command = "./gradlew recordRoborazziDesktop"
+cwd = ""
+env = { }

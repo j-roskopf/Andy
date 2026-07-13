@@ -105,14 +105,29 @@ Very rudimentary file browsing / editing.
 
 ## Screenshots
 
-| Create AVD | Live Mirror | Devices |
+The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state and the matching Linux/Windows baseline contract.
+
+| Devices | Catalog | Live mirror |
 | --- | --- | --- |
-| <img src="docs/readme/create-virtual-device.png" alt="Andy create virtual device dialog selecting an Android device profile" width="320"> | <img src="docs/readme/live.png" alt="Andy live mirror with device controls and logcat" width="320"> | <img src="docs/readme/devices.png" alt="Andy devices screen listing connected devices and emulators" width="320"> |
-| Catalog | Apps | Logcat |
-| <img src="docs/readme/catalog.png" alt="Andy system image catalog screen" width="320"> | <img src="docs/readme/apps.png" alt="Andy apps screen listing installed packages" width="320"> | <img src="docs/readme/logcat.png" alt="Andy logcat screen with level filters" width="320"> |
-| Intents | Files & Data | Network |
-| <img src="docs/readme/intents.png" alt="Andy intents screen for sending deep links" width="320"> | <img src="docs/readme/files-data.png" alt="Andy files and data browser showing sdcard entries" width="320"> | <img src="docs/readme/network.png" alt="Andy network proxy screen with captured traffic and a rewrite rule" width="320"> |
-| Snapshots | Controls | Performance |
-| <img src="docs/readme/snapshots.png" alt="Andy snapshots screen with restore and delete actions" width="320"> | <img src="docs/readme/controls.png" alt="Andy controls screen for radios, display, debug values, and hardware buttons" width="320"> | <img src="docs/readme/performance.png" alt="Andy performance screen with process metrics and frame rendering bars" width="320"> |
-| Design | Accessibility | Bug Capture |
-| <img src="docs/readme/design-overlay.png" alt="Andy design overlay with grid, ruler, and color picker" width="320"> | <img src="docs/readme/accessibility.png" alt="Andy accessibility inspector with hierarchy and live mirror" width="320"> | <img src="docs/readme/bug-replay.png" alt="Andy bug replay screen with action timeline and captured video" width="320"> |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-devices-populated.png" alt="Andy devices screen" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-catalog-images.png" alt="Andy system image catalog" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-live-mirror.png" alt="Andy live mirror" width="320"> |
+| Apps | Logcat | Intents |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-apps-details.png" alt="Andy app details" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-logcat-stream.png" alt="Andy logcat" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-intents-draft.png" alt="Andy intent draft" width="320"> |
+| Files | Computer Files | Network |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="320"> |
+| Projects | Project actions | Project notes |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-populated.png" alt="Andy projects" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-actions.png" alt="Andy project actions" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-notes.png" alt="Andy project notes" width="320"> |
+| Agents | Snapshots | |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="320"> | |
+| Controls | Performance | Design |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="320"> |
+| Accessibility | Bug Capture | Settings |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="320"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="320"> |
+| Mirror pop-out | | |
+| --- | --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="320"> | | |

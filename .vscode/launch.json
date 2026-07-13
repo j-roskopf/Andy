@@ -11,7 +11,17 @@
         "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
         "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
       }
+    },
+    {
+      "name": "Andy: Record Desktop Screenshots",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew recordRoborazziDesktop",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+        "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+      }
     }
   ]
 }
-

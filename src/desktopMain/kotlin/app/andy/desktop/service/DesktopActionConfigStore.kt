@@ -14,15 +14,25 @@ import java.io.File
 
 class DesktopActionConfigStore(
     private val file: File = File(System.getProperty("user.home"), ".andy/actions.toml"),
+    private val starterFile: File? = File(System.getProperty("user.dir"), ".andy/actions.toml"),
 ) : ActionConfigStore {
     override suspend fun load(): ActionsConfig = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext ActionsConfig()
-        runCatching {
-            Toml { ignoreUnknownKeys = true }.decodeFromString(ActionsFileDto.serializer(), file.readText()).toModel()
-        }.getOrElse {
-            file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
+        val starter = starterFile
+            ?.takeIf { it.isFile }
+            ?.let { source ->
+                decode(source).getOrElse { ActionsConfig() }
+                    .resolveRelativeProjectPaths(source.parentFile.parentFile)
+            }
+            ?: ActionsConfig()
+        val personal = if (!file.exists()) {
             ActionsConfig()
+        } else {
+            decode(file).getOrElse {
+                file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
+                ActionsConfig()
+            }
         }
+        personal.mergeMissingStarterActions(starter)
     }
 
     override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
@@ -32,6 +42,10 @@ class DesktopActionConfigStore(
         }
         val content = Toml.encodeToString(ActionsFileDto.serializer(), config.toFileDto())
         file.writeText(content.trimEnd() + "\n")
+    }
+
+    private fun decode(source: File): Result<ActionsConfig> = runCatching {
+        Toml { ignoreUnknownKeys = true }.decodeFromString(ActionsFileDto.serializer(), source.readText()).toModel()
     }
 }
 
@@ -138,3 +152,36 @@ private fun ActionsConfig.toFileDto(): ActionsFileDto = ActionsFileDto(
         }
     },
 )
+
+private fun ActionsConfig.resolveRelativeProjectPaths(workspace: File): ActionsConfig = copy(
+    projects = projects.map { project ->
+        val context = File(project.contextDir)
+        if (context.isAbsolute) project else project.copy(
+            contextDir = File(workspace, project.contextDir).toPath().normalize().toFile().absolutePath,
+        )
+    },
+)
+
+/** Adds checkout-provided actions without changing or persisting personal configuration. */
+private fun ActionsConfig.mergeMissingStarterActions(starter: ActionsConfig): ActionsConfig {
+    val merged = projects.toMutableList()
+    starter.projects.forEach { starterProject ->
+        val existingIndex = merged.indexOfFirst { project ->
+            project.contextDir == starterProject.contextDir || project.id == starterProject.id
+        }
+        if (existingIndex < 0) {
+            merged += starterProject
+        } else {
+            val existing = merged[existingIndex]
+            val additions = starterProject.actions.filter { starterAction ->
+                existing.actions.none { action ->
+                    action.id == starterAction.id || action.command == starterAction.command
+                }
+            }
+            if (additions.isNotEmpty()) {
+                merged[existingIndex] = existing.copy(actions = existing.actions + additions)
+            }
+        }
+    }
+    return copy(projects = merged)
+}

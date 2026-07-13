@@ -6,6 +6,7 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentThreadChangeSnapshot
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -72,6 +73,15 @@ class WorktreeManager(
             changes[path] = AgentFileChange(path, additions = lines, deletions = 0)
         }
         return AgentChangeSummary(changes.values.sortedBy { it.path })
+    }
+
+    /** Captures a task's completed change set before later work in the repository can alter it. */
+    fun changeSnapshot(dir: String, baselinePaths: List<String>): AgentThreadChangeSnapshot? {
+        val summary = changeSummary(dir, baselinePaths) ?: return null
+        val diffs = summary.files.associate { change ->
+            change.path to (fileDiff(dir, change.path) ?: AgentFileDiff(path = change.path, lines = emptyList()))
+        }
+        return AgentThreadChangeSnapshot(summary = summary, diffs = diffs)
     }
 
     /** Unified diff for a single path relative to [dir], for inline review. */

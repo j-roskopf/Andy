@@ -24,6 +24,12 @@ private fun task(agent: AgentKind, sessionId: String? = null, autonomy: AgentAut
     createdAtMillis = 0,
 )
 
+private fun implementationTask(agent: AgentKind): AgentTask = task(agent, autonomy = AgentAutonomy.Full).copy(
+    planMode = false,
+    sandboxMode = AgentSandboxMode.WorkspaceWrite,
+    implementationPrompt = "Begin implementation. Implement the completed plan.",
+)
+
 class ClaudeCodeAdapterTest {
     private val adapter = ClaudeCodeAdapter()
 
@@ -72,6 +78,15 @@ class ClaudeCodeAdapterTest {
 
         assertTrue("--permission-mode" in argv && "plan" in argv)
         assertTrue("--dangerously-skip-permissions" !in argv)
+    }
+
+    @Test
+    fun implementationHandoffUsesWritableFreshCommandWithoutPlanInstructions() {
+        val argv = adapter.buildCommand("/bin/claude", implementationTask(AgentKind.ClaudeCode), mcpUrl = null)
+
+        assertTrue("acceptEdits" in argv)
+        assertTrue("plan" !in argv)
+        assertTrue(!argv.last().contains("Plan mode is active"))
     }
 
     @Test
@@ -288,6 +303,16 @@ class CodexAdapterTest {
     }
 
     @Test
+    fun implementationHandoffStartsNewWritableExecInsteadOfResume() {
+        val argv = adapter.buildCommand("/bin/codex", implementationTask(AgentKind.Codex), mcpUrl = null)
+
+        assertEquals("exec", argv[1])
+        assertTrue("resume" !in argv)
+        assertTrue("--sandbox" in argv && "workspace-write" in argv)
+        assertTrue(!argv.last().contains("Plan mode is active"))
+    }
+
+    @Test
     fun sendsAttachedImagesWithTheNativeCodexFlag() {
         val withImage = task(AgentKind.Codex).copy(imagePaths = listOf("/tmp/mockup.png"))
         val argv = adapter.buildCommand("/bin/codex", withImage, mcpUrl = null)
@@ -355,6 +380,15 @@ class AntigravityAdapterTest {
         assertTrue("--sandbox" in argv)
         assertTrue("--dangerously-skip-permissions" !in argv)
     }
+
+    @Test
+    fun implementationHandoffUsesAcceptEditsWithoutPlanInstructions() {
+        val argv = adapter.buildCommand("/bin/agy", implementationTask(AgentKind.Antigravity), mcpUrl = null)
+
+        assertTrue("accept-edits" in argv)
+        assertTrue("plan" !in argv)
+        assertTrue(!argv.any { it.contains("Plan mode is active") })
+    }
 }
 
 class CursorAdapterTest {
@@ -400,6 +434,15 @@ class CursorAdapterTest {
         assertTrue("--mode" in argv && "plan" in argv)
         assertTrue("--sandbox" in argv && "enabled" in argv)
         assertTrue("--force" !in argv)
+    }
+
+    @Test
+    fun implementationHandoffUsesWritableSandboxWithoutPlanInstructions() {
+        val argv = adapter.buildCommand("/bin/cursor-agent", implementationTask(AgentKind.Cursor), mcpUrl = null)
+
+        assertTrue("--sandbox" in argv && "enabled" in argv)
+        assertTrue("plan" !in argv)
+        assertTrue(!argv.last().contains("Plan mode is active"))
     }
 
     @Test
