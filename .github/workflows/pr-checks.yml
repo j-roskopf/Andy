@@ -88,5 +88,6 @@ jobs:
             build/reports/tests/**
             build/test-results/**
             build/reports/roborazzi/**
+            build/outputs/roborazzi/**
             build/intermediates/roborazzi/**
             build/test-results/roborazzi/**
