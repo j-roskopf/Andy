@@ -7,9 +7,12 @@ import app.andy.currentTimeMillis
 import app.andy.model.*
 import app.andy.service.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.await
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,6 +23,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -92,12 +97,25 @@ private data class WebMirrorStartDto(
     val renderer: String = "browser decoder",
     val width: Int = 0,
     val height: Int = 0,
+    val sessionId: String = "",
 )
 
 @Serializable
 private data class WebLogcatBatchDto(
     val lines: List<String> = emptyList(),
     val error: String? = null,
+)
+
+@Serializable
+private data class WebLogcatStartDto(
+    val sessionId: String = "",
+)
+
+private data class WebMetricsCommandOutput(
+    val cpu: String,
+    val processes: String,
+    val battery: String,
+    val network: Pair<Long, Long>?,
 )
 
 @Serializable
@@ -246,11 +264,15 @@ private class BrowserDeviceService(
         }.getOrElse { emptyList() }
     }
 
-    override suspend fun shell(serial: String, command: List<String>) = runCatching {
+    override suspend fun shell(serial: String, command: List<String>): CommandResult = try {
         WebJson.decodeFromString<WebCommandDto>(
             webAdbShell(serial, WebJson.encodeToString(command)).await<JsString>().toString(),
         ).toResult()
-    }.getOrElse { CommandResult.failure(it.message ?: it.toString()) }
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Throwable) {
+        CommandResult.failure(error.message ?: error.toString())
+    }
 
     override suspend fun pair(host: String, port: Int, code: String) = CommandResult.failure("Wi-Fi pairing is unavailable in the browser.")
     override suspend fun connect(host: String, port: Int) = CommandResult.failure("Use WebUSB or the local ADB bridge.")
@@ -361,19 +383,24 @@ private class BrowserFileService(private val devices: BrowserDeviceService) : Fi
     override suspend fun delete(serial: String, remotePath: String) = devices.shell(serial, listOf("rm", "-rf", remotePath))
 
     private fun parseFileListing(path: String, output: String) = output.lineSequence().mapNotNull { line ->
-        val parts = line.trim().split(Regex("\\s+"), limit = 8)
-        if (parts.size < 7) return@mapNotNull null
-        val name = parts.getOrNull(7) ?: return@mapNotNull null
+        val match = lsLineRegex.matchEntire(line.trim()) ?: return@mapNotNull null
+        val name = match.groupValues[4]
         if (name == "." || name == "..") return@mapNotNull null
         DeviceFile(
             path = if (path.endsWith('/')) path + name else "$path/$name",
             name = name,
-            isDirectory = parts[0].startsWith('d'),
-            sizeBytes = parts.getOrNull(4)?.toLongOrNull(),
-            permissions = parts[0],
-            modified = parts.drop(5).take(2).joinToString(" "),
+            isDirectory = match.groupValues[1].startsWith('d'),
+            sizeBytes = match.groupValues[2].toLongOrNull(),
+            permissions = match.groupValues[1],
+            modified = match.groupValues[3],
         )
     }.toList()
+
+    private companion object {
+        val lsLineRegex = Regex(
+            """^([bcdlps-][rwxStTs-]{9})\s+\S+\s+\S+\s+\S+\s+(\d+)\s+((?:\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})|(?:[A-Z][a-z]{2}\s+\d{1,2}\s+(?:\d{2}:\d{2}|\d{4})))\s+(.+)$""",
+        )
+    }
 }
 
 private class BrowserLogcatService(private val devices: BrowserDeviceService) : LogcatService {
@@ -382,13 +409,20 @@ private class BrowserLogcatService(private val devices: BrowserDeviceService) : 
             ?.let { devices.shell(serial, listOf("pidof", it)).stdout.split(Regex("\\s+")).toSet() }
             .orEmpty()
         while (currentCoroutineContext().isActive) {
-            if (runCatching { webAdbStartLogcat(serial).await<JsString>() }.isFailure) {
+            val sessionId = try {
+                WebJson.decodeFromString<WebLogcatStartDto>(webAdbStartLogcat(serial).await<JsString>().toString()).sessionId
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                ""
+            }
+            if (sessionId.isBlank()) {
                 delay(1_500)
                 continue
             }
             try {
                 while (currentCoroutineContext().isActive) {
-                    val batch = WebJson.decodeFromString<WebLogcatBatchDto>(webAdbDrainLogcat().toString())
+                    val batch = WebJson.decodeFromString<WebLogcatBatchDto>(webAdbDrainLogcat(sessionId).toString())
                     val fresh = batch.lines.asSequence().mapNotNull(::parseLogcatLine).filter { entry ->
                         entry.level in filter.levels &&
                             (filter.packageName == null || entry.pid in packagePids) &&
@@ -399,7 +433,9 @@ private class BrowserLogcatService(private val devices: BrowserDeviceService) : 
                     delay(250)
                 }
             } finally {
-                runCatching { webAdbStopLogcat().await<JsAny?>() }
+                withContext(NonCancellable) {
+                    runCatching { webAdbStopLogcat(sessionId).await<JsAny?>() }
+                }
             }
             delay(750)
         }
@@ -452,10 +488,17 @@ private class BrowserMetricsService(private val devices: BrowserDeviceService) :
         var previousNetwork: Pair<Long, Long>? = null
         var previousAt = 0L
         while (currentCoroutineContext().isActive) {
-            val cpu = devices.shell(serial, listOf("dumpsys", "cpuinfo")).stdout
-            val processOutput = devices.shell(serial, listOf("top", "-b", "-n", "1", "-o", "PID,%CPU,RES,ARGS", "-m", "80")).stdout
-            val battery = devices.shell(serial, listOf("dumpsys", "battery")).stdout
-            val network = parseNetwork(devices.shell(serial, listOf("cat", "/proc/net/dev")).stdout)
+            val output = coroutineScope {
+                val cpu = async { devices.shell(serial, listOf("dumpsys", "cpuinfo")).stdout }
+                val processes = async { devices.shell(serial, listOf("top", "-b", "-n", "1", "-o", "PID,%CPU,RES,ARGS", "-m", "80")).stdout }
+                val battery = async { devices.shell(serial, listOf("dumpsys", "battery")).stdout }
+                val network = async { parseNetwork(devices.shell(serial, listOf("cat", "/proc/net/dev")).stdout) }
+                WebMetricsCommandOutput(cpu.await(), processes.await(), battery.await(), network.await())
+            }
+            val cpu = output.cpu
+            val processOutput = output.processes
+            val battery = output.battery
+            val network = output.network
             val now = currentTimeMillis()
             val elapsed = (now - previousAt) / 1000f
             val rx = if (network != null && previousNetwork != null && elapsed > 0) ((network.first - previousNetwork.first).coerceAtLeast(0) / 1024f) / elapsed else null
@@ -515,6 +558,7 @@ private class BrowserMirrorEngine(
     private val mutableStatus = MutableStateFlow("Disconnected")
     private var serial: String? = null
     private var generation = 0
+    private var sessionId: String? = null
     override val frames: Flow<MirrorFrame> = mutableFrames
     override val status: Flow<String> = mutableStatus
 
@@ -525,6 +569,7 @@ private class BrowserMirrorEngine(
         return runCatching {
             val configJson = """{"maxSize":${config.maxSize},"bitRate":${config.bitRate},"maxFps":${config.maxFps},"codec":${WebJson.encodeToString(config.codec)}}"""
             val start = WebJson.decodeFromString<WebMirrorStartDto>(webAdbStartMirror(serial, configJson).await<JsString>().toString())
+            sessionId = start.sessionId
             mutableFrames.emit(MirrorFrame(start.width.coerceAtLeast(2), start.height.coerceAtLeast(2), IntArray(0), frameNumber = 1))
             mutableStatus.value = "Connected · ${start.width}×${start.height} · measuring displayed fps · ${start.renderer}"
             scope.launch {
@@ -570,7 +615,8 @@ private class BrowserMirrorEngine(
 
     override suspend fun disconnect() {
         generation++
-        webAdbStopMirror().await<JsAny?>()
+        sessionId?.let { webAdbStopMirror(it).await<JsAny?>() }
+        sessionId = null
         mutableStatus.value = "Disconnected"
         mutableFrames.emit(MirrorFrame(1, 1, IntArray(1)))
     }

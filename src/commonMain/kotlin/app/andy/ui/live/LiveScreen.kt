@@ -181,10 +181,13 @@ internal fun LiveScreen(
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
             if (result.isSuccess) {
-                runCatching { services.bugs.startCapture(serial, device) }
-                    .onFailure { error ->
-                        connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
-                    }
+                try {
+                    services.bugs.startCapture(serial, device)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
+                }
                 try {
                     awaitCancellation()
                 } finally {

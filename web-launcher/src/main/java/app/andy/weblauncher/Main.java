@@ -109,14 +109,23 @@ public final class Main {
     }
 
     static boolean isAndyRunning(URL url) {
+        HttpURLConnection connection = null;
         try {
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection = (HttpURLConnection) url.openConnection();
             connection.setConnectTimeout(800);
             connection.setReadTimeout(800);
             connection.setInstanceFollowRedirects(false);
-            return connection.getResponseCode() == 200 && MARKER.equals(connection.getHeaderField("X-Andy-Web"));
+            boolean running = connection.getResponseCode() == 200 && MARKER.equals(connection.getHeaderField("X-Andy-Web"));
+            if (running) {
+                try (InputStream input = connection.getInputStream()) {
+                    input.transferTo(java.io.OutputStream.nullOutputStream());
+                }
+            }
+            return running;
         } catch (IOException ignored) {
             return false;
+        } finally {
+            if (connection != null) connection.disconnect();
         }
     }
 

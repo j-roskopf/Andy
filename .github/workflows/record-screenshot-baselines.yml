@@ -41,16 +41,16 @@ jobs:
 
       - name: Record Linux baselines
         if: inputs.platform == 'linux'
-        run: xvfb-run -a ./gradlew recordRoborazziDesktop
+        run: xvfb-run -a ./gradlew --rerun-tasks recordRoborazziDesktop
 
       - name: Record macOS baselines
         if: inputs.platform == 'macos'
-        run: ./gradlew recordRoborazziDesktop
+        run: ./gradlew --rerun-tasks recordRoborazziDesktop
 
       - name: Record Windows baselines
         if: inputs.platform == 'windows'
         shell: pwsh
-        run: ./gradlew.bat recordRoborazziDesktop
+        run: ./gradlew.bat --rerun-tasks recordRoborazziDesktop
 
       - name: Upload recorded baselines
         uses: actions/upload-artifact@v4

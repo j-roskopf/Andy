@@ -13,10 +13,10 @@ internal fun formatDecimal(value: Number, fractionDigits: Int): String {
     val factor = 10.0.pow(fractionDigits)
     val rounded = round(abs(number) * factor).toLong()
     val whole = rounded / factor.toLong()
-    if (fractionDigits == 0) return (if (number < 0) "-" else "") + whole
+    if (fractionDigits == 0) return (if (number < 0 && rounded > 0) "-" else "") + whole
     val fraction = (rounded % factor.toLong()).toString().padStart(fractionDigits, '0')
     return buildString {
-        if (number < 0) append('-')
+        if (number < 0 && rounded > 0) append('-')
         append(whole)
         append('.')
         append(fraction)

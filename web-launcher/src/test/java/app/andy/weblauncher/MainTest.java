@@ -29,6 +29,17 @@ class MainTest {
     }
 
     @Test
+    void recognizesAndClosesItsOwnServerConnection() throws Exception {
+        HttpServer server = Main.start(0);
+        try {
+            URL url = new URL("http://127.0.0.1:" + server.getAddress().getPort() + "/");
+            assertTrue(Main.isAndyRunning(url));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void bindsOnlyToLoopbackAndDoesNotFallbackFromAnOccupiedPort() throws Exception {
         try (ServerSocket occupied = new ServerSocket()) {
             occupied.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0));
@@ -69,6 +80,9 @@ class MainTest {
             assertTrue(bundle.contains("adb kill-server"));
             assertTrue(bundle.contains("Keep adb stopped while using WebUSB"));
             assertTrue(bundle.contains("requestedMaxSize === 0 ? 720"));
+            assertTrue(bundle.contains("sessionId: String(++state.nextSessionId)"));
+            assertTrue(bundle.contains("webAdbStopLogcat(sessionId)"));
+            assertTrue(bundle.contains("webAdbStopMirror(sessionId)"));
         }
     }
 }

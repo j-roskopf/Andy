@@ -45,6 +45,7 @@ const state = {
   usbDevices: new Map(),
   logcat: undefined,
   mirror: undefined,
+  nextSessionId: 0,
   mirrorHostId: undefined,
   mirrorHighlight: undefined,
   files: new Map(),
@@ -454,13 +455,13 @@ export async function webAdbShell(serial, argsJson) {
 }
 
 export async function webAdbStartLogcat(serial) {
-  if (state.logcat?.serial === serial) return json({ ok: true, reused: true });
+  if (state.logcat?.serial === serial) return json({ ok: true, reused: true, sessionId: state.logcat.sessionId });
   await stopLogcat();
   const adb = state.adbs.get(serial);
   if (!adb) throw new Error(`Android device ${serial} is not connected.`);
   if (!adb.subprocess.shellProtocol) throw new Error("Streaming logcat requires the Android shell protocol.");
   const process = await adb.subprocess.shellProtocol.spawn(["logcat", "-v", "threadtime"]);
-  const logcat = { serial, process, partial: "", lines: [], error: undefined };
+  const logcat = { serial, sessionId: String(++state.nextSessionId), process, partial: "", lines: [], error: undefined };
   state.logcat = logcat;
   process.stdout
     .pipeThrough(new TextDecoderStream())
@@ -482,17 +483,17 @@ export async function webAdbStartLogcat(serial) {
     (exitCode) => { if (state.logcat === logcat && exitCode !== 0) logcat.error = `logcat exited with code ${exitCode}`; },
     (error) => { if (state.logcat === logcat) logcat.error = errorMessage(error); },
   );
-  return json({ ok: true });
+  return json({ ok: true, sessionId: logcat.sessionId });
 }
 
-export function webAdbDrainLogcat() {
+export function webAdbDrainLogcat(sessionId) {
   const logcat = state.logcat;
-  if (!logcat) return json({ lines: [] });
+  if (!logcat || logcat.sessionId !== sessionId) return json({ lines: [] });
   return json({ lines: logcat.lines.splice(0), error: logcat.error });
 }
 
-export async function webAdbStopLogcat() {
-  await stopLogcat();
+export async function webAdbStopLogcat(sessionId) {
+  if (state.logcat?.sessionId === sessionId) await stopLogcat();
 }
 
 function downloadBlob(blob, suggestedName) {
@@ -899,6 +900,7 @@ export async function webAdbStartMirror(serial, configJson) {
       codec: current.codec,
       width: current.width,
       height: current.height,
+      sessionId: current.sessionId,
     });
   }
   clearBugPlayback();
@@ -948,6 +950,7 @@ export async function webAdbStartMirror(serial, configJson) {
   }
   const mirror = {
     serial,
+    sessionId: String(++state.nextSessionId),
     configKey,
     codec: video.metadata.codec,
     client,
@@ -1013,6 +1016,7 @@ export async function webAdbStartMirror(serial, configJson) {
     codec: video.metadata.codec,
     width: mirror.width,
     height: mirror.height,
+    sessionId: mirror.sessionId,
   });
 }
 
@@ -1043,8 +1047,8 @@ export function webAdbDetachMirror(hostId) {
   }
 }
 
-export async function webAdbStopMirror() {
-  await stopMirror();
+export async function webAdbStopMirror(sessionId) {
+  if (state.mirror?.sessionId === sessionId) await stopMirror();
 }
 
 export async function webAdbSendMirrorInput(inputJson) {

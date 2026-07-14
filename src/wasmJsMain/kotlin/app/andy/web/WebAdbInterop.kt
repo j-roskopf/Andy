@@ -15,8 +15,8 @@ external fun webAdbForgetWebUsbAuthorization(): Promise<JsString>
 external fun webAdbListDevices(): Promise<JsString>
 external fun webAdbShell(serial: String, argsJson: String): Promise<JsString>
 external fun webAdbStartLogcat(serial: String): Promise<JsString>
-external fun webAdbDrainLogcat(): JsString
-external fun webAdbStopLogcat(): Promise<JsAny?>
+external fun webAdbDrainLogcat(sessionId: String): JsString
+external fun webAdbStopLogcat(sessionId: String): Promise<JsAny?>
 external fun webPickFiles(allowMultiple: Boolean): Promise<JsString>
 external fun webAdbPushFile(serial: String, reference: String, remotePath: String): Promise<JsString>
 external fun webAdbInstallFile(serial: String, reference: String, replace: Boolean): Promise<JsString>
@@ -25,7 +25,7 @@ external fun webAdbDownloadCommand(serial: String, argsJson: String, suggestedNa
 external fun webAdbDownloadBugReport(serial: String, suggestedName: String): Promise<JsString>
 external fun webAdbAccessibility(serial: String): Promise<JsString>
 external fun webAdbStartMirror(serial: String, configJson: String): Promise<JsString>
-external fun webAdbStopMirror(): Promise<JsAny?>
+external fun webAdbStopMirror(sessionId: String): Promise<JsAny?>
 external fun webAdbAttachMirror(hostId: String): Boolean
 external fun webAdbDetachMirror(hostId: String)
 external fun webAdbSetMirrorHighlight(hostId: String, bounds: String, sourceWidth: Int, sourceHeight: Int)
