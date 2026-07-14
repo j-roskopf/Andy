@@ -91,3 +91,94 @@ jobs:
             build/outputs/roborazzi/**
             build/intermediates/roborazzi/**
             build/test-results/roborazzi/**
+
+  web-preview-deploy:
+    name: Deploy web preview to GitHub Pages
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: web-preview
+      url: https://andy-test.joetr.com/
+    env:
+      PAGES_PREVIEW_DEPLOY_KEY: ${{ secrets.PAGES_PREVIEW_DEPLOY_KEY }}
+      PAGES_PREVIEW_REPOSITORY: ${{ secrets.PAGES_PREVIEW_REPOSITORY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin Wasm Binaryen
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/binaryen
+          key: ${{ runner.os }}-kotlin-wasm-binaryen-${{ hashFiles('build.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-wasm-binaryen-
+
+      - name: Validate web preview deploy settings
+        shell: bash
+        run: |
+          missing=()
+          [[ -n "${PAGES_PREVIEW_DEPLOY_KEY}" ]] || missing+=("PAGES_PREVIEW_DEPLOY_KEY")
+          [[ -n "${PAGES_PREVIEW_REPOSITORY}" ]] || missing+=("PAGES_PREVIEW_REPOSITORY")
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required web preview deploy settings: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Build web bundle
+        run: ./gradlew wasmJsBrowserDistribution
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          mkdir -p "${HOME}/.ssh"
+          printf '%s\n' "${PAGES_PREVIEW_DEPLOY_KEY}" > "${HOME}/.ssh/preview_pages_key"
+          ssh-keyscan github.com > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/preview_pages_key"
+
+      - name: Deploy web preview bundle to preview Pages repository
+        shell: bash
+        run: |
+          export GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/preview_pages_key"
+          repository_url="git@github.com:${PAGES_PREVIEW_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "${repository_url}" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "${repository_url}" preview-pages
+          else
+            git clone "${repository_url}" preview-pages
+            (
+              cd preview-pages
+              git checkout --orphan gh-pages
+              git rm -rf . >/dev/null 2>&1 || true
+            )
+          fi
+
+          rsync -a --delete --exclude .git \
+            build/dist/wasmJs/productionExecutable/ \
+            preview-pages/
+          touch preview-pages/.nojekyll
+          cp preview-pages/index.html preview-pages/404.html
+          printf 'andy-test.joetr.com\n' > preview-pages/CNAME
+
+          (
+            cd preview-pages
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            if git diff --cached --quiet; then
+              echo "No preview Pages changes to deploy."
+            else
+              git commit -m "Deploy Andy preview from ${GITHUB_SHA}"
+              git push origin gh-pages
+            fi
+          )
