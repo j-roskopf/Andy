@@ -296,7 +296,11 @@ class DesktopMirrorEngine(
         }
         if (!useNativeRenderer) publishLegacySession(serial, config, fallbackReason = fallbackReason)
         val scrcpyServer = ScrcpyServerLocator.find()
-            ?: return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
+            ?: run {
+                NativeMirrorJni.destroyPresentation()
+                nativeHost = null
+                return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
+            }
         status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
         videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runNativeVideoLoop(adb, serial, scrcpyServer, config)

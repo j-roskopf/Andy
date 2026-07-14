@@ -11,6 +11,7 @@ import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.flow.flowOf
 
 /** Proves the production Compose -> SwingPanel -> inline Metal host chain. */
 class NativeMirrorComposeHostTest {
@@ -25,7 +26,7 @@ class NativeMirrorComposeHostTest {
             val compose = ComposePanel().apply {
                 setContent {
                     MirrorVideoSurface(
-                        frame = MirrorFrame(2, 2, intArrayOf(0xff000000.toInt(), 0xff000000.toInt(), 0xff000000.toInt(), 0xff000000.toInt())),
+                        frames = flowOf(MirrorFrame(2, 2, intArrayOf(0xff000000.toInt(), 0xff000000.toInt(), 0xff000000.toInt(), 0xff000000.toInt()))),
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

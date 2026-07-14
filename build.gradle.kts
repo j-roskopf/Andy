@@ -1,3 +1,4 @@
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -210,9 +211,18 @@ val packageAndyMirrorScrcpyServer by tasks.registering(Copy::class) {
     doLast {
         val file = output.get().asFile
         check(file.isFile && file.length() > 0) { "Pinned scrcpy-server binary is missing at ${source.asFile}" }
-        val digest = providers.exec {
-            commandLine("shasum", "-a", "256", file.absolutePath)
-        }.standardOutput.asText.get().trim().substringBefore(' ')
+        val messageDigest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                messageDigest.update(buffer, 0, count)
+            }
+        }
+        val digest = messageDigest.digest().joinToString("") {
+            (it.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
         // Official Genymobile scrcpy-server-v4.0 release hash.
         check(digest == "84924bd564a1eb6089c872c7521f968058977f91f5ff02514a8c74aff3210f3a") {
             "Pinned scrcpy-server SHA-256 mismatch: $digest"
