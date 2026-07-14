@@ -198,18 +198,13 @@ roborazzi {
     outputDir.set(layout.projectDirectory.dir("src/screenshotTest/roborazzi"))
 }
 
-val packageAndyMirrorScrcpyServer by tasks.registering(Copy::class) {
-    group = "build"
-    description = "Packages the pinned upstream scrcpy-server release binary (no vendored client tree)."
+val verifyScrcpyServer by tasks.registering {
+    group = "verification"
+    description = "Verifies the pinned upstream scrcpy-server release binary."
     val source = layout.projectDirectory.file("src/commonMain/resources/scrcpy/scrcpy-server")
-    val output = layout.buildDirectory.file("native/andy-mirror/android/scrcpy-server")
     inputs.file(source)
-    outputs.file(output)
-    from(source)
-    into(output.get().asFile.parentFile)
-    rename { "scrcpy-server" }
     doLast {
-        val file = output.get().asFile
+        val file = source.asFile
         check(file.isFile && file.length() > 0) { "Pinned scrcpy-server binary is missing at ${source.asFile}" }
         val messageDigest = MessageDigest.getInstance("SHA-256")
         file.inputStream().buffered().use { input ->
@@ -230,17 +225,8 @@ val packageAndyMirrorScrcpyServer by tasks.registering(Copy::class) {
     }
 }
 
-// Release jobs stage signed andy-mirror binaries under native/andy-mirror/dist. Copy every
-// target into the app resources so runtime selection never depends on a user-installed scrcpy.
 tasks.named<Copy>("desktopProcessResources") {
-    dependsOn("buildAndyMirrorJniMacArm64", "buildAndyMirrorJniMacX64", packageAndyMirrorScrcpyServer)
-    from(layout.buildDirectory.file("native/andy-mirror/android/scrcpy-server")) {
-        into("andy-mirror/android")
-    }
-    from(layout.projectDirectory.dir("native/andy-mirror/dist")) {
-        include("**/andy-mirror", "**/andy-mirror.exe", "**/andy-mirror-jni.dylib")
-        into("andy-mirror")
-    }
+    dependsOn("buildAndyMirrorJniMacArm64", "buildAndyMirrorJniMacX64", verifyScrcpyServer)
     from(layout.buildDirectory.dir("native/andy-mirror")) {
         include("**/andy-mirror-jni.dylib")
         into("andy-mirror")
@@ -317,33 +303,6 @@ val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
         "-ljawt",
         "-o", output.get().asFile.absolutePath,
     )
-}
-
-val verifyAndyMirrorReleaseInputs by tasks.registering(Exec::class) {
-    group = "verification"
-    description = "Verifies signed, pinned andy-mirror inputs for every desktop release target."
-    val verifier = layout.projectDirectory.file("tools/andy-mirror/verify_release_inputs.py")
-    val dist = layout.projectDirectory.dir("native/andy-mirror/dist")
-    val sourcePin = layout.projectDirectory.file("native/andy-mirror/SOURCE_PIN.json")
-    inputs.file(verifier)
-    // `dist` intentionally does not exist in source checkouts. Let the verifier produce the
-    // release-facing diagnostic instead of having Gradle reject the optional staging directory
-    // before the task starts.
-    inputs.property("andyMirrorDist", dist.asFile.absolutePath)
-    inputs.file(sourcePin)
-    commandLine(
-        "python3",
-        verifier.asFile.absolutePath,
-        "--dist", dist.asFile.absolutePath,
-        "--source-pin", sourcePin.asFile.absolutePath,
-    )
-}
-
-// Shipping a release without the native executable would turn Auto into an unbounded CPU
-// fallback. Development and test tasks stay runnable without the artifacts; release packaging
-// intentionally does not.
-tasks.matching { it.name.startsWith("packageRelease") }.configureEach {
-    dependsOn(verifyAndyMirrorReleaseInputs)
 }
 
 // Compose Desktop screenshots share one renderer per process. Running them serially
