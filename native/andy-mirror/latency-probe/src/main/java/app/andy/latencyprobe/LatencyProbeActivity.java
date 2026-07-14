@@ -24,9 +24,9 @@ import java.io.IOException;
 public final class LatencyProbeActivity extends Activity {
     private static final String TAG = "AndyLatencyProbe";
     public static final String CONTROL_SOCKET = "andy-latency-probe";
-    private ProbeView probeView;
-    private LocalServerSocket controlServer;
-    private Thread controlThread;
+    private volatile ProbeView probeView;
+    private volatile LocalServerSocket controlServer;
+    private volatile Thread controlThread;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);

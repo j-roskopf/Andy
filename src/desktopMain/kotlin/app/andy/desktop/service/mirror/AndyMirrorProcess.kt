@@ -7,6 +7,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.OutputStreamWriter
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -97,8 +98,14 @@ internal class AndyMirrorProcess(
         sendRaw(AndyMirrorProtocol.start(serial, config))
         try {
             withTimeout(5_000) { ready.await() }
-        } catch (_: TimeoutCancellationException) {
-            failureReason = "andy-mirror did not report ready within 5 seconds"
+        } catch (error: Throwable) {
+            close()
+            if (error is CancellationException && error !is TimeoutCancellationException) throw error
+            failureReason = if (error is TimeoutCancellationException) {
+                "andy-mirror did not report ready within 5 seconds"
+            } else {
+                "andy-mirror startup failed: ${error.message ?: error::class.simpleName}"
+            }
             null
         }
     }

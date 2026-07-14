@@ -35,9 +35,10 @@ internal object AndyMirrorBinaryLocator {
 
     private fun bundledBinary(): File? {
         val resourcePath = resourcePath() ?: return null
-        val input = javaClass.classLoader.getResourceAsStream(resourcePath) ?: return null
         val target = File(System.getProperty("user.home"), ".andy/mirror/$resourcePath")
-        target.parentFile.mkdirs()
+        if (target.isFile && target.length() > 0L) return target
+        val input = javaClass.classLoader.getResourceAsStream(resourcePath) ?: return null
+        target.parentFile?.mkdirs()
         return runCatching {
             input.use { Files.copy(it, target.toPath(), StandardCopyOption.REPLACE_EXISTING) }
             target.setExecutable(true, false)

@@ -59,6 +59,7 @@ typedef struct {
 
 static AndyMirrorRenderer renderer = {0};
 static pthread_mutex_t latest_pixels_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 // Serialize decoder create/decode/destroy. VideoToolbox sessions are not safe to Invalidate
 // while DecodeFrame (or its async callbacks) are in flight, and long CPU locks on live
 // CVPixelBuffers from bug-capture sampling have correlated with CoreMedia null-mutex crashes.
@@ -391,7 +392,9 @@ destroy_decoder(void) {
 
 static void
 record_input_to_present(void) {
+    pthread_mutex_lock(&stats_lock);
     if (!renderer.pending_input_ticks) {
+        pthread_mutex_unlock(&stats_lock);
         return;
     }
     mach_timebase_info_data_t timebase = {0};
@@ -406,6 +409,7 @@ record_input_to_present(void) {
         renderer.input_to_present_millis[119] = elapsed_millis;
     }
     renderer.pending_input_ticks = 0;
+    pthread_mutex_unlock(&stats_lock);
 }
 
 static void
@@ -417,6 +421,7 @@ record_packet_to_present(uint64_t packet_ticks) {
     mach_timebase_info(&timebase);
     const uint64_t elapsed_ticks = mach_continuous_time() - packet_ticks;
     const double elapsed_millis = (double) elapsed_ticks * timebase.numer / timebase.denom / 1000000.0;
+    pthread_mutex_lock(&stats_lock);
     if (renderer.packet_to_present_count < 120) {
         renderer.packet_to_present_millis[renderer.packet_to_present_count++] = elapsed_millis;
     } else {
@@ -424,6 +429,7 @@ record_packet_to_present(uint64_t packet_ticks) {
                 sizeof(double) * 119);
         renderer.packet_to_present_millis[119] = elapsed_millis;
     }
+    pthread_mutex_unlock(&stats_lock);
 }
 
 static void
@@ -435,6 +441,7 @@ record_transport_to_present(uint64_t transport_ticks) {
     mach_timebase_info(&timebase);
     const uint64_t elapsed_ticks = mach_continuous_time() - transport_ticks;
     const double elapsed_millis = (double) elapsed_ticks * timebase.numer / timebase.denom / 1000000.0;
+    pthread_mutex_lock(&stats_lock);
     if (renderer.transport_to_present_count < 120) {
         renderer.transport_to_present_millis[renderer.transport_to_present_count++] = elapsed_millis;
     } else {
@@ -442,6 +449,7 @@ record_transport_to_present(uint64_t transport_ticks) {
                 sizeof(double) * 119);
         renderer.transport_to_present_millis[119] = elapsed_millis;
     }
+    pthread_mutex_unlock(&stats_lock);
 }
 
 static void
@@ -464,6 +472,7 @@ destroy_renderer(void) {
     renderer.queue = nil;
     renderer.device = nil;
     renderer.layer = nil;
+    pthread_mutex_lock(&stats_lock);
     renderer.frames_presented = 0;
     renderer.dropped_frames = 0;
     renderer.pending_input_ticks = 0;
@@ -474,6 +483,7 @@ destroy_renderer(void) {
     renderer.latency_probe_enabled = false;
     renderer.probe_has_baseline = false;
     renderer.probe_transitions = 0;
+    pthread_mutex_unlock(&stats_lock);
     pthread_mutex_lock(&latest_pixels_lock);
     if (renderer.latest_pixels) {
         CVPixelBufferRelease(renderer.latest_pixels);
@@ -507,8 +517,16 @@ configure_metal(void) {
 
 static bool
 latency_probe_changed(CVPixelBufferRef pixels) {
-    if (!renderer.latency_probe_enabled) {
-        return renderer.pending_input_ticks != 0;
+    pthread_mutex_lock(&stats_lock);
+    const bool probe_enabled = renderer.latency_probe_enabled;
+    const bool input_pending = renderer.pending_input_ticks != 0;
+    const float probe_left = renderer.probe_left;
+    const float probe_top = renderer.probe_top;
+    const float probe_width = renderer.probe_width;
+    const float probe_height = renderer.probe_height;
+    pthread_mutex_unlock(&stats_lock);
+    if (!probe_enabled) {
+        return input_pending;
     }
     const size_t full_width = CVPixelBufferGetWidthOfPlane(pixels, 0);
     const size_t full_height = CVPixelBufferGetHeightOfPlane(pixels, 0);
@@ -518,10 +536,10 @@ latency_probe_changed(CVPixelBufferRef pixels) {
     }
     const uint8_t *base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
     const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
-    const size_t left = (size_t) fmax(0, fmin(full_width - 1, renderer.probe_left * full_width));
-    const size_t top = (size_t) fmax(0, fmin(full_height - 1, renderer.probe_top * full_height));
-    const size_t right = (size_t) fmax(left + 1, fmin(full_width, (renderer.probe_left + renderer.probe_width) * full_width));
-    const size_t bottom = (size_t) fmax(top + 1, fmin(full_height, (renderer.probe_top + renderer.probe_height) * full_height));
+    const size_t left = (size_t) fmax(0, fmin(full_width - 1, probe_left * full_width));
+    const size_t top = (size_t) fmax(0, fmin(full_height - 1, probe_top * full_height));
+    const size_t right = (size_t) fmax(left + 1, fmin(full_width, (probe_left + probe_width) * full_width));
+    const size_t bottom = (size_t) fmax(top + 1, fmin(full_height, (probe_top + probe_height) * full_height));
     uint64_t total = 0;
     size_t samples = 0;
     for (size_t y = top; y < bottom; y += 4) {
@@ -535,13 +553,16 @@ latency_probe_changed(CVPixelBufferRef pixels) {
         return false;
     }
     const double luminance = (double) total / samples;
+    pthread_mutex_lock(&stats_lock);
     const bool changed = renderer.probe_has_baseline && fabs(luminance - renderer.probe_luminance) >= 40.0;
     renderer.probe_luminance = luminance;
     renderer.probe_has_baseline = true;
     if (changed) {
         renderer.probe_transitions++;
     }
-    return changed && renderer.pending_input_ticks != 0;
+    const bool pending = renderer.pending_input_ticks != 0;
+    pthread_mutex_unlock(&stats_lock);
+    return changed && pending;
 }
 
 static void
@@ -574,7 +595,9 @@ render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t 
         // drawable supplied by CAMetalLayer.
         id<CAMetalDrawable> drawable = [renderer.layer nextDrawable];
         if (!drawable) {
+            pthread_mutex_lock(&stats_lock);
             renderer.dropped_frames++;
+            pthread_mutex_unlock(&stats_lock);
             return;
         }
         CVMetalTextureRef y_ref = NULL;
@@ -588,7 +611,9 @@ render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t 
         if (y_result != kCVReturnSuccess || uv_result != kCVReturnSuccess) {
             if (y_ref) CFRelease(y_ref);
             if (uv_ref) CFRelease(uv_ref);
+            pthread_mutex_lock(&stats_lock);
             renderer.dropped_frames++;
+            pthread_mutex_unlock(&stats_lock);
             return;
         }
         id<MTLCommandBuffer> command = [renderer.queue commandBuffer];
@@ -610,7 +635,9 @@ render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t 
         [command presentDrawable:drawable];
         [command addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
             (void) buffer;
+            pthread_mutex_lock(&stats_lock);
             renderer.frames_presented++;
+            pthread_mutex_unlock(&stats_lock);
             record_packet_to_present(packet_ticks);
             record_transport_to_present(transport_ticks);
             if (input_changed_probe) {
@@ -633,13 +660,18 @@ decoded_frame(void *decompression_output_refcon, void *source_frame_refcon,
     (void) presentation_time_stamp;
     (void) presentation_duration;
     if (status != noErr || !image_buffer) {
+        pthread_mutex_lock(&stats_lock);
         renderer.dropped_frames++;
+        pthread_mutex_unlock(&stats_lock);
         return;
     }
     const uint64_t packet_ticks = (uint64_t) (uintptr_t) source_frame_refcon;
     CVPixelBufferRef pixels = (CVPixelBufferRef) image_buffer;
     remember_latest_pixels(pixels);
-    render_pixel_buffer(pixels, latency_probe_changed(pixels), packet_ticks, renderer.transport_ingress_ticks);
+    pthread_mutex_lock(&stats_lock);
+    const uint64_t transport_ticks = renderer.transport_ingress_ticks;
+    pthread_mutex_unlock(&stats_lock);
+    render_pixel_buffer(pixels, latency_probe_changed(pixels), packet_ticks, transport_ticks);
 }
 
 static bool
@@ -750,7 +782,7 @@ consume_h264_access_unit(const uint8_t *bytes, size_t length) {
         pthread_mutex_unlock(&decoder_lock);
         return false;
     }
-    uint8_t *avcc = malloc(length + 16);
+    uint8_t *avcc = malloc(length + (length / 3) + 1);
     if (!avcc) {
         pthread_mutex_unlock(&decoder_lock);
         return false;
@@ -1202,7 +1234,10 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeFramesPresented(
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
-    return (jlong) renderer.frames_presented;
+    pthread_mutex_lock(&stats_lock);
+    const jlong frames = (jlong) renderer.frames_presented;
+    pthread_mutex_unlock(&stats_lock);
+    return frames;
 }
 
 JNIEXPORT void JNICALL
@@ -1210,7 +1245,9 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeRecordInput(
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
+    pthread_mutex_lock(&stats_lock);
     renderer.pending_input_ticks = mach_continuous_time();
+    pthread_mutex_unlock(&stats_lock);
 }
 
 JNIEXPORT void JNICALL
@@ -1218,7 +1255,9 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeRecordTransportIngres
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
+    pthread_mutex_lock(&stats_lock);
     renderer.transport_ingress_ticks = mach_continuous_time();
+    pthread_mutex_unlock(&stats_lock);
 }
 
 JNIEXPORT void JNICALL
@@ -1226,6 +1265,7 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeConfigureLatencyProbe
         JNIEnv *env, jclass clazz, jfloat left, jfloat top, jfloat width, jfloat height) {
     (void) env;
     (void) clazz;
+    pthread_mutex_lock(&stats_lock);
     renderer.latency_probe_enabled = width > 0 && height > 0;
     renderer.probe_left = fmaxf(0.0f, fminf(1.0f, left));
     renderer.probe_top = fmaxf(0.0f, fminf(1.0f, top));
@@ -1233,6 +1273,7 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeConfigureLatencyProbe
     renderer.probe_height = fmaxf(0.0f, fminf(1.0f - renderer.probe_top, height));
     renderer.probe_has_baseline = false;
     renderer.probe_transitions = 0;
+    pthread_mutex_unlock(&stats_lock);
 }
 
 JNIEXPORT void JNICALL
@@ -1269,7 +1310,10 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeLatencyProbeTransitio
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
-    return (jlong) renderer.probe_transitions;
+    pthread_mutex_lock(&stats_lock);
+    const jlong transitions = (jlong) renderer.probe_transitions;
+    pthread_mutex_unlock(&stats_lock);
+    return transitions;
 }
 
 JNIEXPORT jint JNICALL
@@ -1320,14 +1364,18 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95InputToPresentMill
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
-    if (!renderer.input_to_present_count) {
+    double samples[120];
+    pthread_mutex_lock(&stats_lock);
+    const size_t count = renderer.input_to_present_count;
+    if (count) {
+        memcpy(samples, renderer.input_to_present_millis, count * sizeof(double));
+    }
+    pthread_mutex_unlock(&stats_lock);
+    if (!count) {
         return -1.0f;
     }
-    double samples[120];
-    memcpy(samples, renderer.input_to_present_millis,
-           renderer.input_to_present_count * sizeof(double));
-    for (size_t i = 0; i < renderer.input_to_present_count; ++i) {
-        for (size_t j = i + 1; j < renderer.input_to_present_count; ++j) {
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = i + 1; j < count; ++j) {
             if (samples[j] < samples[i]) {
                 double swap = samples[i];
                 samples[i] = samples[j];
@@ -1335,7 +1383,7 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95InputToPresentMill
             }
         }
     }
-    size_t index = (size_t) ceil(renderer.input_to_present_count * 0.95) - 1;
+    size_t index = (size_t) ceil(count * 0.95) - 1;
     return (jfloat) samples[index];
 }
 
@@ -1345,9 +1393,14 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeInputToPresentSamples
     (void) clazz;
     char output[2048] = {0};
     size_t offset = 0;
-    for (size_t i = 0; i < renderer.input_to_present_count && offset < sizeof(output); ++i) {
+    double samples[120];
+    pthread_mutex_lock(&stats_lock);
+    const size_t count = renderer.input_to_present_count;
+    memcpy(samples, renderer.input_to_present_millis, count * sizeof(double));
+    pthread_mutex_unlock(&stats_lock);
+    for (size_t i = 0; i < count && offset < sizeof(output); ++i) {
         int written = snprintf(output + offset, sizeof(output) - offset, "%s%.3f",
-                               i ? "," : "", renderer.input_to_present_millis[i]);
+                               i ? "," : "", samples[i]);
         if (written < 0 || (size_t) written >= sizeof(output) - offset) {
             break;
         }
@@ -1361,14 +1414,18 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95PacketToPresentMil
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
-    if (!renderer.packet_to_present_count) {
+    double samples[120];
+    pthread_mutex_lock(&stats_lock);
+    const size_t count = renderer.packet_to_present_count;
+    if (count) {
+        memcpy(samples, renderer.packet_to_present_millis, count * sizeof(double));
+    }
+    pthread_mutex_unlock(&stats_lock);
+    if (!count) {
         return -1;
     }
-    double samples[120];
-    memcpy(samples, renderer.packet_to_present_millis,
-           renderer.packet_to_present_count * sizeof(double));
-    for (size_t i = 0; i < renderer.packet_to_present_count; ++i) {
-        for (size_t j = i + 1; j < renderer.packet_to_present_count; ++j) {
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = i + 1; j < count; ++j) {
             if (samples[j] < samples[i]) {
                 const double value = samples[i];
                 samples[i] = samples[j];
@@ -1376,7 +1433,7 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95PacketToPresentMil
             }
         }
     }
-    size_t index = (size_t) ceil(renderer.packet_to_present_count * 0.95) - 1;
+    size_t index = (size_t) ceil(count * 0.95) - 1;
     return (jfloat) samples[index];
 }
 
@@ -1385,14 +1442,18 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95TransportToPresent
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
-    if (!renderer.transport_to_present_count) {
+    double samples[120];
+    pthread_mutex_lock(&stats_lock);
+    const size_t count = renderer.transport_to_present_count;
+    if (count) {
+        memcpy(samples, renderer.transport_to_present_millis, count * sizeof(double));
+    }
+    pthread_mutex_unlock(&stats_lock);
+    if (!count) {
         return -1;
     }
-    double samples[120];
-    memcpy(samples, renderer.transport_to_present_millis,
-           renderer.transport_to_present_count * sizeof(double));
-    for (size_t i = 0; i < renderer.transport_to_present_count; ++i) {
-        for (size_t j = i + 1; j < renderer.transport_to_present_count; ++j) {
+    for (size_t i = 0; i < count; ++i) {
+        for (size_t j = i + 1; j < count; ++j) {
             if (samples[j] < samples[i]) {
                 const double value = samples[i];
                 samples[i] = samples[j];
@@ -1400,6 +1461,6 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeP95TransportToPresent
             }
         }
     }
-    size_t index = (size_t) ceil(renderer.transport_to_present_count * 0.95) - 1;
+    size_t index = (size_t) ceil(count * 0.95) - 1;
     return (jfloat) samples[index];
 }

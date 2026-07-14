@@ -20,11 +20,12 @@ internal object ScrcpyServerLocator {
 
     private fun bundledServer(): File? {
         val target = File(System.getProperty("user.home"), ".andy/scrcpy/andy-scrcpy-server-v4")
+        if (target.isFile && target.length() > 0L) return target
         // Prefer the pinned release binary under scrcpy/; andy-mirror/android is a legacy alias.
         val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server")
             ?: javaClass.classLoader.getResourceAsStream("andy-mirror/android/scrcpy-server")
             ?: return null
-        target.parentFile.mkdirs()
+        target.parentFile?.mkdirs()
         try {
             resource.use { input ->
                 Files.copy(input, target.toPath(), StandardCopyOption.REPLACE_EXISTING)

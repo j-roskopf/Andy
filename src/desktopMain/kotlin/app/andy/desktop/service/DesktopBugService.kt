@@ -702,9 +702,10 @@ class DesktopBugService(
 
         private fun h264NalTypes(bytes: ByteArray): Sequence<Int> = sequence {
             var i = 0
-            while (i + 4 < bytes.size) {
+            while (i + 3 < bytes.size) {
                 val startLen = when {
-                    bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
+                    i + 4 <= bytes.size &&
+                        bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
                         bytes[i + 2] == 0.toByte() && bytes[i + 3] == 1.toByte() -> 4
                     bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
                         bytes[i + 2] == 1.toByte() -> 3

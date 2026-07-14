@@ -550,6 +550,11 @@ internal data class EmulatorGraphicsInfo(
     val softwareRendered: Boolean = false,
 )
 
+private val emulatorGraphicsBackendPattern =
+    Regex("""Graphics backend:\s*(.+)""", RegexOption.IGNORE_CASE)
+private val emulatorGraphicsRendererPattern =
+    Regex("""(?:GPU Renderer=\[|Graphics Adapter\s+)(.+?)(?:])?$""", RegexOption.IGNORE_CASE)
+
 /**
  * `-gpu auto` is a request, not proof of host acceleration. gfxstream may resolve to
  * SwiftShader, swangle, lavapipe, or llvmpipe, all of which must be reported as software.
@@ -565,19 +570,25 @@ internal fun emulatorGraphicsAreSoftware(backend: String, renderer: String?): Bo
  */
 internal fun emulatorGraphicsInfo(logFile: File): EmulatorGraphicsInfo? {
     if (!logFile.isFile) return null
-    val lines = runCatching { logFile.useLines { it.toList() } }.getOrNull() ?: return null
-    val backend = lines.asReversed().firstNotNullOfOrNull { line ->
-        Regex("""Graphics backend:\s*(.+)""", RegexOption.IGNORE_CASE).find(line)
-            ?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
-    } ?: return null
-    val renderer = lines.asReversed().firstNotNullOfOrNull { line ->
-        Regex("""(?:GPU Renderer=\[|Graphics Adapter\s+)(.+?)(?:])?$""", RegexOption.IGNORE_CASE).find(line)
-            ?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
-    }
+    var backend: String? = null
+    var renderer: String? = null
+    val success = runCatching {
+        logFile.useLines { lines ->
+            lines.forEach { line ->
+                emulatorGraphicsBackendPattern.find(line)
+                    ?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
+                    ?.let { backend = it }
+                emulatorGraphicsRendererPattern.find(line)
+                    ?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
+                    ?.let { renderer = it }
+            }
+        }
+    }.isSuccess
+    val resolvedBackend = backend?.takeIf { success } ?: return null
     return EmulatorGraphicsInfo(
-        backend = backend,
+        backend = resolvedBackend,
         renderer = renderer,
-        softwareRendered = emulatorGraphicsAreSoftware(backend, renderer),
+        softwareRendered = emulatorGraphicsAreSoftware(resolvedBackend, renderer),
     )
 }
 
