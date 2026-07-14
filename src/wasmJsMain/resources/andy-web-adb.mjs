@@ -1036,6 +1036,33 @@ export function webAdbSetMirrorHighlight(hostId, bounds, sourceWidth, sourceHeig
   renderMirrorHighlight();
 }
 
+export function webAdbMirrorPoint(hostId, clientX, clientY) {
+  const host = document.getElementById(hostId);
+  const mirror = state.mirror;
+  const canvas = mirror?.canvas;
+  if (!host || !canvas || canvas.parentElement !== host || !mirror.width || !mirror.height) return "";
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return "";
+  const x = Math.max(0, Math.min(mirror.width - 1, Math.round((clientX - rect.left) * mirror.width / rect.width)));
+  const y = Math.max(0, Math.min(mirror.height - 1, Math.round((clientY - rect.top) * mirror.height / rect.height)));
+  const pixelX = Math.max(0, Math.min(canvas.width - 1, Math.round(x * canvas.width / mirror.width)));
+  const pixelY = Math.max(0, Math.min(canvas.height - 1, Math.round(y * canvas.height / mirror.height)));
+  let pixel;
+  const context2d = canvas.getContext("2d");
+  if (context2d) pixel = context2d.getImageData(pixelX, pixelY, 1, 1).data;
+  else {
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    if (gl) {
+      pixel = new Uint8Array(4);
+      gl.readPixels(pixelX, canvas.height - pixelY - 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    }
+  }
+  const color = pixel
+    ? `#${[pixel[0], pixel[1], pixel[2]].map((channel) => channel.toString(16).padStart(2, "0")).join("").toUpperCase()}`
+    : "#000000";
+  return `${x},${y},${color}`;
+}
+
 export function webAdbDetachMirror(hostId) {
   const host = document.getElementById(hostId);
   const mirror = state.mirror;
