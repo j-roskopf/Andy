@@ -243,7 +243,7 @@ class DesktopMirrorEngine(
             null
         }
         val nativeAvailable = host != null
-        val unavailableReason = acceleratedUnavailableReason()
+        val unavailableReason by lazy { acceleratedUnavailableReason() }
         if (config.rendererMode == MirrorRendererMode.Accelerated && !nativeAvailable) {
             val reason = unavailableReason
             session.value = MirrorSession(
