@@ -1,5 +1,8 @@
 package app.andy.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 enum class LogLevel { Verbose, Debug, Info, Warn, Error, Fatal, Silent }
 
 data class LogcatEntry(

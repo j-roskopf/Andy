@@ -131,8 +131,8 @@ internal fun PerformanceScreen(
                         items(latest?.processes.orEmpty()) { process ->
                             TableRow {
                                 MonoCell(process.pid, 80.dp, TextSecondary)
-                                MonoCell(process.cpuPercent?.let { "%.1f%%".format(it) } ?: "-", 70.dp, if ((process.cpuPercent ?: 0f) > 10f) Rust else TextPrimary)
-                                MonoCell(process.memoryMb?.let { "%.1f".format(it) } ?: "-", 90.dp, TextSecondary)
+                                MonoCell(process.cpuPercent?.let { "${app.andy.formatDecimal(it, 1)}%" } ?: "-", 70.dp, if ((process.cpuPercent ?: 0f) > 10f) Rust else TextPrimary)
+                                MonoCell(process.memoryMb?.let { app.andy.formatDecimal(it, 1) } ?: "-", 90.dp, TextSecondary)
                                 MonoCell(process.name, 1.dp, TextPrimary, Modifier.weight(1f))
                             }
                         }
@@ -159,7 +159,7 @@ internal fun PerformanceScreen(
                     }
                     LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                         items(recentFrames) { frame ->
-                            Text("${frame.label}  ${"%.2f".format(frame.millis)} ms", color = if (frame.millis <= 16.6f) Green else Red, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                            Text("${frame.label}  ${app.andy.formatDecimal(frame.millis, 2)} ms", color = if (frame.millis <= 16.6f) Green else Red, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                     }
                 }

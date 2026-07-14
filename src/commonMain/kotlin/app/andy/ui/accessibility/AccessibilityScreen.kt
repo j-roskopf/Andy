@@ -365,7 +365,7 @@ internal fun AccessibilityDetails(node: AccessibilityNode?) {
         DetailRow("label", node.contentDescription ?: node.text ?: node.hint)
         if (node.attributes.isNotEmpty()) {
             DetailSection("Raw Dump")
-            node.attributes.toSortedMap().forEach { (key, value) ->
+            node.attributes.entries.sortedBy { it.key }.forEach { (key, value) ->
                 DetailRow(key, value)
             }
         }

@@ -10,8 +10,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun DeviceLivePanel(
@@ -38,7 +41,17 @@ internal fun DeviceLivePanel(
     }
     LaunchedEffect(serial) {
         connectResult = ""
-        connect()
+        if (serial != null) {
+            val result = services.mirror.connect(serial)
+            connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
+            if (result.isSuccess) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) { services.mirror.disconnect() }
+                }
+            }
+        }
     }
     MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
         LiveDevicePane(

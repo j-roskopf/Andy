@@ -1,5 +1,7 @@
 package app.andy.model
 
+import kotlinx.serialization.Serializable
+
 enum class DeviceKind { Physical, Emulator, Unknown }
 enum class DeviceConnectionState { Online, Offline, Unauthorized, Missing, Unknown }
 enum class DeviceTransport { Usb, Wifi, Unknown }
@@ -35,6 +37,7 @@ data class MdnsService(
             serviceType.startsWith("_adb._tcp")
 }
 
+@Serializable
 data class PairedWifiDevice(
     val id: String,
     val displayName: String,

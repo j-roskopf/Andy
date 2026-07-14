@@ -66,6 +66,7 @@ import app.andy.model.ProxyStartOptions
 import app.andy.model.SdkDiscovery
 import app.andy.model.diagnoseNetworkTraffic
 import app.andy.service.AndyServices
+import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.HorizontalPaneDivider
@@ -323,7 +324,7 @@ internal fun NetworkScreen(
         if (state.seenFlowIds.isNotEmpty() && added.isNotEmpty()) {
             added.flatMap(::networkTrafficAncestorKeys).distinct().forEach { key ->
                 if (state.expandedTrafficKeys[key] != true && key !in state.flashingTrafficKeys) {
-                    val flashToken = System.nanoTime()
+                    val flashToken = currentTimeMillis()
                     state.flashingTrafficKeys[key] = flashToken
                     scope.launch {
                         delay(280)
@@ -1264,4 +1265,3 @@ private fun <T> List<T>.swapItems(first: Int, second: Int): List<T> {
         items[second] = temp
     }
 }
-

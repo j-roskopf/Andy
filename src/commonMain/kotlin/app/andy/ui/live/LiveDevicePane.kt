@@ -154,7 +154,11 @@ internal fun LiveDevicePane(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        listOfNotNull(device?.screenSize, frame?.decodedFps?.let { "%.1f fps".format(it) }).joinToString(" · ").ifBlank { "-" },
+                        listOfNotNull(
+                            frame?.let { "${it.width}×${it.height} stream" },
+                            frame?.displayedFps?.let { "${app.andy.formatDecimal(it, 1)} displayed fps" },
+                            frame?.decodedFps?.let { "${app.andy.formatDecimal(it, 1)} decoded fps" },
+                        ).joinToString(" · ").ifBlank { mirrorStatus },
                         color = TextSecondary,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(start = 8.dp),

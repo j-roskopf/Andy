@@ -1,5 +1,8 @@
 package app.andy.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class BugReport(
     val id: String,
     val title: String,
@@ -20,6 +23,7 @@ data class BugReport(
     val videoFrameTimestampsMillis: List<Long> = emptyList(),
 )
 
+@Serializable
 data class BugAction(
     val id: String,
     val timestampMillis: Long,
@@ -28,6 +32,7 @@ data class BugAction(
     val detail: String? = null,
 )
 
+@Serializable
 data class BugArtifact(
     val name: String,
     val relativePath: String,
@@ -35,11 +40,13 @@ data class BugArtifact(
     val sizeBytes: Long? = null,
 )
 
+@Serializable
 data class BugCaptureDraft(
     val title: String,
     val notes: String = "",
 )
 
+@Serializable
 data class BugCaptureStatus(
     val active: Boolean = false,
     val deviceSerial: String? = null,

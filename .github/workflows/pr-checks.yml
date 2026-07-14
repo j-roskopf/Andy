@@ -17,6 +17,20 @@ env:
   JAVA_DISTRIBUTION: temurin
 
 jobs:
+  tracebox:
+    name: Andy tracebox checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify launcher and pinned manifest
+        run: |
+          python3 -m unittest discover -s tools/andy-tracebox -p 'test_*.py'
+          python3 tools/andy-tracebox/package_release.py --verify-manifest-only
+
   desktop:
     name: Desktop checks (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
@@ -53,16 +67,16 @@ jobs:
 
       - name: Run Linux checks
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop assemble
+        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
 
       - name: Run macOS checks
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest verifyRoborazziDesktop assemble
+        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
 
       - name: Run Windows checks
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat desktopTest verifyRoborazziDesktop assemble
+        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble
 
       - name: Upload test reports
         if: failure()

@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,8 +62,11 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private fun transferStatusColor(status: String): Color = when {
     status.startsWith("App installed") ||
@@ -76,6 +78,19 @@ private fun transferStatusColor(status: String): Color = when {
         status.contains("not allowed", ignoreCase = true) -> Rust
     status == "Cancelled" || status.startsWith("Wait for") -> Yellow
     else -> TextSecondary
+}
+
+internal fun mirrorVideoConfig(maxSize: String, bitRateMbps: String, maxFps: String): MirrorVideoConfig {
+    val parsedMaxSize = maxSize.toIntOrNull()
+    return MirrorVideoConfig(
+        maxSize = when (parsedMaxSize) {
+            0 -> 0
+            null -> 720
+            else -> parsedMaxSize.coerceIn(240, 4_320)
+        },
+        bitRate = ((bitRateMbps.toFloatOrNull()?.coerceIn(0.5f, 80f) ?: 4f) * 1_000_000).toInt(),
+        maxFps = maxFps.toIntOrNull()?.coerceIn(15, 120) ?: 60,
+    )
 }
 
 @Composable
@@ -100,8 +115,9 @@ internal fun LiveScreen(
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
-    var maxSize by remember { mutableStateOf("720") }
-    var bitRateMbps by remember { mutableStateOf("4") }
+    val isWeb = services.capabilities.platform == app.andy.service.AndyPlatform.Web
+    var maxSize by remember { mutableStateOf(if (isWeb) "1440" else "720") }
+    var bitRateMbps by remember { mutableStateOf(if (isWeb) "12" else "4") }
     var maxFps by remember { mutableStateOf("60") }
     var bugDialogVisible by remember { mutableStateOf(false) }
     var bugSaveStatus by remember { mutableStateOf("") }
@@ -143,29 +159,41 @@ internal fun LiveScreen(
     LaunchedEffect(transfer.status) {
         if (transfer.status.isNotBlank()) liveActionStatus = transfer.status
     }
+    fun reconnectMirror(config: MirrorVideoConfig) {
+        if (serial == null) return
+        scope.launch {
+            val result = services.mirror.connect(serial, config)
+            connectResult = if (result.isSuccess) result.stdout else result.stderr
+        }
+    }
     fun applyPreset(size: String, mbps: String, fps: String = "60") {
         maxSize = size
         bitRateMbps = mbps
         maxFps = fps
+        reconnectMirror(mirrorVideoConfig(size, mbps, fps))
     }
-    fun mirrorConfig(): MirrorVideoConfig = MirrorVideoConfig(
-        maxSize = maxSize.toIntOrNull()?.coerceIn(240, 2160) ?: 720,
-        bitRate = ((bitRateMbps.toFloatOrNull()?.coerceIn(0.5f, 80f) ?: 4f) * 1_000_000).toInt(),
-        maxFps = maxFps.toIntOrNull()?.coerceIn(15, 120) ?: 60,
-    )
+    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps)
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
-    LaunchedEffect(serial) {
+    LaunchedEffect(serial, device?.state) {
         if (serial != null && device?.state == DeviceConnectionState.Online) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
-            services.bugs.startCapture(serial, device)
-        }
-    }
-    DisposableEffect(serial) {
-        onDispose {
-            scope.launch { services.bugs.stopCapture() }
+            if (result.isSuccess) {
+                runCatching { services.bugs.startCapture(serial, device) }
+                    .onFailure { error ->
+                        connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
+                    }
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        services.bugs.stopCapture()
+                        services.mirror.disconnect()
+                    }
+                }
+            }
         }
     }
     Row(Modifier.fillMaxSize()) {
@@ -194,12 +222,7 @@ internal fun LiveScreen(
                 onPopOut = onPopOutMirror,
                 onInput = sendMirrorInput,
                 onConnect = {
-                    if (serial != null) {
-                        scope.launch {
-                            val result = services.mirror.connect(serial, mirrorConfig())
-                            connectResult = if (result.isSuccess) result.stdout else result.stderr
-                        }
-                    }
+                    reconnectMirror(mirrorConfig())
                 },
             )
         }
@@ -212,25 +235,23 @@ internal fun LiveScreen(
                 Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold)
                 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("SD", maxSize == "480", Cyan) { applyPreset("480", "2") }
-                    FilterPill("HD", maxSize == "720", Green) { applyPreset("720", "4") }
-                    FilterPill("FHD", maxSize == "1080", Yellow) { applyPreset("1080", "8") }
-                    FilterPill("Max", maxSize == "1440", Rust) { applyPreset("1440", "16") }
+                    FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
+                    FilterPill("1080 edge", maxSize == "1080", Green) { applyPreset("1080", "8") }
+                    FilterPill("1440 edge", maxSize == "1440", Yellow) { applyPreset("1440", "12") }
+                    FilterPill("Native", maxSize == "0", Rust) { applyPreset("0", "16") }
                 }
                 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    LabeledField("Max px", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
+                    LabeledField("Max edge", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
                     LabeledField("Mbps", bitRateMbps, { bitRateMbps = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.width(88.dp))
                     LabeledField("FPS", maxFps, { maxFps = it.filter(Char::isDigit) }, Modifier.width(78.dp))
                     Box(Modifier.align(Alignment.Bottom).padding(bottom = 2.dp)) {
                         Button(onClick = {
-                            if (serial != null) scope.launch {
-                                val result = services.mirror.connect(serial, mirrorConfig())
-                                connectResult = if (result.isSuccess) result.stdout else result.stderr
-                            }
-                        }) { Text("Apply") }
+                            reconnectMirror(mirrorConfig())
+                        }) { Text("Restart mirror") }
                     }
                 }
+                Text("Max edge is the stream's longest side; 0 keeps the device's native resolution.", color = TextSecondary, fontSize = 10.sp)
                 Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
@@ -312,7 +333,7 @@ internal fun LiveScreen(
 
 @Composable
 internal fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureDraft) -> Unit) {
-    var title by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf("Bug capture") }
     var notes by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,

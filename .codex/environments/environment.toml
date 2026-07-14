@@ -11,6 +11,11 @@ icon = "run"
 command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew run"
 
 [[actions]]
+name = "Web"
+icon = "debug"
+command = "./gradlew wasmJsBrowserDevelopmentRun"
+
+[[actions]]
 name = "Test"
 icon = "test"
 command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew desktopTest assemble"

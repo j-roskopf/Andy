@@ -48,6 +48,17 @@
         }
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Andy: Run Web",
+      "type": "shell",
+      "command": "./gradlew",
+      "args": ["wasmJsBrowserDevelopmentRun"],
+      "group": "build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
     }
   ]
 }

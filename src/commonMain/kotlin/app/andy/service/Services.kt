@@ -1,5 +1,6 @@
 package app.andy.service
 
+import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -243,6 +244,7 @@ data class MirrorFrame(
     val argb: IntArray,
     val frameNumber: Long = 0,
     val decodedFps: Float? = null,
+    val displayedFps: Float? = null,
 )
 
 data class MirrorVideoConfig(
@@ -279,6 +281,96 @@ interface McpServerService {
 
 enum class MirrorTouchAction { Down, Move, Up }
 
+enum class AndyPlatform { Desktop, Web }
+
+enum class WebConnectionTransport { None, WebSocket, WebUsb }
+
+data class WebConnectionState(
+    val transport: WebConnectionTransport = WebConnectionTransport.None,
+    val status: String = "Disconnected",
+    val connecting: Boolean = false,
+    val connected: Boolean = false,
+    val error: String? = null,
+)
+
+internal fun WebConnectionState.shouldAutoConnectWebSocket(): Boolean =
+    transport == WebConnectionTransport.None && !connecting && !connected
+
+interface WebConnectionService {
+    val state: StateFlow<WebConnectionState>
+    suspend fun connectWebSocket(): CommandResult
+    suspend fun requestWebUsb(): CommandResult
+    suspend fun retry(): CommandResult
+    suspend fun forgetWebUsbAuthorization(): CommandResult
+}
+
+data class WebStorageState(
+    val persisted: Boolean = false,
+    val usageBytes: Long = 0,
+    val quotaBytes: Long = 0,
+    val resourceOrigins: List<String> = emptyList(),
+)
+
+interface WebStorageService {
+    val state: StateFlow<WebStorageState>
+    suspend fun refresh(): WebStorageState
+    suspend fun requestPersistence(): Boolean
+    suspend fun clearAll(): CommandResult
+}
+
+data class WebServices(
+    val connection: WebConnectionService,
+    val storage: WebStorageService,
+)
+
+data class PlatformCapabilities(
+    val platform: AndyPlatform,
+    val destinations: List<AndyDestination>,
+    val avdManagement: Boolean,
+    val wifiPairing: Boolean,
+    val hostAutomation: Boolean,
+    val proxy: Boolean,
+    val mcp: Boolean,
+    val updates: Boolean,
+) {
+    companion object {
+        val Desktop = PlatformCapabilities(
+            platform = AndyPlatform.Desktop,
+            destinations = AndyDestination.entries,
+            avdManagement = true,
+            wifiPairing = true,
+            hostAutomation = true,
+            proxy = true,
+            mcp = true,
+            updates = true,
+        )
+
+        val Web = PlatformCapabilities(
+            platform = AndyPlatform.Web,
+            destinations = listOf(
+                AndyDestination.Devices,
+                AndyDestination.Live,
+                AndyDestination.Apps,
+                AndyDestination.Logcat,
+                AndyDestination.Intents,
+                AndyDestination.Files,
+                AndyDestination.Controls,
+                AndyDestination.Performance,
+                AndyDestination.Design,
+                AndyDestination.Accessibility,
+                AndyDestination.Bugs,
+                AndyDestination.Settings,
+            ),
+            avdManagement = false,
+            wifiPairing = false,
+            hostAutomation = false,
+            proxy = false,
+            mcp = false,
+            updates = false,
+        )
+    }
+}
+
 data class AndyServices(
     val devices: DeviceService,
     val avd: AvdService,
@@ -299,4 +391,6 @@ data class AndyServices(
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
     val agentRuns: AgentRunService,
+    val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
+    val web: WebServices? = null,
 )

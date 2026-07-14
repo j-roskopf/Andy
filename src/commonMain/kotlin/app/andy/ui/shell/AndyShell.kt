@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -41,6 +42,9 @@ import app.andy.ui.live.LiveScreen
 import app.andy.ui.logcat.LogcatScreen
 import app.andy.ui.network.NetworkScreen
 import app.andy.model.ProxyStartOptions
+import app.andy.model.AgentTask
+import app.andy.model.RunningAction
+import app.andy.service.AvailableUpdate
 import app.andy.ui.network.shouldAutoStartProxy
 import app.andy.ui.performance.PerformanceScreen
 import app.andy.ui.settings.SettingsScreen
@@ -66,9 +70,22 @@ internal fun AndyShell(
     contentTopPadding: androidx.compose.ui.unit.Dp,
 ) {
     val state = rememberShellState(services)
-    val runningActions by services.actionRuns.running.collectAsState()
-    val agentTasks by services.agentRuns.tasks.collectAsState()
-    val pendingUpdateInstallConfirmation by services.updates.pendingInstallConfirmation.collectAsState()
+    val capabilities = services.capabilities
+    val runningActions by if (capabilities.hostAutomation) {
+        services.actionRuns.running.collectAsState()
+    } else {
+        remember { mutableStateOf(emptyList<RunningAction>()) }
+    }
+    val agentTasks by if (capabilities.hostAutomation) {
+        services.agentRuns.tasks.collectAsState()
+    } else {
+        remember { mutableStateOf(emptyList<AgentTask>()) }
+    }
+    val pendingUpdateInstallConfirmation by if (capabilities.updates) {
+        services.updates.pendingInstallConfirmation.collectAsState()
+    } else {
+        remember { mutableStateOf<AvailableUpdate?>(null) }
+    }
 
     LaunchedEffect(Unit) {
         state.initialize()
@@ -81,7 +98,7 @@ internal fun AndyShell(
 
     LaunchedEffect(requestedDestination) {
         requestedDestination?.let {
-            state.setDestination(it)
+            state.navigateTo(it.takeIf(capabilities.destinations::contains) ?: AndyDestination.Devices)
             onDestinationConsumed()
         }
     }
@@ -97,6 +114,7 @@ internal fun AndyShell(
     }
 
     LaunchedEffect(state.workspaceState.mcpServerEnabled, state.workspaceState.mcpServerPort) {
+        if (!capabilities.mcp) return@LaunchedEffect
         if (state.workspaceState.mcpServerEnabled) {
             services.mcp.start(state.workspaceState.mcpServerPort)
         } else {
@@ -105,6 +123,7 @@ internal fun AndyShell(
     }
 
     LaunchedEffect(state.workspaceLoaded, state.workspaceState.proxyStartOnLaunch, state.workspaceState.proxyPort, state.workspaceState.proxyRules, state.workspaceState.proxySslInsecure, state.workspaceState.proxyUpstreamTrustedCaPath) {
+        if (!capabilities.proxy) return@LaunchedEffect
         if (!state.workspaceLoaded || !state.workspaceState.proxyStartOnLaunch) return@LaunchedEffect
         val currentStatus = try {
             withTimeout(200) { services.proxy.status.first() }
@@ -124,8 +143,16 @@ internal fun AndyShell(
         }
     }
 
-    val mcpRunning by services.mcp.running.collectAsState(false)
-    val proxyStatus by services.proxy.status.collectAsState("Proxy stopped")
+    val mcpRunning by if (capabilities.mcp) {
+        services.mcp.running.collectAsState(false)
+    } else {
+        remember { mutableStateOf(false) }
+    }
+    val proxyStatus by if (capabilities.proxy) {
+        services.proxy.status.collectAsState("Proxy stopped")
+    } else {
+        remember { mutableStateOf("Proxy unavailable") }
+    }
     val proxyRunning = proxyStatus.contains("listening on")
 
     Box(
@@ -136,16 +163,17 @@ internal fun AndyShell(
         Row(Modifier.fillMaxSize().padding(top = contentTopPadding, start = 14.dp, end = 14.dp, bottom = 14.dp)) {
             Sidebar(
                 current = state.destination,
+                destinations = capabilities.destinations,
                 deviceCount = state.devices.size,
                 // Project chats are owned by Actions. Keep their unread state out of
                 // the standalone Agent destination.
                 hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
                 hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
-                onSelect = state::setDestination,
+                onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
                 sdk = state.sdk,
-                updates = services.updates,
+                updates = services.updates.takeIf { capabilities.updates },
                 mcpRunning = mcpRunning,
                 mcpPort = state.workspaceState.mcpServerPort
             )
@@ -188,7 +216,7 @@ internal fun AndyShell(
                             running = runningActions,
                             activeRunId = state.activeRunId,
                             terminalRunId = state.terminalRunId,
-                            onActiveRunIdChange = { state.setActiveRunId(it) },
+                            onActiveRunIdChange = { state.updateActiveRunId(it) },
                             onConfigChange = { state.persistActionsConfig(it) },
                             agentTasks = agentTasks,
                             active = actionsActive,
@@ -217,6 +245,8 @@ internal fun AndyShell(
                             onForgetPairedWifi = state::forgetPairedWifi,
                             onReconnectPairedWifi = state::reconnectPairedWifi,
                             onDisconnectWifi = state::disconnectWifi,
+                            allowAvdManagement = capabilities.avdManagement,
+                            allowWifiPairing = capabilities.wifiPairing,
                         )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
@@ -230,7 +260,7 @@ internal fun AndyShell(
                             stopStatus = state.emulatorStopStatus,
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(liveDevicePaneWidth = width) } },
                             onControlsPaneHeightChange = { height -> state.updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
-                            onBugSaved = { state.setDestination(AndyDestination.Bugs) },
+                            onBugSaved = { state.navigateTo(AndyDestination.Bugs) },
                             logcatState = state.liveLogcatState,
                             onPopOutMirror = {
                                 val selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial }
@@ -280,7 +310,7 @@ internal fun AndyShell(
                             upstreamTrustedCaPath = state.workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
                             onPortChange = { value -> state.updateWorkspace { it.copy(proxyPort = value) } },
                             onRulesChange = { value -> state.updateWorkspace { it.copy(proxyRules = value) } },
-                            onRulesVisibleChange = { state.setNetworkRulesVisible(it) },
+                            onRulesVisibleChange = { state.updateNetworkRulesVisible(it) },
                             onSslInsecureChange = { value -> state.updateWorkspace { it.copy(proxySslInsecure = value) } },
                             onUpstreamTrustedCaPathChange = { value ->
                                 state.updateWorkspace { it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() }) }

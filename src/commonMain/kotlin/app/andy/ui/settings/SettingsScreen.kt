@@ -27,10 +27,12 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import app.andy.model.WorkspaceState
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AvailableUpdate
+import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
@@ -56,6 +59,7 @@ import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun UpdateInstallConfirmationDialog(
@@ -116,6 +120,10 @@ internal fun SettingsScreen(
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
     services: AndyServices
 ) {
+    services.web?.let { web ->
+        WebSettingsScreen(web)
+        return
+    }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
     val clientOptions = remember { services.mcp.getClients() }
     val toolNames = remember { services.mcp.getToolNames() }
@@ -401,3 +409,169 @@ internal fun SettingsScreen(
         }
     }
 }
+
+@Composable
+private fun WebSettingsScreen(web: WebServices) {
+    val scope = rememberCoroutineScope()
+    val connection by web.connection.state.collectAsState()
+    val storage by web.storage.state.collectAsState()
+    var operationStatus by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmForgetUsb by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { web.storage.refresh() }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        PanelCard {
+            Text("Connection", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text(
+                "Connect through Andy tracebox on this computer, or directly to one USB device. The browser never starts either tool for you.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { scope.launch { operationStatus = web.connection.connectWebSocket().webMessage() } },
+                    enabled = !connection.connecting,
+                ) { Text("Use ADB + WebSocket") }
+                Button(
+                    onClick = { scope.launch { operationStatus = web.connection.requestWebUsb().webMessage() } },
+                    enabled = !connection.connecting,
+                ) { Text("Use WebUSB") }
+                Button(
+                    onClick = { scope.launch { operationStatus = web.connection.retry().webMessage() } },
+                    enabled = !connection.connecting,
+                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                ) { Text("Retry now") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlowingDot(connection.connected)
+                Text(connection.status, color = if (connection.connected) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont)
+            }
+            connection.error?.let { error ->
+                SelectionContainer {
+                    Text(
+                        error,
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.fillMaxWidth()
+                            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                            .padding(12.dp),
+                    )
+                }
+            }
+        }
+
+        PanelCard {
+            Text("Storage", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text(
+                "Settings and authorization keys use IndexedDB. Bug recordings and large captures use origin-private storage (OPFS).",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+            Text(
+                "${webFormatBytes(storage.usageBytes)} used of ${webFormatBytes(storage.quotaBytes)} · ${if (storage.persisted) "persistent" else "best effort"}",
+                color = TextPrimary,
+                fontFamily = MonoFont,
+                fontSize = 12.sp,
+            )
+            Text(
+                "Loaded origins: ${storage.resourceOrigins.ifEmpty { listOf("http://localhost:10000") }.joinToString()}",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { scope.launch { operationStatus = if (web.storage.requestPersistence()) "Persistent storage granted" else "Persistent storage was not granted" } },
+                ) { Text("Keep data") }
+                Button(
+                    onClick = { confirmClear = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                ) { Text("Clear site data") }
+            }
+            Text("Clearing site data permanently removes settings, captures, bug reports, and the saved WebUSB ADB key.", color = Rust, fontSize = 11.sp)
+        }
+
+        PanelCard {
+            Text("Authorization", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text("The WebUSB ADB private key is non-exportable and stored only for this browser origin.", color = TextSecondary, fontSize = 12.sp)
+            Button(
+                onClick = { confirmForgetUsb = true },
+                colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+            ) { Text("Forget WebUSB authorization") }
+        }
+
+        PanelCard {
+            Text("About Andy for web", color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text("Supported origins: http://localhost:10000 · https://andy.joetr.com", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
+            Text("Desktop Chrome or Edge · Android 11 / API 30 or newer", color = TextSecondary, fontSize = 12.sp)
+            Text("Device traffic stays on this computer. No telemetry or hosted device API.", color = TextSecondary, fontSize = 12.sp)
+        }
+
+        operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
+    }
+
+    if (confirmClear) {
+        WebDestructiveConfirmation(
+            title = "Clear all Andy browser data?",
+            message = "This permanently deletes settings, authorization, captures, and bug reports for http://localhost:10000.",
+            confirmLabel = "Clear all data",
+            onDismiss = { confirmClear = false },
+            onConfirm = {
+                confirmClear = false
+                scope.launch { operationStatus = web.storage.clearAll().webMessage() }
+            },
+        )
+    }
+    if (confirmForgetUsb) {
+        WebDestructiveConfirmation(
+            title = "Forget WebUSB authorization?",
+            message = "The next direct USB connection will require browser and Android authorization again.",
+            confirmLabel = "Forget authorization",
+            onDismiss = { confirmForgetUsb = false },
+            onConfirm = {
+                confirmForgetUsb = false
+                scope.launch { operationStatus = web.connection.forgetWebUsbAuthorization().webMessage() }
+            },
+        )
+    }
+}
+
+@Composable
+private fun WebDestructiveConfirmation(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel, color = Rust) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) } },
+        containerColor = PanelSoft,
+    )
+}
+
+private fun webFormatBytes(bytes: Long): String = when {
+    bytes <= 0L -> "0 B"
+    bytes < 1024L -> "$bytes B"
+    bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+    else -> "${bytes / (1024L * 1024L)} MB"
+}
+
+private fun app.andy.service.CommandResult.webMessage(): String =
+    if (isSuccess) stdout.ifBlank { "Done" } else stderr.ifBlank { stdout.ifBlank { "Operation failed" } }

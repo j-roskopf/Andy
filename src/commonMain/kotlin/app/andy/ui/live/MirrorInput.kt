@@ -17,12 +17,12 @@ import app.andy.service.AndyServices
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import app.andy.currentTimeMillis
 import app.andy.service.MirrorTouchAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -38,31 +38,10 @@ internal fun rememberMirrorInputSender(
     val currentSerial by rememberUpdatedState(serial)
     val currentEnabled by rememberUpdatedState(enabled)
     val currentRecordActions by rememberUpdatedState(recordActions)
-    var latestAccessibilityRoot by remember { mutableStateOf<AccessibilityNode?>(null) }
-    val currentAccessibilityRoot by rememberUpdatedState(latestAccessibilityRoot)
     var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
     var tapAccessibilityLookup by remember { mutableStateOf<Deferred<AccessibilityNode?>?>(null) }
     val scope = rememberCoroutineScope()
     val channel = remember(services.mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
-    LaunchedEffect(services.bugs, services.accessibility, serial) {
-        services.bugs.status.collectLatest { status ->
-            val activeSerial = serial
-            if (!status.active || status.deviceSerial != activeSerial || activeSerial == null) {
-                latestAccessibilityRoot = null
-                return@collectLatest
-            }
-            while (true) {
-                latestAccessibilityRoot = try {
-                    services.accessibility.dump(activeSerial)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    null
-                }
-                delay(BugAccessibilitySnapshotMillis)
-            }
-        }
-    }
     LaunchedEffect(channel, services.mirror) {
         for (input in channel) {
             if (currentEnabled && currentSerial != null) {
@@ -78,7 +57,7 @@ internal fun rememberMirrorInputSender(
             if (currentEnabled && currentSerial != null && currentRecordActions) {
                 when (input) {
                     is MirrorInput.Touch -> {
-                        val now = System.currentTimeMillis()
+                        val now = currentTimeMillis()
                         when (input.action) {
                             MirrorTouchAction.Down -> {
                                 touchGesture = BugTouchGesture(input.x, input.y, input.x, input.y, now)
@@ -122,7 +101,6 @@ internal fun rememberMirrorInputSender(
                                                 null
                                             }
                                         }
-                                            ?: currentAccessibilityRoot
                                         val (tapLabel, tapDetail) = mirrorTapBugText(input.x, input.y, root)
                                         services.bugs.recordAction("input", tapLabel, tapDetail)
                                     }
@@ -130,8 +108,24 @@ internal fun rememberMirrorInputSender(
                             }
                         }
                     }
+                    is MirrorInput.Tap -> {
+                        scope.launch {
+                            val root = try {
+                                withTimeoutOrNull(BugTapAccessibilityLookupMillis) {
+                                    val activeSerial = currentSerial ?: return@withTimeoutOrNull null
+                                    services.accessibility.dump(activeSerial)
+                                }
+                            } catch (_: CancellationException) {
+                                null
+                            } catch (_: Exception) {
+                                null
+                            }
+                            val (label, detail) = mirrorTapBugText(input.x, input.y, root)
+                            services.bugs.recordAction("input", label, detail)
+                        }
+                    }
                     else -> {
-                        val (label, detail) = mirrorInputBugText(input, currentAccessibilityRoot)
+                        val (label, detail) = mirrorInputBugText(input, null)
                         services.bugs.recordAction("input", label, detail)
                     }
                 }
@@ -156,8 +150,7 @@ private data class BugTouchGesture(
     }
 }
 
-private const val BugAccessibilitySnapshotMillis = 1_500L
-private const val BugTapAccessibilityLookupMillis = 350L
+private const val BugTapAccessibilityLookupMillis = 1_500L
 private const val BugTapMaxDistancePx = 24
 
 @Composable
@@ -172,17 +165,19 @@ internal fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @
                 return@collectLatest
             }
             val previous = frame
-            if (
-                previous == null ||
-                previous.width != next.width ||
-                previous.height != next.height ||
-                next.frameNumber % MirrorMetadataFrameInterval == 0L
-            ) {
+            if (shouldUpdateMirrorMetadata(previous, next)) {
                 frame = next
             }
         }
     }
     content(mirror.frames, frame)
 }
+
+internal fun shouldUpdateMirrorMetadata(previous: MirrorFrame?, next: MirrorFrame): Boolean =
+    previous == null ||
+        previous.width != next.width ||
+        previous.height != next.height ||
+        next.argb.isEmpty() ||
+        next.frameNumber % MirrorMetadataFrameInterval == 0L
 
 private const val MirrorMetadataFrameInterval = 30L
