@@ -98,6 +98,29 @@ jobs:
             echo "tag_name=${tag_name}"
           } >> "${GITHUB_OUTPUT}"
 
+  tracebox:
+    name: Package Andy tracebox
+    needs:
+      - version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Package pinned tracebox assets
+        run: python3 tools/andy-tracebox/package_release.py --output release-artifacts
+
+      - name: Upload tracebox artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracebox-release
+          if-no-files-found: error
+          path: release-artifacts/*
+
 
   linux:
     name: Linux release
@@ -479,7 +502,8 @@ jobs:
       - linux
       - windows
       - macos
-    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success'
+      - tracebox
+    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -501,3 +525,7 @@ jobs:
             release-artifacts/**/*.flatpak
             release-artifacts/**/*.msi
             release-artifacts/**/*.dmg
+            release-artifacts/**/andy-tracebox
+            release-artifacts/**/andy-tracebox-bin-*
+            release-artifacts/**/andy-tracebox-SHA256SUMS
+            release-artifacts/**/andy-tracebox-LICENSE.txt

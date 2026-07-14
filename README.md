@@ -96,6 +96,22 @@ Check for desktop app updates and confirm installation from inside Andy. Version
 
 Very rudimentary file browsing / editing.
 
+### Andy for web
+
+The browser build can connect directly with WebUSB or through Andy's pinned
+tracebox distribution. The bridge keeps ADB on loopback and permits only
+Perfetto's standard local origins plus `https://andy.joetr.com`.
+
+```sh
+adb start-server
+curl -fL https://github.com/j-roskopf/Andy/releases/latest/download/andy-tracebox -o andy-tracebox
+chmod +x andy-tracebox
+./andy-tracebox
+```
+
+The source manifest, checksum verification, launcher, and release packager are
+maintained in [`tools/andy-tracebox`](tools/andy-tracebox/README.md).
+
 ## Screenshots
 
 The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state and the matching Linux/Windows baseline contract.

@@ -1,0 +1,43 @@
+{
+  "upstream": {
+    "project": "Perfetto",
+    "version": "v57.2",
+    "commit": "da1d152cff27890903d158fe96751de3aab883cc",
+    "license_url": "https://raw.githubusercontent.com/google/perfetto/v57.2/LICENSE",
+    "license_sha256": "9a682a56cffc9524dfa9b0b1c0dca9cb81a19e96d5bd0793aaf02c08a95ee7ca"
+  },
+  "assets": [
+    {
+      "platform": "darwin",
+      "machine": "x86_64",
+      "release_name": "andy-tracebox-bin-macos-x86_64",
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/mac-amd64/tracebox",
+      "sha256": "cf61aff9d13a62f7265b92020741fcf35ac3ab08dc84e3020508a2eafd9e80c0",
+      "size": 2329616
+    },
+    {
+      "platform": "darwin",
+      "machine": "arm64",
+      "release_name": "andy-tracebox-bin-macos-arm64",
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/mac-arm64/tracebox",
+      "sha256": "0203b4bda5ce4835cf4a2473b170e51b54857ae7067fdcf597367ff5f4f09fe3",
+      "size": 2162216
+    },
+    {
+      "platform": "linux",
+      "machine": "x86_64",
+      "release_name": "andy-tracebox-bin-linux-x86_64",
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-amd64/tracebox",
+      "sha256": "af22b25abb57260eb22bd4dc5bd64ea25d88fd781c1c221f446d0d49eaff59e8",
+      "size": 3207400
+    },
+    {
+      "platform": "linux",
+      "machine": "arm64",
+      "release_name": "andy-tracebox-bin-linux-arm64",
+      "url": "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v57.2/linux-arm64/tracebox",
+      "sha256": "484656492cebfb88b5faf845da470144e232b38ae31f9c270a52182875be7acf",
+      "size": 3064072
+    }
+  ]
+}
