@@ -28,8 +28,11 @@ external fun webAdbStartMirror(serial: String, configJson: String): Promise<JsSt
 external fun webAdbStopMirror(sessionId: String): Promise<JsAny?>
 external fun webAdbAttachMirror(hostId: String): Boolean
 external fun webAdbDetachMirror(hostId: String)
-external fun webAdbSetMirrorHighlight(hostId: String, bounds: String, sourceWidth: Int, sourceHeight: Int)
+external fun webAdbSetMirrorOverlay(hostId: String, configJson: String)
 external fun webAdbMirrorPoint(hostId: String, clientX: Double, clientY: Double): String
+external fun webAdbMirrorSourcePoint(hostId: String, clientX: Double, clientY: Double): String
+external fun webAdbMirrorRulerAxis(hostId: String, clientX: Double, clientY: Double): String
+external fun webAdbSetMirrorPickerPoint(hostId: String, clientX: Double, clientY: Double)
 external fun webAdbSendMirrorInput(inputJson: String): Promise<JsString>
 external fun webAdbMirrorStats(): JsString
 external fun webStorageStatus(): Promise<JsString>

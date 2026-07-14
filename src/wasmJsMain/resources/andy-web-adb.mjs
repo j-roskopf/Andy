@@ -825,8 +825,10 @@ function attachMirrorToActiveHost(mirror = state.mirror) {
   const host = state.mirrorHostId ? document.getElementById(state.mirrorHostId) : undefined;
   if (!host || !mirror) return false;
   const highlight = ensureMirrorHighlight(host);
-  if (mirror.canvas.parentElement !== host) host.replaceChildren(mirror.canvas, highlight);
+  const overlay = ensureMirrorOverlay(host);
+  if (mirror.canvas.parentElement !== host) host.replaceChildren(mirror.canvas, highlight, overlay);
   renderMirrorHighlight();
+  renderMirrorOverlay();
   return true;
 }
 
@@ -850,27 +852,174 @@ function renderMirrorHighlight() {
   const host = config ? document.getElementById(config.hostId) : undefined;
   if (!host) return;
   const highlight = ensureMirrorHighlight(host);
-  const match = /^\s*\[(-?\d+),(-?\d+)]\[(-?\d+),(-?\d+)]\s*$/.exec(config.bounds);
+  const canvas = state.mirror?.canvas;
+  const match = /^\s*\[(-?\d+),(-?\d+)]\[(-?\d+),(-?\d+)]\s*$/.exec(config.highlightBounds);
   if (!match || config.sourceWidth <= 0 || config.sourceHeight <= 0) {
     highlight.style.display = "none";
     return;
   }
-  const hostWidth = host.clientWidth;
-  const hostHeight = host.clientHeight;
-  const scale = Math.min(hostWidth / config.sourceWidth, hostHeight / config.sourceHeight);
-  const fittedWidth = config.sourceWidth * scale;
-  const fittedHeight = config.sourceHeight * scale;
-  const fittedLeft = (hostWidth - fittedWidth) / 2;
-  const fittedTop = (hostHeight - fittedHeight) / 2;
+  if (!canvas || canvas.parentElement !== host) {
+    highlight.style.display = "none";
+    return;
+  }
+  const hostRect = host.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  const scaleX = canvasRect.width / config.sourceWidth;
+  const scaleY = canvasRect.height / config.sourceHeight;
   const left = Number(match[1]);
   const top = Number(match[2]);
   const right = Number(match[3]);
   const bottom = Number(match[4]);
   highlight.style.display = "block";
-  highlight.style.left = `${fittedLeft + left * scale}px`;
-  highlight.style.top = `${fittedTop + top * scale}px`;
-  highlight.style.width = `${Math.max(0, right - left) * scale}px`;
-  highlight.style.height = `${Math.max(0, bottom - top) * scale}px`;
+  highlight.style.left = `${canvasRect.left - hostRect.left + left * scaleX}px`;
+  highlight.style.top = `${canvasRect.top - hostRect.top + top * scaleY}px`;
+  highlight.style.width = `${Math.max(0, right - left) * scaleX}px`;
+  highlight.style.height = `${Math.max(0, bottom - top) * scaleY}px`;
+}
+
+function ensureMirrorOverlay(host) {
+  let overlay = host.querySelector("[data-andy-mirror-overlay]");
+  if (overlay) return overlay;
+  overlay = document.createElement("canvas");
+  overlay.dataset.andyMirrorOverlay = "true";
+  overlay.style.position = "absolute";
+  overlay.style.pointerEvents = "none";
+  overlay.style.zIndex = "3";
+  overlay.style.display = "none";
+  return overlay;
+}
+
+function drawOverlayPill(context, x, y, label, color) {
+  context.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const width = Math.max(20, Math.ceil(context.measureText(label).width) + 12);
+  context.fillStyle = color;
+  context.beginPath();
+  context.roundRect(x, y, width, 18, 9);
+  context.fill();
+  context.fillStyle = "#ffffff";
+  context.fillText(label, x + 6, y + 13);
+}
+
+function renderMirrorOverlay() {
+  const config = state.mirrorHighlight;
+  const host = config ? document.getElementById(config.hostId) : undefined;
+  const mirror = state.mirror;
+  const sourceCanvas = mirror?.canvas;
+  if (!host || !sourceCanvas || sourceCanvas.parentElement !== host) return;
+  const overlay = ensureMirrorOverlay(host);
+  if (overlay.parentElement !== host) host.appendChild(overlay);
+  const hostRect = host.getBoundingClientRect();
+  const rect = sourceCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    overlay.style.display = "none";
+    return;
+  }
+  const left = rect.left - hostRect.left;
+  const top = rect.top - hostRect.top;
+  const pixelRatio = window.devicePixelRatio || 1;
+  overlay.style.display = "block";
+  overlay.style.left = `${left}px`;
+  overlay.style.top = `${top}px`;
+  overlay.style.width = `${rect.width}px`;
+  overlay.style.height = `${rect.height}px`;
+  const width = Math.max(1, Math.round(rect.width * pixelRatio));
+  const height = Math.max(1, Math.round(rect.height * pixelRatio));
+  if (overlay.width !== width || overlay.height !== height) {
+    overlay.width = width;
+    overlay.height = height;
+  }
+  const context = overlay.getContext("2d");
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, rect.width, rect.height);
+
+  if (config.showGrid && config.gridSize >= 2) {
+    context.strokeStyle = config.gridColor;
+    context.globalAlpha = 0.72;
+    context.lineWidth = 1;
+    for (let x = 0; x <= rect.width; x += config.gridSize) {
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, rect.height);
+      context.stroke();
+    }
+    for (let y = 0; y <= rect.height; y += config.gridSize) {
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(rect.width, y);
+      context.stroke();
+    }
+    context.globalAlpha = 1;
+  }
+
+  if (config.showRuler && config.sourceWidth > 0 && config.sourceHeight > 0) {
+    const x = Math.max(0, Math.min(rect.width, config.rulerX * rect.width / config.sourceWidth));
+    const y = Math.max(0, Math.min(rect.height, config.rulerY * rect.height / config.sourceHeight));
+    const color = config.rulerColor;
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, rect.height);
+    context.moveTo(0, y);
+    context.lineTo(rect.width, y);
+    context.stroke();
+    context.beginPath();
+    context.arc(x, rect.height / 2, 4, 0, Math.PI * 2);
+    context.arc(rect.width / 2, y, 4, 0, Math.PI * 2);
+    context.fill();
+    drawOverlayPill(context, Math.min(rect.width - 56, x + 8), 8, `L ${Math.round(config.rulerX)}`, color);
+    drawOverlayPill(context, Math.max(4, x - 70), Math.max(4, rect.height - 26), `R ${Math.round(config.sourceWidth - config.rulerX)}`, color);
+    drawOverlayPill(context, 8, Math.min(rect.height - 22, y + 8), `T ${Math.round(config.rulerY)}`, color);
+    drawOverlayPill(context, Math.max(4, rect.width - 76), Math.max(4, y - 26), `B ${Math.round(config.sourceHeight - config.rulerY)}`, color);
+  }
+
+  if (config.pickerEnabled) {
+    const point = config.pickerPoint;
+    const cx = point ? point.clientX - rect.left : rect.width * 0.7;
+    const cy = point ? point.clientY - rect.top : rect.height / 3;
+    const radius = 48;
+    context.save();
+    context.beginPath();
+    context.arc(cx, cy, radius, 0, Math.PI * 2);
+    context.clip();
+    context.fillStyle = config.pickerColor;
+    context.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    if (point && sourceCanvas.width && sourceCanvas.height) {
+      const zoom = 5;
+      const sourceRadiusX = radius / zoom * sourceCanvas.width / rect.width;
+      const sourceRadiusY = radius / zoom * sourceCanvas.height / rect.height;
+      const sourceX = (point.clientX - rect.left) * sourceCanvas.width / rect.width;
+      const sourceY = (point.clientY - rect.top) * sourceCanvas.height / rect.height;
+      try {
+        context.imageSmoothingEnabled = false;
+        context.drawImage(
+          sourceCanvas,
+          sourceX - sourceRadiusX,
+          sourceY - sourceRadiusY,
+          sourceRadiusX * 2,
+          sourceRadiusY * 2,
+          cx - radius,
+          cy - radius,
+          radius * 2,
+          radius * 2,
+        );
+      } catch (_) {
+        // Some WebGL renderers reject a direct canvas copy; the color sample remains useful.
+      }
+    }
+    context.restore();
+    context.strokeStyle = "#d06b4c";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(cx, cy, radius, 0, Math.PI * 2);
+    context.moveTo(cx - 7, cy);
+    context.lineTo(cx + 7, cy);
+    context.moveTo(cx, cy - 7);
+    context.lineTo(cx, cy + 7);
+    context.stroke();
+    drawOverlayPill(context, Math.max(4, cx - 24), Math.min(rect.height - 22, cy + radius + 8), config.pickerHex || "#------", "#d06b4c");
+  }
 }
 
 export async function webAdbStartMirror(serial, configJson) {
@@ -1031,9 +1180,15 @@ export function webAdbAttachMirror(hostId) {
   return attachMirrorToActiveHost();
 }
 
-export function webAdbSetMirrorHighlight(hostId, bounds, sourceWidth, sourceHeight) {
-  state.mirrorHighlight = { hostId, bounds, sourceWidth, sourceHeight };
+export function webAdbSetMirrorOverlay(hostId, configJson) {
+  const previous = state.mirrorHighlight;
+  state.mirrorHighlight = {
+    hostId,
+    ...JSON.parse(configJson),
+    pickerPoint: previous?.hostId === hostId ? previous.pickerPoint : undefined,
+  };
   renderMirrorHighlight();
+  renderMirrorOverlay();
 }
 
 export function webAdbMirrorPoint(hostId, clientX, clientY) {
@@ -1063,11 +1218,43 @@ export function webAdbMirrorPoint(hostId, clientX, clientY) {
   return `${x},${y},${color}`;
 }
 
+export function webAdbMirrorSourcePoint(hostId, clientX, clientY) {
+  const config = state.mirrorHighlight;
+  const host = document.getElementById(hostId);
+  const canvas = state.mirror?.canvas;
+  if (!config || config.hostId !== hostId || !host || !canvas || canvas.parentElement !== host || config.sourceWidth <= 0 || config.sourceHeight <= 0) return "";
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return "";
+  const x = Math.max(0, Math.min(config.sourceWidth, (clientX - rect.left) * config.sourceWidth / rect.width));
+  const y = Math.max(0, Math.min(config.sourceHeight, (clientY - rect.top) * config.sourceHeight / rect.height));
+  return `${x},${y}`;
+}
+
+export function webAdbMirrorRulerAxis(hostId, clientX, clientY) {
+  const config = state.mirrorHighlight;
+  const host = document.getElementById(hostId);
+  const canvas = state.mirror?.canvas;
+  if (!config?.showRuler || config.hostId !== hostId || !host || !canvas || canvas.parentElement !== host || config.sourceWidth <= 0 || config.sourceHeight <= 0) return "";
+  const rect = canvas.getBoundingClientRect();
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return "";
+  const rulerX = rect.left + config.rulerX * rect.width / config.sourceWidth;
+  const rulerY = rect.top + config.rulerY * rect.height / config.sourceHeight;
+  if (Math.abs(clientX - rulerX) <= 10) return "x";
+  if (Math.abs(clientY - rulerY) <= 10) return "y";
+  return "";
+}
+
+export function webAdbSetMirrorPickerPoint(hostId, clientX, clientY) {
+  const config = state.mirrorHighlight;
+  if (!config || config.hostId !== hostId) return;
+  config.pickerPoint = { clientX, clientY };
+  renderMirrorOverlay();
+}
+
 export function webAdbDetachMirror(hostId) {
   const host = document.getElementById(hostId);
   const mirror = state.mirror;
-  if (host && mirror?.canvas.parentElement === host) host.removeChild(mirror.canvas);
-  if (host && state.bugPlayback?.video.parentElement === host) host.removeChild(state.bugPlayback.video);
+  if (host && (mirror?.canvas.parentElement === host || state.bugPlayback?.video.parentElement === host)) host.replaceChildren();
   if (state.mirrorHostId === hostId) {
     state.mirrorHostId = undefined;
     state.mirrorHighlight = undefined;

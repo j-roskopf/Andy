@@ -4,7 +4,9 @@
 
 # Andy
 
-Andy is a desktop companion for Android developers.
+Andy is a desktop companion for Android developers. The desktop app is the
+recommended experience and includes the full feature set. A smaller subset of
+Andy is also available on the web at [andy.joetr.com](https://www.andy.joetr.com).
 
 ## Download
 
@@ -98,10 +100,12 @@ Very rudimentary file browsing / editing.
 
 ### Andy for web
 
-The browser build can connect directly with WebUSB or through Andy's pinned
-tracebox distribution. The bridge keeps ADB on loopback and permits only
-Perfetto's standard local origins, `https://andy.joetr.com`, and the computer's
-detected private IPv4 origin on port `10000`.
+The browser build at [andy.joetr.com](https://www.andy.joetr.com) provides a
+smaller subset of Andy's functionality. For the complete experience, use the
+desktop app. The browser build can connect directly with WebUSB or through
+Andy's pinned tracebox distribution. The bridge keeps ADB on loopback and
+permits only Perfetto's standard local origins, `https://andy.joetr.com`, and
+the computer's detected private IPv4 origin on port `10000`.
 
 ```sh
 adb start-server
