@@ -26,11 +26,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify pinned native-tool manifests
+      - name: Verify pinned tracebox manifests
         run: |
           python3 -m unittest discover -s tools/andy-tracebox -p 'test_*.py'
           python3 tools/andy-tracebox/package_release.py --verify-manifest-only
-          python3 -m unittest discover -s tools/andy-mirror -p 'test_*.py'
 
   desktop:
     name: Desktop checks (${{ matrix.os }})

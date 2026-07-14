@@ -17,7 +17,6 @@ import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
-import app.andy.service.MirrorStats
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.CancellationException
@@ -222,11 +221,10 @@ class DesktopMirrorEngine(
     private var connectedAtNanos: Long = 0L
     private var lastEmulatorDisplaySizeRefreshNanos: Long = 0L
     private var nativeHost: java.awt.Canvas? = null
-    private var nativeCompanion: AndyMirrorProcess? = null
     private val controlLock = Any()
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
-        if (connectedSerial == serial && connectedConfig == config && (videoJob?.isActive == true || nativeCompanion != null)) {
+        if (connectedSerial == serial && connectedConfig == config && videoJob?.isActive == true) {
             return CommandResult.success("Embedded mirror already connected for $serial")
         }
         disconnect()
@@ -244,20 +242,8 @@ class DesktopMirrorEngine(
         } else {
             null
         }
-        var nativeAvailable = host != null
-        val companionFailure = startPackagedCompanionIfNeeded(serial, config, nativeAvailable)
-        val unavailableReason = listOfNotNull(
-            NativeMirrorJni.embeddedPresentationFailureReason()
-                .takeIf {
-                    config.rendererMode != MirrorRendererMode.Legacy &&
-                        !nativeAvailable &&
-                        !NativeMirrorJni.isEmbeddedPresentationSupported()
-                },
-            companionFailure,
-        ).distinct().joinToString("; ").ifBlank { acceleratedUnavailableReason() }
-        if (nativeCompanion != null) {
-            return CommandResult.success("Andy native mirror companion starting for $serial")
-        }
+        val nativeAvailable = host != null
+        val unavailableReason by lazy { acceleratedUnavailableReason() }
         if (config.rendererMode == MirrorRendererMode.Accelerated && !nativeAvailable) {
             val reason = unavailableReason
             session.value = MirrorSession(
@@ -320,8 +306,6 @@ class DesktopMirrorEngine(
         }
         emulatorGrpcClient?.close()
         emulatorGrpcClient = null
-        nativeCompanion?.close()
-        nativeCompanion = null
         NativeMirrorJni.destroyPresentation()
         nativeHost = null
         videoProcess?.destroyForcibly()
@@ -345,13 +329,6 @@ class DesktopMirrorEngine(
     }
 
     override suspend fun sendInput(input: MirrorInput): CommandResult {
-        nativeCompanion?.let { companion ->
-            return if (companion.input(input)) {
-                CommandResult.success("Input sent to andy-mirror")
-            } else {
-                CommandResult.failure(companion.failureReason ?: "andy-mirror is not accepting input")
-            }
-        }
         emulatorGrpcClient?.let { client ->
             // Run the blocking gRPC touch RPC off the Compose UI dispatcher so dragging
             // stays as smooth as Android Studio instead of stalling the event thread.
@@ -486,122 +463,6 @@ class DesktopMirrorEngine(
         !NativeMirrorJni.isAvailable() -> "This desktop platform has no packaged VideoToolbox/Metal native mirror bridge"
         NativeMirrorHostRegistry.current() == null -> "No realized native mirror host is available"
         else -> "The native mirror backend could not initialize"
-    }
-
-    /** Starts a staged product companion when this process cannot own a JAWT surface. */
-    private suspend fun startPackagedCompanionIfNeeded(
-        serial: String,
-        config: MirrorVideoConfig,
-        hasInProcessNativeHost: Boolean,
-    ): String? {
-        if (config.rendererMode == MirrorRendererMode.Legacy || hasInProcessNativeHost) return null
-        val executable = AndyMirrorBinaryLocator.find() ?: return "No packaged andy-mirror companion is available"
-        val adb = devices.adbPath() ?: return "ADB not found for the packaged andy-mirror companion"
-        val server = ScrcpyServerLocator.find()
-            ?: return "Andy’s bundled scrcpy server is missing for the packaged andy-mirror companion"
-        // AndyMirrorProcess reads stdout asynchronously. Do not expose any early `ready` event
-        // to the UI until its decoder and renderer claims have both passed this contract's
-        // verification. Otherwise a renderer-only process could briefly look accelerated.
-        val eventLock = Any()
-        val pendingEvents = mutableListOf<AndyMirrorEvent>()
-        var accepted = false
-        val companion = AndyMirrorProcess(
-            executable = executable,
-            onEvent = { event ->
-                synchronized(eventLock) {
-                    if (accepted) {
-                        publishCompanionEvent(serial, config, event)
-                    } else {
-                        pendingEvents += event
-                    }
-                }
-            },
-            environment = mapOf(
-                "ANDY_MIRROR_ADB_PATH" to adb,
-                "ANDY_MIRROR_SCRCPY_SERVER_PATH" to server.absolutePath,
-            ),
-        )
-        val ready = runCatching { companion.start(serial, config) }.getOrElse { error ->
-            companion.close()
-            return "Unable to launch packaged andy-mirror: ${error.message ?: error::class.simpleName}"
-        }
-        val reason = ready?.failureReason ?: companion.failureReason
-        if (ready?.isVerifiedHardwareReady() != true) {
-            companion.close()
-            return reason ?: "andy-mirror did not verify named hardware decoder and hardware renderer"
-        }
-        // A child process cannot reuse the JVM's JAWT surface. Its portable hand-off is an
-        // owned pop-out, which is also the only valid presentation route on Wayland.
-        if (!companion.attach("popout")) {
-            val attachFailure = companion.failureReason ?: "andy-mirror rejected the pop-out attachment"
-            companion.close()
-            return attachFailure
-        }
-        synchronized(eventLock) {
-            nativeCompanion = companion
-            accepted = true
-            pendingEvents.forEach { publishCompanionEvent(serial, config, it) }
-            pendingEvents.clear()
-        }
-        return null
-    }
-
-    private fun publishCompanionEvent(serial: String, config: MirrorVideoConfig, event: AndyMirrorEvent) {
-        when (event.type) {
-            "ready", "stats" -> {
-                val existing = session.value
-                val backend = existing?.backend ?: MirrorBackend(
-                    kind = MirrorBackendKind.NativeHardware,
-                    decoder = event.decoder ?: "Native hardware decoder",
-                    renderer = event.renderer ?: "Native renderer",
-                )
-                if (
-                    event.hardwareBacked == false ||
-                    event.decoderHardwareBacked == false ||
-                    event.rendererHardwareBacked == false
-                ) {
-                    session.value = MirrorSession(
-                        serial = serial,
-                        requestedMode = config.rendererMode,
-                        backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = "andy-mirror reported an unverified decoder or renderer"),
-                        failureReason = "andy-mirror reported an unverified decoder or renderer",
-                    )
-                    status.value = "Andy native mirror rejected its unverified decoder or renderer"
-                    return
-                }
-                session.value = MirrorSession(
-                    serial = serial,
-                    requestedMode = config.rendererMode,
-                    backend = backend.copy(
-                        decoder = event.decoder ?: backend.decoder,
-                        renderer = event.renderer ?: backend.renderer,
-                    ),
-                    stats = MirrorStats(
-                        displayedFps = event.displayedFps ?: existing?.stats?.displayedFps ?: 0f,
-                        decodedFps = event.decodedFps ?: existing?.stats?.decodedFps ?: 0f,
-                        droppedFrames = event.droppedFrames ?: existing?.stats?.droppedFrames ?: 0L,
-                        framesPresented = event.framesPresented ?: existing?.stats?.framesPresented ?: 0L,
-                        p95InputToPresentMillis = event.p95InputToPresentMillis ?: existing?.stats?.p95InputToPresentMillis,
-                    ),
-                    width = event.width ?: existing?.width ?: 0,
-                    height = event.height ?: existing?.height ?: 0,
-                )
-                if (event.width != null && event.height != null) {
-                    frames.value = MirrorFrame(event.width, event.height, IntArray(0), frameNumber = event.framesPresented ?: 1)
-                }
-                status.value = "Andy native mirror ${event.decoder ?: backend.decoder} / ${event.renderer ?: backend.renderer}"
-            }
-            "failure" -> {
-                val reason = event.failureReason ?: "andy-mirror failed without a reason"
-                session.value = MirrorSession(
-                    serial = serial,
-                    requestedMode = config.rendererMode,
-                    backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason),
-                    failureReason = reason,
-                )
-                status.value = "Andy native mirror failed · $reason"
-            }
-        }
     }
 
     private suspend fun awaitNativeHost(): java.awt.Canvas? {
