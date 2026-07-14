@@ -529,3 +529,103 @@ jobs:
             release-artifacts/**/andy-tracebox-bin-*
             release-artifacts/**/andy-tracebox-SHA256SUMS
             release-artifacts/**/andy-tracebox-LICENSE.txt
+
+  web:
+    name: Web release
+    needs:
+      - version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin Wasm Binaryen
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/binaryen
+          key: ${{ runner.os }}-kotlin-wasm-binaryen-${{ hashFiles('build.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-wasm-binaryen-
+
+      - name: Build web bundle
+        run: ./gradlew wasmJsBrowserDistribution
+
+      - name: Prepare GitHub Pages artifact
+        shell: bash
+        run: |
+          touch build/dist/wasmJs/productionExecutable/.nojekyll
+          cp build/dist/wasmJs/productionExecutable/index.html \
+            build/dist/wasmJs/productionExecutable/404.html
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/dist/wasmJs/productionExecutable
+          include-hidden-files: true
+
+  web-pages-deploy:
+    name: Deploy web to GitHub Pages
+    needs:
+      - web
+    if: always() && needs.web.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.pages_url.outputs.page_url }}
+    permissions:
+      contents: read
+      id-token: write
+      pages: write
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+        with:
+          timeout: 900000
+          error_count: 20
+
+      - name: Wait before retrying GitHub Pages deployment
+        if: steps.deployment.outcome == 'failure'
+        shell: bash
+        run: sleep 30
+
+      - name: Retry GitHub Pages deployment
+        if: steps.deployment.outcome == 'failure'
+        id: deployment_retry
+        uses: actions/deploy-pages@v5
+        with:
+          timeout: 900000
+          error_count: 20
+
+      - name: Set GitHub Pages deployment URL
+        if: always()
+        id: pages_url
+        shell: bash
+        env:
+          PRIMARY_PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          RETRY_PAGE_URL: ${{ steps.deployment_retry.outputs.page_url }}
+        run: |
+          page_url="${RETRY_PAGE_URL:-${PRIMARY_PAGE_URL}}"
+          if [[ -z "${page_url}" ]]; then
+            echo "::error::GitHub Pages deployment did not produce a page URL"
+            exit 1
+          fi
+          echo "page_url=${page_url}" >> "${GITHUB_OUTPUT}"
