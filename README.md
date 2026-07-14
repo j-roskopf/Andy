@@ -100,7 +100,8 @@ Very rudimentary file browsing / editing.
 
 The browser build can connect directly with WebUSB or through Andy's pinned
 tracebox distribution. The bridge keeps ADB on loopback and permits only
-Perfetto's standard local origins plus `https://andy.joetr.com`.
+Perfetto's standard local origins, `https://andy.joetr.com`, and the computer's
+detected private IPv4 origin on port `10000`.
 
 ```sh
 adb start-server

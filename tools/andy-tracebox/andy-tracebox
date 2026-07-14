@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Launch Andy's pinned tracebox bridge with its production origin allowed."""
+"""Launch Andy's pinned tracebox bridge with its web origins allowed."""
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import platform
+import socket
 import stat
 import subprocess
 import sys
@@ -15,7 +17,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 
-ALLOWED_ORIGIN = "https://andy.joetr.com"
+PRODUCTION_ORIGIN = "https://andy.joetr.com"
+WEB_PORT = 10_000
 DEFAULT_RELEASE_BASE = "https://github.com/j-roskopf/Andy/releases/latest/download"
 CHECKSUM_ASSET = "andy-tracebox-SHA256SUMS"
 
@@ -87,6 +90,51 @@ def cache_directory() -> Path:
     return Path.home() / ".cache" / "andy" / "tracebox"
 
 
+def discover_private_ipv4_addresses() -> List[str]:
+    addresses = set()
+    try:
+        for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addresses.add(result[4][0])
+    except OSError:
+        pass
+
+    # Connecting a UDP socket selects the default route without sending a packet.
+    route_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        route_socket.connect(("192.0.2.1", 9))
+        addresses.add(route_socket.getsockname()[0])
+    except OSError:
+        pass
+    finally:
+        route_socket.close()
+
+    private_addresses = []
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
+            private_addresses.append(address)
+    return sorted(private_addresses)
+
+
+def allowed_origins(
+    private_ipv4_addresses: Optional[List[str]] = None,
+    configured_origins: Optional[List[str]] = None,
+) -> List[str]:
+    addresses = private_ipv4_addresses
+    if addresses is None:
+        addresses = discover_private_ipv4_addresses()
+    if configured_origins is None:
+        configured_origins = os.environ.get("ANDY_TRACEBOX_ADDITIONAL_ORIGINS", "").split(",")
+
+    origins = [PRODUCTION_ORIGIN]
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if parsed.version == 4 and parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
+            origins.append(f"http://{address}:{WEB_PORT}")
+    origins.extend(origin.strip() for origin in configured_origins if origin.strip())
+    return list(dict.fromkeys(origins))
+
+
 def resolve_binary() -> Path:
     override = os.environ.get("ANDY_TRACEBOX_BINARY")
     if override:
@@ -120,13 +168,17 @@ def resolve_binary() -> Path:
     return binary
 
 
-def bridge_command(binary: Path, extra_arguments: List[str]) -> List[str]:
+def bridge_command(
+    binary: Path,
+    extra_arguments: List[str],
+    origins: Optional[List[str]] = None,
+) -> List[str]:
     return [
         str(binary),
         "websocket_bridge",
         *extra_arguments,
         "--http-additional-cors-origins",
-        ALLOWED_ORIGIN,
+        ",".join(origins or allowed_origins()),
     ]
 
 
@@ -136,14 +188,22 @@ def main(arguments: List[str]) -> int:
     if os.environ.get("ANDY_TRACEBOX_PRINT_COMMAND") == "1":
         print(" ".join(command))
         return 0
-    return subprocess.call(command)
+    process = subprocess.Popen(command)
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        return 130
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main(sys.argv[1:]))
-    except KeyboardInterrupt:
-        raise SystemExit(130)
     except (OSError, RuntimeError) as error:
         print(f"andy-tracebox: {error}", file=sys.stderr)
         raise SystemExit(1)

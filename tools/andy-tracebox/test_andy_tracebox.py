@@ -36,12 +36,33 @@ class AndyTraceboxTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "missing"):
             andy_tracebox.parse_checksum(checksums, "absent")
 
-    def test_bridge_command_always_adds_exact_production_origin(self) -> None:
-        command = andy_tracebox.bridge_command(Path("/tmp/tracebox"), ["--help"])
+    def test_allowed_origins_include_production_private_lan_and_configuration(self) -> None:
+        origins = andy_tracebox.allowed_origins(
+            ["192.168.86.84", "127.0.0.1", "169.254.1.1", "8.8.8.8"],
+            ["http://10.0.0.2:10000", "", "https://andy.joetr.com"],
+        )
+        self.assertEqual(
+            [
+                "https://andy.joetr.com",
+                "http://192.168.86.84:10000",
+                "http://10.0.0.2:10000",
+            ],
+            origins,
+        )
+
+    def test_bridge_command_adds_all_origins_in_one_option(self) -> None:
+        command = andy_tracebox.bridge_command(
+            Path("/tmp/tracebox"),
+            ["--help"],
+            ["https://andy.joetr.com", "http://192.168.86.84:10000"],
+        )
         self.assertEqual("websocket_bridge", command[1])
         self.assertEqual("--help", command[2])
         self.assertEqual("--http-additional-cors-origins", command[-2])
-        self.assertEqual("https://andy.joetr.com", command[-1])
+        self.assertEqual(
+            "https://andy.joetr.com,http://192.168.86.84:10000",
+            command[-1],
+        )
 
 
 if __name__ == "__main__":
