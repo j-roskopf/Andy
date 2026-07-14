@@ -1,6 +1,8 @@
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 import org.jetbrains.kotlin.gradle.targets.wasm.nodejs.WasmNodeJsEnvSpec
@@ -193,6 +195,145 @@ extensions.configure<WasmNodeJsEnvSpec>("kotlinWasmNodeJsSpec") {
 
 roborazzi {
     outputDir.set(layout.projectDirectory.dir("src/screenshotTest/roborazzi"))
+}
+
+val packageAndyMirrorScrcpyServer by tasks.registering(Copy::class) {
+    group = "build"
+    description = "Packages the pinned upstream scrcpy-server release binary (no vendored client tree)."
+    val source = layout.projectDirectory.file("src/commonMain/resources/scrcpy/scrcpy-server")
+    val output = layout.buildDirectory.file("native/andy-mirror/android/scrcpy-server")
+    inputs.file(source)
+    outputs.file(output)
+    from(source)
+    into(output.get().asFile.parentFile)
+    rename { "scrcpy-server" }
+    doLast {
+        val file = output.get().asFile
+        check(file.isFile && file.length() > 0) { "Pinned scrcpy-server binary is missing at ${source.asFile}" }
+        val digest = providers.exec {
+            commandLine("shasum", "-a", "256", file.absolutePath)
+        }.standardOutput.asText.get().trim().substringBefore(' ')
+        // Official Genymobile scrcpy-server-v4.0 release hash.
+        check(digest == "84924bd564a1eb6089c872c7521f968058977f91f5ff02514a8c74aff3210f3a") {
+            "Pinned scrcpy-server SHA-256 mismatch: $digest"
+        }
+    }
+}
+
+// Release jobs stage signed andy-mirror binaries under native/andy-mirror/dist. Copy every
+// target into the app resources so runtime selection never depends on a user-installed scrcpy.
+tasks.named<Copy>("desktopProcessResources") {
+    dependsOn("buildAndyMirrorJniMacArm64", "buildAndyMirrorJniMacX64", packageAndyMirrorScrcpyServer)
+    from(layout.buildDirectory.file("native/andy-mirror/android/scrcpy-server")) {
+        into("andy-mirror/android")
+    }
+    from(layout.projectDirectory.dir("native/andy-mirror/dist")) {
+        include("**/andy-mirror", "**/andy-mirror.exe", "**/andy-mirror-jni.dylib")
+        into("andy-mirror")
+    }
+    from(layout.buildDirectory.dir("native/andy-mirror")) {
+        include("**/andy-mirror-jni.dylib")
+        into("andy-mirror")
+    }
+}
+
+val buildAndyMirrorJniMacArm64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS arm64 JAWT CAMetalLayer bridge used by the native mirror."
+    val source = layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m")
+    val output = layout.buildDirectory.file("native/andy-mirror/macos-arm64/andy-mirror-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "arm64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "MetalKit",
+        "-framework", "QuartzCore",
+        "-framework", "Metal",
+        "-framework", "VideoToolbox",
+        "-framework", "CoreMedia",
+        "-framework", "CoreVideo",
+        "-L${System.getProperty("java.home")}/lib",
+        "-ljawt",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+// The bridge source contains no arm64-specific code. Build the x64 slice on an Intel macOS
+// release host so an Intel user does not silently lose the accelerated embedded route.
+val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS x64 JAWT CAMetalLayer bridge used by the native mirror."
+    val source = layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m")
+    val output = layout.buildDirectory.file("native/andy-mirror/macos-x86_64/andy-mirror-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("x86_64", "amd64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "x86_64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "MetalKit",
+        "-framework", "QuartzCore",
+        "-framework", "Metal",
+        "-framework", "VideoToolbox",
+        "-framework", "CoreMedia",
+        "-framework", "CoreVideo",
+        "-L${System.getProperty("java.home")}/lib",
+        "-ljawt",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+val verifyAndyMirrorReleaseInputs by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Verifies signed, pinned andy-mirror inputs for every desktop release target."
+    val verifier = layout.projectDirectory.file("tools/andy-mirror/verify_release_inputs.py")
+    val dist = layout.projectDirectory.dir("native/andy-mirror/dist")
+    val sourcePin = layout.projectDirectory.file("native/andy-mirror/SOURCE_PIN.json")
+    inputs.file(verifier)
+    // `dist` intentionally does not exist in source checkouts. Let the verifier produce the
+    // release-facing diagnostic instead of having Gradle reject the optional staging directory
+    // before the task starts.
+    inputs.property("andyMirrorDist", dist.asFile.absolutePath)
+    inputs.file(sourcePin)
+    commandLine(
+        "python3",
+        verifier.asFile.absolutePath,
+        "--dist", dist.asFile.absolutePath,
+        "--source-pin", sourcePin.asFile.absolutePath,
+    )
+}
+
+// Shipping a release without the native executable would turn Auto into an unbounded CPU
+// fallback. Development and test tasks stay runnable without the artifacts; release packaging
+// intentionally does not.
+tasks.matching { it.name.startsWith("packageRelease") }.configureEach {
+    dependsOn(verifyAndyMirrorReleaseInputs)
 }
 
 // Compose Desktop screenshots share one renderer per process. Running them serially

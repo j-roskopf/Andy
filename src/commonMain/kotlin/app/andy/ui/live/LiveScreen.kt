@@ -13,7 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +42,8 @@ import app.andy.onExternalFileDrop
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorRendererMode
+import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.transfer.LocalDropKind
@@ -80,7 +83,12 @@ private fun transferStatusColor(status: String): Color = when {
     else -> TextSecondary
 }
 
-internal fun mirrorVideoConfig(maxSize: String, bitRateMbps: String, maxFps: String): MirrorVideoConfig {
+internal fun mirrorVideoConfig(
+    maxSize: String,
+    bitRateMbps: String,
+    maxFps: String,
+    rendererMode: MirrorRendererMode = MirrorRendererMode.Auto,
+): MirrorVideoConfig {
     val parsedMaxSize = maxSize.toIntOrNull()
     return MirrorVideoConfig(
         maxSize = when (parsedMaxSize) {
@@ -90,7 +98,19 @@ internal fun mirrorVideoConfig(maxSize: String, bitRateMbps: String, maxFps: Str
         },
         bitRate = ((bitRateMbps.toFloatOrNull()?.coerceIn(0.5f, 80f) ?: 4f) * 1_000_000).toInt(),
         maxFps = maxFps.toIntOrNull()?.coerceIn(15, 120) ?: 60,
+        rendererMode = rendererMode,
     )
+}
+
+internal fun MirrorSession.liveTelemetry(): String = buildString {
+    append(backend.decoder)
+    append(" / ")
+    append(backend.renderer)
+    if (backend.isHardwareBacked) append(" · GPU accelerated") else append(" · inline CPU")
+    if (stats.displayedFps > 0f) append(" · ${app.andy.formatDecimal(stats.displayedFps, 1)} fps")
+    if (stats.droppedFrames > 0) append(" · ${stats.droppedFrames} dropped")
+    stats.p95InputToPresentMillis?.let { append(" · ${app.andy.formatDecimal(it, 1)} ms P95") }
+    backend.fallbackReason?.let { append(" · $it") }
 }
 
 @Composable
@@ -116,15 +136,29 @@ internal fun LiveScreen(
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
     val isWeb = services.capabilities.platform == app.andy.service.AndyPlatform.Web
-    var maxSize by remember { mutableStateOf(if (isWeb) "1440" else "720") }
-    var bitRateMbps by remember { mutableStateOf(if (isWeb) "12" else "4") }
+    val acceleratedMirror = services.capabilities.acceleratedMirror
+    val controlsPaneMinHeight = if (acceleratedMirror) 320f else 280f
+    var maxSize by remember { mutableStateOf("1080") }
+    var bitRateMbps by remember { mutableStateOf(if (isWeb) "12" else "8") }
     var maxFps by remember { mutableStateOf("60") }
+    var rendererMode by remember(acceleratedMirror) {
+        mutableStateOf(if (acceleratedMirror) MirrorRendererMode.Auto else MirrorRendererMode.Legacy)
+    }
+    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var bugDialogVisible by remember { mutableStateOf(false) }
     var bugSaveStatus by remember { mutableStateOf("") }
     var liveActionStatus by remember { mutableStateOf("") }
     var clipDialogVisible by remember { mutableStateOf(false) }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
-    var localControlsPaneHeight by remember(controlsPaneHeight) { mutableStateOf(controlsPaneHeight.coerceIn(170f, 360f)) }
+    var localControlsPaneHeight by remember(controlsPaneHeight, controlsPaneMinHeight) {
+        mutableStateOf(controlsPaneHeight.coerceIn(controlsPaneMinHeight, 520f))
+    }
+    LaunchedEffect(controlsPaneMinHeight) {
+        if (localControlsPaneHeight < controlsPaneMinHeight) {
+            localControlsPaneHeight = controlsPaneMinHeight
+            onControlsPaneHeightChange(controlsPaneMinHeight)
+        }
+    }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     fun sendHardware(input: MirrorInput) {
         sendMirrorInput(input)
@@ -170,11 +204,14 @@ internal fun LiveScreen(
         maxSize = size
         bitRateMbps = mbps
         maxFps = fps
-        reconnectMirror(mirrorVideoConfig(size, mbps, fps))
+        reconnectMirror(mirrorVideoConfig(size, mbps, fps, rendererMode))
     }
-    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps)
+    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode)
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
+    }
+    LaunchedEffect(Unit) {
+        services.mirror.session.collectLatest { mirrorSession = it }
     }
     LaunchedEffect(serial, device?.state) {
         if (serial != null && device?.state == DeviceConnectionState.Online) {
@@ -201,14 +238,14 @@ internal fun LiveScreen(
     }
     Row(Modifier.fillMaxSize()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
-            val visibleFrame = frame.takeUnless { bugDialogVisible || clipDialogVisible }
-            val visibleFrameFlow = frameFlow.takeUnless { bugDialogVisible || clipDialogVisible }
+            val dialogsOpen = bugDialogVisible || clipDialogVisible
             LiveDevicePane(
                 serial = serial,
                 device = device,
-                frame = visibleFrame,
-                frameFlow = visibleFrameFlow,
+                frame = frame,
+                frameFlow = frameFlow,
                 mirrorStatus = mirrorStatus,
+                mirrorTelemetry = mirrorSession?.liveTelemetry().orEmpty(),
                 connectResult = connectResult,
                 modifier = Modifier
                     .width(localDevicePaneWidth.dp)
@@ -224,6 +261,7 @@ internal fun LiveScreen(
                 onClipText = { clipDialogVisible = true },
                 onPopOut = onPopOutMirror,
                 showPopOut = !isWeb,
+                surfaceOccluded = dialogsOpen,
                 onInput = sendMirrorInput,
                 onConnect = {
                     reconnectMirror(mirrorConfig())
@@ -236,6 +274,13 @@ internal fun LiveScreen(
         )
         Column(Modifier.fillMaxSize().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             PanelCard(Modifier.fillMaxWidth().height(localControlsPaneHeight.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                 Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold)
                 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -243,6 +288,22 @@ internal fun LiveScreen(
                     FilterPill("1080 edge", maxSize == "1080", Green) { applyPreset("1080", "8") }
                     FilterPill("1440 edge", maxSize == "1440", Yellow) { applyPreset("1440", "12") }
                     FilterPill("Native", maxSize == "0", Rust) { applyPreset("0", "16") }
+                }
+                if (acceleratedMirror) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterPill("Auto", rendererMode == MirrorRendererMode.Auto, Cyan) {
+                            rendererMode = MirrorRendererMode.Auto
+                            reconnectMirror(mirrorConfig())
+                        }
+                        FilterPill("GPU", rendererMode == MirrorRendererMode.Accelerated, Green) {
+                            rendererMode = MirrorRendererMode.Accelerated
+                            reconnectMirror(mirrorConfig())
+                        }
+                        FilterPill("CPU", rendererMode == MirrorRendererMode.Legacy, Rust) {
+                            rendererMode = MirrorRendererMode.Legacy
+                            reconnectMirror(mirrorConfig())
+                        }
+                    }
                 }
                 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -256,6 +317,19 @@ internal fun LiveScreen(
                     }
                 }
                 Text("Max edge is the stream's longest side; 0 keeps the device's native resolution.", color = TextSecondary, fontSize = 10.sp)
+                Text(
+                    if (acceleratedMirror) {
+                        if (isWeb) {
+                            "Auto uses WebCodecs/WebGL when the browser verifies hardware, otherwise CPU. GPU never falls back."
+                        } else {
+                            "Auto uses inline Metal when available and falls back to CPU. GPU never falls back."
+                        }
+                    } else {
+                        "This platform uses CPU presentation until a native GPU mirror is available."
+                    },
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                )
                 Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
@@ -288,9 +362,10 @@ internal fun LiveScreen(
                 if (bugSaveStatus.isNotBlank()) {
                     Text(bugSaveStatus, color = Rust, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                }
             }
             HorizontalPaneDivider(
-                onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(170f, 520f) },
+                onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(controlsPaneMinHeight, 520f) },
                 onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
             )
             LogcatPanel(
@@ -333,38 +408,6 @@ internal fun LiveScreen(
             },
         )
     }
-}
-
-@Composable
-internal fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureDraft) -> Unit) {
-    var title by remember { mutableStateOf("Bug capture") }
-    var notes by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Panel,
-        title = { Text("Capture bug", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth(), placeholder = "Crash opening playlist")
-                LabeledField("Notes / repro steps", notes, { notes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 120.dp, placeholder = "What happened? What should have happened?")
-                Text("Saves the last 30 seconds of Andy actions, live video, and logcat.", color = TextSecondary, fontSize = 12.sp)
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(BugCaptureDraft(title, notes)) },
-                enabled = title.trim().isNotBlank(),
-                colors = primaryButtonColors(),
-            ) {
-                Text("Save bug")
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
-    )
 }
 
 @Composable

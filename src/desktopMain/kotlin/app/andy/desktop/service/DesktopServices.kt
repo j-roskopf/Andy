@@ -9,10 +9,12 @@ import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.model.AgentKind
 import app.andy.desktop.updates.DesktopAppUpdateService
 import app.andy.service.AndyServices
+import app.andy.service.PlatformCapabilities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -86,5 +88,8 @@ fun createDesktopServices(): AndyServices {
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = agentRuns,
+        capabilities = PlatformCapabilities.Desktop.copy(
+            acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
+        ),
     )
 }

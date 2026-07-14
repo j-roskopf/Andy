@@ -41,9 +41,9 @@ class DesktopMirrorEngineDeviceSmokeTest {
                 println("mirror-status: $status")
             }
         }
-        val startedAt = System.nanoTime()
         var firstFrame: MirrorFrame? = null
         var lastFrame: MirrorFrame
+        var streamingStartedAt = 0L
         try {
             firstFrame = try {
                 withTimeout(12_000) {
@@ -54,6 +54,10 @@ class DesktopMirrorEngineDeviceSmokeTest {
             }
             writeFramePng(firstFrame, File("build/reports/andy-mirror-smoke/first-frame.png"))
             lastFrame = firstFrame
+            // Connection, device encoder startup, and first-frame decode are not presentation
+            // throughput. Measure the active stream below so a valid CPU fallback is not
+            // rejected merely because an emulator took time to start its encoder.
+            streamingStartedAt = System.nanoTime()
             val motionJob = launch {
                 while (isActive) {
                     services.mirror.sendInput(MirrorInput.Swipe(900, 1400, 180, 1400, 250))
@@ -77,8 +81,8 @@ class DesktopMirrorEngineDeviceSmokeTest {
             services.mirror.disconnect()
         }
 
-        val elapsedSeconds = (System.nanoTime() - startedAt) / 1_000_000_000.0
-        val decodedFps = lastFrame.frameNumber / elapsedSeconds
+        val elapsedSeconds = (System.nanoTime() - streamingStartedAt) / 1_000_000_000.0
+        val decodedFps = (lastFrame.frameNumber - firstFrame.frameNumber).coerceAtLeast(0) / elapsedSeconds
         println("mirror-smoke decodedFps=%.1f firstFrame=${firstFrame.frameNumber} lastFrame=${lastFrame.frameNumber}".format(decodedFps))
         assertTrue(decodedFps >= 10.0, "Expected at least 10 decoded fps, got %.1f fps".format(decodedFps))
         assertTrue(lastFrame.decodedFps != null && lastFrame.decodedFps >= 1f, "Expected in-app decoded FPS telemetry, got ${lastFrame.decodedFps}")

@@ -84,6 +84,7 @@ class DesktopAvdService(
         val running = runningEmulatorNames()
         return avds.map { avd ->
             val config = avd.config.ifEmpty { loadAvdConfig(avd).orEmpty() }
+            val graphics = emulatorGraphicsInfo(emulatorLaunchLogFile(avd.name))
             avd.copy(
                 running = running.any { namesMatch(it, avd.name) },
                 apiLevel = avd.apiLevel
@@ -94,6 +95,9 @@ class DesktopAvdService(
                     AndroidParsers.classifyVirtualDevice(avd.name, avd.target.orEmpty(), config)
                 },
                 config = config,
+                graphicsBackend = graphics?.backend,
+                graphicsRenderer = graphics?.renderer,
+                graphicsSoftwareRendered = graphics?.softwareRendered == true,
             )
         }
     }
@@ -149,9 +153,18 @@ class DesktopAvdService(
             val logFile = emulatorLaunchLogFile(name)
             ProcessBuilder(emulatorStudioStyleLaunchCommand(emulator, name, extraArgs, ports))
                 .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+                // A log describes one launch only. Appending would let a stale renderer from a
+                // previous launch be reported as the renderer selected for this process.
+                .redirectOutput(ProcessBuilder.Redirect.to(logFile))
                 .start()
-            CommandResult.success("Starting $name with hidden emulator window and local gRPC control on ${ports.grpc}")
+            val graphics = awaitEmulatorGraphicsInfo(logFile)
+            val graphicsSummary = graphics?.let { info ->
+                buildString {
+                    append("; graphics backend ${info.backend}")
+                    info.renderer?.let { append(" ($it)") }
+                }
+            }.orEmpty()
+            CommandResult.success("Starting $name with hidden emulator window and local gRPC control on ${ports.grpc}$graphicsSummary")
         }
     }
 
@@ -521,6 +534,51 @@ class DesktopAvdService(
             file.parentFile?.mkdirs()
         }
     }
+
+    private suspend fun awaitEmulatorGraphicsInfo(logFile: File): EmulatorGraphicsInfo? {
+        repeat(15) {
+            emulatorGraphicsInfo(logFile)?.let { return it }
+            delay(100)
+        }
+        return null
+    }
+}
+
+internal data class EmulatorGraphicsInfo(
+    val backend: String,
+    val renderer: String? = null,
+    val softwareRendered: Boolean = false,
+)
+
+/**
+ * `-gpu auto` is a request, not proof of host acceleration. gfxstream may resolve to
+ * SwiftShader, swangle, lavapipe, or llvmpipe, all of which must be reported as software.
+ */
+internal fun emulatorGraphicsAreSoftware(backend: String, renderer: String?): Boolean {
+    val description = listOfNotNull(backend, renderer).joinToString(" ").lowercase()
+    return listOf("swiftshader", "swangle", "lavapipe", "llvmpipe", "software").any(description::contains)
+}
+
+/**
+ * The emulator writes these after resolving `-gpu auto`. Keep the last occurrence because
+ * a single launch may recreate its renderer while booting.
+ */
+internal fun emulatorGraphicsInfo(logFile: File): EmulatorGraphicsInfo? {
+    if (!logFile.isFile) return null
+    val lines = runCatching { logFile.useLines { it.toList() } }.getOrNull() ?: return null
+    val backend = lines.asReversed().firstNotNullOfOrNull { line ->
+        Regex("""Graphics backend:\s*(.+)""", RegexOption.IGNORE_CASE).find(line)
+            ?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+    } ?: return null
+    val renderer = lines.asReversed().firstNotNullOfOrNull { line ->
+        Regex("""(?:GPU Renderer=\[|Graphics Adapter\s+)(.+?)(?:])?$""", RegexOption.IGNORE_CASE).find(line)
+            ?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+    return EmulatorGraphicsInfo(
+        backend = backend,
+        renderer = renderer,
+        softwareRendered = emulatorGraphicsAreSoftware(backend, renderer),
+    )
 }
 
 internal data class EmulatorLaunchPorts(

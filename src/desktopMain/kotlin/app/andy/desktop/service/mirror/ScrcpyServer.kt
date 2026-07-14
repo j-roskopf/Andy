@@ -12,20 +12,18 @@ internal object ScrcpyServerLocator {
         val envPath = System.getenv("SCRCPY_SERVER_PATH")?.takeIf { it.isNotBlank() }?.let(::File)
         if (envPath != null && envPath.isFile) return envPath
 
-        bundledServer()?.let { return it }
-
-        val candidates = listOf(
-            "/opt/homebrew/Cellar/scrcpy/4.0/share/scrcpy/scrcpy-server",
-            "/opt/homebrew/share/scrcpy/scrcpy-server",
-            "/usr/local/share/scrcpy/scrcpy-server",
-            "/Applications/scrcpy/scrcpy-server",
-        ).map(::File)
-        return candidates.firstOrNull { it.isFile }
+        // Mirroring must not depend on a developer's Homebrew or application install. The
+        // server is copied from Andy's own resources, and an explicit environment override is
+        // reserved for local protocol/codec development.
+        return bundledServer()
     }
 
     private fun bundledServer(): File? {
-        val target = File(System.getProperty("user.home"), ".andy/scrcpy/scrcpy-server")
-        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server") ?: return null
+        val target = File(System.getProperty("user.home"), ".andy/scrcpy/andy-scrcpy-server-v4")
+        // Prefer the pinned release binary under scrcpy/; andy-mirror/android is a legacy alias.
+        val resource = javaClass.classLoader.getResourceAsStream("scrcpy/scrcpy-server")
+            ?: javaClass.classLoader.getResourceAsStream("andy-mirror/android/scrcpy-server")
+            ?: return null
         target.parentFile.mkdirs()
         try {
             resource.use { input ->
@@ -145,4 +143,3 @@ internal object ScrcpyControlMessage {
         this[offset + 7] = (value and 0xff).toByte()
     }
 }
-

@@ -28,8 +28,11 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -49,6 +52,7 @@ import app.andy.domain.BugPointerEvent
 import app.andy.service.BugService
 import app.andy.service.MirrorFrame
 import app.andy.ui.components.Button
+import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.DetailRow
 import app.andy.ui.components.DetailSection
 import app.andy.ui.components.EmptyState
@@ -56,6 +60,7 @@ import app.andy.ui.components.FilterPill
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
+import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.live.fittedRect
@@ -68,6 +73,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 @Composable
@@ -75,6 +81,7 @@ internal fun BugsScreen(bugs: BugService) {
     val scope = rememberCoroutineScope()
     val state = remember(bugs) { BugsScreenState(bugs) }
     val stepsListState = rememberLazyListState()
+    var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
 
     fun refreshReports() {
         scope.launch {
@@ -106,7 +113,8 @@ internal fun BugsScreen(bugs: BugService) {
         val runId = state.playbackRunId
         state.playbackFrame = null
         try {
-            state.bugs.playbackFrames(id, state.playbackStartFrameIndex).collect { frame ->
+            // Drop queued frames when Compose can't paint full capture FPS — keeps real-time feel.
+            state.bugs.playbackFrames(id, state.playbackStartFrameIndex).conflate().collect { frame ->
                 state.playbackFrame = frame
                 state.playbackFrameIndex = frame.frameNumber.toInt().coerceAtLeast(1) - 1
                 state.isInspectingPlayback = true
@@ -195,11 +203,17 @@ internal fun BugsScreen(bugs: BugService) {
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
-                            scope.launch {
-                                state.bugs.deleteBug(report.id)
-                                state.status = "Deleted ${report.title}"
-                                state.selectedId = null
-                                refreshReports()
+                            pendingConfirmation = PendingConfirmation(
+                                title = "Delete bug report?",
+                                message = "\"${report.title}\" will be permanently deleted.",
+                                confirmLabel = "Delete",
+                            ) {
+                                scope.launch {
+                                    state.bugs.deleteBug(report.id)
+                                    state.status = "Deleted ${report.title}"
+                                    state.selectedId = null
+                                    refreshReports()
+                                }
                             }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
@@ -347,6 +361,16 @@ internal fun BugsScreen(bugs: BugService) {
                 }
             }
         }
+    }
+    pendingConfirmation?.let { confirmation ->
+        ConfirmationDialog(
+            confirmation = confirmation,
+            onDismiss = { pendingConfirmation = null },
+            onConfirm = {
+                pendingConfirmation = null
+                confirmation.onConfirm()
+            },
+        )
     }
 }
 

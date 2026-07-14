@@ -11,20 +11,27 @@ import app.andy.desktop.service.emulator.readEmulatorGrpcToken
 import app.andy.model.DeviceConnectionState
 import app.andy.service.CommandResult
 import app.andy.service.MirrorEngine
+import app.andy.service.MirrorBackend
+import app.andy.service.MirrorBackendKind
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorRendererMode
+import app.andy.service.MirrorSession
+import app.andy.service.MirrorStats
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import app.andy.service.EncodedVideoAccessUnit
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext
-import org.bytedeco.ffmpeg.avcodec.AVCodecParserContext
 import org.bytedeco.ffmpeg.avcodec.AVPacket
 import org.bytedeco.ffmpeg.avutil.AVFrame
 import org.bytedeco.ffmpeg.global.avcodec
@@ -36,6 +43,8 @@ import org.bytedeco.javacpp.IntPointer
 import org.bytedeco.javacpp.PointerPointer
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.EOFException
 import java.io.File
 import java.net.ServerSocket
 import java.net.Socket
@@ -47,10 +56,62 @@ import kotlin.random.Random
 
 private const val EMULATOR_DISPLAY_SIZE_SETTLE_NANOS = 60_000_000_000L
 private const val EMULATOR_DISPLAY_SIZE_REFRESH_MIN_NANOS = 1_000_000_000L
+private const val NATIVE_HOST_WAIT_NANOS = 750_000_000L
+private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
+private const val SCRCPY_FRAME_HEADER_BYTES = 12
+private const val MAX_SCRCPY_FRAME_BYTES = 16 * 1024 * 1024
 private val EMULATOR_WM_SIZE_REGEX = Regex("""(?:Physical|Override) size:\s*(\d+)x(\d+)""")
 
 internal data class EmulatorDisplaySize(val width: Int, val height: Int)
 internal data class EmulatorTouchPoint(val x: Int, val y: Int)
+internal data class ScrcpySessionFrame(val width: Int, val height: Int, val clientResized: Boolean)
+
+/** Extracts the big-endian payload length from scrcpy's 8-byte PTS/flags + 4-byte-size header. */
+internal fun scrcpyFramePayloadSize(header: ByteArray): Int {
+    require(header.size == SCRCPY_FRAME_HEADER_BYTES) { "Expected a $SCRCPY_FRAME_HEADER_BYTES-byte scrcpy frame header" }
+    require(!scrcpyFrameIsSession(header)) { "A scrcpy session header has no payload" }
+    val size = ((header[8].toInt() and 0xff) shl 24) or
+        ((header[9].toInt() and 0xff) shl 16) or
+        ((header[10].toInt() and 0xff) shl 8) or
+        (header[11].toInt() and 0xff)
+    require(size in 0..MAX_SCRCPY_FRAME_BYTES) { "Invalid scrcpy frame size: $size" }
+    return size
+}
+
+/** A metadata-only packet that announces the video size; it is never an H.264 access unit. */
+internal fun scrcpyFrameIsSession(header: ByteArray): Boolean {
+    require(header.size == SCRCPY_FRAME_HEADER_BYTES) { "Expected a $SCRCPY_FRAME_HEADER_BYTES-byte scrcpy frame header" }
+    return header[0].toInt() and 0x80 != 0
+}
+
+internal fun scrcpySessionFrame(header: ByteArray): ScrcpySessionFrame {
+    require(scrcpyFrameIsSession(header)) { "Expected a scrcpy session header" }
+    fun readUint32(offset: Int): Int =
+        ((header[offset].toInt() and 0xff) shl 24) or
+            ((header[offset + 1].toInt() and 0xff) shl 16) or
+            ((header[offset + 2].toInt() and 0xff) shl 8) or
+            (header[offset + 3].toInt() and 0xff)
+    val width = readUint32(4)
+    val height = readUint32(8)
+    require(width > 0 && height > 0) { "Invalid scrcpy session size: ${width}x${height}" }
+    return ScrcpySessionFrame(width, height, header[3].toInt() and 1 != 0)
+}
+
+/**
+ * Scales a physical display size to the scrcpy `max_size` edge. `maxSize <= 0` means native
+ * (unlimited), matching scrcpy's `max_size=0` contract. Treating 0 as a real limit previously
+ * collapsed the metadata frame to 2x2 and made GPU touch mapping a no-op.
+ */
+internal fun scaledCaptureSize(sourceWidth: Int, sourceHeight: Int, maxSize: Int): Pair<Int, Int> {
+    val longestSide = maxOf(sourceWidth, sourceHeight).coerceAtLeast(1)
+    val scale = when {
+        maxSize <= 0 -> 1.0
+        longestSide > maxSize -> maxSize.toDouble() / longestSide
+        else -> 1.0
+    }
+    fun evenAtLeast(value: Int, minimum: Int): Int = maxOf(minimum, value and -2)
+    return evenAtLeast((sourceWidth * scale).toInt(), 2) to evenAtLeast((sourceHeight * scale).toInt(), 2)
+}
 
 private fun MirrorInput.usesTouchCoordinates(): Boolean = when (this) {
     is MirrorInput.Touch,
@@ -84,6 +145,34 @@ internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): Int
     return pixels
 }
 
+/**
+ * Apply the one low-latency encoder key that the Qualcomm Codec2 stack exposes explicitly.
+ *
+ * The server accepts arbitrary MediaFormat keys, so this must be limited to Qualcomm devices.
+ * An explicit developer override remains authoritative, including an explicit `=0` opt-out.
+ */
+internal fun videoCodecOptionsForDevice(
+    socManufacturer: String?,
+    override: String?,
+): String? {
+    val options = override
+        ?.split(',')
+        ?.map(String::trim)
+        ?.filter(String::isNotEmpty)
+        ?.toMutableList()
+        ?: mutableListOf()
+    val isQualcomm = socManufacturer
+        ?.trim()
+        ?.lowercase()
+        ?.let { it == "qti" || it == "qualcomm" }
+        ?: false
+    val lowLatencyKey = "vendor.qti-ext-enc-low-latency.enable"
+    if (isQualcomm && options.none { it.substringBefore('=').trim() == lowLatencyKey }) {
+        options += "$lowLatencyKey=1"
+    }
+    return options.takeIf { it.isNotEmpty() }?.joinToString(",")
+}
+
 internal fun scaledEmulatorTouchPoint(
     x: Int,
     y: Int,
@@ -108,8 +197,20 @@ class DesktopMirrorEngine(
     private val runner: CommandRunner,
     private val devices: DesktopDeviceService,
 ) : MirrorEngine {
+    override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
     override val status = MutableStateFlow("Ready for embedded mirror")
+    private val encodedVideoFlow = MutableSharedFlow<EncodedVideoAccessUnit>(
+        // ~30s at 60fps so bug capture can keep the rolling window without DROP_OLDEST gaps.
+        extraBufferCapacity = 1_800,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+    )
+    override val encodedVideo: SharedFlow<EncodedVideoAccessUnit> = encodedVideoFlow
+
+    /** Best-effort emit for bug capture; never blocks the live decode path. */
+    private fun publishEncodedVideo(unit: EncodedVideoAccessUnit) {
+        encodedVideoFlow.tryEmit(unit)
+    }
     private var videoJob: Job? = null
     private var videoProcess: Process? = null
     private var controlSocket: Socket? = null
@@ -120,10 +221,12 @@ class DesktopMirrorEngine(
     private var connectedConfig: MirrorVideoConfig? = null
     private var connectedAtNanos: Long = 0L
     private var lastEmulatorDisplaySizeRefreshNanos: Long = 0L
+    private var nativeHost: java.awt.Canvas? = null
+    private var nativeCompanion: AndyMirrorProcess? = null
     private val controlLock = Any()
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
-        if (connectedSerial == serial && connectedConfig == config && videoJob?.isActive == true) {
+        if (connectedSerial == serial && connectedConfig == config && (videoJob?.isActive == true || nativeCompanion != null)) {
             return CommandResult.success("Embedded mirror already connected for $serial")
         }
         disconnect()
@@ -133,21 +236,68 @@ class DesktopMirrorEngine(
         lastEmulatorDisplaySizeRefreshNanos = 0L
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
-        if (serial.isEmulatorSerial()) {
-            val grpcPort = serial.emulatorConsolePort()?.plus(3000)
-                ?: return CommandResult.failure("Unable to resolve emulator gRPC port for $serial")
-            val token = readEmulatorGrpcToken(grpcPort)
-            val client = EmulatorGrpcClient("127.0.0.1", grpcPort, token, readEmulatorDisplaySize(adb, serial))
-            emulatorGrpcClient = client
-            status.value = "Starting emulator gRPC mirror for $serial on port $grpcPort"
-            videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                runEmulatorGrpcVideoLoop(adb, serial, client, config)
-            }
-            return CommandResult.success("Emulator gRPC mirror starting for $serial")
+        // SwingPanel realizes its AWT child just after the Compose tree commits. Connection is
+        // also started from a LaunchedEffect, so probe briefly instead of racing that lifecycle
+        // and permanently selecting the CPU path for an otherwise supported Live surface.
+        val host = if (config.rendererMode != MirrorRendererMode.Legacy && NativeMirrorJni.isEmbeddedPresentationSupported()) {
+            awaitNativeHost()
+        } else {
+            null
         }
+        var nativeAvailable = host != null
+        val companionFailure = startPackagedCompanionIfNeeded(serial, config, nativeAvailable)
+        val unavailableReason = listOfNotNull(
+            NativeMirrorJni.embeddedPresentationFailureReason()
+                .takeIf {
+                    config.rendererMode != MirrorRendererMode.Legacy &&
+                        !nativeAvailable &&
+                        !NativeMirrorJni.isEmbeddedPresentationSupported()
+                },
+            companionFailure,
+        ).distinct().joinToString("; ").ifBlank { acceleratedUnavailableReason() }
+        if (nativeCompanion != null) {
+            return CommandResult.success("Andy native mirror companion starting for $serial")
+        }
+        if (config.rendererMode == MirrorRendererMode.Accelerated && !nativeAvailable) {
+            val reason = unavailableReason
+            session.value = MirrorSession(
+                serial = serial,
+                requestedMode = config.rendererMode,
+                backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason),
+                failureReason = reason,
+            )
+            status.value = "Accelerated mirror unavailable · $reason"
+            return CommandResult.failure(status.value)
+        }
+        var useNativeRenderer = config.rendererMode != MirrorRendererMode.Legacy && nativeAvailable
+        if (useNativeRenderer && host != null) {
+            // Product GPU path: borderless Metal surface letterboxed over the Live Canvas.
+            if (!NativeMirrorJni.openMetalInlineOverlay(host)) {
+                val reason = "VideoToolbox/Metal inline overlay initialization failed"
+                if (config.rendererMode == MirrorRendererMode.Accelerated) {
+                    session.value = MirrorSession(
+                        serial = serial,
+                        requestedMode = config.rendererMode,
+                        backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason),
+                        failureReason = reason,
+                    )
+                    status.value = "Accelerated mirror unavailable · $reason"
+                    return CommandResult.failure(status.value)
+                }
+                useNativeRenderer = false
+            } else {
+                nativeHost = host
+            }
+        }
+        val fallbackReason = if (!useNativeRenderer && config.rendererMode == MirrorRendererMode.Auto) {
+            "$unavailableReason; using legacy CPU presentation"
+        } else {
+            null
+        }
+        if (!useNativeRenderer) publishLegacySession(serial, config, fallbackReason = fallbackReason)
         val scrcpyServer = ScrcpyServerLocator.find()
-            ?: return CommandResult.failure("scrcpy-server not found. Andy bundles it for packaged builds; for development, install scrcpy with `brew install scrcpy` or set SCRCPY_SERVER_PATH.")
-        status.value = "Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)"
+            ?: return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
+        status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
         videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             runNativeVideoLoop(adb, serial, scrcpyServer, config)
         }
@@ -166,6 +316,10 @@ class DesktopMirrorEngine(
         }
         emulatorGrpcClient?.close()
         emulatorGrpcClient = null
+        nativeCompanion?.close()
+        nativeCompanion = null
+        NativeMirrorJni.destroyPresentation()
+        nativeHost = null
         videoProcess?.destroyForcibly()
         videoProcess = null
         videoForwardPort?.let { port ->
@@ -182,10 +336,18 @@ class DesktopMirrorEngine(
         // in-flight frame can't win the race and leave a frozen image on screen.
         job?.let { runCatching { it.join() } }
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
+        session.value = null
         status.value = "Disconnected"
     }
 
     override suspend fun sendInput(input: MirrorInput): CommandResult {
+        nativeCompanion?.let { companion ->
+            return if (companion.input(input)) {
+                CommandResult.success("Input sent to andy-mirror")
+            } else {
+                CommandResult.failure(companion.failureReason ?: "andy-mirror is not accepting input")
+            }
+        }
         emulatorGrpcClient?.let { client ->
             // Run the blocking gRPC touch RPC off the Compose UI dispatcher so dragging
             // stays as smooth as Android Studio instead of stalling the event thread.
@@ -250,6 +412,13 @@ class DesktopMirrorEngine(
             synchronized(controlLock) {
                 messages.forEach(output::write)
                 output.flush()
+                // Start the host-input measurement at the point the command has actually
+                // entered the scrcpy control socket. Recording it before serialization or a
+                // contended control lock would inflate the end-to-end result with host-side
+                // queuing that has not yet injected anything into Android.
+                if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
+                    NativeMirrorJni.recordInput()
+                }
             }
             CommandResult.success("Input sent")
         }.getOrElse { error ->
@@ -261,6 +430,184 @@ class DesktopMirrorEngine(
             }
             CommandResult.failure("scrcpy control failed: ${error.message ?: error::class.simpleName}")
         }
+    }
+
+    private fun publishLegacySession(serial: String, config: MirrorVideoConfig, fallbackReason: String?) {
+        session.value = MirrorSession(
+            serial = serial,
+            requestedMode = config.rendererMode,
+            backend = MirrorBackend(
+                kind = MirrorBackendKind.LegacyCpu,
+                decoder = "FFmpeg software decode",
+                renderer = "Swing BufferedImage",
+                fallbackReason = fallbackReason,
+            ),
+            failureReason = fallbackReason,
+        )
+    }
+
+    private fun publishNativeSession(serial: String, config: MirrorVideoConfig) {
+        session.value = MirrorSession(
+            serial = serial,
+            requestedMode = config.rendererMode,
+            backend = MirrorBackend(
+                kind = MirrorBackendKind.NativeHardware,
+                decoder = "VideoToolbox H.264",
+                renderer = "Metal",
+            ),
+        )
+    }
+
+    private fun publishCpuFrame(frame: MirrorFrame) {
+        frames.value = frame
+        val active = session.value ?: return
+        session.value = active.copy(
+            stats = active.stats.copy(
+                displayedFps = frame.displayedFps ?: frame.decodedFps ?: active.stats.displayedFps,
+                decodedFps = frame.decodedFps ?: active.stats.decodedFps,
+                framesPresented = frame.frameNumber.coerceAtLeast(active.stats.framesPresented),
+            ),
+            width = frame.width,
+            height = frame.height,
+        )
+    }
+
+    private fun legacyStatus(message: String): String = buildString {
+        append(message)
+        session.value?.backend?.fallbackReason?.let { append(" · $it") }
+    }
+
+    private fun acceleratedUnavailableReason(): String = when {
+        !NativeMirrorJni.isEmbeddedPresentationSupported() -> NativeMirrorJni.embeddedPresentationFailureReason()
+        !NativeMirrorJni.isAvailable() -> "This desktop platform has no packaged VideoToolbox/Metal native mirror bridge"
+        NativeMirrorHostRegistry.current() == null -> "No realized native mirror host is available"
+        else -> "The native mirror backend could not initialize"
+    }
+
+    /** Starts a staged product companion when this process cannot own a JAWT surface. */
+    private suspend fun startPackagedCompanionIfNeeded(
+        serial: String,
+        config: MirrorVideoConfig,
+        hasInProcessNativeHost: Boolean,
+    ): String? {
+        if (config.rendererMode == MirrorRendererMode.Legacy || hasInProcessNativeHost) return null
+        val executable = AndyMirrorBinaryLocator.find() ?: return "No packaged andy-mirror companion is available"
+        val adb = devices.adbPath() ?: return "ADB not found for the packaged andy-mirror companion"
+        val server = ScrcpyServerLocator.find()
+            ?: return "Andy’s bundled scrcpy server is missing for the packaged andy-mirror companion"
+        // AndyMirrorProcess reads stdout asynchronously. Do not expose any early `ready` event
+        // to the UI until its decoder and renderer claims have both passed this contract's
+        // verification. Otherwise a renderer-only process could briefly look accelerated.
+        val eventLock = Any()
+        val pendingEvents = mutableListOf<AndyMirrorEvent>()
+        var accepted = false
+        val companion = AndyMirrorProcess(
+            executable = executable,
+            onEvent = { event ->
+                synchronized(eventLock) {
+                    if (accepted) {
+                        publishCompanionEvent(serial, config, event)
+                    } else {
+                        pendingEvents += event
+                    }
+                }
+            },
+            environment = mapOf(
+                "ANDY_MIRROR_ADB_PATH" to adb,
+                "ANDY_MIRROR_SCRCPY_SERVER_PATH" to server.absolutePath,
+            ),
+        )
+        val ready = runCatching { companion.start(serial, config) }.getOrElse { error ->
+            companion.close()
+            return "Unable to launch packaged andy-mirror: ${error.message ?: error::class.simpleName}"
+        }
+        val reason = ready?.failureReason ?: companion.failureReason
+        if (ready?.isVerifiedHardwareReady() != true) {
+            companion.close()
+            return reason ?: "andy-mirror did not verify named hardware decoder and hardware renderer"
+        }
+        // A child process cannot reuse the JVM's JAWT surface. Its portable hand-off is an
+        // owned pop-out, which is also the only valid presentation route on Wayland.
+        if (!companion.attach("popout")) {
+            val attachFailure = companion.failureReason ?: "andy-mirror rejected the pop-out attachment"
+            companion.close()
+            return attachFailure
+        }
+        synchronized(eventLock) {
+            nativeCompanion = companion
+            accepted = true
+            pendingEvents.forEach { publishCompanionEvent(serial, config, it) }
+            pendingEvents.clear()
+        }
+        return null
+    }
+
+    private fun publishCompanionEvent(serial: String, config: MirrorVideoConfig, event: AndyMirrorEvent) {
+        when (event.type) {
+            "ready", "stats" -> {
+                val existing = session.value
+                val backend = existing?.backend ?: MirrorBackend(
+                    kind = MirrorBackendKind.NativeHardware,
+                    decoder = event.decoder ?: "Native hardware decoder",
+                    renderer = event.renderer ?: "Native renderer",
+                )
+                if (
+                    event.hardwareBacked == false ||
+                    event.decoderHardwareBacked == false ||
+                    event.rendererHardwareBacked == false
+                ) {
+                    session.value = MirrorSession(
+                        serial = serial,
+                        requestedMode = config.rendererMode,
+                        backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = "andy-mirror reported an unverified decoder or renderer"),
+                        failureReason = "andy-mirror reported an unverified decoder or renderer",
+                    )
+                    status.value = "Andy native mirror rejected its unverified decoder or renderer"
+                    return
+                }
+                session.value = MirrorSession(
+                    serial = serial,
+                    requestedMode = config.rendererMode,
+                    backend = backend.copy(
+                        decoder = event.decoder ?: backend.decoder,
+                        renderer = event.renderer ?: backend.renderer,
+                    ),
+                    stats = MirrorStats(
+                        displayedFps = event.displayedFps ?: existing?.stats?.displayedFps ?: 0f,
+                        decodedFps = event.decodedFps ?: existing?.stats?.decodedFps ?: 0f,
+                        droppedFrames = event.droppedFrames ?: existing?.stats?.droppedFrames ?: 0L,
+                        framesPresented = event.framesPresented ?: existing?.stats?.framesPresented ?: 0L,
+                        p95InputToPresentMillis = event.p95InputToPresentMillis ?: existing?.stats?.p95InputToPresentMillis,
+                    ),
+                    width = event.width ?: existing?.width ?: 0,
+                    height = event.height ?: existing?.height ?: 0,
+                )
+                if (event.width != null && event.height != null) {
+                    frames.value = MirrorFrame(event.width, event.height, IntArray(0), frameNumber = event.framesPresented ?: 1)
+                }
+                status.value = "Andy native mirror ${event.decoder ?: backend.decoder} / ${event.renderer ?: backend.renderer}"
+            }
+            "failure" -> {
+                val reason = event.failureReason ?: "andy-mirror failed without a reason"
+                session.value = MirrorSession(
+                    serial = serial,
+                    requestedMode = config.rendererMode,
+                    backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason),
+                    failureReason = reason,
+                )
+                status.value = "Andy native mirror failed · $reason"
+            }
+        }
+    }
+
+    private suspend fun awaitNativeHost(): java.awt.Canvas? {
+        NativeMirrorHostRegistry.current()?.let { return it }
+        val deadline = System.nanoTime() + NATIVE_HOST_WAIT_NANOS
+        while (System.nanoTime() < deadline) {
+            delay(NATIVE_HOST_WAIT_STEP_MILLIS)
+            NativeMirrorHostRegistry.current()?.let { return it }
+        }
+        return null
     }
 
     override suspend fun screenshot(serial: String): ByteArray? {
@@ -325,13 +672,13 @@ class DesktopMirrorEngine(
                     fpsWindowFrame = 0
                     fpsWindowStartedAt = now
                 }
-                frames.value = MirrorFrame(
+                publishCpuFrame(MirrorFrame(
                     width = image.width,
                     height = image.height,
                     argb = emulatorRgb888ToArgb(image.width, image.height, rgb),
                     frameNumber = ++frameNumber,
                     decodedFps = decodedFps.takeIf { it > 0f },
-                )
+                ))
             }
             status.value = "Emulator gRPC video stream ended"
         } catch (cancelled: CancellationException) {
@@ -369,6 +716,14 @@ class DesktopMirrorEngine(
             status.value = "Failed to create adb video tunnel: ${forward.stderr.ifBlank { forward.stdout }.take(180)}"
             return@withContext
         }
+        val socManufacturer = runner.run(
+            listOf(adb, "-s", serial, "shell", "getprop", "ro.soc.manufacturer"),
+            timeoutSeconds = 3,
+        ).stdout.trim()
+        val codecOptions = videoCodecOptionsForDevice(
+            socManufacturer = socManufacturer,
+            override = System.getenv("ANDY_MIRROR_VIDEO_CODEC_OPTIONS"),
+        )?.let { listOf("video_codec_options=$it") }.orEmpty()
         val command = listOf(
             adb,
             "-s", serial,
@@ -382,12 +737,17 @@ class DesktopMirrorEngine(
             "tunnel_forward=true",
             "audio=false",
             "cleanup=false",
-            "raw_stream=true",
+            // Preserve each MediaCodec output-buffer boundary. Raw Annex-B requires an extra
+            // parser to rediscover access units, which can hold real-time frames in a queue.
+            "send_device_meta=false",
+            "send_stream_meta=false",
+            "send_frame_meta=true",
+            "send_dummy_byte=false",
             "max_size=${config.maxSize}",
             "video_bit_rate=${config.bitRate}",
             "max_fps=${config.maxFps}",
             "log_level=info",
-        )
+        ) + codecOptions
         var frameNumber = 0L
         var fpsWindowStartedAt = System.nanoTime()
         var fpsWindowFrame = 0L
@@ -410,9 +770,12 @@ class DesktopMirrorEngine(
                 }
             }
         }
-        delay(500)
+        // On physical devices the server may take longer than an emulator to initialize its
+        // localabstract socket. ADB accepts the local TCP connection before that socket exists,
+        // then immediately closes it; waiting here avoids treating that empty stream as a
+        // decoder failure.
+        delay(1_500)
         var socket: Socket? = null
-        var parser: AVCodecParserContext? = null
         var codecContext: AVCodecContext? = null
         var packet: AVPacket? = null
         var frame: AVFrame? = null
@@ -424,73 +787,158 @@ class DesktopMirrorEngine(
                 controlOutput = BufferedOutputStream(controlSocket!!.getOutputStream(), 1024)
             }
             status.value = "scrcpy-server video connected (${captureSize.width}x${captureSize.height})"
-            val codec = avcodec.avcodec_find_decoder(avcodec.AV_CODEC_ID_H264)
-                ?: error("H.264 decoder not available")
-            parser = avcodec.av_parser_init(avcodec.AV_CODEC_ID_H264)
-                ?: error("H.264 parser not available")
-            codecContext = avcodec.avcodec_alloc_context3(codec)
-                ?: error("Unable to allocate H.264 decoder")
-            codecContext.width(captureSize.width)
-            codecContext.height(captureSize.height)
-            if (avcodec.avcodec_open2(codecContext, codec, null as PointerPointer<*>?) < 0) {
-                error("Unable to open H.264 decoder")
+            var usingNativeRenderer = nativeHost != null && config.rendererMode != MirrorRendererMode.Legacy
+            var nativeHardwareVerified = false
+            var nativeStatsWindowStartedAt = System.nanoTime()
+            var nativeStatsWindowFrames = NativeMirrorJni.framesPresented()
+            if (usingNativeRenderer) {
+                // Metadata only: the Canvas needs source dimensions for coordinate mapping while
+                // VideoToolbox/Metal owns the actual pixels.
+                frames.value = MirrorFrame(captureSize.width, captureSize.height, IntArray(0), frameNumber = 1)
+                NativeMirrorJni.setPresentationContentSize(captureSize.width, captureSize.height)
+                status.value = "Native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
             }
-            packet = avcodec.av_packet_alloc()
-                ?: error("Unable to allocate H.264 packet")
-            frame = avutil.av_frame_alloc()
-                ?: error("Unable to allocate H.264 frame")
 
-            val input = BufferedInputStream(socket.getInputStream(), 1 shl 20)
-            val readBuffer = ByteArray(64 * 1024)
+            val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 1 shl 20))
+            val header = ByteArray(SCRCPY_FRAME_HEADER_BYTES)
             while (isActive) {
-                val read = input.read(readBuffer)
-                if (read < 0) break
-                val inputPointer: BytePointer = BytePointer((read + 64).toLong())
-                inputPointer.put(readBuffer, 0, read)
-                repeat(64) { inputPointer.put(read + it.toLong(), 0.toByte()) }
-                inputPointer.position(0)
-                var offset = 0
-                while (offset < read && isActive) {
-                    val output = PointerPointer<BytePointer>(1)
-                    val outputSize = IntPointer(1)
-                    val consumed = avcodec.av_parser_parse2(
-                        parser,
-                        codecContext,
-                        output,
-                        outputSize,
-                        inputPointer.position(offset.toLong()),
-                        read - offset,
-                        avutil.AV_NOPTS_VALUE,
-                        avutil.AV_NOPTS_VALUE,
-                        0,
-                    )
-                    if (consumed < 0) error("Unable to parse H.264 stream")
-                    offset += consumed
-                    if (outputSize.get() > 0) {
-                        packet.data(output.get(BytePointer::class.java))
-                        packet.size(outputSize.get())
-                        val sendResult = avcodec.avcodec_send_packet(codecContext, packet)
-                        avcodec.av_packet_unref(packet)
-                        if (sendResult >= 0) {
-                            val beforeFrameNumber = frameNumber
-                            frameNumber = receiveDecodedFrames(codecContext, frame, swsContext, frameNumber, decodedFps)
-                            swsContext = currentSwsContext
-                            if (frameNumber > beforeFrameNumber) {
-                                fpsWindowFrame += frameNumber - beforeFrameNumber
-                                val now = System.nanoTime()
-                                val elapsedNanos = now - fpsWindowStartedAt
-                                if (elapsedNanos >= 1_000_000_000L) {
-                                    decodedFps = fpsWindowFrame * 1_000_000_000f / elapsedNanos
-                                    fpsWindowFrame = 0
-                                    fpsWindowStartedAt = now
-                                }
+                try {
+                    input.readFully(header)
+                } catch (_: EOFException) {
+                    break
+                }
+                if (scrcpyFrameIsSession(header)) {
+                    val sessionFrame = scrcpySessionFrame(header)
+                    status.value = "scrcpy session ${sessionFrame.width}x${sessionFrame.height}" +
+                        if (sessionFrame.clientResized) " (client resized)" else ""
+                    // Keep touch-mapping metadata aligned with the live stream size. This matters
+                    // most for max_size=0 (native), where the initial estimate must match the
+                    // encoder output or scrcpy control injects into a tiny coordinate space.
+                    if (usingNativeRenderer) {
+                        frames.value = MirrorFrame(
+                            sessionFrame.width,
+                            sessionFrame.height,
+                            IntArray(0),
+                            frameNumber = frames.value.frameNumber.coerceAtLeast(1),
+                        )
+                        NativeMirrorJni.setPresentationContentSize(sessionFrame.width, sessionFrame.height)
+                    }
+                    // Session headers are exactly 12 bytes. Treating their height field as a
+                    // payload size consumes the next H.264 access unit and desynchronizes the
+                    // stream, which is especially visible on Android Emulator startup.
+                    continue
+                }
+                val payloadSize = scrcpyFramePayloadSize(header)
+                val payload = ByteArray(payloadSize)
+                try {
+                    input.readFully(payload)
+                } catch (_: EOFException) {
+                    break
+                }
+                val streamWidth = frames.value.width.coerceAtLeast(captureSize.width)
+                val streamHeight = frames.value.height.coerceAtLeast(captureSize.height)
+                publishEncodedVideo(
+                    EncodedVideoAccessUnit(
+                        timestampMillis = System.currentTimeMillis(),
+                        bytes = payload.copyOf(),
+                        width = streamWidth,
+                        height = streamHeight,
+                    ),
+                )
+                if (usingNativeRenderer) {
+                    NativeMirrorJni.recordTransportIngress()
+                    if (!NativeMirrorJni.consumeH264(payload)) {
+                        val reason = "VideoToolbox rejected the H.264 access unit"
+                        if (config.rendererMode == MirrorRendererMode.Accelerated) error(reason)
+                        usingNativeRenderer = false
+                        NativeMirrorJni.destroyPresentation()
+                        nativeHost = null
+                        publishLegacySession(
+                            serial,
+                            config,
+                            fallbackReason = "$reason; using legacy CPU presentation",
+                        )
+                        status.value = "Native mirror failed; falling back to legacy CPU presentation"
+                    } else {
+                        if (!nativeHardwareVerified && NativeMirrorJni.isHardwareReady()) {
+                            nativeHardwareVerified = true
+                            publishNativeSession(serial, config)
+                            status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
+                        }
+                        val now = System.nanoTime()
+                        val framesPresented = NativeMirrorJni.framesPresented()
+                        val elapsedNanos = now - nativeStatsWindowStartedAt
+                        if (elapsedNanos >= 1_000_000_000L) {
+                            val displayedFps = if (elapsedNanos > 0L) {
+                                (framesPresented - nativeStatsWindowFrames).coerceAtLeast(0) * 1_000_000_000f / elapsedNanos
+                            } else {
+                                0f
+                            }
+                            nativeStatsWindowStartedAt = now
+                            nativeStatsWindowFrames = framesPresented
+                            session.value?.let { active ->
+                                session.value = active.copy(
+                                    stats = active.stats.copy(
+                                        displayedFps = displayedFps,
+                                        decodedFps = displayedFps,
+                                        framesPresented = framesPresented,
+                                        p95InputToPresentMillis = NativeMirrorJni.p95InputToPresentMillis(),
+                                    ),
+                                )
                             }
                         }
                     }
-                    output.close()
-                    outputSize.close()
                 }
-                inputPointer.close()
+                if (!usingNativeRenderer) {
+                    // The JavaCV path is strictly a fallback. Do not even create FFmpeg's
+                    // software codec/parser during a native VideoToolbox/Metal session: that
+                    // avoids competing decoder state and proves the normal path has no JVM
+                    // frame-presentation dependency.
+                    if (codecContext == null || packet == null || frame == null) {
+                        val codec = avcodec.avcodec_find_decoder(avcodec.AV_CODEC_ID_H264)
+                            ?: error("H.264 fallback decoder not available")
+                        codecContext = avcodec.avcodec_alloc_context3(codec)
+                            ?: error("Unable to allocate H.264 fallback decoder")
+                        codecContext.width(captureSize.width)
+                        codecContext.height(captureSize.height)
+                        if (avcodec.avcodec_open2(codecContext, codec, null as PointerPointer<*>?) < 0) {
+                            error("Unable to open H.264 fallback decoder")
+                        }
+                        packet = avcodec.av_packet_alloc()
+                            ?: error("Unable to allocate H.264 fallback packet")
+                        frame = avutil.av_frame_alloc()
+                            ?: error("Unable to allocate H.264 fallback frame")
+                    }
+                    val cpuCodecContext = checkNotNull(codecContext)
+                    val cpuPacket = checkNotNull(packet)
+                    val cpuFrame = checkNotNull(frame)
+                    // `send_frame_meta=true` preserves MediaCodec output-buffer boundaries,
+                    // so every non-session payload is already a complete Annex-B access unit.
+                    // Feeding it directly avoids a second parser queue and accepts a standalone
+                    // SPS/PPS config packet, which FFmpeg's parser may legally report as zero
+                    // consumed while waiting for a later picture.
+                    if (avcodec.av_new_packet(cpuPacket, payload.size) < 0) {
+                        error("Unable to allocate H.264 fallback packet payload")
+                    }
+                    cpuPacket.data().position(0).put(payload, 0, payload.size)
+                    val sendResult = avcodec.avcodec_send_packet(cpuCodecContext, cpuPacket)
+                    avcodec.av_packet_unref(cpuPacket)
+                    if (sendResult >= 0) {
+                        val beforeFrameNumber = frameNumber
+                        frameNumber = receiveDecodedFrames(cpuCodecContext, cpuFrame, swsContext, frameNumber, decodedFps)
+                        swsContext = currentSwsContext
+                        if (frameNumber > beforeFrameNumber) {
+                            fpsWindowFrame += frameNumber - beforeFrameNumber
+                            val now = System.nanoTime()
+                            val elapsedNanos = now - fpsWindowStartedAt
+                            if (elapsedNanos >= 1_000_000_000L) {
+                                decodedFps = fpsWindowFrame * 1_000_000_000f / elapsedNanos
+                                fpsWindowFrame = 0
+                                fpsWindowStartedAt = now
+                            }
+                        }
+                    }
+                }
             }
             val exitCode = runCatching { process.exitValue() }.getOrNull()
             status.value = "Video stream ended${exitCode?.let { " ($it)" }.orEmpty()}"
@@ -511,9 +959,8 @@ class DesktopMirrorEngine(
             swsContext?.let { swscale.sws_freeContext(it) }
             frame?.let { avutil.av_frame_free(it) }
             packet?.let { avcodec.av_packet_free(it) }
-            parser?.let { avcodec.av_parser_close(it) }
             // Avoid avcodec_free_context() here for now. JavaCPP/FFmpeg may crash if
-            // the parser-owned packet pointers are still referenced during teardown.
+            // packet pointers are still referenced during teardown.
             currentDecodedFrameBuffer?.close()
             currentDecodedFrameBuffer = null
             process.destroy()
@@ -564,7 +1011,7 @@ class DesktopMirrorEngine(
                 avutil.av_frame_unref(frame)
                 continue
             }
-            frames.value = MirrorFrame(width, height, bgraToArgb(output.bgra, width * height), ++nextFrameNumber, decodedFps.takeIf { it > 0f })
+            publishCpuFrame(MirrorFrame(width, height, bgraToArgb(output.bgra, width * height), ++nextFrameNumber, decodedFps.takeIf { it > 0f }))
             avutil.av_frame_unref(frame)
         }
         currentSwsContext = context
@@ -613,16 +1060,8 @@ class DesktopMirrorEngine(
         val match = Regex("""Physical size:\s*(\d+)x(\d+)""").find(output)
         val sourceWidth = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 720
         val sourceHeight = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 1280
-        val longestSide = maxOf(sourceWidth, sourceHeight)
-        val scale = if (longestSide > maxSize) maxSize.toDouble() / longestSide else 1.0
-        return CaptureSize(
-            width = evenAtLeast((sourceWidth * scale).toInt(), 2),
-            height = evenAtLeast((sourceHeight * scale).toInt(), 2),
-        )
-    }
-
-    private fun evenAtLeast(value: Int, minimum: Int): Int {
-        return maxOf(minimum, value and -2)
+        val (width, height) = scaledCaptureSize(sourceWidth, sourceHeight, maxSize)
+        return CaptureSize(width = width, height = height)
     }
 
     private fun allocateLocalPort(): Int {

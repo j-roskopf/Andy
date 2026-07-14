@@ -15,6 +15,7 @@ import app.andy.service.DeviceService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MirrorEngine
+import app.andy.service.MirrorSession
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorVideoConfig
@@ -119,6 +120,7 @@ class DesktopBugServiceTest {
 }
 
 private class FakeMirrorEngine : MirrorEngine {
+    override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = CommandResult.success()

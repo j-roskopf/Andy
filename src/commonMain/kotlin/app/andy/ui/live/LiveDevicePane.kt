@@ -24,8 +24,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -60,11 +58,8 @@ import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.TextField
-import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -80,6 +75,7 @@ internal fun LiveDevicePane(
     frame: MirrorFrame?,
     frameFlow: Flow<MirrorFrame>? = null,
     mirrorStatus: String,
+    mirrorTelemetry: String = "",
     connectResult: String,
     modifier: Modifier = Modifier,
     highlightBounds: String? = null,
@@ -116,6 +112,7 @@ internal fun LiveDevicePane(
     onClipText: () -> Unit = {},
     onPopOut: () -> Unit = {},
     showPopOut: Boolean = true,
+    surfaceOccluded: Boolean = false,
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
@@ -156,11 +153,13 @@ internal fun LiveDevicePane(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        listOfNotNull(
-                            frame?.let { "${it.width}×${it.height} stream" },
-                            frame?.displayedFps?.let { "${app.andy.formatDecimal(it, 1)} displayed fps" },
-                            frame?.decodedFps?.let { "${app.andy.formatDecimal(it, 1)} decoded fps" },
-                        ).joinToString(" · ").ifBlank { mirrorStatus },
+                        mirrorTelemetry.ifBlank {
+                            listOfNotNull(
+                                frame?.let { "${it.width}×${it.height} stream" },
+                                frame?.displayedFps?.let { "${app.andy.formatDecimal(it, 1)} displayed fps" },
+                                frame?.decodedFps?.let { "${app.andy.formatDecimal(it, 1)} decoded fps" },
+                            ).joinToString(" · ").ifBlank { mirrorStatus }
+                        },
                         color = TextSecondary,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(start = 8.dp),
@@ -206,7 +205,10 @@ internal fun LiveDevicePane(
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (frame != null) {
+                            // The native desktop renderer must attach before it receives its
+                            // first H.264 access unit. The screenshot renderer remains fully
+                            // Compose-only, so deterministic tests never need an AWT host.
+                            if (serial != null || frame != null) {
                                 val surfaceOverlay = MirrorOverlay(
                                     highlightBounds = highlightBounds,
                                     sourceWidth = sourceWidth,
@@ -238,6 +240,7 @@ internal fun LiveDevicePane(
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
+                                        occluded = surfaceOccluded,
                                     )
                                 } else {
                                     MirrorVideoSurface(
@@ -250,6 +253,7 @@ internal fun LiveDevicePane(
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
+                                        occluded = surfaceOccluded,
                                     )
                                 }
                             }
@@ -307,31 +311,6 @@ internal fun CompactHardwareButton(label: String, serial: String?, onClick: () -
     ) {
         Text(label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
-}
-
-@Composable
-internal fun ClipTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Panel,
-        title = { Text("Clip text", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            TextField(
-                text,
-                { text = it },
-                modifier = Modifier.fillMaxWidth().height(110.dp),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
-                colors = fieldColors(),
-            )
-        },
-        confirmButton = {
-            Button(onClick = { onSend(text) }, enabled = text.isNotBlank(), colors = primaryButtonColors()) { Text("Send") }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
 }
 
 @Composable
