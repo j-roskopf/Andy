@@ -223,6 +223,7 @@ internal fun LiveScreen(
                 onBugReport = { bugDialogVisible = true },
                 onClipText = { clipDialogVisible = true },
                 onPopOut = onPopOutMirror,
+                showPopOut = !isWeb,
                 onInput = sendMirrorInput,
                 onConnect = {
                     reconnectMirror(mirrorConfig())

@@ -115,6 +115,7 @@ internal fun LiveDevicePane(
     onBugReport: () -> Unit = {},
     onClipText: () -> Unit = {},
     onPopOut: () -> Unit = {},
+    showPopOut: Boolean = true,
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
@@ -139,6 +140,7 @@ internal fun LiveDevicePane(
                 onBugReport = onBugReport,
                 onClipText = onClipText,
                 onPopOut = onPopOut,
+                showPopOut = showPopOut,
             )
         }
 
@@ -343,6 +345,7 @@ internal fun LiveHardwareToolbar(
     onBugReport: () -> Unit,
     onClipText: () -> Unit,
     onPopOut: () -> Unit,
+    showPopOut: Boolean,
 ) {
     Box(
         Modifier.width(68.dp).fillMaxHeight(),
@@ -365,7 +368,7 @@ internal fun LiveHardwareToolbar(
             ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
             ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
             ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
-            ToolbarButton(HardwareIcon.PopOut, "Pop Out", enabled, onPopOut)
+            if (showPopOut) ToolbarButton(HardwareIcon.PopOut, "Pop Out", enabled, onPopOut)
             ToolbarButton(HardwareIcon.Record, "Record", false) {}
         }
     }

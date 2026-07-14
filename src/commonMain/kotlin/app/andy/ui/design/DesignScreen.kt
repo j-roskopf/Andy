@@ -143,6 +143,7 @@ internal fun DesignScreen(
                     rulerX = x.toInt().toString()
                     rulerY = y.toInt().toString()
                 },
+                showPopOut = services.capabilities.platform != app.andy.service.AndyPlatform.Web,
                 onInput = sendMirrorInput,
                 onConnect = {
                     if (serial != null) scope.launch {
