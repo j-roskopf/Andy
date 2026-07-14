@@ -33,6 +33,46 @@ import kotlin.test.assertTrue
 
 class DesktopServicesMockDeviceTest {
     @Test
+    fun emulatorGraphicsInfoReadsTheBackendActuallySelectedByAutoGpu() {
+        val log = kotlin.io.path.createTempFile("andy-emulator", ".log").toFile()
+        try {
+            log.writeText(
+                """
+                INFO | Graphics backend: gfxstream
+                INFO | GPU Renderer=[Android Emulator OpenGL ES Translator (Apple M5 Pro)]
+                INFO | Graphics backend: gfxstream
+                INFO | Graphics Adapter Android Emulator OpenGL ES Translator (Apple M5 Pro)
+                """.trimIndent(),
+            )
+
+            assertEquals(
+                EmulatorGraphicsInfo("gfxstream", "Android Emulator OpenGL ES Translator (Apple M5 Pro)"),
+                emulatorGraphicsInfo(log),
+            )
+        } finally {
+            log.delete()
+        }
+    }
+
+    @Test
+    fun emulatorGraphicsInfoMarksSoftwareAutoGpuFallbacks() {
+        val log = kotlin.io.path.createTempFile("andy-emulator-software", ".log").toFile()
+        try {
+            log.writeText(
+                """
+                INFO | Graphics backend: gfxstream
+                INFO | GPU Renderer=[Android Emulator OpenGL ES Translator (ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device)), SwiftShader driver)]
+                """.trimIndent(),
+            )
+
+            val graphics = requireNotNull(emulatorGraphicsInfo(log))
+            assertTrue(graphics.softwareRendered)
+        } finally {
+            log.delete()
+        }
+    }
+
+    @Test
     fun scrcpyServerLocatorUsesBundledResource() {
         val originalHome = System.getProperty("user.home")
         val testHome = kotlin.io.path.createTempDirectory("andy-scrcpy-test-home").toFile()
@@ -48,8 +88,8 @@ class DesktopServicesMockDeviceTest {
 
         assertNotNull(serverInfo)
         assertTrue(serverInfo.second)
-        assertTrue(serverInfo.third > 100_000)
-        assertEquals(File(testHome, ".andy/scrcpy/scrcpy-server").absolutePath, serverInfo.first)
+        assertTrue(serverInfo.third > 50_000)
+        assertEquals(File(testHome, ".andy/scrcpy/andy-scrcpy-server-v4").absolutePath, serverInfo.first)
     }
 
     @Test

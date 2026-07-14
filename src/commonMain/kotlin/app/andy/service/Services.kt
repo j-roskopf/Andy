@@ -4,6 +4,7 @@ import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 
 interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
@@ -39,7 +40,26 @@ interface AvdService {
 }
 
 interface MirrorEngine {
+    /**
+     * The presentation session. This is deliberately low-frequency state: native and web
+     * renderers own video frames, while Compose observes only their verified capabilities
+     * and telemetry.
+     */
+    val session: StateFlow<MirrorSession?>
+
+    /**
+     * Legacy CPU frames. These remain available for screenshots, bug capture and deterministic
+     * tests, but must not be used as the normal accelerated presentation path.
+     */
     val frames: Flow<MirrorFrame>
+
+    /**
+     * Annex-B H.264 access units from the live stream when available. Bug capture prefers this
+     * bitstream (full stream FPS, no re-encode) and falls back to [frames] when empty.
+     */
+    val encodedVideo: Flow<EncodedVideoAccessUnit>
+        get() = emptyFlow()
+
     val status: Flow<String>
     suspend fun connect(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult
     suspend fun disconnect()
@@ -248,10 +268,87 @@ data class MirrorFrame(
 )
 
 data class MirrorVideoConfig(
-    val maxSize: Int = 720,
-    val bitRate: Int = 4_000_000,
+    val maxSize: Int = 1080,
+    val bitRate: Int = 8_000_000,
     val maxFps: Int = 60,
     val codec: String = "h264",
+    val rendererMode: MirrorRendererMode = MirrorRendererMode.Auto,
+)
+
+/** One Annex-B H.264 access unit from the device stream, for bug capture remux. */
+data class EncodedVideoAccessUnit(
+    val timestampMillis: Long,
+    val bytes: ByteArray,
+    val width: Int,
+    val height: Int,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is EncodedVideoAccessUnit) return false
+        return timestampMillis == other.timestampMillis &&
+            width == other.width &&
+            height == other.height &&
+            bytes.contentEquals(other.bytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = timestampMillis.hashCode()
+        result = 31 * result + bytes.contentHashCode()
+        result = 31 * result + width
+        result = 31 * result + height
+        return result
+    }
+}
+
+/** User-visible renderer policy. Accelerated never silently falls back. */
+enum class MirrorRendererMode {
+    Auto,
+    Accelerated,
+    Legacy,
+}
+
+/** The verified class of the currently active decoder/presenter pair. */
+enum class MirrorBackendKind {
+    NativeHardware,
+    BrowserHardware,
+    LegacyCpu,
+    Unavailable,
+}
+
+data class MirrorBackend(
+    val kind: MirrorBackendKind = MirrorBackendKind.Unavailable,
+    val decoder: String = "Unavailable",
+    val renderer: String = "Unavailable",
+    val fallbackReason: String? = null,
+) {
+    val isHardwareBacked: Boolean
+        get() = kind == MirrorBackendKind.NativeHardware || kind == MirrorBackendKind.BrowserHardware
+}
+
+/**
+ * Presentation telemetry produced by the renderer. Latency is host-input to present and does
+ * not require clock synchronization with Android.
+ */
+data class MirrorStats(
+    val displayedFps: Float = 0f,
+    val decodedFps: Float = 0f,
+    val droppedFrames: Long = 0,
+    val framesPresented: Long = 0,
+    val p95InputToPresentMillis: Float? = null,
+)
+
+/**
+ * The cross-platform contract for a live mirror. Surface ownership stays with the renderer;
+ * Kotlin receives this state only, never a continuous GPU frame stream.
+ */
+data class MirrorSession(
+    val serial: String,
+    val requestedMode: MirrorRendererMode,
+    val backend: MirrorBackend,
+    val stats: MirrorStats = MirrorStats(),
+    val width: Int = 0,
+    val height: Int = 0,
+    val failureReason: String? = null,
 )
 
 sealed interface MirrorInput {
@@ -332,6 +429,8 @@ data class PlatformCapabilities(
     val proxy: Boolean,
     val mcp: Boolean,
     val updates: Boolean,
+    /** True when Live may offer Auto/GPU renderer controls (Mac Metal or browser WebCodecs). */
+    val acceleratedMirror: Boolean = false,
 ) {
     companion object {
         val Desktop = PlatformCapabilities(
@@ -343,6 +442,8 @@ data class PlatformCapabilities(
             proxy = true,
             mcp = true,
             updates = true,
+            // Overridden at service creation from the packaged native bridge (Mac only today).
+            acceleratedMirror = false,
         )
 
         val Web = PlatformCapabilities(
@@ -367,6 +468,8 @@ data class PlatformCapabilities(
             proxy = false,
             mcp = false,
             updates = false,
+            // Browser path: WebCodecs + WebGL when the runtime verifies hardware.
+            acceleratedMirror = true,
         )
     }
 }

@@ -12,6 +12,7 @@ import app.andy.service.CommandResult
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.logcat.LogcatState
@@ -24,70 +25,85 @@ import kotlin.test.assertEquals
 @OptIn(ExperimentalTestApi::class)
 class MirrorLifecycleTest {
     @Test
-    fun liveScreenDisconnectsMirrorWhenRemovedFromComposition() = runDesktopComposeUiTest {
-        val visible = mutableStateOf(true)
-        val mirror = TrackingMirror()
-        val services = ScreenshotServices.create().copy(mirror = mirror)
-        val device = AndroidDevice(
-            serial = "device-1",
-            displayName = "Test device",
-            kind = DeviceKind.Physical,
-            state = DeviceConnectionState.Online,
-            transport = DeviceTransport.Usb,
-        )
+    fun liveScreenDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
+        runDesktopComposeUiTest {
+            val visible = mutableStateOf(true)
+            val mirror = TrackingMirror()
+            val services = ScreenshotServices.create().copy(mirror = mirror)
+            val device = AndroidDevice(
+                serial = "device-1",
+                displayName = "Test device",
+                kind = DeviceKind.Physical,
+                state = DeviceConnectionState.Online,
+                transport = DeviceTransport.Usb,
+            )
 
-        setContent {
-            if (visible.value) {
-                LiveScreen(
-                    services = services,
-                    serial = device.serial,
-                    device = device,
-                    devicePaneWidth = 680f,
-                    controlsPaneHeight = 220f,
-                    onStopEmulator = {},
-                    stoppingEmulatorSerial = null,
-                    stopStatus = "",
-                    onDevicePaneWidthChange = {},
-                    onControlsPaneHeightChange = {},
-                    onBugSaved = {},
-                    logcatState = LogcatState(),
-                    onPopOutMirror = {},
-                    selectedPackage = null,
-                    onSelectedPackageChange = {},
-                    transfer = DeviceTransferCoordinator(),
-                )
+            setContent {
+                if (visible.value) {
+                    LiveScreen(
+                        services = services,
+                        serial = device.serial,
+                        device = device,
+                        devicePaneWidth = 680f,
+                        controlsPaneHeight = 220f,
+                        onStopEmulator = {},
+                        stoppingEmulatorSerial = null,
+                        stopStatus = "",
+                        onDevicePaneWidthChange = {},
+                        onControlsPaneHeightChange = {},
+                        onBugSaved = {},
+                        logcatState = LogcatState(),
+                        onPopOutMirror = {},
+                        selectedPackage = null,
+                        onSelectedPackageChange = {},
+                        transfer = DeviceTransferCoordinator(),
+                    )
+                }
             }
+
+            waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
+            runOnUiThread { visible.value = false }
+            waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
+
+            assertEquals(1, mirror.disconnectCalls)
         }
-
-        waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
-        runOnUiThread { visible.value = false }
-        waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
-
-        assertEquals(1, mirror.disconnectCalls)
     }
 
     @Test
-    fun embeddedLivePanelDisconnectsMirrorWhenRemovedFromComposition() = runDesktopComposeUiTest {
-        val visible = mutableStateOf(true)
-        val mirror = TrackingMirror()
-        val services = ScreenshotServices.create().copy(mirror = mirror)
+    fun embeddedLivePanelDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
+        runDesktopComposeUiTest {
+            val visible = mutableStateOf(true)
+            val mirror = TrackingMirror()
+            val services = ScreenshotServices.create().copy(mirror = mirror)
 
-        setContent {
-            if (visible.value) {
-                DeviceLivePanel(services = services, serial = "device-1", device = null)
+            setContent {
+                if (visible.value) {
+                    DeviceLivePanel(services = services, serial = "device-1", device = null)
+                }
             }
+
+            waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
+            runOnUiThread { visible.value = false }
+            waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
+
+            assertEquals(1, mirror.disconnectCalls)
         }
+    }
 
-        waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
-        runOnUiThread { visible.value = false }
-        waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
-
-        assertEquals(1, mirror.disconnectCalls)
+    private inline fun <T> withComposeMirrorRenderer(block: () -> T): T {
+        val previous = System.getProperty("andy.screenshot.renderer")
+        System.setProperty("andy.screenshot.renderer", "compose")
+        return try {
+            block()
+        } finally {
+            if (previous == null) System.clearProperty("andy.screenshot.renderer") else System.setProperty("andy.screenshot.renderer", previous)
+        }
     }
 
     private class TrackingMirror : MirrorEngine {
         private val mutableFrames = MutableSharedFlow<MirrorFrame>()
         private val mutableStatus = MutableStateFlow("Disconnected")
+        override val session = MutableStateFlow<MirrorSession?>(null)
 
         var connectCalls = 0
             private set

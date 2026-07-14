@@ -19,7 +19,6 @@ import {
   ScrcpyPointerId,
 } from "@yume-chan/scrcpy";
 import {
-  BitmapVideoFrameRenderer,
   WebCodecsVideoDecoder,
   WebGLVideoFrameRenderer,
 } from "@yume-chan/scrcpy-decoder-webcodecs";
@@ -1022,11 +1021,54 @@ function renderMirrorOverlay() {
   }
 }
 
+function acceleratedMirrorCapabilities() {
+  const probe = document.createElement("canvas");
+  const webGl = probe.getContext("webgl2");
+  const debugRenderer = webGl?.getExtension("WEBGL_debug_renderer_info");
+  const webGlRenderer = debugRenderer
+    ? String(webGl.getParameter(debugRenderer.UNMASKED_RENDERER_WEBGL) ?? "")
+    : "";
+  // A WebGL2 context may be backed by SwiftShader or llvmpipe. Do not advertise a GPU mirror
+  // merely because context creation succeeded: require a named non-software renderer.
+  const webGlHardware = webGlRenderer.length > 0 &&
+    !/(swiftshader|llvmpipe|softpipe|software rasterizer|mesa offscreen)/i.test(webGlRenderer);
+  return {
+    secureContext: window.isSecureContext === true,
+    webUsb: typeof navigator !== "undefined" && "usb" in navigator,
+    webCodecs: WebCodecsVideoDecoder.isSupported === true,
+    webGl2: WebGLVideoFrameRenderer.isSupported === true && webGl !== null,
+    webGlHardware,
+    webGlRenderer,
+  };
+}
+
+function p95(samples) {
+  if (!samples.length) return undefined;
+  const sorted = [...samples].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
+}
+
 export async function webAdbStartMirror(serial, configJson) {
   const adb = state.adbs.get(serial);
   if (!adb) throw new Error(`Android device ${serial} is not connected.`);
   const config = JSON.parse(configJson);
-  const useHardwareDecoder = WebCodecsVideoDecoder.isSupported;
+  const capabilities = acceleratedMirrorCapabilities();
+  const acceleratedUnavailableReason = !capabilities.secureContext
+    ? "secure context is required for WebUSB and WebCodecs"
+    : !capabilities.webUsb
+      ? "WebUSB is unavailable in this browser"
+      : !capabilities.webCodecs
+      ? "WebCodecs is unavailable in this browser"
+      : !capabilities.webGl2
+        ? "WebGL2 is unavailable in this browser"
+        : !capabilities.webGlHardware
+          ? "WebGL2 did not expose a verified hardware renderer"
+        : undefined;
+  const requestedMode = config.rendererMode ?? "auto";
+  if (requestedMode === "accelerated" && acceleratedUnavailableReason) {
+    throw new Error(`Accelerated mirror unavailable: ${acceleratedUnavailableReason}`);
+  }
+  const useHardwareDecoder = requestedMode !== "legacy" && !acceleratedUnavailableReason;
   if (!useHardwareDecoder && (config.codec ?? "h264") !== "h264") {
     throw new Error("This origin requires the H.264 decoder. Use H.264 or open Andy over HTTPS for hardware decoding.");
   }
@@ -1037,6 +1079,7 @@ export async function webAdbStartMirror(serial, configJson) {
     maxFps: useHardwareDecoder ? (config.maxFps ?? 60) : Math.min(config.maxFps ?? 60, 30),
     codec: config.codec ?? "h264",
     decoder: useHardwareDecoder ? "webcodecs" : "tinyh264",
+    rendererMode: requestedMode,
   });
   const effectiveConfig = JSON.parse(configKey);
   const current = state.mirror;
@@ -1045,7 +1088,10 @@ export async function webAdbStartMirror(serial, configJson) {
       ok: true,
       reused: true,
       serial,
-      renderer: current.renderer.constructor.name,
+      renderer: current.rendererName,
+      decoder: current.decoderName,
+      hardwareBacked: current.hardwareBacked,
+      fallbackReason: current.fallbackReason,
       codec: current.codec,
       width: current.width,
       height: current.height,
@@ -1089,10 +1135,16 @@ export async function webAdbStartMirror(serial, configJson) {
   let renderer;
   let decoder;
   if (useHardwareDecoder) {
-    renderer = WebGLVideoFrameRenderer.isSupported
-      ? new WebGLVideoFrameRenderer(canvas, false)
-      : new BitmapVideoFrameRenderer(canvas);
-    decoder = new WebCodecsVideoDecoder({ codec: video.metadata.codec, renderer });
+    // The accelerated path is intentionally all-GPU: no BitmapVideoFrameRenderer fallback.
+    renderer = new WebGLVideoFrameRenderer(canvas, false);
+    decoder = new WebCodecsVideoDecoder({
+      codec: video.metadata.codec,
+      renderer,
+      // The decoder package forwards this to VideoDecoder.configure(). It requests the
+      // browser's hardware decoder and keeps its low-latency configuration; it does not
+      // silently fall through to the Bitmap renderer.
+      hardwareAcceleration: "prefer-hardware",
+    });
   } else {
     decoder = new TinyH264Decoder({ canvas });
     renderer = decoder;
@@ -1105,6 +1157,10 @@ export async function webAdbStartMirror(serial, configJson) {
     client,
     decoder,
     renderer,
+    decoderName: useHardwareDecoder ? "WebCodecs (hardware requested)" : "TinyH264 software",
+    rendererName: useHardwareDecoder ? `WebGL2 VideoFrame (${capabilities.webGlRenderer})` : "TinyH264 canvas",
+    hardwareBacked: useHardwareDecoder,
+    fallbackReason: useHardwareDecoder ? undefined : (requestedMode === "legacy" ? "Legacy renderer selected" : acceleratedUnavailableReason),
     canvas,
     width: video.width,
     height: video.height,
@@ -1114,6 +1170,8 @@ export async function webAdbStartMirror(serial, configJson) {
     lastDecodedFrames: 0,
     displayedFps: 0,
     decodedFps: 0,
+    latencySamples: [],
+    pendingInputAt: undefined,
     error: undefined,
     serverOutput,
   };
@@ -1146,6 +1204,11 @@ export async function webAdbStartMirror(serial, configJson) {
     const elapsed = now - mirror.lastStatsAt;
     const frames = decoder.framesRendered;
     const decodedFrames = frames + decoder.framesSkipped;
+    if (mirror.pendingInputAt !== undefined && frames > mirror.lastFrames) {
+      mirror.latencySamples.push(now - mirror.pendingInputAt);
+      if (mirror.latencySamples.length > 120) mirror.latencySamples.shift();
+      mirror.pendingInputAt = undefined;
+    }
     mirror.displayedFps = elapsed > 0 ? (frames - mirror.lastFrames) * 1000 / elapsed : 0;
     mirror.decodedFps = elapsed > 0 ? (decodedFrames - mirror.lastDecodedFrames) * 1000 / elapsed : 0;
     mirror.lastFrames = frames;
@@ -1156,12 +1219,16 @@ export async function webAdbStartMirror(serial, configJson) {
     canvas.dataset.framesRendered = String(frames);
     canvas.dataset.framesSkipped = String(decoder.framesSkipped);
     canvas.dataset.error = mirror.error ?? "";
+    canvas.dataset.p95InputToPresentMillis = String(p95(mirror.latencySamples) ?? "");
     canvas.dataset.serverOutput = mirror.serverOutput.slice(-12).join("\n");
   }, 1000);
   return json({
     ok: true,
     serial,
-    renderer: renderer.constructor.name,
+    renderer: mirror.rendererName,
+    decoder: mirror.decoderName,
+    hardwareBacked: mirror.hardwareBacked,
+    fallbackReason: mirror.fallbackReason,
     codec: video.metadata.codec,
     width: mirror.width,
     height: mirror.height,
@@ -1270,6 +1337,7 @@ export async function webAdbSendMirrorInput(inputJson) {
   const controller = mirror?.client.controller;
   if (!controller) throw new Error("The Live mirror is not connected.");
   const input = JSON.parse(inputJson);
+  mirror.pendingInputAt = performance.now();
   const injectKey = async (keyCode) => {
     const base = { keyCode, repeat: 0, metaState: AndroidKeyEventMeta.None };
     await controller.injectKeyCode({ ...base, action: AndroidKeyEventAction.Down });
@@ -1301,7 +1369,11 @@ export function webAdbMirrorStats() {
     width: mirror.width,
     height: mirror.height,
     elapsedMillis: performance.now() - mirror.startedAt,
-    renderer: mirror.renderer.constructor.name,
+    renderer: mirror.rendererName,
+    decoder: mirror.decoderName,
+    hardwareBacked: mirror.hardwareBacked,
+    fallbackReason: mirror.fallbackReason,
+    p95InputToPresentMillis: p95(mirror.latencySamples),
     error: mirror.error,
     serverOutput: mirror.serverOutput.slice(-12),
   });

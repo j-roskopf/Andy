@@ -84,11 +84,16 @@ fun AndyMirrorPopOut(
         LaunchedEffect(Unit) {
             services.mirror.status.collectLatest { mirrorStatus = it }
         }
+        // Share the already-running Live mirror session. Reconnecting here with default
+        // MirrorVideoConfig would tear down GPU mode and leave the main pane blank on close.
         LaunchedEffect(serial) {
-            if (serial != null) {
-                val result = services.mirror.connect(serial)
-                connectResult = if (result.isSuccess) result.stdout else result.stderr
+            if (serial == null) return@LaunchedEffect
+            if (services.mirror.session.value?.serial == serial) {
+                connectResult = "Using the Live mirror session"
+                return@LaunchedEffect
             }
+            val result = services.mirror.connect(serial)
+            connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
         Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
             MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->

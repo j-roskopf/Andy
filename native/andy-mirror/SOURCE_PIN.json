@@ -1,0 +1,11 @@
+{
+  "name": "scrcpy-server",
+  "upstream": "https://github.com/Genymobile/scrcpy",
+  "version": "4.0",
+  "releaseAsset": "scrcpy-server-v4.0",
+  "releaseUrl": "https://github.com/Genymobile/scrcpy/releases/download/v4.0/scrcpy-server-v4.0",
+  "sha256": "84924bd564a1eb6089c872c7521f968058977f91f5ff02514a8c74aff3210f3a",
+  "license": "Apache-2.0",
+  "bundledPath": "src/commonMain/resources/scrcpy/scrcpy-server",
+  "purpose": "Pinned Android capture/control server used by Andy's Live mirror. Andy does not bundle the scrcpy desktop client."
+}

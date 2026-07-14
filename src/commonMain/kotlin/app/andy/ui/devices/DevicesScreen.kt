@@ -244,6 +244,20 @@ internal fun DevicesScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(avd.name, color = TextPrimary, fontWeight = FontWeight.Bold)
                                 Text(listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" }, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                avd.graphicsBackend?.let { backend ->
+                                    Text(
+                                        listOfNotNull(
+                                            "Graphics: $backend",
+                                            avd.graphicsRenderer,
+                                            "software renderer".takeIf { avd.graphicsSoftwareRendered },
+                                        ).joinToString(" · "),
+                                        color = TextSecondary,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                             Text(if (runningDevice != null || avd.running) "running" else "stopped", color = if (runningDevice != null || avd.running) Green else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                             Text(avd.deviceType.name.lowercase(), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.width(80.dp))

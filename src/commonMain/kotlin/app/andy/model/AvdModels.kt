@@ -47,6 +47,11 @@ data class VirtualDevice(
     val apiLevel: Int? = null,
     val deviceType: VirtualDeviceType = VirtualDeviceType.Unknown,
     val config: Map<String, String> = emptyMap(),
+    /** The renderer selected by the most recent emulator launch, read from its launch log. */
+    val graphicsBackend: String? = null,
+    val graphicsRenderer: String? = null,
+    /** True only when the launch log identifies a known software graphics implementation. */
+    val graphicsSoftwareRendered: Boolean = false,
 )
 
 enum class AvdCameraOption(val configValue: String) {

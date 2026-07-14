@@ -89,12 +89,19 @@ private data class WebMirrorStatsDto(
     val width: Int = 720,
     val height: Int = 1280,
     val renderer: String = "WebCodecs",
+    val decoder: String = "WebCodecs",
+    val hardwareBacked: Boolean = false,
+    val fallbackReason: String? = null,
+    val p95InputToPresentMillis: Float? = null,
     val error: String? = null,
 )
 
 @Serializable
 private data class WebMirrorStartDto(
     val renderer: String = "browser decoder",
+    val decoder: String = "browser decoder",
+    val hardwareBacked: Boolean = false,
+    val fallbackReason: String? = null,
     val width: Int = 0,
     val height: Int = 0,
     val sessionId: String = "",
@@ -556,6 +563,7 @@ private class BrowserMirrorEngine(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mutableFrames = MutableSharedFlow<MirrorFrame>(replay = 1, extraBufferCapacity = 2)
     private val mutableStatus = MutableStateFlow("Disconnected")
+    override val session = MutableStateFlow<MirrorSession?>(null)
     private var serial: String? = null
     private var generation = 0
     private var sessionId: String? = null
@@ -565,11 +573,24 @@ private class BrowserMirrorEngine(
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
         val token = ++generation
         this.serial = serial
-        mutableStatus.value = "Connecting · WebCodecs"
+        mutableStatus.value = "Connecting · ${config.rendererMode.name.lowercase()} renderer"
         return runCatching {
-            val configJson = """{"maxSize":${config.maxSize},"bitRate":${config.bitRate},"maxFps":${config.maxFps},"codec":${WebJson.encodeToString(config.codec)}}"""
+            val configJson = """{"maxSize":${config.maxSize},"bitRate":${config.bitRate},"maxFps":${config.maxFps},"codec":${WebJson.encodeToString(config.codec)},"rendererMode":${WebJson.encodeToString(config.rendererMode.name.lowercase())}}"""
             val start = WebJson.decodeFromString<WebMirrorStartDto>(webAdbStartMirror(serial, configJson).await<JsString>().toString())
             sessionId = start.sessionId
+            session.value = MirrorSession(
+                serial = serial,
+                requestedMode = config.rendererMode,
+                backend = MirrorBackend(
+                    kind = if (start.hardwareBacked) MirrorBackendKind.BrowserHardware else MirrorBackendKind.LegacyCpu,
+                    decoder = start.decoder,
+                    renderer = start.renderer,
+                    fallbackReason = start.fallbackReason,
+                ),
+                width = start.width,
+                height = start.height,
+                failureReason = start.fallbackReason,
+            )
             mutableFrames.emit(MirrorFrame(start.width.coerceAtLeast(2), start.height.coerceAtLeast(2), IntArray(0), frameNumber = 1))
             mutableStatus.value = "Connected · ${start.width}×${start.height} · measuring displayed fps · ${start.renderer}"
             scope.launch {
@@ -578,6 +599,26 @@ private class BrowserMirrorEngine(
                     runCatching {
                         val stats = WebJson.decodeFromString<WebMirrorStatsDto>(webAdbMirrorStats().toString())
                         if (stats.connected) {
+                            session.value?.let { active ->
+                                session.value = active.copy(
+                                    backend = MirrorBackend(
+                                        kind = if (stats.hardwareBacked) MirrorBackendKind.BrowserHardware else MirrorBackendKind.LegacyCpu,
+                                        decoder = stats.decoder,
+                                        renderer = stats.renderer,
+                                        fallbackReason = stats.fallbackReason,
+                                    ),
+                                    stats = MirrorStats(
+                                        displayedFps = stats.displayedFps,
+                                        decodedFps = stats.decodedFps,
+                                        droppedFrames = stats.framesSkipped,
+                                        framesPresented = stats.framesRendered,
+                                        p95InputToPresentMillis = stats.p95InputToPresentMillis,
+                                    ),
+                                    width = stats.width,
+                                    height = stats.height,
+                                    failureReason = stats.error ?: stats.fallbackReason,
+                                )
+                            }
                             mutableStatus.value = buildString {
                                 append("Connected · ")
                                 append(formatDecimal(stats.displayedFps, 1))
@@ -589,6 +630,9 @@ private class BrowserMirrorEngine(
                                 append(stats.height)
                                 append(" · ")
                                 append(stats.renderer)
+                                if (stats.hardwareBacked) append(" · GPU accelerated")
+                                stats.fallbackReason?.let { append(" · fallback: $it") }
+                                stats.p95InputToPresentMillis?.let { append(" · ${formatDecimal(it, 1)} ms P95") }
                                 stats.error?.let { append(" · $it") }
                             }
                             mutableFrames.emit(
@@ -608,6 +652,12 @@ private class BrowserMirrorEngine(
             CommandResult.success("Connected · ${start.width}×${start.height} · ${start.renderer}")
         }.getOrElse { error ->
             val message = error.message ?: error.toString()
+            session.value = MirrorSession(
+                serial = serial,
+                requestedMode = config.rendererMode,
+                backend = MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = message),
+                failureReason = message,
+            )
             mutableStatus.value = "Connection failed · $message"
             CommandResult.failure(message)
         }
@@ -617,6 +667,7 @@ private class BrowserMirrorEngine(
         generation++
         sessionId?.let { webAdbStopMirror(it).await<JsAny?>() }
         sessionId = null
+        session.value = null
         mutableStatus.value = "Disconnected"
         mutableFrames.emit(MirrorFrame(1, 1, IntArray(1)))
     }

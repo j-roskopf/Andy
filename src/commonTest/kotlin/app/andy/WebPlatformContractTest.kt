@@ -34,6 +34,8 @@ class WebPlatformContractTest {
         assertFalse(PlatformCapabilities.Web.proxy)
         assertFalse(PlatformCapabilities.Web.mcp)
         assertFalse(PlatformCapabilities.Web.updates)
+        assertTrue(PlatformCapabilities.Web.acceleratedMirror)
+        assertFalse(PlatformCapabilities.Desktop.acceleratedMirror)
         assertTrue(PlatformCapabilities.Desktop.destinations.containsAll(AndyDestination.entries))
     }
 }

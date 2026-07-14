@@ -103,6 +103,16 @@ internal object ScreenshotServices {
             val r = (25 + x / 6).coerceAtMost(255); val g = (35 + y / 5).coerceAtMost(255); val b = 45 + (x + y) % 70
             (0xff shl 24) or (r shl 16) or (g shl 8) or b
         }, frameNumber = 42, decodedFps = 59.8f)
+        override val session = kotlinx.coroutines.flow.MutableStateFlow(
+            MirrorSession(
+                serial = "emulator-5554",
+                requestedMode = MirrorRendererMode.Legacy,
+                backend = MirrorBackend(MirrorBackendKind.LegacyCpu, "Deterministic test decoder", "Compose"),
+                stats = MirrorStats(displayedFps = 59.8f, decodedFps = 59.8f, framesPresented = 42),
+                width = frame.width,
+                height = frame.height,
+            ),
+        )
         override val frames: Flow<MirrorFrame> = flowOf(frame)
         override val status: Flow<String> = flowOf("Connected · 59.8 fps · H.264")
         override suspend fun connect(serial: String, config: MirrorVideoConfig) = CommandResult.success("Connected to Pixel 8 API 36")

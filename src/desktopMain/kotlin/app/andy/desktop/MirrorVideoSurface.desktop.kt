@@ -13,10 +13,14 @@ import androidx.compose.ui.graphics.Color
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorTouchAction
+import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
+import app.andy.desktop.service.mirror.NativeMirrorJni
 import java.awt.AlphaComposite
 import java.awt.Point
 import java.awt.BasicStroke
 import java.awt.Cursor
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -31,7 +35,6 @@ import java.awt.image.DataBufferInt
 import java.awt.geom.Ellipse2D
 import java.io.File
 import javax.imageio.ImageIO
-import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import java.util.concurrent.CompletableFuture
 import kotlin.math.roundToInt
@@ -49,6 +52,7 @@ actual fun MirrorVideoSurface(
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
+    occluded: Boolean,
 ) {
     if (isScreenshotRenderer()) {
         ScreenshotMirrorSurface(frame, modifier, overlay)
@@ -57,7 +61,7 @@ actual fun MirrorVideoSurface(
     SwingPanel(
         modifier = modifier,
         background = Color.Black,
-        factory = { MirrorPanel() },
+        factory = { MirrorPanel(hostsNativePresentation = false) },
         update = { panel ->
             panel.setFrame(frame)
             panel.onInput = onInput
@@ -67,6 +71,7 @@ actual fun MirrorVideoSurface(
             panel.onDevicePointClick = onDevicePointClick
             panel.onRulerResize = onRulerResize
             panel.setOverlay(overlay)
+            panel.setOccluded(occluded)
         },
     )
 }
@@ -83,13 +88,14 @@ actual fun MirrorVideoSurface(
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
+    occluded: Boolean,
 ) {
     if (isScreenshotRenderer()) {
         val frame by frames.collectAsState(initial = null)
         ScreenshotMirrorSurface(frame, modifier, overlay)
         return
     }
-    val panel = remember { MirrorPanel() }
+    val panel = remember { MirrorPanel(hostsNativePresentation = true) }
     SwingPanel(
         modifier = modifier,
         background = Color.Black,
@@ -102,6 +108,7 @@ actual fun MirrorVideoSurface(
             panel.onDevicePointClick = onDevicePointClick
             panel.onRulerResize = onRulerResize
             panel.setOverlay(overlay)
+            panel.setOccluded(occluded)
         },
     )
     LaunchedEffect(panel, frames, resetKey) {
@@ -141,15 +148,22 @@ private fun ScreenshotMirrorSurface(frame: MirrorFrame?, modifier: Modifier, ove
     }
 }
 
-private class MirrorPanel : JPanel() {
+private class MirrorPanel(
+    private val hostsNativePresentation: Boolean = true,
+) : java.awt.Canvas() {
     private enum class DragMode { Device, RulerX, RulerY, Inspect, None }
 
     private var image: BufferedImage? = null
     private var frameNumber: Long = -1
+    // Native VideoToolbox frames carry dimensions only: Metal owns their pixels. Keeping this
+    // separate from a CPU image prevents the Swing fallback painter from clearing under the
+    // Metal presenter with an uninitialized BufferedImage on every native-frame update.
+    private var nativeMetadataFrame = false
     private var overlay: MirrorOverlay = MirrorOverlay()
     private var referenceImagePath: String? = null
     private var referenceImage: BufferedImage? = null
     private var referenceImageRequestId = 0L
+    private var occluded = false
     var onInput: (MirrorInput) -> Unit = {}
     var onHoverColor: (String) -> Unit = {}
     var onPickerClick: (String) -> Unit = {}
@@ -167,7 +181,7 @@ private class MirrorPanel : JPanel() {
     init {
         background = java.awt.Color.BLACK
         preferredSize = Dimension(240, 520)
-        isDoubleBuffered = true
+        ignoreRepaint = false
         // Let the panel own keyboard focus so physical keystrokes reach the device,
         // and keep Tab/Enter for ourselves instead of moving focus within Swing.
         isFocusable = true
@@ -251,11 +265,70 @@ private class MirrorPanel : JPanel() {
 
             override fun mouseExited(event: MouseEvent) {
                 pickerPoint = null
-                repaint()
+                if (!nativeMetadataFrame) repaint()
             }
         }
         addMouseListener(listener)
         addMouseMotionListener(listener)
+        addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(event: ComponentEvent) {
+                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+
+            override fun componentMoved(event: ComponentEvent) {
+                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+
+            override fun componentShown(event: ComponentEvent) {
+                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+        })
+    }
+
+    private var ancestorMoveListener: ComponentAdapter? = null
+
+    override fun addNotify() {
+        super.addNotify()
+        if (hostsNativePresentation) {
+            NativeMirrorHostRegistry.register(this)
+        }
+        val window = SwingUtilities.getWindowAncestor(this)
+        ancestorMoveListener = object : ComponentAdapter() {
+            override fun componentMoved(event: ComponentEvent) {
+                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+
+            override fun componentResized(event: ComponentEvent) {
+                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+        }.also { window?.addComponentListener(it) }
+    }
+
+    override fun removeNotify() {
+        // Teardown runs before Canvas loses its heavyweight peer. Unregister first so a sibling
+        // Live/pop-out host can reclaim the Metal presenter instead of destroying the session.
+        ancestorMoveListener?.let { listener ->
+            SwingUtilities.getWindowAncestor(this)?.removeComponentListener(listener)
+        }
+        ancestorMoveListener = null
+        if (hostsNativePresentation) {
+            NativeMirrorHostRegistry.unregister(this)
+            NativeMirrorJni.removeMetalLayer(this)
+        }
+        super.removeNotify()
+    }
+
+    /**
+     * Compose dialogs cannot paint above heavyweight SwingPanel / Metal. Hide both without
+     * tearing down VideoToolbox so Live resumes immediately after dismiss.
+     */
+    fun setOccluded(next: Boolean) {
+        if (occluded == next) return
+        occluded = next
+        isVisible = !next
+        if (hostsNativePresentation) {
+            NativeMirrorJni.setInlineOverlayVisible(!next)
+        }
     }
 
     // Maps AWT key codes for non-text keys to Android key codes (KeyEvent.KEYCODE_*).
@@ -284,15 +357,23 @@ private class MirrorPanel : JPanel() {
     }
 
     fun setFrame(frame: MirrorFrame?) {
-        if (frame == null || frame.frameNumber == frameNumber || frame.argb.size < frame.width * frame.height) return
+        if (frame == null || frame.frameNumber == frameNumber) return
         frameNumber = frame.frameNumber
+        val hasCpuPixels = frame.argb.size >= frame.width * frame.height
+        nativeMetadataFrame = !hasCpuPixels
+        val sizeChanged = image?.width != frame.width || image?.height != frame.height
         val buffered = image?.takeIf { it.width == frame.width && it.height == frame.height }
             ?: BufferedImage(frame.width, frame.height, BufferedImage.TYPE_INT_ARGB).also {
                 image = it
             }
-        val pixels = (buffered.raster.dataBuffer as DataBufferInt).data
-        frame.argb.copyInto(pixels, endIndex = frame.width * frame.height)
-        repaint()
+        if (hasCpuPixels) {
+            val pixels = (buffered.raster.dataBuffer as DataBufferInt).data
+            frame.argb.copyInto(pixels, endIndex = frame.width * frame.height)
+            repaint()
+        } else {
+            NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)
+            if (sizeChanged) NativeMirrorJni.updateMetalLayerGeometry(this)
+        }
     }
 
     fun enqueueFrame(frame: MirrorFrame) {
@@ -311,6 +392,7 @@ private class MirrorPanel : JPanel() {
     }
 
     fun setOverlay(next: MirrorOverlay) {
+        updateNativeOverlay(next)
         if (overlay == next) return
         if (referenceImagePath != next.referenceImagePath || overlay.referenceImageKey != next.referenceImageKey) {
             referenceImagePath = next.referenceImagePath
@@ -324,18 +406,62 @@ private class MirrorPanel : JPanel() {
                     SwingUtilities.invokeLater {
                         if (referenceImageRequestId == requestId && referenceImagePath == path) {
                             referenceImage = loadedImage
-                            repaint()
+                            if (!nativeMetadataFrame) repaint()
                         }
                     }
                 }
             }
         }
         overlay = next
-        repaint()
+        // The Metal layer draws its overlay itself. Asking this heavyweight Canvas to repaint
+        // while it is overlaid can make AWT clear the host surface to its black background
+        // after Metal has presented a drawable.
+        if (!nativeMetadataFrame) repaint()
     }
 
-    override fun paintComponent(graphics: Graphics) {
-        super.paintComponent(graphics)
+    /** Mirrors geometry controls into Metal; the Java paint path still owns CPU fallback/tests. */
+    private fun updateNativeOverlay(next: MirrorOverlay) {
+        val sourceWidth = (next.sourceWidth ?: image?.width ?: 1).coerceAtLeast(1)
+        val sourceHeight = (next.sourceHeight ?: image?.height ?: 1).coerceAtLeast(1)
+        val gridColor = if (next.gridColor == Color.Transparent) {
+            Color.White.copy(alpha = .28f)
+        } else {
+            next.gridColor.copy(alpha = .28f)
+        }
+        val rulerColor = next.rulerColor.copy(alpha = .95f)
+        val highlight = parseBounds(next.highlightBounds)
+        NativeMirrorJni.updateOverlay(
+            gridEnabled = next.showGrid && next.gridSize >= 2f,
+            gridStep = (next.gridSize / sourceWidth).coerceIn(0f, 1f),
+            gridR = gridColor.red,
+            gridG = gridColor.green,
+            gridB = gridColor.blue,
+            gridA = gridColor.alpha,
+            rulerEnabled = next.showRuler,
+            rulerX = (next.rulerX / sourceWidth).coerceIn(0f, 1f),
+            rulerY = (next.rulerY / sourceHeight).coerceIn(0f, 1f),
+            rulerR = rulerColor.red,
+            rulerG = rulerColor.green,
+            rulerB = rulerColor.blue,
+            rulerA = rulerColor.alpha,
+            highlightLeft = highlight?.get(0)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 1f,
+            highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
+            highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
+            highlightBottom = highlight?.get(3)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 0f,
+        )
+    }
+
+    override fun update(graphics: Graphics) {
+        // Component.update may clear a heavyweight Canvas before delegating to paint(). A native
+        // frame has no JVM pixels, so neither operation is allowed to touch the Metal host.
+        if (!nativeMetadataFrame) super.update(graphics)
+    }
+
+    override fun paint(graphics: Graphics) {
+        // In the accelerated route, Metal owns pixels. Calling Canvas.paint here would clear the
+        // host under the letterboxed presenter with the CPU placeholder used only for input mapping.
+        if (nativeMetadataFrame) return
+        super.paint(graphics)
         val frameImage = image ?: return
         val g2 = graphics as Graphics2D
         g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
@@ -510,15 +636,21 @@ private class MirrorPanel : JPanel() {
         val frameImage = image ?: return null
         val mapped = mapPoint(point) ?: run {
             pickerPoint = null
-            repaint()
+            if (!nativeMetadataFrame) repaint()
             return null
         }
         pickerPoint = point
-        val rgb = frameImage.getRGB(mapped.x, mapped.y)
-        val color = java.awt.Color(rgb, true)
-        val hex = "#%02X%02X%02X".format(color.red, color.green, color.blue)
+        val nativeHex = NativeMirrorJni.inspectPixel(
+            mapped.x.toFloat() / frameImage.width.coerceAtLeast(1),
+            mapped.y.toFloat() / frameImage.height.coerceAtLeast(1),
+        )
+        val hex = nativeHex ?: run {
+            val rgb = frameImage.getRGB(mapped.x, mapped.y)
+            val color = java.awt.Color(rgb, true)
+            "#%02X%02X%02X".format(color.red, color.green, color.blue)
+        }
         onHoverColor(hex)
-        repaint()
+        if (!nativeMetadataFrame) repaint()
         return hex
     }
 

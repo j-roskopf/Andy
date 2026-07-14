@@ -19,7 +19,7 @@ data class WorkspaceState(
     val mcpServerPort: Int = 8565,
     val workspaceSidebarExpanded: Boolean = true,
     val liveDevicePaneWidth: Float = 720f,
-    val liveControlsPaneHeight: Float = 230f,
+    val liveControlsPaneHeight: Float = 320f,
     val appsListPaneWidth: Float = 520f,
     val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,

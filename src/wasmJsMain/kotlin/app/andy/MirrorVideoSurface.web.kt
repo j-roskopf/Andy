@@ -198,7 +198,11 @@ actual fun MirrorVideoSurface(
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
-) = WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
+    occluded: Boolean,
+) {
+    if (occluded) return
+    WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
+}
 
 @Composable
 actual fun MirrorVideoSurface(
@@ -212,4 +216,8 @@ actual fun MirrorVideoSurface(
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
-) = WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
+    occluded: Boolean,
+) {
+    if (occluded) return
+    WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
+}
