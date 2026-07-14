@@ -40,7 +40,6 @@ private data class WebMirrorInteraction(
     val onPickerClick: (String) -> Unit,
     val onDevicePointClick: (Int, Int) -> Unit,
     val onRulerResize: (Float, Float) -> Unit,
-    var rulerAxis: String? = null,
 )
 
 private data class WebMirrorPoint(val x: Int, val y: Int, val color: String)
@@ -82,11 +81,12 @@ private fun androidx.compose.ui.graphics.Color.toCssColor(): String {
 }
 
 private fun installMirrorInteraction(host: HTMLDivElement) {
+    var activeRulerAxis: String? = null
     host.addEventListener("pointermove", { event ->
         val interaction = mirrorInteractions[host.id]
         if (interaction != null) {
             val pointer = event.unsafeCast<WebPointerEvent>()
-            val rulerAxis = interaction.rulerAxis
+            val rulerAxis = activeRulerAxis
             if (rulerAxis != null) {
                 webMirrorSourcePoint(host.id, event)?.let { (sourceX, sourceY) ->
                     val nextX = if (rulerAxis == "x") sourceX else interaction.overlay.rulerX
@@ -107,7 +107,7 @@ private fun installMirrorInteraction(host: HTMLDivElement) {
             val pointer = event.unsafeCast<WebPointerEvent>()
             val rulerAxis = webAdbMirrorRulerAxis(host.id, pointer.clientX, pointer.clientY)
             if (rulerAxis.isNotEmpty()) {
-                interaction.rulerAxis = rulerAxis
+                activeRulerAxis = rulerAxis
                 host.setPointerCapture(pointer.pointerId)
                 event.preventDefault()
                 pointer.stopImmediatePropagation()
@@ -126,18 +126,16 @@ private fun installMirrorInteraction(host: HTMLDivElement) {
         }
     }, true)
     host.addEventListener("pointerup", { event ->
-        val interaction = mirrorInteractions[host.id] ?: return@addEventListener
-        if (interaction.rulerAxis != null) {
-            interaction.rulerAxis = null
+        if (activeRulerAxis != null) {
+            activeRulerAxis = null
             host.releasePointerCapture(event.unsafeCast<WebPointerEvent>().pointerId)
             event.preventDefault()
             event.unsafeCast<WebPointerEvent>().stopImmediatePropagation()
         }
     }, true)
     host.addEventListener("pointercancel", { event ->
-        val interaction = mirrorInteractions[host.id] ?: return@addEventListener
-        if (interaction.rulerAxis != null) {
-            interaction.rulerAxis = null
+        if (activeRulerAxis != null) {
+            activeRulerAxis = null
             host.releasePointerCapture(event.unsafeCast<WebPointerEvent>().pointerId)
             event.preventDefault()
             event.unsafeCast<WebPointerEvent>().stopImmediatePropagation()
@@ -178,7 +176,6 @@ private fun WebMirrorHost(
                 onPickerClick = onPickerClick,
                 onDevicePointClick = onDevicePointClick,
                 onRulerResize = onRulerResize,
-                rulerAxis = mirrorInteractions[it.id]?.rulerAxis,
             )
             webAdbAttachMirror(it.id)
             webAdbSetMirrorOverlay(it.id, overlay.webConfig())
