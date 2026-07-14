@@ -1,5 +1,8 @@
 package app.andy.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class ProxyRule(
     val id: String,
     val name: String,

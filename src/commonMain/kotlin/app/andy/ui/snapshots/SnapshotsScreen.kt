@@ -221,7 +221,7 @@ private fun SnapshotCard(
     onRenameClick: (EmulatorSnapshot) -> Unit,
 ) {
     val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, snapshot.screenshotPath) {
-        value = withContext(Dispatchers.IO) {
+        value = withContext(Dispatchers.Default) {
             snapshot.screenshotPath?.let { loadImageBitmap(it) }
         }
     }

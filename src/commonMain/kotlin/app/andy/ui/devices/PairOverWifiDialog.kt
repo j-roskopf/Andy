@@ -35,6 +35,7 @@ import app.andy.loadImageBitmap
 import app.andy.model.MdnsService
 import app.andy.model.PairedWifiDevice
 import app.andy.service.DeviceService
+import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
@@ -212,11 +213,11 @@ internal fun PairOverWifiDialog(
                                                 val result = devices.connect(service.host, service.port)
                                                 if (result.isSuccess) {
                                                     val paired = PairedWifiDevice(
-                                                        id = "wifi-${System.currentTimeMillis()}-${service.endpoint.hashCode().toUInt()}",
+                                                        id = "wifi-${currentTimeMillis()}-${service.endpoint.hashCode().toUInt()}",
                                                         displayName = service.instanceName,
                                                         mdnsInstanceName = service.instanceName,
                                                         lastEndpoint = service.endpoint,
-                                                        pairedAtMillis = System.currentTimeMillis(),
+                                                        pairedAtMillis = currentTimeMillis(),
                                                     )
                                                     onPaired(paired, result.stdout.ifBlank { "Connected to ${service.endpoint}" })
                                                 } else {

@@ -420,13 +420,12 @@ private fun BugPointerOverlay(frame: MirrorFrame, event: BugPointerEvent) {
 
 private fun relativeSeconds(timestampMillis: Long, endMillis: Long): String {
     val seconds = ((timestampMillis - endMillis) / 1000.0)
-    return "%.1fs".format(seconds)
+    return "${app.andy.formatDecimal(seconds, 1)}s"
 }
 
 private fun formatBytes(bytes: Long): String {
     if (bytes < 1024) return "$bytes B"
     val kb = bytes / 1024.0
-    if (kb < 1024) return "%.1f KB".format(kb)
-    return "%.1f MB".format(kb / 1024.0)
+    if (kb < 1024) return "${app.andy.formatDecimal(kb, 1)} KB"
+    return "${app.andy.formatDecimal(kb / 1024.0, 1)} MB"
 }
-

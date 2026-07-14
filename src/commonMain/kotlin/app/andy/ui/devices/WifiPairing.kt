@@ -6,6 +6,7 @@ import app.andy.model.MdnsService
 import app.andy.model.PairedWifiDevice
 import app.andy.service.CommandResult
 import app.andy.service.DeviceService
+import app.andy.currentTimeMillis
 import kotlinx.coroutines.delay
 
 internal fun parseHostPort(value: String): Pair<String, Int>? {
@@ -80,11 +81,11 @@ internal suspend fun pairThenConnect(
         ?: connectService?.instanceName
         ?: mdns.firstOrNull { it.host == pairHost }?.instanceName
     val paired = PairedWifiDevice(
-        id = "wifi-${System.currentTimeMillis()}-${endpoint.hashCode().toUInt()}",
+        id = "wifi-${currentTimeMillis()}-${endpoint.hashCode().toUInt()}",
         displayName = instanceName ?: endpoint,
         mdnsInstanceName = instanceName,
         lastEndpoint = endpoint,
-        pairedAtMillis = System.currentTimeMillis(),
+        pairedAtMillis = currentTimeMillis(),
     )
     return CommandResult.success("Paired and connected to $endpoint") to paired
 }

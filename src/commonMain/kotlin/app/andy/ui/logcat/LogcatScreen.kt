@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -152,6 +153,12 @@ internal fun LogcatPanel(
         }
     }
     LaunchedEffect(serial, state.live, state.search, state.levels.values.toList(), selectedPackage) { restart() }
+    DisposableEffect(Unit) {
+        onDispose {
+            streamJob?.cancel()
+            streamJob = null
+        }
+    }
 
     PanelCard(modifier) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {

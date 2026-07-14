@@ -67,6 +67,7 @@ import app.andy.model.ProjectNote
 import app.andy.model.RunningAction
 import app.andy.pickDirectory
 import app.andy.service.AndyServices
+import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
@@ -147,7 +148,7 @@ private fun ProjectCockpit(
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var editingNote by remember { mutableStateOf<EditingNote?>(null) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
-    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     var completedNotesExpanded by remember { mutableStateOf(false) }
     var sessionsVisibleCount by remember { mutableStateOf(InitialSessionVisibleCount) }
     var dockWidth by remember { mutableStateOf(680f) }
@@ -169,11 +170,16 @@ private fun ProjectCockpit(
         workPane = ProjectRightPane.ActionOutput
         handledTerminalRunId = runId
     }
-    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = System.currentTimeMillis() } }
+    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
     val projects = remember(config.projects, query) {
         config.projects.filter { project ->
             query.isBlank() || project.name.contains(query, true) || project.contextDir.contains(query, true)
+        }
+    }
+    val unreadProjectIds = remember(agentTasks) {
+        agentTasks.mapNotNullTo(mutableSetOf()) { task ->
+            task.projectId?.takeIf { task.unread }
         }
     }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
@@ -222,6 +228,7 @@ private fun ProjectCockpit(
                             Text(item.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${item.actions.size} runs · ${item.notes.count { !it.completed }} notes", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                         }
+                        if (item.id in unreadProjectIds) UnreadDot()
                     }
                 }
             }

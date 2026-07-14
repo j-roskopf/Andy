@@ -47,6 +47,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentKind
 import app.andy.model.modelConfigurationLabel
 import app.andy.service.AndyServices
+import app.andy.currentTimeMillis
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
@@ -83,9 +84,9 @@ private fun AgentCommandCenter(services: AndyServices, active: Boolean) {
     var query by remember { mutableStateOf("") }
     var activeOnly by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
-    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     LaunchedEffect(active) { if (!active) { composing = true; pendingConfirmation = null } }
-    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = System.currentTimeMillis() } }
+    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
     val inbox = remember(tasks, query, activeOnly) {
         tasks.filter { it.projectId == null }

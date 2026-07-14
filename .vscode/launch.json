@@ -22,6 +22,13 @@
         "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
         "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
       }
+    },
+    {
+      "name": "Andy: Run Web",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew wasmJsBrowserDevelopmentRun",
+      "cwd": "${workspaceFolder}"
     }
   ]
 }

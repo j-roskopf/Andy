@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,6 +31,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -104,11 +106,15 @@ internal fun DevicesScreen(
     onForgetPairedWifi: (String) -> Unit,
     onReconnectPairedWifi: (PairedWifiDevice) -> Unit,
     onDisconnectWifi: (String) -> Unit,
+    allowAvdManagement: Boolean = true,
+    allowWifiPairing: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(services.avd) { DevicesScreenState(services.avd) }
+    val webConnection = services.web?.connection?.state?.collectAsState()?.value
 
     fun refreshAvds() {
+        if (!allowAvdManagement) return
         scope.launch {
             state.avds = state.avd.listVirtualDevices()
         }
@@ -133,10 +139,46 @@ internal fun DevicesScreen(
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Toolbar("Devices", "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${state.avds.size} created", onPrimary = {
+        val deviceSummary = if (allowAvdManagement) {
+            "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${state.avds.size} created"
+        } else {
+            "${devices.size} connected over Web ADB"
+        }
+        Toolbar("Devices", deviceSummary, onPrimary = {
             onRefresh()
             refreshAvds()
         }, primaryLabel = "Refresh")
+        if (services.web != null && webConnection != null) {
+            PanelCard {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("Web ADB connection", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(webConnection.status, color = if (webConnection.connected) Green else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = { scope.launch { services.web.connection.connectWebSocket(); onRefresh() } },
+                        enabled = !webConnection.connecting,
+                    ) { Text("Use ADB + WebSocket") }
+                    OutlinedButton(
+                        onClick = { scope.launch { services.web.connection.requestWebUsb(); onRefresh() } },
+                        enabled = !webConnection.connecting,
+                    ) { Text("Use WebUSB") }
+                    OutlinedButton(
+                        onClick = { scope.launch { services.web.connection.retry(); onRefresh() } },
+                        enabled = !webConnection.connecting,
+                    ) { Text("Retry now") }
+                }
+                webConnection.error?.let { error ->
+                    SelectionContainer {
+                        Text(error, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextField(
                 state.deviceQuery,
@@ -151,17 +193,25 @@ internal fun DevicesScreen(
                 FilterPill(filter.label, state.deviceFilter == filter, if (state.deviceFilter == filter) Rust else Cyan) { state.deviceFilter = filter }
             }
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { state.showPairDialog = true }) { Text("Pair over Wi‑Fi") }
-            Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
+            if (allowWifiPairing) {
+                OutlinedButton(onClick = { state.showPairDialog = true }) { Text("Pair over Wi‑Fi") }
+            }
+            if (allowAvdManagement) {
+                Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
+            }
         }
         if (sdk.issues.isNotEmpty()) {
             PanelCard {
                 Text("SDK setup", color = TextPrimary, fontWeight = FontWeight.Bold)
-                sdk.issues.forEach { Text(it, color = TextSecondary, fontSize = 12.sp) }
-                Text("SDK: ${sdk.sdkPath ?: "-"}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        sdk.issues.forEach { Text(it, color = TextSecondary, fontSize = 12.sp) }
+                        Text("SDK: ${sdk.sdkPath ?: "-"}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                }
             }
         }
-        PanelCard {
+        if (allowAvdManagement) PanelCard {
             Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
             if (startStatus.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -269,7 +319,7 @@ internal fun DevicesScreen(
                 }
             }
         }
-        PanelCard {
+        if (allowWifiPairing) PanelCard {
             Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
             if (state.wifiStatus.isNotBlank()) {
                 Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
@@ -357,7 +407,7 @@ internal fun DevicesScreen(
                         }
                     }
                     OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
-                    if (device.kind == DeviceKind.Emulator && online) {
+                    if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
                         Spacer(Modifier.width(8.dp))
                         OutlinedButton(
                             onClick = { onStopEmulator(device) },
@@ -369,8 +419,10 @@ internal fun DevicesScreen(
                 }
             }
         }
-        if (devices.isEmpty()) EmptyState("No connected Android devices. Connect USB debugging, pair over Wi‑Fi, or start an emulator.")
-        if (state.showCreateWizard) {
+        if (devices.isEmpty()) {
+            EmptyState(if (allowAvdManagement) "No connected Android devices. Connect USB debugging, pair over Wi‑Fi, or start an emulator." else "No browser-authorized Android devices. Use ADB + WebSocket or WebUSB to connect.")
+        }
+        if (allowAvdManagement && state.showCreateWizard) {
             CreateVirtualDeviceDialog(
                 avd = state.avd,
                 onDismiss = { state.showCreateWizard = false },
@@ -382,7 +434,7 @@ internal fun DevicesScreen(
                 },
             )
         }
-        if (state.showPairDialog) {
+        if (allowWifiPairing && state.showPairDialog) {
             PairOverWifiDialog(
                 devices = services.devices,
                 onDismiss = { state.showPairDialog = false },
@@ -545,7 +597,7 @@ private fun CreateVirtualDeviceDialog(
                 Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 when (step) {
                     1 -> LazyColumn(Modifier.height(390.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        profiles.groupBy { it.category }.toSortedMap(compareBy { it.ordinal }).forEach { (category, rows) ->
+                        profiles.groupBy { it.category }.entries.sortedBy { it.key.ordinal }.forEach { (category, rows) ->
                             item { Text(category.name, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
                             items(rows) { profile ->
                                 TableRow(Modifier.clickable {

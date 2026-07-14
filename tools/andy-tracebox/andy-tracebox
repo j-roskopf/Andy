@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Launch Andy's pinned tracebox bridge with its web origins allowed."""
+
+from __future__ import annotations
+
+import hashlib
+import ipaddress
+import os
+import platform
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+
+PRODUCTION_ORIGIN = "https://andy.joetr.com"
+WEB_PORT = 10_000
+DEFAULT_RELEASE_BASE = "https://github.com/j-roskopf/Andy/releases/latest/download"
+CHECKSUM_ASSET = "andy-tracebox-SHA256SUMS"
+
+
+def normalized_target(system: Optional[str] = None, machine: Optional[str] = None) -> Tuple[str, str]:
+    system = (system or sys.platform).lower()
+    machine = (machine or platform.machine()).lower()
+    if system.startswith("darwin"):
+        target_system = "macos"
+    elif system.startswith("linux"):
+        target_system = "linux"
+    else:
+        raise RuntimeError(
+            "Andy tracebox currently supports macOS and Linux. "
+            "Use WebUSB in Chrome or Edge on this platform."
+        )
+
+    if machine in {"arm64", "aarch64"}:
+        target_machine = "arm64"
+    elif machine in {"x86_64", "amd64"}:
+        target_machine = "x86_64"
+    else:
+        raise RuntimeError(f"Andy tracebox does not have a build for {system}/{machine}.")
+    return target_system, target_machine
+
+
+def release_asset_name(system: Optional[str] = None, machine: Optional[str] = None) -> str:
+    target_system, target_machine = normalized_target(system, machine)
+    return f"andy-tracebox-bin-{target_system}-{target_machine}"
+
+
+def parse_checksum(checksums: str, asset_name: str) -> str:
+    for line in checksums.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) == 2 and parts[1].lstrip("*") == asset_name:
+            digest = parts[0].lower()
+            if len(digest) == 64 and all(character in "0123456789abcdef" for character in digest):
+                return digest
+    raise RuntimeError(f"{asset_name} is missing from {CHECKSUM_ASSET}.")
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return response.read().decode("utf-8")
+
+
+def download_file(url: str, destination: Path) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": "Andy tracebox launcher"})
+    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
+        while chunk := response.read(1024 * 1024):
+            output.write(chunk)
+
+
+def cache_directory() -> Path:
+    configured = os.environ.get("ANDY_TRACEBOX_CACHE_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache:
+        return Path(xdg_cache).expanduser() / "andy" / "tracebox"
+    return Path.home() / ".cache" / "andy" / "tracebox"
+
+
+def discover_private_ipv4_addresses() -> List[str]:
+    addresses = set()
+    try:
+        for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addresses.add(result[4][0])
+    except OSError:
+        pass
+
+    # Connecting a UDP socket selects the default route without sending a packet.
+    route_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        route_socket.connect(("192.0.2.1", 9))
+        addresses.add(route_socket.getsockname()[0])
+    except OSError:
+        pass
+    finally:
+        route_socket.close()
+
+    private_addresses = []
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
+            private_addresses.append(address)
+    return sorted(private_addresses)
+
+
+def allowed_origins(
+    private_ipv4_addresses: Optional[List[str]] = None,
+    configured_origins: Optional[List[str]] = None,
+) -> List[str]:
+    addresses = private_ipv4_addresses
+    if addresses is None:
+        addresses = discover_private_ipv4_addresses()
+    if configured_origins is None:
+        configured_origins = os.environ.get("ANDY_TRACEBOX_ADDITIONAL_ORIGINS", "").split(",")
+
+    origins = [PRODUCTION_ORIGIN]
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if parsed.version == 4 and parsed.is_private and not parsed.is_loopback and not parsed.is_link_local:
+            origins.append(f"http://{address}:{WEB_PORT}")
+    origins.extend(origin.strip() for origin in configured_origins if origin.strip())
+    return list(dict.fromkeys(origins))
+
+
+def resolve_binary() -> Path:
+    override = os.environ.get("ANDY_TRACEBOX_BINARY")
+    if override:
+        binary = Path(override).expanduser().resolve()
+        if not binary.is_file():
+            raise RuntimeError(f"ANDY_TRACEBOX_BINARY does not exist: {binary}")
+        return binary
+
+    release_base = os.environ.get("ANDY_TRACEBOX_RELEASE_BASE", DEFAULT_RELEASE_BASE).rstrip("/")
+    asset_name = release_asset_name()
+    checksums = download_text(f"{release_base}/{CHECKSUM_ASSET}")
+    expected_sha256 = parse_checksum(checksums, asset_name)
+    binary = cache_directory() / f"{asset_name}-{expected_sha256[:16]}"
+    if binary.is_file() and sha256(binary) == expected_sha256:
+        return binary
+
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=f".{asset_name}-", dir=binary.parent, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        download_file(f"{release_base}/{asset_name}", temporary_path)
+        actual_sha256 = sha256(temporary_path)
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"Checksum mismatch for {asset_name}: expected {expected_sha256}, got {actual_sha256}."
+            )
+        temporary_path.chmod(temporary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        temporary_path.replace(binary)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return binary
+
+
+def bridge_command(
+    binary: Path,
+    extra_arguments: List[str],
+    origins: Optional[List[str]] = None,
+) -> List[str]:
+    return [
+        str(binary),
+        "websocket_bridge",
+        *extra_arguments,
+        "--http-additional-cors-origins",
+        ",".join(origins or allowed_origins()),
+    ]
+
+
+def main(arguments: List[str]) -> int:
+    binary = resolve_binary()
+    command = bridge_command(binary, arguments)
+    if os.environ.get("ANDY_TRACEBOX_PRINT_COMMAND") == "1":
+        print(" ".join(command))
+        return 0
+    process = subprocess.Popen(command)
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        return 130
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except (OSError, RuntimeError) as error:
+        print(f"andy-tracebox: {error}", file=sys.stderr)
+        raise SystemExit(1)

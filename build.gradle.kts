@@ -1,6 +1,9 @@
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
+import org.jetbrains.kotlin.gradle.targets.wasm.nodejs.WasmNodeJsEnvSpec
 
 plugins {
     kotlin("multiplatform") version "2.4.0"
@@ -79,8 +82,24 @@ val generateAndyBuildInfo = tasks.register("generateAndyBuildInfo") {
 group = "app.andy"
 version = andyVersionName
 
+@OptIn(ExperimentalWasmDsl::class)
 kotlin {
     jvm("desktop")
+    wasmJs {
+        browser {
+            commonWebpackConfig {
+                // The rename invalidates older cached development bundles once. The
+                // webpack.config.d override prevents subsequent rebuilds from being
+                // hidden by the browser cache.
+                outputFileName = "andy-web.js"
+                devServer = (devServer ?: KotlinWebpackConfig.DevServer()).copy(
+                    port = 10000,
+                    open = false,
+                )
+            }
+        }
+        binaries.executable()
+    }
 
     sourceSets {
         val commonMain by getting {
@@ -91,6 +110,7 @@ kotlin {
                 implementation("org.jetbrains.compose.material3:material3:1.9.0")
                 implementation("org.jetbrains.compose.components:components-resources:1.11.1")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
             }
         }
         val commonTest by getting {
@@ -102,7 +122,6 @@ kotlin {
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
                 implementation("org.jetbrains.jediterm:jediterm-core:3.73")
@@ -143,6 +162,19 @@ kotlin {
                 }
             }
         }
+        val wasmJsMain by getting {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
+                implementation(npm("@yume-chan/adb", "2.6.0"))
+                implementation(npm("@yume-chan/adb-daemon-webusb", "2.3.2"))
+                implementation(npm("@yume-chan/adb-credential-web", "2.1.0"))
+                implementation(npm("@yume-chan/adb-scrcpy", "2.3.2"))
+                implementation(npm("@yume-chan/scrcpy", "2.3.0"))
+                implementation(npm("@yume-chan/scrcpy-decoder-webcodecs", "2.5.3"))
+                implementation(npm("@yume-chan/scrcpy-decoder-tinyh264", "2.1.0"))
+                implementation(npm("@yume-chan/stream-extra", "2.6.1"))
+            }
+        }
         val desktopTest by getting {
             dependencies {
                 implementation(kotlin("test"))
@@ -151,6 +183,12 @@ kotlin {
             }
         }
     }
+}
+
+// Use the developer or CI machine's Node installation. Besides avoiding a redundant
+// runtime download, this keeps the build compatible with settings-level-only repositories.
+extensions.configure<WasmNodeJsEnvSpec>("kotlinWasmNodeJsSpec") {
+    download.set(false)
 }
 
 roborazzi {

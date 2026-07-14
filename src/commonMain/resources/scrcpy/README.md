@@ -28,7 +28,7 @@ executable, SDL UI, or scrcpy's host-side wrappers.
 3. Replace this directory's `scrcpy-server` file with that payload.
 4. Copy the matching upstream license to `LICENSE.scrcpy` if it changed.
 5. Update the `Version` and `SHA-256` lines above:
-   `shasum -a 256 src/desktopMain/resources/scrcpy/scrcpy-server`
+   `shasum -a 256 src/commonMain/resources/scrcpy/scrcpy-server`
 6. Verify at least:
    `./gradlew --no-daemon desktopTest --tests app.andy.desktop.service.DesktopServicesMockDeviceTest`
    `./gradlew --no-daemon compileKotlinDesktop`

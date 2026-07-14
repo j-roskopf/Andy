@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentKind
 import app.andy.model.AgentProviderQuota
+import app.andy.currentTimeMillis
+import app.andy.formatDecimal
 import app.andy.model.AgentQuotaWindow
 import app.andy.model.agentUsageOverview
 import app.andy.service.AndyServices
@@ -55,7 +57,7 @@ internal fun AgentQuotaMenu(
     val tasks by services.agentRuns.tasks.collectAsState()
     val quotas by services.agentRuns.providerQuotas.collectAsState()
     val quotaAccess by services.agentRuns.quotaAccess.collectAsState()
-    val now = System.currentTimeMillis()
+    val now = currentTimeMillis()
     val overview = remember(tasks, agent, now / 60_000L) { agentUsageOverview(tasks, agent, now) }
     val quota = quotas[agent]
     var expanded by remember(agent) { mutableStateOf(false) }
@@ -296,7 +298,7 @@ private fun compactTokens(value: Long): String = when {
     else -> "$value tok"
 }
 
-private fun formatUsageCost(value: Double): String = "${if (value > 0) "~" else ""}$${"%.2f".format(value)}"
+private fun formatUsageCost(value: Double): String = "${if (value > 0) "~" else ""}$${formatDecimal(value, 2)}"
 
 private fun formatQuotaReset(resetAtMillis: Long, nowMillis: Long): String {
     val minutes = ((resetAtMillis - nowMillis) / 60_000L).coerceAtLeast(0)

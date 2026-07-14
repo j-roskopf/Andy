@@ -31,7 +31,6 @@ internal class ShellState(
     private val services: AndyServices,
     private val scope: CoroutineScope,
 ) {
-    @set:JvmName("writeDestination")
     var destination by mutableStateOf(AndyDestination.Devices)
         private set
     var devices by mutableStateOf<List<AndroidDevice>>(emptyList())
@@ -44,7 +43,6 @@ internal class ShellState(
         private set
     var workspaceLoaded by mutableStateOf(false)
         private set
-    @set:JvmName("writeNetworkRulesVisible")
     var networkRulesVisible by mutableStateOf(false)
         private set
     var networkLiveVisible by mutableStateOf(false)
@@ -61,10 +59,8 @@ internal class ShellState(
         private set
     var actionsConfig by mutableStateOf(ActionsConfig())
         private set
-    @set:JvmName("writeActiveRunId")
     var activeRunId by mutableStateOf<String?>(null)
         private set
-    @set:JvmName("writeTerminalRunId")
     var terminalRunId by mutableStateOf<String?>(null)
         private set
 
@@ -73,7 +69,7 @@ internal class ShellState(
     val accessibilityState = AccessibilityState()
     val transfer = DeviceTransferCoordinator()
 
-    fun setDestination(value: AndyDestination) {
+    fun navigateTo(value: AndyDestination) {
         destination = value
     }
 
@@ -81,7 +77,7 @@ internal class ShellState(
         selectedSerial = serial
     }
 
-    fun setNetworkRulesVisible(value: Boolean) {
+    fun updateNetworkRulesVisible(value: Boolean) {
         networkRulesVisible = value
     }
 
@@ -97,7 +93,7 @@ internal class ShellState(
         performanceLiveVisible = !performanceLiveVisible
     }
 
-    fun setActiveRunId(value: String?) {
+    fun updateActiveRunId(value: String?) {
         activeRunId = value
     }
 
@@ -170,9 +166,11 @@ internal class ShellState(
         val saved = services.workspaceStore.load()
         workspaceState = saved
         selectedSerial = saved.selectedDeviceSerial
-        actionsConfig = services.actionConfig.load()
+        if (services.capabilities.hostAutomation) {
+            actionsConfig = services.actionConfig.load()
+        }
         workspaceLoaded = true
-        if (saved.pairedWifiDevices.isNotEmpty()) {
+        if (services.capabilities.wifiPairing && saved.pairedWifiDevices.isNotEmpty()) {
             // Reconnect in the background so workspace load / first device refresh are not blocked.
             scope.launch {
                 val discovery = services.devices.discoverSdk()

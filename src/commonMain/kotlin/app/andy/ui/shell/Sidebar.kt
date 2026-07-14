@@ -33,6 +33,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +66,7 @@ import org.jetbrains.compose.resources.painterResource
 @Composable
 internal fun Sidebar(
     current: AndyDestination,
+    destinations: List<AndyDestination>,
     deviceCount: Int,
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
@@ -71,11 +74,15 @@ internal fun Sidebar(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     sdk: SdkDiscovery,
-    updates: AppUpdateService,
+    updates: AppUpdateService?,
     mcpRunning: Boolean,
     mcpPort: Int
 ) {
-    val updateState by updates.state.collectAsState()
+    val updateState by if (updates != null) {
+        updates.state.collectAsState()
+    } else {
+        remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
+    }
     val scope = rememberCoroutineScope()
     val sidebarWidth by animateDpAsState(
         targetValue = if (expanded) 246.dp else 64.dp,
@@ -121,7 +128,7 @@ internal fun Sidebar(
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
         ) {
-            AndyDestination.entries.forEach { item ->
+            destinations.forEach { item ->
                 val active = item == current
                 Row(
                     Modifier.fillMaxWidth()
@@ -182,13 +189,19 @@ internal fun Sidebar(
                     fontSize = 10.sp,
                     maxLines = 1,
                 )
-                StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-                StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
-                StatusRow("Proxy CA", "local", true)
-                StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
+                if (updates != null) {
+                    StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
+                    StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
+                    StatusRow("Proxy CA", "local", true)
+                    StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
+                } else {
+                    StatusRow("Web ADB", if (deviceCount > 0) "connected" else "disconnected", deviceCount > 0)
+                    StatusRow("Local only", "port 10000", true)
+                }
 
                 HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
 
+                if (updates != null) {
                 val updateText = when (updateState) {
                     AppUpdateState.Idle -> "Check for updates"
                     AppUpdateState.Checking -> "Checking for updates..."
@@ -230,6 +243,7 @@ internal fun Sidebar(
                         fontFamily = MonoFont,
                         fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
                     )
+                }
                 }
             }
         }

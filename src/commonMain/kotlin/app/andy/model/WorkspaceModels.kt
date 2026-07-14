@@ -1,5 +1,8 @@
 package app.andy.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class WorkspaceState(
     val selectedSdkPath: String? = null,
     val selectedDeviceSerial: String? = null,

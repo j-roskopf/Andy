@@ -177,12 +177,12 @@ internal fun DesignScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = {
                         val next = ((zoom.toFloatOrNull() ?: 1f) - 0.25f).coerceIn(0.5f, 4f)
-                        zoom = "%.2f".format(next)
+                        zoom = app.andy.formatDecimal(next, 2)
                     }) { Text("-") }
                     TextField(zoom, { zoom = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(96.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
                     OutlinedButton(onClick = {
                         val next = ((zoom.toFloatOrNull() ?: 1f) + 0.25f).coerceIn(0.5f, 4f)
-                        zoom = "%.2f".format(next)
+                        zoom = app.andy.formatDecimal(next, 2)
                     }) { Text("+") }
                 }
             }
@@ -191,7 +191,7 @@ internal fun DesignScreen(
                 OutlinedButton(onClick = {
                     scope.launch {
                         val path = pickFiles(allowMultiple = false).firstOrNull() ?: return@launch
-                        val canLoad = withContext(Dispatchers.IO) { loadImageBitmap(path) != null }
+                        val canLoad = withContext(Dispatchers.Default) { loadImageBitmap(path) != null }
                         if (canLoad) {
                             referenceImagePath = path
                             referenceImageKey++
@@ -281,7 +281,7 @@ private fun Color.toHex(): String {
     val r = (red * 255).toInt().coerceIn(0, 255)
     val g = (green * 255).toInt().coerceIn(0, 255)
     val b = (blue * 255).toInt().coerceIn(0, 255)
-    return "#%02X%02X%02X".format(r, g, b)
+    return app.andy.formatRgbHex(r, g, b)
 }
 
 private fun String.fileName(): String = substringAfterLast('/').substringAfterLast('\\')
