@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.andy.service.AndyServices
 import app.andy.service.MirrorInput
+import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
@@ -50,6 +51,8 @@ fun AndyApp(
     services: AndyServices,
     requestedDestination: AndyDestination? = null,
     onDestinationConsumed: () -> Unit = {},
+    requestedOpenAgentTask: OpenAgentTaskRequest? = null,
+    onOpenAgentTaskConsumed: () -> Unit = {},
     requestPopOutMirror: Boolean = false,
     onPopOutMirrorRequestConsumed: () -> Unit = {},
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
@@ -62,6 +65,8 @@ fun AndyApp(
             services = services,
             requestedDestination = requestedDestination,
             onDestinationConsumed = onDestinationConsumed,
+            requestedOpenAgentTask = requestedOpenAgentTask,
+            onOpenAgentTaskConsumed = onOpenAgentTaskConsumed,
             requestPopOutMirror = requestPopOutMirror,
             onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
             onPopOutMirror = onPopOutMirror,

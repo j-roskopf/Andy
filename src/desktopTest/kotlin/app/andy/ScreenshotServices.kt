@@ -21,6 +21,7 @@ internal object ScreenshotServices {
             WorkspaceState(
                 selectedSdkPath = "/Android/sdk",
                 selectedDeviceSerial = serial,
+                projectsIntroductionCompleted = true,
                 selectedPackage = "com.example.garden",
                 proxyPort = 9099,
                 proxyRules = listOf(
@@ -278,6 +279,7 @@ internal object ScreenshotServices {
         override suspend fun refreshProviderQuotas() = Unit
         override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
         override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(listOf(AgentSkill("compose-expert", "Compose UI guidance", "/skills/compose-expert/SKILL.md")))
+        override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
         override suspend fun createAndStart(draft: AgentTaskDraft) = task
         override suspend fun startImplementation(taskId: String) = Unit
         override fun stop(taskId: String) = Unit
@@ -470,6 +472,8 @@ internal object ScreenshotServices {
         override fun pauseBuildPair(buildTaskId: String) = Unit
         override fun stopBuildPair(buildTaskId: String) = Unit
         override suspend fun resumeBuildPair(buildTaskId: String) = Unit
+        override suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String? = null
+        override suspend fun startRecoveryReview(buildTaskId: String): String? = null
         override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
         override suspend fun deleteProject(projectId: String) = Unit
     }

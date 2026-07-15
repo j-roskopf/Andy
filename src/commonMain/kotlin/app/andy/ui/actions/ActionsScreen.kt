@@ -140,6 +140,9 @@ private fun ProjectCockpit(
     agentTasks: List<AgentTask>,
     initialWorkflowTaskId: String?,
     initialCanvasLabel: String?,
+    requestedAgentTaskId: String?,
+    requestedProjectId: String?,
+    onRequestedAgentTaskConsumed: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
@@ -169,6 +172,17 @@ private fun ProjectCockpit(
 
     LaunchedEffect(config.projects) {
         if (selectedProjectId !in config.projects.map { it.id }) selectedProjectId = config.projects.firstOrNull()?.id
+    }
+    LaunchedEffect(requestedAgentTaskId, requestedProjectId, agentTasks) {
+        val taskId = requestedAgentTaskId ?: return@LaunchedEffect
+        val task = agentTasks.firstOrNull { it.id == taskId && it.projectId == requestedProjectId }
+        if (task != null) {
+            selectedProjectId = task.projectId
+            selectedTaskId = task.id
+            workPane = ProjectRightPane.Chat
+            services.agentRuns.markRead(task.id)
+        }
+        onRequestedAgentTaskConsumed()
     }
     LaunchedEffect(selectedProjectId) {
         sessionsVisibleCount = InitialSessionVisibleCount
@@ -515,22 +529,34 @@ internal fun ActionsScreen(
     onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
+    showIntroduction: Boolean = false,
+    onIntroductionComplete: () -> Unit = {},
     active: Boolean = true,
     initialWorkflowTaskId: String? = null,
     initialCanvasLabel: String? = null,
+    requestedAgentTaskId: String? = null,
+    requestedProjectId: String? = null,
+    onRequestedAgentTaskConsumed: () -> Unit = {},
 ) {
-    ProjectCockpit(
-        services = services,
-        config = config,
-        running = running,
-        activeRunId = activeRunId,
-        terminalRunId = terminalRunId,
-        onActiveRunIdChange = onActiveRunIdChange,
-        onConfigChange = onConfigChange,
-        agentTasks = agentTasks,
-        initialWorkflowTaskId = initialWorkflowTaskId,
-        initialCanvasLabel = initialCanvasLabel,
-    )
+    if (showIntroduction) {
+        ProjectsIntroduction(onComplete = onIntroductionComplete)
+    } else {
+        ProjectCockpit(
+            services = services,
+            config = config,
+            running = running,
+            activeRunId = activeRunId,
+            terminalRunId = terminalRunId,
+            onActiveRunIdChange = onActiveRunIdChange,
+            onConfigChange = onConfigChange,
+            agentTasks = agentTasks,
+            initialWorkflowTaskId = initialWorkflowTaskId,
+            initialCanvasLabel = initialCanvasLabel,
+            requestedAgentTaskId = requestedAgentTaskId,
+            requestedProjectId = requestedProjectId,
+            onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
+        )
+    }
 }
 
 private fun actionStatusColor(status: ActionRunStatus): Color = when (status) {

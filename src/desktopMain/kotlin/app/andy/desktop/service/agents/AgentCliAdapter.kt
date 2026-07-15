@@ -189,6 +189,19 @@ internal fun parseCursorStyleToolCall(obj: JsonObject, nowMillis: Long): List<Ag
     }
 }
 
+/**
+ * Cursor's plan mode can finish through its structured `createPlan` tool while
+ * the terminal `result` only repeats the last progress update. Keep the
+ * successful tool payload as the authoritative implementation plan.
+ */
+internal fun successfulCursorPlanText(line: String): String? {
+    val obj = parseJsonObject(line) ?: return null
+    if (obj.stringOrNull("type") != "tool_call" || obj.stringOrNull("subtype") != "completed") return null
+    val payload = obj.objectOrNull("tool_call")?.objectOrNull("createPlanToolCall") ?: return null
+    if (payload.objectOrNull("result")?.objectOrNull("success") == null) return null
+    return payload.objectOrNull("args")?.stringOrNull("plan")?.trim()?.takeIf { it.isNotBlank() }
+}
+
 private fun firstCursorToolPayload(toolCall: JsonObject): JsonObject? =
     toolCall.entries.firstOrNull { (key, value) -> key.endsWith("ToolCall") && value is JsonObject }
         ?.value as? JsonObject

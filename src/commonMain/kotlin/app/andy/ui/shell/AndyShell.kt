@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
 import app.andy.service.AndyServices
+import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.accessibility.AccessibilityScreen
 import app.andy.ui.actions.ActionsScreen
 import app.andy.ui.agents.AgentsScreen
@@ -64,6 +65,8 @@ internal fun AndyShell(
     services: AndyServices,
     requestedDestination: AndyDestination?,
     onDestinationConsumed: () -> Unit,
+    requestedOpenAgentTask: OpenAgentTaskRequest?,
+    onOpenAgentTaskConsumed: () -> Unit,
     requestPopOutMirror: Boolean,
     onPopOutMirrorRequestConsumed: () -> Unit,
     onPopOutMirror: (String?, String?) -> Unit,
@@ -102,6 +105,11 @@ internal fun AndyShell(
         requestedDestination?.let {
             state.navigateTo(it.takeIf(capabilities.destinations::contains) ?: AndyDestination.Devices)
             onDestinationConsumed()
+        }
+    }
+    LaunchedEffect(requestedOpenAgentTask) {
+        requestedOpenAgentTask?.let { request ->
+            state.navigateTo(if (request.projectId == null) AndyDestination.Agents else AndyDestination.Actions)
         }
     }
 
@@ -221,13 +229,22 @@ internal fun AndyShell(
                             onActiveRunIdChange = { state.updateActiveRunId(it) },
                             onConfigChange = { state.persistActionsConfig(it) },
                             agentTasks = agentTasks,
+                            showIntroduction = state.workspaceLoaded && !state.workspaceState.projectsIntroductionCompleted,
+                            onIntroductionComplete = { state.updateWorkspace { it.copy(projectsIntroductionCompleted = true) } },
                             active = actionsActive,
                             initialWorkflowTaskId = initialProjectTaskId,
                             initialCanvasLabel = initialProjectTab,
+                            requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
+                            requestedProjectId = requestedOpenAgentTask?.projectId,
+                            onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
                         )
                     }
                     RetainedDestination(active = agentsActive) {
-                        AgentsScreen(services = services, active = agentsActive)
+                        AgentsScreen(
+                            services = services, active = agentsActive,
+                            requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
+                            onRequestedTaskConsumed = onOpenAgentTaskConsumed,
+                        )
                     }
                     when (state.destination) {
                         AndyDestination.Devices -> DevicesScreen(

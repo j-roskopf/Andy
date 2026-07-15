@@ -9,6 +9,13 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
+import app.andy.model.ProjectAgentProfile
+import app.andy.model.ProjectPlanVersion
+import app.andy.model.ProjectTask
+import app.andy.model.ProjectTaskKind
+import app.andy.model.ProjectTaskState
+import app.andy.model.ProjectWorkflowStage
+import app.andy.model.ProjectWorkflowState
 import app.andy.model.WorkspaceState
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
@@ -283,8 +290,8 @@ class AgentPlanHandoffTest {
             assertTrue(!implementation.hasChangeBaseline)
             assertTrue(implementation.changeBaselinePaths.isEmpty())
             assertTrue(launched.implementationPrompt?.contains(planned.prompt) == true)
-            assertTrue(launched.implementationPrompt?.contains(completedPlan) == true)
-            assertTrue(launched.implementationPrompt?.contains("Plan mode is active") == false)
+            assertTrue(launched.implementationPrompt.contains(completedPlan))
+            assertTrue(!launched.implementationPrompt.contains("Plan mode is active"))
             assertTrue(adapter.resumeCalls == 0, "implementation must never use a provider resume command")
             assertTrue(
                 service.events(planned.id).value.filterIsInstance<AgentEvent.UserMessage>()
@@ -400,6 +407,90 @@ class AgentUserInputResumeTest {
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>()
                     .any { it.text.contains("Desktop") },
             )
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+}
+
+class CursorPlanBackfillTest {
+    @Test
+    fun restoresStructuredCursorPlansIntoTheTaskAndProjectWorkflow() = runBlocking {
+        val dir = File.createTempFile("andy-cursor-plan-backfill", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val oldPlan = "Gathering details. Writing the specification."
+            val recoveredPlan = "# iOS Live Mirror\n\n- Keep Android and iOS sessions independent."
+            val run = AgentTask(
+                id = "cursor-spec-run",
+                title = "Spec: iOS mirror",
+                prompt = "Plan iOS mirroring",
+                agent = AgentKind.Cursor,
+                cwd = dir.absolutePath,
+                originDir = dir.absolutePath,
+                planMode = true,
+                completedPlanText = oldPlan,
+                status = AgentTaskStatus.Completed,
+                workflowTaskId = "spec-ios",
+                workflowStage = ProjectWorkflowStage.Spec,
+                createdAtMillis = 1,
+                finishedAtMillis = 2,
+            )
+            val workflow = ProjectWorkflowState(
+                projectId = "project-ios",
+                tasks = listOf(
+                    ProjectTask(
+                        id = "spec-ios",
+                        projectId = "project-ios",
+                        kind = ProjectTaskKind.Spec,
+                        title = "iOS mirror",
+                        instructions = "Plan it",
+                        profile = ProjectAgentProfile(agent = AgentKind.Cursor),
+                        includeScratchpad = false,
+                        state = ProjectTaskState.Completed,
+                        planVersions = listOf(ProjectPlanVersion(1, oldPlan, run.id, 2)),
+                        createdAtMillis = 1,
+                        updatedAtMillis = 2,
+                    ),
+                ),
+            )
+            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            store.save(
+                AgentStoreState(
+                    tasks = listOf(run),
+                    projectWorkflows = mapOf(workflow.projectId to workflow),
+                ),
+            )
+            store.transcriptFile(run.id).apply { parentFile.mkdirs() }.writeText(
+                """
+                {"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"# iOS Live Mirror\n\n- Keep Android and iOS sessions independent."},"result":{"success":{}}}}}
+                {"type":"result","subtype":"success","result":"$oldPlan"}
+                """.trimIndent() + "\n",
+            )
+
+            val service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Cursor to CursorAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+            )
+
+            withTimeout(10_000) {
+                while (service.tasks.value.singleOrNull()?.completedPlanText != recoveredPlan) delay(25)
+            }
+            assertEquals(recoveredPlan, service.projects.value[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
+
+            val saved = store.load()
+            assertEquals(recoveredPlan, saved.tasks.single().completedPlanText)
+            assertEquals(recoveredPlan, saved.projectWorkflows[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
         } finally {
             scope.cancel()
             dir.deleteRecursively()

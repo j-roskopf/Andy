@@ -244,6 +244,8 @@ private data class ProjectTaskDto(
     val reviewGeneration: Int = 0,
     val maxReviewFailures: Int = 5,
     val reviewReopenedCompleted: Boolean = false,
+    val recoveryMode: Boolean = false,
+    val reviewStale: Boolean = false,
     val verificationInstructions: String = "",
     val maxVerificationAttempts: Int = 5,
     val maxBudgetUsd: Double = 0.0,
@@ -287,6 +289,7 @@ private data class ProjectTaskAttemptDto(
     val createdAtMillis: Long,
     val reviewedBuildRunId: String = "",
     val reviewGeneration: Int = 0,
+    val isRecoveryFollowUp: Boolean = false,
 )
 
 @Serializable
@@ -636,6 +639,8 @@ private fun ProjectTaskDto.toModel(): ProjectTask? {
         reviewGeneration = reviewGeneration.coerceAtLeast(0),
         maxReviewFailures = maxReviewFailures.coerceIn(1, 20),
         reviewReopenedCompleted = reviewReopenedCompleted,
+        recoveryMode = recoveryMode,
+        reviewStale = reviewStale,
         verificationInstructions = verificationInstructions,
         maxVerificationAttempts = maxVerificationAttempts.coerceIn(1, 20),
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
@@ -656,6 +661,7 @@ private fun ProjectTaskDto.toModel(): ProjectTask? {
                     createdAtMillis = attempt.createdAtMillis,
                     reviewedBuildRunId = attempt.reviewedBuildRunId.takeIf { it.isNotBlank() },
                     reviewGeneration = attempt.reviewGeneration.coerceAtLeast(0),
+                    isRecoveryFollowUp = attempt.isRecoveryFollowUp,
                 )
             }
         },
@@ -743,6 +749,8 @@ private fun ProjectTask.toDto(): ProjectTaskDto = ProjectTaskDto(
     reviewGeneration = reviewGeneration,
     maxReviewFailures = maxReviewFailures,
     reviewReopenedCompleted = reviewReopenedCompleted,
+    recoveryMode = recoveryMode,
+    reviewStale = reviewStale,
     verificationInstructions = verificationInstructions,
     maxVerificationAttempts = maxVerificationAttempts,
     maxBudgetUsd = maxBudgetUsd ?: 0.0,
@@ -762,6 +770,7 @@ private fun ProjectTask.toDto(): ProjectTaskDto = ProjectTaskDto(
             it.createdAtMillis,
             it.reviewedBuildRunId.orEmpty(),
             it.reviewGeneration,
+            it.isRecoveryFollowUp,
         )
     },
     reviewVerdicts = reviewVerdicts.map { verdict ->

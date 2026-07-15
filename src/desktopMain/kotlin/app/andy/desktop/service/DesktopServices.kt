@@ -89,6 +89,7 @@ fun createDesktopServices(): AndyServices {
         actionRuns = actionRuns,
         agentRuns = agentRuns,
         projectWorkflows = agentRuns,
+        notificationSounds = DesktopNotificationSoundPlayer(),
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),

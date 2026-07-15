@@ -5,7 +5,7 @@
       "name": "Andy: Run Desktop",
       "type": "node-terminal",
       "request": "launch",
-      "command": "./gradlew run",
+      "command": "./gradlew runDistributable",
       "cwd": "${workspaceFolder}",
       "env": {
         "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",

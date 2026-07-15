@@ -315,6 +315,9 @@ tasks.withType<Test>().configureEach {
 compose.desktop {
     application {
         mainClass = "app.andy.desktop.MainKt"
+        // On macOS, the JDK's posix_spawn helper can fail with a JDK version
+        // mismatch. Use the direct fork path so Andy can still launch agent CLIs.
+        jvmArgs += "-Djdk.lang.Process.launchMechanism=FORK"
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

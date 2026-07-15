@@ -75,7 +75,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-private fun AgentCommandCenter(services: AndyServices, active: Boolean) {
+private fun AgentCommandCenter(services: AndyServices, active: Boolean, requestedTaskId: String?, onRequestedTaskConsumed: () -> Unit) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
     val statuses by services.agentRuns.cliStatuses.collectAsState()
@@ -86,6 +86,9 @@ private fun AgentCommandCenter(services: AndyServices, active: Boolean) {
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     LaunchedEffect(active) { if (!active) { composing = true; pendingConfirmation = null } }
+    LaunchedEffect(requestedTaskId, tasks) {
+        requestedTaskId?.let { id -> tasks.firstOrNull { it.id == id && it.projectId == null }?.let { task -> selectedTaskId = task.id; composing = false; services.agentRuns.markRead(task.id) }; onRequestedTaskConsumed() }
+    }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
     val inbox = remember(tasks, query, activeOnly) {
@@ -145,8 +148,10 @@ private fun AgentCommandCenter(services: AndyServices, active: Boolean) {
 internal fun AgentsScreen(
     services: AndyServices,
     active: Boolean = true,
+    requestedTaskId: String? = null,
+    onRequestedTaskConsumed: () -> Unit = {},
 ) {
-    AgentCommandCenter(services, active)
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed)
 }
 
 @Composable

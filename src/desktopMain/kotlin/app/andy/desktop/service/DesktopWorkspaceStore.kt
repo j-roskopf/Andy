@@ -3,14 +3,21 @@ package app.andy.desktop.service
 import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentNotificationSound
+import app.andy.model.AgentNotificationTiming
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import java.util.Properties
 
-class DesktopWorkspaceStore : WorkspaceStore {
-    private val file = File(System.getProperty("user.home"), ".andy/workspace.properties")
+class DesktopWorkspaceStore(
+    private val file: File = File(System.getProperty("user.home"), ".andy/workspace.properties"),
+) : WorkspaceStore {
+    private val mutableState = MutableStateFlow(WorkspaceState())
+    val state: StateFlow<WorkspaceState> = mutableState
 
     override suspend fun load(): WorkspaceState = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext WorkspaceState()
@@ -26,6 +33,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
+            projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             proxyRules = loadProxyRules(props),
             pairedWifiDevices = loadPairedWifi(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
@@ -42,8 +50,13 @@ class DesktopWorkspaceStore : WorkspaceStore {
             hostFileTreePaneWidth = props.getProperty("hostFileTreePaneWidth")?.toFloatOrNull() ?: 320f,
             hostFileSearchPaneWidth = props.getProperty("hostFileSearchPaneWidth")?.toFloatOrNull() ?: 430f,
             selectedPackage = props.getProperty("selectedPackage")?.takeIf { it.isNotBlank() },
+            agentOsNotificationsEnabled = props.getProperty("agentOsNotificationsEnabled")?.toBooleanStrictOrNull() ?: true,
+            agentNotificationSoundEnabled = props.getProperty("agentNotificationSoundEnabled")?.toBooleanStrictOrNull() ?: true,
+            agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
+            agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
+            agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
         )
-    }
+    }.also { mutableState.value = it }
 
     override suspend fun save(state: WorkspaceState) = withContext(Dispatchers.IO) {
         file.parentFile.mkdirs()
@@ -58,6 +71,7 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
+            setProperty("projectsIntroductionCompleted", state.projectsIntroductionCompleted.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
             state.proxyRules.forEachIndexed { index, rule ->
                 val prefix = "proxyRule.$index."
@@ -94,8 +108,14 @@ class DesktopWorkspaceStore : WorkspaceStore {
             setProperty("hostFileTreePaneWidth", state.hostFileTreePaneWidth.toString())
             setProperty("hostFileSearchPaneWidth", state.hostFileSearchPaneWidth.toString())
             setProperty("selectedPackage", state.selectedPackage.orEmpty())
+            setProperty("agentOsNotificationsEnabled", state.agentOsNotificationsEnabled.toString())
+            setProperty("agentNotificationSoundEnabled", state.agentNotificationSoundEnabled.toString())
+            setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
+            setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
+            setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
+        mutableState.value = state
     }
 
     private fun loadProxyRules(props: Properties): List<ProxyRule> {

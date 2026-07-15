@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.ActionProject
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentCliStatus
+import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.ProjectAgentProfile
@@ -72,6 +73,7 @@ import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.defaultSandboxMode
+import app.andy.model.grillMeInstallCommand
 import app.andy.model.labelFor
 import app.andy.model.sandboxControlLabel
 import app.andy.formatDecimal
@@ -308,10 +310,29 @@ internal fun ProjectWorkflowDetail(
                 onSubmit = { answers -> services.agentRuns.respondToUserInput(runId, request.id, answers) },
             )
         }
-        when (task.kind) {
-            ProjectTaskKind.Spec -> SpecDetail(task, onNewBuildFromPlan) {
-                scope.launch { services.projectWorkflows.runSpec(task.id) }
+        val pairActive = when (task.kind) {
+            ProjectTaskKind.Build -> listOfNotNull(task.linkedReviewTaskId, task.linkedVerificationTaskId)
+                .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
+            ProjectTaskKind.Review, ProjectTaskKind.Verification -> {
+                val build = workflow.tasks.firstOrNull { it.id == task.linkedBuildTaskId }
+                build?.isActive == true || listOfNotNull(build?.linkedReviewTaskId, build?.linkedVerificationTaskId)
+                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
             }
+            ProjectTaskKind.Spec -> workflow.tasks.filter { it.linkedSpecTaskId == task.id }.any { child ->
+                child.isActive || listOfNotNull(child.linkedReviewTaskId, child.linkedVerificationTaskId)
+                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
+            }
+        }
+        when (task.kind) {
+            ProjectTaskKind.Spec -> SpecDetail(
+                task = task,
+                onNewBuildFromPlan = onNewBuildFromPlan,
+                onPlanViewed = services.agentRuns::markRead,
+                onRun = { scope.launch { services.projectWorkflows.runSpec(task.id) } },
+                onRefine = { instructions -> scope.launch { services.projectWorkflows.runSpec(task.id, instructions) } },
+                onEdit = { onEdit(task) },
+                canEdit = !task.isActive && !pairActive,
+            )
             ProjectTaskKind.Build -> BuildDetail(services, workflow, task, agentTasks)
             ProjectTaskKind.Review -> ReviewDetail(task, agentTasks)
             ProjectTaskKind.Verification -> VerificationDetail(task)
@@ -328,7 +349,13 @@ internal fun ProjectWorkflowDetail(
                 ) {
                     AgentBadge(attempt.profile.agent)
                     Column(Modifier.weight(1f)) {
-                        Text("${attempt.stage.name.lowercase()} attempt ${attempt.attempt}", color = TextPrimary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                        Text(
+                            if (attempt.isRecoveryFollowUp) "recovery ${attempt.stage.name.lowercase()} attempt ${attempt.attempt}" else "${attempt.stage.name.lowercase()} attempt ${attempt.attempt}",
+                            color = TextPrimary,
+                            fontFamily = MonoFont,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 11.sp,
+                        )
                         Text(run?.status?.name?.lowercase() ?: "run removed", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                     }
                     run?.totalCostUsd?.let { Text("$${formatDecimal(it, 3)}", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp) }
@@ -336,21 +363,10 @@ internal fun ProjectWorkflowDetail(
                 }
             }
         }
-        val pairActive = when (task.kind) {
-            ProjectTaskKind.Build -> listOfNotNull(task.linkedReviewTaskId, task.linkedVerificationTaskId)
-                .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
-            ProjectTaskKind.Review, ProjectTaskKind.Verification -> {
-                val build = workflow.tasks.firstOrNull { it.id == task.linkedBuildTaskId }
-                build?.isActive == true || listOfNotNull(build?.linkedReviewTaskId, build?.linkedVerificationTaskId)
-                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
-            }
-            ProjectTaskKind.Spec -> workflow.tasks.filter { it.linkedSpecTaskId == task.id }.any { child ->
-                child.isActive || listOfNotNull(child.linkedReviewTaskId, child.linkedVerificationTaskId)
-                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
-            }
-        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onEdit(task) }, enabled = !task.isActive && !pairActive) { Text("Edit") }
+            if (task.kind != ProjectTaskKind.Spec) {
+                OutlinedButton(onClick = { onEdit(task) }, enabled = !task.isActive && !pairActive) { Text("Edit") }
+            }
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { onDelete(task) }, enabled = !task.isActive && !pairActive) { Text("Delete", color = Red) }
         }
@@ -358,11 +374,29 @@ internal fun ProjectWorkflowDetail(
 }
 
 @Composable
-private fun SpecDetail(task: ProjectTask, onNewBuildFromPlan: (ProjectPlanSnapshot) -> Unit, onRun: () -> Unit) {
+private fun SpecDetail(
+    task: ProjectTask,
+    onNewBuildFromPlan: (ProjectPlanSnapshot) -> Unit,
+    onPlanViewed: (String) -> Unit,
+    onRun: () -> Unit,
+    onRefine: (String) -> Unit,
+    onEdit: () -> Unit,
+    canEdit: Boolean,
+) {
     var selectedVersion by remember(task.id, task.planVersions.size) { mutableStateOf(task.planVersions.lastOrNull()?.version) }
+    var refineOpen by remember(task.id) { mutableStateOf(false) }
+    var refinementInstructions by remember(task.id) { mutableStateOf("") }
     val version = task.planVersions.firstOrNull { it.version == selectedVersion } ?: task.planVersions.lastOrNull()
+    version?.let { plan ->
+        LaunchedEffect(plan.runId) { onPlanViewed(plan.runId) }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = onRun, enabled = !task.isActive, colors = primaryButtonColors()) { Text(if (task.planVersions.isEmpty()) "Run spec" else "Revise spec") }
+        Button(
+            onClick = { if (task.planVersions.isEmpty()) onRun() else refineOpen = true },
+            enabled = !task.isActive,
+            colors = primaryButtonColors(),
+        ) { Text(if (task.planVersions.isEmpty()) "Run spec" else "Refine spec") }
+        OutlinedButton(onClick = onEdit, enabled = canEdit) { Text("Edit") }
         if (task.grillMeEnabled) StatusTag("grill-me", Rust)
         Spacer(Modifier.weight(1f))
         version?.let { plan ->
@@ -381,11 +415,48 @@ private fun SpecDetail(task: ProjectTask, onNewBuildFromPlan: (ProjectPlanSnapsh
         }
         version?.let { DetailBlock("IMPLEMENTATION PLAN · V${it.version}", it.text, selectable = true) }
     }
+    if (refineOpen) {
+        AlertDialog(
+            onDismissRequest = { refineOpen = false },
+            containerColor = Panel,
+            title = {
+                Text("Refine spec", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold)
+            },
+            text = {
+                LabeledField(
+                    "Additional refinement instructions",
+                    refinementInstructions,
+                    { refinementInstructions = it },
+                    Modifier.width(620.dp),
+                    singleLine = false,
+                    minHeight = 150.dp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRefine(refinementInstructions.trim())
+                        refinementInstructions = ""
+                        refineOpen = false
+                    },
+                    enabled = refinementInstructions.isNotBlank(),
+                    colors = primaryButtonColors(),
+                ) { Text("Refine spec") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { refineOpen = false }) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 @Composable
 private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, build: ProjectTask, runs: List<AgentTask>) {
     val scope = rememberCoroutineScope()
+    var planExpanded by remember(build.id, build.planSnapshot?.text) { mutableStateOf(false) }
+    var followUpOpen by remember(build.id) { mutableStateOf(false) }
+    var followUp by remember(build.id) { mutableStateOf("") }
+    var recoveryActionError by remember(build.id) { mutableStateOf<String?>(null) }
     val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
     val verification = workflow.tasks.firstOrNull { it.id == build.linkedVerificationTaskId }
     val cost = remember(build, review, verification, runs) {
@@ -398,8 +469,17 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                 OutlinedButton(onClick = { services.projectWorkflows.pauseBuildPair(build.id) }) { Text("Pause after current") }
                 OutlinedButton(onClick = { services.projectWorkflows.stopBuildPair(build.id) }) { Text("Stop current", color = Red) }
             }
+            build.recoveryMode -> {
+                OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }
+                if (build.reviewEnabled && build.reviewStale) {
+                    Button(onClick = {
+                        scope.launch { recoveryActionError = services.projectWorkflows.startRecoveryReview(build.id) }
+                    }, colors = primaryButtonColors()) { Text("Review all changes") }
+                }
+            }
             build.state == ProjectTaskState.Draft -> Button(onClick = { scope.launch { services.projectWorkflows.startBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Start pair") }
             build.state != ProjectTaskState.Completed -> Button(onClick = { scope.launch { services.projectWorkflows.resumeBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Resume pair") }
+            else -> OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }
         }
         Spacer(Modifier.weight(1f))
         Text(
@@ -407,8 +487,20 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
             color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp,
         )
     }
-    DetailBlock("FROZEN PLAN · ${build.planSnapshot?.sourceLabel.orEmpty()}", build.planSnapshot?.text.orEmpty(), selectable = true)
+    CollapsibleDetailBlock(
+        label = "FROZEN PLAN · ${build.planSnapshot?.sourceLabel.orEmpty()}",
+        value = build.planSnapshot?.text.orEmpty(),
+        expanded = planExpanded,
+        onToggle = { planExpanded = !planExpanded },
+    )
     if (build.buildNotes.isNotBlank()) DetailBlock("BUILD NOTES", build.buildNotes)
+    if (build.recoveryMode) {
+        WorkflowNotice(
+            if (build.reviewStale) "Manual recovery is open. Add any tested fixes, then run one cumulative review when ready." else "Manual recovery review is current.",
+            Cyan,
+        )
+    }
+    recoveryActionError?.let { WorkflowNotice(it, Red) }
     if (build.reviewEnabled) {
         val failureCount = review?.reviewVerdicts?.count {
             it.status == ProjectReviewStatus.ChangesRequested && it.reviewGeneration == build.reviewGeneration
@@ -423,8 +515,42 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
     } else if (review != null) {
         DetailBlock("REVIEW GATE", "Disabled · prior review history is retained")
     }
-    DetailBlock("VERIFICATION CRITERIA", build.verificationInstructions)
+    if (build.verificationInstructions.isNotBlank()) DetailBlock("VERIFICATION CRITERIA", build.verificationInstructions)
     build.workspacePath?.let { DetailBlock("WORKSPACE", listOfNotNull(it, build.branchName).joinToString("\n")) }
+    if (followUpOpen) {
+        AlertDialog(
+            onDismissRequest = { followUpOpen = false },
+            containerColor = Panel,
+            title = { Text("Add build follow-up", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
+            text = {
+                LabeledField(
+                    "What did testing reveal?",
+                    followUp,
+                    { followUp = it },
+                    Modifier.width(620.dp),
+                    singleLine = false,
+                    minHeight = 150.dp,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val error = services.projectWorkflows.startRecoveryFollowUp(build.id, followUp.trim())
+                            recoveryActionError = error
+                            if (error == null) {
+                                followUp = ""
+                                followUpOpen = false
+                            }
+                        }
+                    },
+                    enabled = followUp.isNotBlank(),
+                    colors = primaryButtonColors(),
+                ) { Text("Start follow-up") }
+            },
+            dismissButton = { OutlinedButton(onClick = { followUpOpen = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -471,7 +597,7 @@ private fun ReviewDetail(task: ProjectTask, runs: List<AgentTask>) {
 
 @Composable
 private fun VerificationDetail(task: ProjectTask) {
-    DetailBlock("VERIFICATION INSTRUCTIONS", task.verificationInstructions)
+    if (task.verificationInstructions.isNotBlank()) DetailBlock("VERIFICATION INSTRUCTIONS", task.verificationInstructions)
     task.verdicts.lastOrNull()?.let { verdict ->
         WorkflowNotice(verdict.summary, if (verdict.status == ProjectVerificationStatus.Passed) Green else Red)
         if (verdict.evidence.isNotEmpty()) DetailBlock("EVIDENCE", verdict.evidence.joinToString("\n") { "• $it" })
@@ -485,6 +611,46 @@ private fun DetailBlock(label: String, value: String, selectable: Boolean = fals
         Text(label, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
         if (selectable) SelectionContainer { Text(value, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 17.sp) }
         else Text(value, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 17.sp)
+    }
+}
+
+@Composable
+private fun CollapsibleDetailBlock(
+    label: String,
+    value: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .animateContentSize(tween(180)),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(label, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp, modifier = Modifier.weight(1f))
+            Text(if (expanded) "v" else ">", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(140)) + expandVertically(tween(180)),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(140)),
+        ) {
+            SelectionContainer {
+                Text(
+                    value,
+                    color = TextPrimary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                )
+            }
+        }
     }
 }
 
@@ -594,10 +760,17 @@ internal fun SpecTaskDialog(
                 LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
                 LabeledField("Brief", brief, { brief = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 170.dp)
                 ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, ProjectTaskKind.Spec)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("Include scratchpad", includeScratchpad, Cyan) { includeScratchpad = !includeScratchpad }
-                    if (grillAvailable) FilterPill("Use grill-me", grillMe, Rust) { grillMe = !grillMe }
-                    else Text("grill-me not installed for ${profile.agent.label}", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, modifier = Modifier.padding(vertical = 8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterPill("Include scratchpad", includeScratchpad, Cyan) { includeScratchpad = !includeScratchpad }
+                        if (grillAvailable) FilterPill("Use grill-me", grillMe, Rust) { grillMe = !grillMe }
+                    }
+                    if (!grillAvailable) {
+                        GrillMeInstallHint(
+                            agent = profile.agent,
+                            onRefresh = { services.agentRuns.refreshSkills(profile.agent, project.contextDir) },
+                        )
+                    }
                 }
                 WorkflowNotice("Plan mode and read-only safety are locked for every Spec run.", Green)
             }
@@ -612,6 +785,24 @@ internal fun SpecTaskDialog(
         },
         dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun GrillMeInstallHint(agent: AgentKind, onRefresh: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(Rust.copy(alpha = 0.09f), RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Rust.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R3))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text("grill-me isn't installed for ${agent.label}.", color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
+        Text("Run this once in Terminal, then check again:", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+        SelectionContainer {
+            Text(agent.grillMeInstallCommand(), color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
+        }
+        OutlinedButton(onClick = onRefresh, modifier = Modifier.height(28.dp)) { Text("check again", fontSize = 10.sp) }
+    }
 }
 
 @Composable
@@ -632,9 +823,14 @@ internal fun BuildPairDialog(
         spec.planVersions.map { version -> version.toSnapshot(spec) }
     }.sortedByDescending { it.sourceVersion }
     val initialPlan = seed.plan ?: existing?.planSnapshot ?: availablePlans.firstOrNull() ?: ProjectPlanSnapshot("")
-    var title by remember(existing?.id, seed.plan) { mutableStateOf(existing?.title.orEmpty()) }
+    val reuseSpecTitle = existing == null && seed.plan?.sourceSpecTaskId != null
+    val sourceSpecTitle = initialPlan.sourceSpecTaskId
+        ?.let { sourceId -> workflow.tasks.firstOrNull { it.id == sourceId }?.title }
+        .orEmpty()
+    var title by remember(existing?.id, seed.plan) { mutableStateOf(existing?.title ?: sourceSpecTitle) }
     var plan by remember(existing?.id, seed.plan) { mutableStateOf(initialPlan) }
     var externalPlan by remember(existing?.id, seed.plan) { mutableStateOf(initialPlan.sourceSpecTaskId == null) }
+    var planExpanded by remember(existing?.id, seed.plan) { mutableStateOf(false) }
     var buildNotes by remember(existing?.id) { mutableStateOf(existing?.buildNotes.orEmpty()) }
     var verificationInstructions by remember(existing?.id) { mutableStateOf(existing?.verificationInstructions.orEmpty()) }
     var buildProfile by remember(existing?.id) { mutableStateOf(existing?.profile ?: workflow.profiles[ProjectTaskKind.Build] ?: ProjectAgentProfile()) }
@@ -650,28 +846,57 @@ internal fun BuildPairDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
-        title = { Text(if (existing == null) "New build + verification" else "Edit build + verification", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
+        title = { Text(if (existing == null) "New build" else "Edit build", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.width(820.dp).heightIn(max = 720.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
+                if (!reuseSpecTitle) LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
                 if (existing == null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        FilterPill("Spec plan", !externalPlan, Cyan) { if (availablePlans.isNotEmpty()) { externalPlan = false; plan = availablePlans.first() } }
-                        FilterPill("Pasted plan", externalPlan, Rust) { externalPlan = true; plan = ProjectPlanSnapshot(plan.text.takeIf { plan.sourceSpecTaskId == null }.orEmpty()) }
-                        if (!externalPlan) Box {
-                            OutlinedButton(onClick = { planMenu = true }) { Text(plan.sourceLabel) }
-                            DropdownMenu(expanded = planMenu, onDismissRequest = { planMenu = false }, containerColor = PanelSoft) {
-                                availablePlans.forEach { candidate -> DropdownMenuItem(text = { Text(candidate.sourceLabel, color = TextPrimary) }, onClick = { plan = candidate; planMenu = false }) }
+                    if (reuseSpecTitle) {
+                        CollapsibleDetailBlock(
+                            label = "FROZEN WHEN SAVED · ${plan.sourceLabel}",
+                            value = plan.text,
+                            expanded = planExpanded,
+                            onToggle = { planExpanded = !planExpanded },
+                        )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilterPill("Spec plan", !externalPlan, Cyan) {
+                                if (availablePlans.isNotEmpty()) {
+                                    externalPlan = false
+                                    plan = availablePlans.first()
+                                }
+                            }
+                            FilterPill("Pasted plan", externalPlan, Rust) {
+                                externalPlan = true
+                                plan = ProjectPlanSnapshot(plan.text.takeIf { plan.sourceSpecTaskId == null }.orEmpty())
+                            }
+                            if (!externalPlan) Box {
+                                OutlinedButton(onClick = { planMenu = true }) { Text(plan.sourceLabel) }
+                                DropdownMenu(expanded = planMenu, onDismissRequest = { planMenu = false }, containerColor = PanelSoft) {
+                                    availablePlans.forEach { candidate -> DropdownMenuItem(text = { Text(candidate.sourceLabel, color = TextPrimary) }, onClick = { plan = candidate; planMenu = false }) }
+                                }
                             }
                         }
+                        if (externalPlan) {
+                            LabeledField("Implementation plan", plan.text, { plan = ProjectPlanSnapshot(it) }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 190.dp)
+                        } else {
+                            CollapsibleDetailBlock(
+                                label = "FROZEN WHEN SAVED · ${plan.sourceLabel}",
+                                value = plan.text,
+                                expanded = planExpanded,
+                                onToggle = { planExpanded = !planExpanded },
+                            )
+                        }
                     }
-                    if (externalPlan) LabeledField("Implementation plan", plan.text, { plan = ProjectPlanSnapshot(it) }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 190.dp)
-                    else DetailBlock("FROZEN WHEN SAVED · ${plan.sourceLabel}", plan.text, selectable = true)
                 } else {
-                    DetailBlock("FROZEN PLAN · ${plan.sourceLabel}", plan.text, selectable = true)
+                    CollapsibleDetailBlock(
+                        label = "FROZEN PLAN · ${plan.sourceLabel}",
+                        value = plan.text,
+                        expanded = planExpanded,
+                        onToggle = { planExpanded = !planExpanded },
+                    )
                 }
                 LabeledField("Build notes (optional)", buildNotes, { buildNotes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 90.dp)
-                LabeledField("Verification instructions", verificationInstructions, { verificationInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
                 LabeledField("Reported-cost guardrail in USD (optional)", budgetText, { budgetText = it.filter { char -> char.isDigit() || char == '.' } }, Modifier.fillMaxWidth())
                 ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, ProjectTaskKind.Build)
                 FilterPill("Build gets scratchpad snapshot", includeBuildScratchpad, Cyan) { includeBuildScratchpad = !includeBuildScratchpad }
@@ -683,8 +908,13 @@ internal fun BuildPairDialog(
                         FilterPill("Reviewer gets scratchpad snapshot", includeReviewScratchpad, AndyColors.Blue) { includeReviewScratchpad = !includeReviewScratchpad }
                     }
                 }
-                ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, ProjectTaskKind.Verification)
-                FilterPill("Verifier gets scratchpad snapshot", includeVerifyScratchpad, Cyan) { includeVerifyScratchpad = !includeVerifyScratchpad }
+                LabeledField("Verification instructions (optional)", verificationInstructions, { verificationInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
+                AnimatedVisibility(verificationInstructions.isNotBlank()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, ProjectTaskKind.Verification)
+                        FilterPill("Verifier gets scratchpad snapshot", includeVerifyScratchpad, Cyan) { includeVerifyScratchpad = !includeVerifyScratchpad }
+                    }
+                }
                 WorkflowNotice("Saving never launches a run. Review changes pause existing workflows until you explicitly resume.", Green)
             }
         },
@@ -712,7 +942,7 @@ internal fun BuildPairDialog(
                     )
                     onSaved(id)
                 }
-            }, enabled = title.isNotBlank() && plan.text.isNotBlank() && verificationInstructions.isNotBlank(), colors = primaryButtonColors()) { Text("Save pair") }
+            }, enabled = title.isNotBlank() && plan.text.isNotBlank(), colors = primaryButtonColors()) { Text("Save build") }
         },
         dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
     )

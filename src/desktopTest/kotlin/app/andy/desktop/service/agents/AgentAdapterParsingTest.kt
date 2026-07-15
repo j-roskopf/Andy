@@ -10,6 +10,7 @@ import app.andy.model.estimatedTokenCostUsd
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private fun task(agent: AgentKind, sessionId: String? = null, autonomy: AgentAutonomy = AgentAutonomy.Standard) = AgentTask(
@@ -530,5 +531,21 @@ class CursorAdapterTest {
         assertEquals("total 0", result.summary)
         assertEquals("total 0", result.detail)
         assertTrue(!result.isError)
+    }
+
+    @Test
+    fun extractsThePlanFromASuccessfulCreatePlanToolCompletion() {
+        val plan = successfulCursorPlanText(
+            """
+            {"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"# iOS Live Mirror\n\n- Reuse the existing Live destination."},"result":{"success":{}}}}}
+            """.trimIndent(),
+        )
+
+        assertEquals("# iOS Live Mirror\n\n- Reuse the existing Live destination.", plan)
+        assertNull(
+            successfulCursorPlanText(
+                """{"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"discard me"},"result":{"error":{"message":"failed"}}}}}""",
+            ),
+        )
     }
 }

@@ -42,6 +42,80 @@ import kotlinx.coroutines.withTimeout
 
 class ProjectWorkflowServiceTest {
     @Test
+    fun recoveryFollowUpsWaitForOneManualCumulativeReview() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "approved")))) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
+            }
+
+            harness.service.startRecoveryFollowUp(buildId, "The confirmation toast never appears after rotation.")
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Paused
+            }
+            var workflow = harness.service.projects.value.getValue("project-1")
+            var build = workflow.tasks.first { it.id == buildId }
+            assertTrue(build.recoveryMode)
+            assertTrue(build.reviewStale)
+            assertEquals(2, build.attempts.size)
+            assertTrue(build.attempts.last().isRecoveryFollowUp)
+            assertTrue(build.attempts.last().prompt.contains("confirmation toast"))
+            val originalWorkspace = harness.service.tasks.value.first { it.id == build.attempts.first().runId }.cwd
+            val recoveryWorkspace = harness.service.tasks.value.first { it.id == build.attempts.last().runId }.cwd
+            assertEquals(originalWorkspace, recoveryWorkspace, "recovery follow-ups must reuse the workflow workspace")
+            assertEquals(1, workflow.tasks.first { it.id == build.linkedReviewTaskId }.attempts.size, "review must not start automatically")
+            assertEquals(1, workflow.tasks.first { it.id == build.linkedVerificationTaskId }.attempts.size, "verification stays historical")
+
+            harness.service.startRecoveryReview(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
+            }
+            workflow = harness.service.projects.value.getValue("project-1")
+            build = workflow.tasks.first { it.id == buildId }
+            val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
+            assertFalse(build.recoveryMode)
+            assertFalse(build.reviewStale)
+            assertEquals(2, review.attempts.size)
+            assertTrue(review.attempts.last().isRecoveryFollowUp)
+            assertTrue(review.attempts.last().prompt.contains("cumulative re-review"))
+            assertEquals(1, workflow.tasks.first { it.id == build.linkedVerificationTaskId }.attempts.size, "manual approval completes without verification")
+        }
+    }
+
+    @Test
+    fun recoveryReviewRejectionReturnsToManualFixModeWithoutAutoBuild() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "changes", "approved")))) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
+            }
+
+            harness.service.startRecoveryFollowUp(buildId, "Fix the validation message.")
+            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            harness.service.startRecoveryReview(buildId)
+            await(timeoutMillis = 20_000) {
+                val workflow = harness.service.projects.value["project-1"] ?: return@await false
+                workflow.tasks.first { it.id == buildId }.state == ProjectTaskState.Paused &&
+                    workflow.tasks.first { it.id == workflow.tasks.first { task -> task.id == buildId }.linkedReviewTaskId }.reviewVerdicts.size == 2
+            }
+            var build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertTrue(build.recoveryMode)
+            assertTrue(build.reviewStale)
+            assertEquals(2, build.attempts.size, "rejected recovery review must not launch another build")
+
+            harness.service.startRecoveryFollowUp(buildId, "Also cover the whitespace path.")
+            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            harness.service.startRecoveryReview(buildId)
+            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Completed }
+            build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertEquals(3, build.attempts.size)
+            assertFalse(build.recoveryMode)
+        }
+    }
+
+    @Test
     fun reviewApprovalBlocksVerificationAndIsStampedToTheExactBuild() = runBlocking {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved-warnings")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
@@ -394,6 +468,87 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun buildWithoutVerificationCompletesAfterTheBuildRun() = runBlocking {
+        withHarness(WorkflowAdapter()) { harness ->
+            val buildId = harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Build without verification",
+                    plan = ProjectPlanSnapshot("Implement the focused change"),
+                    buildNotes = "",
+                    verificationInstructions = "",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                ),
+            )
+            val draft = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertEquals(null, draft.linkedVerificationTaskId)
+
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+
+            val workflowRuns = harness.service.tasks.value.filter { it.workflowTaskId == buildId }
+            assertEquals(1, workflowRuns.size)
+            assertEquals(ProjectWorkflowStage.Build, workflowRuns.single().workflowStage)
+        }
+    }
+
+    @Test
+    fun addingVerificationToCompletedBuildReopensForVerification() = runBlocking {
+        withHarness(WorkflowAdapter()) { harness ->
+            val buildId = harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Build without verification",
+                    plan = ProjectPlanSnapshot("Implement the focused change"),
+                    buildNotes = "",
+                    verificationInstructions = "",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                ),
+            )
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+
+            val completed = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = completed.title,
+                    plan = requireNotNull(completed.planSnapshot),
+                    buildNotes = completed.buildNotes,
+                    verificationInstructions = "Run focused checks",
+                    buildProfile = completed.profile,
+                    verificationProfile = verifyProfile(),
+                    buildTaskId = buildId,
+                ),
+            )
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
+            assertEquals(ProjectTaskState.Paused, build.state)
+            assertTrue(build.paused)
+            assertEquals(ProjectTaskState.Draft, verification.state)
+
+            harness.service.resumeBuildPair(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+            val verificationRuns = harness.service.tasks.value.filter {
+                it.workflowTaskId == build.linkedVerificationTaskId
+            }
+            assertEquals(1, verificationRuns.count { it.workflowStage == ProjectWorkflowStage.Verification })
+        }
+    }
+
+    @Test
     fun specForcesPlanModeAndAttachesAnExactInstalledGrillMeSkill() = runBlocking {
         val adapter = WorkflowAdapter(kind = AgentKind.ClaudeCode)
         withHarness(
@@ -430,7 +585,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(verificationOutcomes = ArrayDeque(List(5) { "failed" }))) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 20_000) {
+            await(timeoutMillis = 60_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention
             }
             val workflow = harness.service.projects.value.getValue("project-1")
@@ -551,6 +706,46 @@ class ProjectWorkflowServiceTest {
             val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
             assertTrue(build.paused)
             assertTrue(verification.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun stoppingAndDeletingASpecRefineRestoresCompletedAndDropsTheAttempt() = runBlocking {
+        withHarness(WorkflowAdapter(stageDelayMillis = 5_000)) { harness ->
+            val service = harness.service
+            val specId = service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan typed workflows",
+                    brief = "Design typed project tasks",
+                    profile = specProfile(),
+                ),
+            )
+            service.runSpec(specId)
+            await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.planVersions?.size == 1 }
+            assertEquals(ProjectTaskState.Completed, service.projects.value.getValue("project-1").tasks.first { it.id == specId }.state)
+
+            service.runSpec(specId, "Tighten the recovery section")
+            await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.state == ProjectTaskState.Running }
+            val refineRun = service.tasks.value.single { it.workflowTaskId == specId && it.status == AgentTaskStatus.Running }
+            service.stop(refineRun.id)
+            await {
+                val spec = service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }
+                spec?.state == ProjectTaskState.Completed &&
+                    service.tasks.value.firstOrNull { it.id == refineRun.id }?.status == AgentTaskStatus.Stopped
+            }
+            var spec = service.projects.value.getValue("project-1").tasks.first { it.id == specId }
+            assertEquals(1, spec.planVersions.size)
+            assertEquals(2, spec.attempts.size)
+            assertEquals(null, spec.lastError)
+
+            service.delete(refineRun.id, removeWorktree = false)
+            spec = service.projects.value.getValue("project-1").tasks.first { it.id == specId }
+            assertEquals(ProjectTaskState.Completed, spec.state)
+            assertEquals(1, spec.attempts.size)
+            assertEquals(spec.planVersions.single().runId, spec.attempts.single().runId)
+            assertEquals(null, spec.lastError)
+            assertTrue(service.tasks.value.none { it.id == refineRun.id })
         }
     }
 

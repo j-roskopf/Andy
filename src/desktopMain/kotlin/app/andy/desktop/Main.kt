@@ -20,6 +20,11 @@ import app.andy.AndyDestination
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import app.andy.desktop.service.createDesktopServices
+import app.andy.desktop.service.DesktopAgentAttentionCoordinator
+import app.andy.desktop.service.DesktopOsNotificationService
+import app.andy.desktop.service.DesktopWorkspaceStore
+import app.andy.desktop.service.PendingAgentTaskOpen
+import app.andy.service.OpenAgentTaskRequest
 import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
@@ -36,6 +41,8 @@ fun main() {
     installRuntimeAppIcon()
     application {
         val services = remember { createDesktopServices() }
+        val workspaceStore = services.workspaceStore as DesktopWorkspaceStore
+        val workspaceState by workspaceStore.state.collectAsState()
         val agentTasks by services.agentRuns.tasks.collectAsState()
         // Dock/tray/title reflect every finished chat waiting for review.
         // In-app, unread still routes to Agents vs Actions by projectId.
@@ -43,6 +50,8 @@ fun main() {
         val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
+        var requestedOpenAgentTask by remember { mutableStateOf<OpenAgentTaskRequest?>(null) }
+        val appFocus = remember { AppFocusState() }
         var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutSerial by remember { mutableStateOf<String?>(null) }
         var popOutDeviceName by remember { mutableStateOf<String?>(null) }
@@ -53,6 +62,9 @@ fun main() {
             requestedDestination = destination
             visible = true
         }
+        fun consumePendingOpen() {
+            PendingAgentTaskOpen.consume()?.let { requestedOpenAgentTask = it }
+        }
         fun openPopOutMirror() {
             visible = true
             requestPopOutMirror = true
@@ -62,20 +74,27 @@ fun main() {
             exitApplication()
         }
         DisposableEffect(Unit) {
-            val listener = installDockReopenHandler { visible = true }
+            val listener = installDockReopenHandler { visible = true; consumePendingOpen() }
             onDispose { removeDockReopenHandler(listener) }
         }
-        LaunchedEffect(unreadCount) {
-            updateDockBadge(unreadCount)
+        LaunchedEffect(Unit) {
+            DesktopAgentAttentionCoordinator(
+                scope = this, tasks = services.agentRuns.tasks,
+                workspace = { workspaceStore.state.value }, isForeground = appFocus::isForeground,
+                notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
+            ).start()
+        }
+        LaunchedEffect(unreadCount, workspaceState.agentIconBadgeEnabled) {
+            updateDockBadge(if (workspaceState.agentIconBadgeEnabled) unreadCount else 0)
         }
         // Compose Multiplatform AWT Tray is broken on Wayland (white icon, dead menu).
         // ComposeNativeTray uses StatusNotifier / native backends instead.
         Tray(
             icon = Res.drawable.andy_robot,
             tooltip = if (unreadCount > 0) "Andy ($unreadCount unread)" else "Andy",
-            primaryAction = { visible = true },
+            primaryAction = { visible = true; consumePendingOpen() },
         ) {
-            Item(label = "Show Andy") { visible = true }
+            Item(label = "Show Andy") { visible = true; consumePendingOpen() }
             Item(label = "Quit") {
                 dispose()
                 quitApp()
@@ -96,6 +115,24 @@ fun main() {
             title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
         ) {
+            LaunchedEffect(visible) {
+                appFocus.visible = visible
+                if (visible) consumePendingOpen()
+            }
+            DisposableEffect(window) {
+                val listener = object : java.awt.event.WindowAdapter() {
+                    override fun windowActivated(event: java.awt.event.WindowEvent) {
+                        appFocus.focused = true
+                        consumePendingOpen()
+                    }
+
+                    override fun windowDeactivated(event: java.awt.event.WindowEvent) {
+                        appFocus.focused = false
+                    }
+                }
+                window.addWindowListener(listener)
+                onDispose { window.removeWindowListener(listener) }
+            }
             LaunchedEffect(window) {
                 configureMacTitleBar(window)
             }
@@ -121,6 +158,8 @@ fun main() {
                 services = services,
                 requestedDestination = requestedDestination,
                 onDestinationConsumed = { requestedDestination = null },
+                requestedOpenAgentTask = requestedOpenAgentTask,
+                onOpenAgentTaskConsumed = { requestedOpenAgentTask = null },
                 requestPopOutMirror = requestPopOutMirror,
                 onPopOutMirrorRequestConsumed = { requestPopOutMirror = false },
                 onPopOutMirror = { serial, name ->
@@ -212,6 +251,14 @@ private fun removeDockReopenHandler(listener: SystemEventListener?) {
 
 private fun isMacOs(): Boolean =
     System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
+
+/** Thread-safe focus snapshot read by the background attention coordinator. */
+private class AppFocusState {
+    @Volatile var visible: Boolean = true
+    @Volatile var focused: Boolean = true
+
+    fun isForeground(): Boolean = visible && focused
+}
 
 /** Cmd/Ctrl+1–0 for the first ten pages; letter shortcuts for the rest. */
 private fun AndyDestination.menuShortcut(): KeyShortcut {

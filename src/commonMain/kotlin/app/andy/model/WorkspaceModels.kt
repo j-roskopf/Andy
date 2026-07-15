@@ -2,6 +2,14 @@ package app.andy.model
 
 import kotlinx.serialization.Serializable
 
+enum class AgentNotificationTiming { Always, BackgroundOnly }
+
+enum class AgentNotificationSound(val id: String, val label: String) {
+    Chime("chime", "Chime"),
+    Ping("ping", "Ping"),
+    Soft("soft", "Soft"),
+}
+
 @Serializable
 data class WorkspaceState(
     val selectedSdkPath: String? = null,
@@ -18,6 +26,7 @@ data class WorkspaceState(
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
     val workspaceSidebarExpanded: Boolean = true,
+    val projectsIntroductionCompleted: Boolean = false,
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 320f,
     val appsListPaneWidth: Float = 520f,
@@ -32,4 +41,9 @@ data class WorkspaceState(
     val hostFileTreePaneWidth: Float = 320f,
     val hostFileSearchPaneWidth: Float = 430f,
     val selectedPackage: String? = null,
+    val agentOsNotificationsEnabled: Boolean = true,
+    val agentNotificationSoundEnabled: Boolean = true,
+    val agentIconBadgeEnabled: Boolean = true,
+    val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
+    val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
 )
