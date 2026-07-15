@@ -50,6 +50,7 @@ internal fun agentColor(kind: AgentKind): Color = when (kind) {
 internal fun agentStatusColor(status: AgentTaskStatus): Color = when (status) {
     AgentTaskStatus.Running -> Green
     AgentTaskStatus.Queued -> Cyan
+    AgentTaskStatus.WaitingForInput -> Rust
     AgentTaskStatus.Completed -> Cyan
     AgentTaskStatus.Failed -> Red
     AgentTaskStatus.Stopped -> Rust
@@ -58,6 +59,7 @@ internal fun agentStatusColor(status: AgentTaskStatus): Color = when (status) {
 
 internal fun agentStatusLabel(status: AgentTaskStatus): String = when (status) {
     AgentTaskStatus.Unknown -> "interrupted"
+    AgentTaskStatus.WaitingForInput -> "needs your input"
     else -> status.name.lowercase()
 }
 

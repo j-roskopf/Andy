@@ -356,6 +356,92 @@ class AgentQueuedFollowUpTest {
     }
 }
 
+class AgentUserInputResumeTest {
+    @Test
+    fun choiceCheckpointWaitsForAnAnswerThenResumesTheProviderSession() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-user-input", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            val service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to UserInputTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft("ask", "Ask before planning", AgentKind.Codex, projectId = null, directory = dir.absolutePath),
+            )
+            withTimeout(10_000) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentTaskStatus.WaitingForInput) delay(25)
+            }
+            val waiting = service.tasks.value.first { it.id == task.id }
+            val request = assertNotNull(waiting.userInputRequest)
+            assertEquals("Desktop", request.questions.single().options.first().label)
+
+            service.respondToUserInput(task.id, request.id, mapOf("platform" to "Desktop"))
+            withTimeout(10_000) {
+                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+            }
+            val finished = service.tasks.value.first { it.id == task.id }
+            assertEquals(AgentTaskStatus.Completed, finished.status)
+            assertNull(finished.userInputRequest)
+            assertTrue(
+                service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>()
+                    .any { it.text.contains("Desktop") },
+            )
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+}
+
+private class UserInputTestAdapter : AgentCliAdapter {
+    override val kind = AgentKind.Codex
+    override val supportsHeadlessResume = true
+    override val supportsStreamJson = false
+
+    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
+        listOf(binary, "-c", "printf 'ask\\n'")
+
+    override fun buildResumeCommand(
+        binary: String,
+        task: AgentTask,
+        followUp: String,
+        imagePaths: List<String>,
+        mcpUrl: String?,
+    ): List<String> = listOf(binary, "-c", "printf 'resumed\\n'")
+
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
+
+    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> = when (line) {
+        "ask" -> listOf(
+            AgentEvent.SessionStarted(nowMillis, "user-input-session", null),
+            AgentEvent.AssistantText(
+                nowMillis,
+                "<andy_user_input>{\"questions\":[{\"id\":\"platform\",\"question\":\"Which platform?\",\"options\":[{\"label\":\"Desktop\"},{\"label\":\"Desktop + web\"}]}]}</andy_user_input>",
+            ),
+            AgentEvent.TaskResult(nowMillis, success = true, finalText = "asked"),
+        )
+        "resumed" -> listOf(
+            AgentEvent.AssistantText(nowMillis, "planned for desktop"),
+            AgentEvent.TaskResult(nowMillis, success = true, finalText = "planned for desktop"),
+        )
+        else -> emptyList()
+    }
+}
+
 private class QueueTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
     override val supportsHeadlessResume = true

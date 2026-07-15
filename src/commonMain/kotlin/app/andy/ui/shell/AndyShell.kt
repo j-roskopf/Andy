@@ -68,6 +68,8 @@ internal fun AndyShell(
     onPopOutMirrorRequestConsumed: () -> Unit,
     onPopOutMirror: (String?, String?) -> Unit,
     contentTopPadding: androidx.compose.ui.unit.Dp,
+    initialProjectTaskId: String?,
+    initialProjectTab: String?,
 ) {
     val state = rememberShellState(services)
     val capabilities = services.capabilities
@@ -220,6 +222,8 @@ internal fun AndyShell(
                             onConfigChange = { state.persistActionsConfig(it) },
                             agentTasks = agentTasks,
                             active = actionsActive,
+                            initialWorkflowTaskId = initialProjectTaskId,
+                            initialCanvasLabel = initialProjectTab,
                         )
                     }
                     RetainedDestination(active = agentsActive) {

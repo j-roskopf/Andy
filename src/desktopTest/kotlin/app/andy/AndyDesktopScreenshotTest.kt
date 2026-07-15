@@ -2,14 +2,22 @@ package app.andy
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.v2.runDesktopComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import app.andy.ui.screenshots.AndyScreenshotApp
 import app.andy.ui.screenshots.AndyScreenshotScenario
 import com.github.takahirom.roborazzi.RoborazziOptions
@@ -35,9 +43,6 @@ class AndyDesktopScreenshotTest {
     )
 
     private val workspaceScenarios = listOf(
-        AndyScreenshotScenario.ProjectsPopulated,
-        AndyScreenshotScenario.ProjectsActions,
-        AndyScreenshotScenario.ProjectsNotes,
         AndyScreenshotScenario.AgentsCompletedDiff,
         AndyScreenshotScenario.SnapshotsPopulated,
         AndyScreenshotScenario.ControlsHardware,
@@ -58,23 +63,90 @@ class AndyDesktopScreenshotTest {
     fun desktopWorkspaceAndDiagnosticsSurfaces() = capture(workspaceScenarios)
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectWorkflowList() = capture(listOf(AndyScreenshotScenario.ProjectsWorkflows))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectSpecDetail() = capture(listOf(AndyScreenshotScenario.ProjectsSpecDetail))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectBuildDetail() = capture(listOf(AndyScreenshotScenario.ProjectsBuildDetail))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectVerificationDetail() = capture(listOf(AndyScreenshotScenario.ProjectsVerification))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectBlockingReviewDetail() = capture(listOf(AndyScreenshotScenario.ProjectsReviewBlocking))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectDisabledReviewDetail() = capture(listOf(AndyScreenshotScenario.ProjectsReviewDisabled))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectProfiles() = capture(listOf(AndyScreenshotScenario.ProjectsProfiles))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectNewSpec() = capture(listOf(AndyScreenshotScenario.ProjectsNewSpec))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectNewBuild() = capture(listOf(AndyScreenshotScenario.ProjectsNewBuild))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectRunbook() = capture(listOf(AndyScreenshotScenario.ProjectsRunbook))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectScratchpad() = capture(listOf(AndyScreenshotScenario.ProjectsScratchpad))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectScratchpadEditor() = capture(listOf(AndyScreenshotScenario.ProjectsScratchpadEditor))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     private fun capture(scenarios: List<AndyScreenshotScenario>) {
         val previousRenderer = System.getProperty("andy.screenshot.renderer")
         System.setProperty("andy.screenshot.renderer", "compose")
         try {
             runDesktopComposeUiTest(width = 1365, height = 900) {
                 scenarios.forEach { scenario ->
+                    var redrawTick by mutableStateOf(0)
                     setContent {
-                        Box(Modifier.size(1365.dp, 900.dp)) {
+                        Box(
+                            Modifier.size(1365.dp, 900.dp).drawWithContent {
+                                redrawTick
+                                drawContent()
+                            },
+                        ) {
                             AndyScreenshotApp(scenario, ScreenshotServices.create())
                         }
                     }
                     waitForIdle()
-                    scenario.projectCanvasTab?.let { tab ->
-                        onNodeWithText(tab).performClick()
+                    scenario.projectInteraction?.let { label ->
+                        onNodeWithText(label).performClick()
                         waitForIdle()
                     }
-                    onRoot().captureRoboImage(
+                    runOnUiThread { redrawTick++ }
+                    waitForIdle()
+                    val captureTarget = when (scenario) {
+                        AndyScreenshotScenario.MirrorPopOut -> onRoot()
+                        AndyScreenshotScenario.ProjectsSpecDetail,
+                        AndyScreenshotScenario.ProjectsBuildDetail,
+                        AndyScreenshotScenario.ProjectsVerification,
+                        AndyScreenshotScenario.ProjectsReviewBlocking,
+                        AndyScreenshotScenario.ProjectsReviewDisabled,
+                        -> onNodeWithTag("project-task-dock")
+                        AndyScreenshotScenario.ProjectsRunbook -> onNodeWithTag("project-canvas")
+                        else -> onNode(isRoot() and hasAnyDescendant(hasText("devices")))
+                    }
+                    captureTarget.captureRoboImage(
                         filePath = "src/screenshotTest/roborazzi/${baselinePlatform()}/${scenario.fileName}",
                         roborazziOptions = screenshotOptions,
                     )
@@ -92,10 +164,12 @@ class AndyDesktopScreenshotTest {
         else -> "linux"
     }
 
-    private val AndyScreenshotScenario.projectCanvasTab: String?
+    private val AndyScreenshotScenario.projectInteraction: String?
         get() = when (this) {
-            AndyScreenshotScenario.ProjectsActions -> "actions"
-            AndyScreenshotScenario.ProjectsNotes -> "notes"
+            AndyScreenshotScenario.ProjectsProfiles -> "Profiles"
+            AndyScreenshotScenario.ProjectsNewSpec -> "New spec"
+            AndyScreenshotScenario.ProjectsNewBuild -> "New build"
+            AndyScreenshotScenario.ProjectsScratchpadEditor -> "edit"
             else -> null
         }
 }

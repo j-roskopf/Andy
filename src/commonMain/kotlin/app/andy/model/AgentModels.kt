@@ -161,6 +161,8 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
 enum class AgentTaskStatus {
     Queued,
     Running,
+    /** The agent stopped at an explicit decision point and is awaiting a response in Andy. */
+    WaitingForInput,
     Completed,
     Failed,
     Stopped,
@@ -174,6 +176,26 @@ data class AgentQueuedFollowUp(
     val text: String,
     val imagePaths: List<String> = emptyList(),
     val skills: List<AgentSkill> = emptyList(),
+)
+
+/** One selectable answer supplied by an agent when it needs a product decision. */
+data class AgentUserInputOption(
+    val label: String,
+    val description: String = "",
+)
+
+/** A concise question rendered by Andy as choices plus an always-available freeform answer. */
+data class AgentUserInputQuestion(
+    val id: String,
+    val header: String = "",
+    val question: String,
+    val options: List<AgentUserInputOption>,
+)
+
+/** A persisted decision checkpoint emitted by a provider-neutral agent protocol. */
+data class AgentUserInputRequest(
+    val id: String,
+    val questions: List<AgentUserInputQuestion>,
 )
 
 data class AgentTask(
@@ -199,6 +221,8 @@ data class AgentTask(
     val completedPlanText: String? = null,
     /** Generated context used only when a completed plan starts its fresh implementation run. */
     val implementationPrompt: String? = null,
+    /** A fresh-provider continuation used only when that provider cannot resume its prior session. */
+    val continuationPrompt: String? = null,
     /** Null keeps the provider's own default model. */
     val model: String? = null,
     /** Null keeps the provider's own default reasoning level. */
@@ -213,6 +237,8 @@ data class AgentTask(
     val goal: String? = null,
     /** Follow-ups to send in order after this task's current successful run completes. */
     val queuedFollowUps: List<AgentQueuedFollowUp> = emptyList(),
+    /** An explicit decision checkpoint that must be answered before this task can continue. */
+    val userInputRequest: AgentUserInputRequest? = null,
     val maxBudgetUsd: Double? = null,
     /** Files already changed when the task began; excluded from its change summary. */
     val changeBaselinePaths: List<String> = emptyList(),
@@ -237,6 +263,14 @@ data class AgentTask(
     val contextWindowTokens: Long? = null,
     /** True after an agent finishes until the chat is opened (or marked read). */
     val unread: Boolean = false,
+    /** True only for the run that created and may remove [worktreePath]. */
+    val ownsWorktree: Boolean = false,
+    /** Optional typed project task that launched this raw agent session. */
+    val workflowTaskId: String? = null,
+    val workflowStage: ProjectWorkflowStage? = null,
+    val workflowAttempt: Int? = null,
+    /** Final provider response for non-plan workflow stages and completed chats. */
+    val completedResultText: String? = null,
 ) {
     val isActive: Boolean get() = status == AgentTaskStatus.Queued || status == AgentTaskStatus.Running
 }
@@ -345,6 +379,12 @@ data class AgentTaskDraft(
     val skills: List<AgentSkill> = emptyList(),
     val goal: String? = null,
     val maxBudgetUsd: Double? = null,
+    /** Reuse an existing workflow worktree instead of creating a new one. */
+    val existingWorktreePath: String? = null,
+    val existingBranchName: String? = null,
+    val workflowTaskId: String? = null,
+    val workflowStage: ProjectWorkflowStage? = null,
+    val workflowAttempt: Int? = null,
 )
 
 /** Last-used launch settings, stored independently for each provider. */
@@ -540,7 +580,7 @@ private fun promptWithPlanModeHint(text: String, planMode: Boolean): String = if
 }
 
 fun AgentTask.promptForCli(): String = promptWithImageHints(
-    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(implementationPrompt ?: prompt, skills), planMode), goal),
+    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(continuationPrompt ?: implementationPrompt ?: prompt, skills), planMode), goal),
     imagePaths,
 )
 

@@ -64,6 +64,7 @@ import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
+import app.andy.model.ProjectAgentProfile
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
 import app.andy.model.labelFor
@@ -254,6 +255,27 @@ private class AgentTaskComposerFormState(
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
     }
+}
+
+private fun AgentTaskComposerFormState.providerProfile(): ProjectAgentProfile = ProjectAgentProfile(
+    agent = agent,
+    model = if (usesCustomModel) customModel else modelId,
+    reasoningEffort = reasoningEffort,
+    fastMode = fastMode,
+)
+
+private fun AgentTaskComposerFormState.applyProviderProfile(profile: ProjectAgentProfile) {
+    providerChosenInComposer = true
+    agent = profile.agent
+    val catalogModel = AgentModelCatalog.option(profile.agent, profile.model)
+    modelId = when {
+        profile.model == null -> null
+        catalogModel != null -> catalogModel.id
+        else -> CUSTOM_MODEL_ID
+    }
+    customModel = if (catalogModel == null) profile.model.orEmpty() else ""
+    reasoningEffort = profile.reasoningEffort
+    fastMode = profile.fastMode
 }
 
 @Composable
@@ -682,30 +704,13 @@ private fun AgentTaskComposerFields(
         }
 
         if (showAgentControls) {
-            Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                AgentKind.entries.forEach { kind ->
-                    val status = form.cliStatuses.firstOrNull { it.kind == kind }
-                    if (status?.ready == true) {
-                        FilterPill(
-                            kind.label,
-                            state.providerChosenInComposer && state.agent == kind,
-                            agentColor(kind),
-                            leadingContent = { AgentPillIcon(kind) },
-                        ) {
-                            state.providerChosenInComposer = true
-                            state.agent = kind
-                        }
-                    } else {
-                        Text(
-                            "${kind.label} — ${if (status?.issue != null) "needs repair" else "not found"}",
-                            color = TextSecondary.copy(alpha = 0.6f),
-                            fontFamily = MonoFont,
-                            fontSize = 11.sp,
-                        )
-                    }
-                }
-            }
+            AgentProviderModelProfileControls(
+                profile = state.providerProfile(),
+                onChange = state::applyProviderProfile,
+                cliStatuses = form.cliStatuses,
+                providerSelectionActive = state.providerChosenInComposer,
+                showModelControls = false,
+            )
         }
 
         AnimatedVisibility(
@@ -714,52 +719,14 @@ private fun AgentTaskComposerFields(
             exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                form.cliStatuses.firstOrNull { it.kind == state.agent }?.version?.let { version ->
-                    Text(version, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                }
-                Text("Model", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("provider default", state.modelId == null, Cyan) { state.modelId = null }
-                    AgentModelCatalog.options(state.agent).forEach { option ->
-                        FilterPill(option.label, state.modelId == option.id, agentColor(state.agent)) { state.modelId = option.id }
-                    }
-                    FilterPill("custom", state.usesCustomModel, Rust) { state.modelId = CUSTOM_MODEL_ID }
-                }
-                if (state.usesCustomModel) {
-                    LabeledField(
-                        "Exact model / variant",
-                        state.customModel,
-                        { state.customModel = it },
-                        Modifier.fillMaxWidth(),
-                        placeholder = "passed to ${state.agent.cliName} exactly",
-                    )
-                    Text("Custom variants are passed as-is, so Andy does not add a reasoning or speed suffix.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                } else if (form.selectedModel != null) {
-                    if (form.selectedModel.efforts.isNotEmpty()) {
-                        Text("Reasoning", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (state.agent != AgentKind.Cursor) {
-                                FilterPill("provider default", state.reasoningEffort == null, Cyan) { state.reasoningEffort = null }
-                            }
-                            form.selectedModel.efforts.forEach { effort ->
-                                FilterPill(effort.label, state.reasoningEffort == effort, Rust) { state.reasoningEffort = effort }
-                            }
-                        }
-                    }
-                    if (form.selectedModel.supportsFastMode) {
-                        FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
-                    }
-                    Text(
-                        when (state.agent) {
-                            AgentKind.Cursor -> "Cursor receives the selected provider variant, e.g. cursor-grok-4.5-high-fast. Availability follows your Cursor account."
-                            AgentKind.Antigravity -> "Antigravity receives its model plus level as one variant; its installed CLI/account remains authoritative."
-                            else -> "The selected model and reasoning level are passed directly to the ${state.agent.label} CLI."
-                        },
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
-                    )
-                }
+                AgentProviderModelProfileControls(
+                    profile = state.providerProfile(),
+                    onChange = state::applyProviderProfile,
+                    cliStatuses = form.cliStatuses,
+                    showProviderControls = false,
+                    showVersion = true,
+                    showModelHelp = true,
+                )
             }
         }
 

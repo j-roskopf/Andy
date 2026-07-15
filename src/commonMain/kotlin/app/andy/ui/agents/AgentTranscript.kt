@@ -78,6 +78,7 @@ internal fun AgentTranscript(
     isActive: Boolean,
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
+    pendingContent: (@Composable () -> Unit)? = null,
     originalPrompt: String? = null,
     completedContent: (@Composable () -> Unit)? = null,
     onSkillOpen: (AgentSkill) -> Unit = {},
@@ -98,8 +99,8 @@ internal fun AgentTranscript(
     }
     // Stream deltas replace the final item in place, so size alone does not
     // change while a long assistant message is growing.
-    val transcriptItemCount = displayEvents.size + (if (headerContent != null) 1 else 0) + (if (originalPromptVisible != null) 1 else 0) + if (isActive) 1 else 0
-    LaunchedEffect(displayEvents.lastOrNull(), headerContent != null, originalPromptVisible, isActive, stickToBottom) {
+    val transcriptItemCount = displayEvents.size + (if (headerContent != null) 1 else 0) + (if (pendingContent != null) 1 else 0) + (if (originalPromptVisible != null) 1 else 0) + if (isActive) 1 else 0
+    LaunchedEffect(displayEvents.lastOrNull(), headerContent != null, pendingContent != null, originalPromptVisible, isActive, stickToBottom) {
         if (stickToBottom && transcriptItemCount > 0) {
             listState.scrollToItem(transcriptItemCount - 1)
         }
@@ -127,6 +128,9 @@ internal fun AgentTranscript(
             ) {
                 headerContent?.let { header ->
                     item(key = "task-header") { header() }
+                }
+                pendingContent?.let { content ->
+                    item(key = "pending-task-input") { content() }
                 }
                 originalPromptVisible?.let { prompt ->
                     item(key = "original-prompt") {
