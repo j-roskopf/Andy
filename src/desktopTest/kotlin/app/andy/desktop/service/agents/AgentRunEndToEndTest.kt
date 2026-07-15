@@ -348,7 +348,20 @@ class AgentQueuedFollowUpTest {
             )
 
             withTimeout(10_000) {
-                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    val userMessages = service.events(task.id).value
+                        .filterIsInstance<AgentEvent.UserMessage>()
+                        .map { it.text }
+                    if (
+                        current.status == AgentTaskStatus.Completed &&
+                        current.queuedFollowUps.isEmpty() &&
+                        userMessages == listOf("second message", "third message")
+                    ) {
+                        break
+                    }
+                    delay(25)
+                }
             }
             val finished = service.tasks.value.first { it.id == task.id }
             assertEquals(AgentTaskStatus.Completed, finished.status)
