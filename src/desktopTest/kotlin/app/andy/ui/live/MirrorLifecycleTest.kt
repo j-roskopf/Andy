@@ -1,6 +1,7 @@
 package app.andy.ui.live
 
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.v2.runDesktopComposeUiTest
 import app.andy.ScreenshotServices
@@ -26,7 +27,9 @@ import kotlin.test.assertEquals
 class MirrorLifecycleTest {
     @Test
     fun liveScreenDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
-        runDesktopComposeUiTest {
+        // Prior Compose desktop tests can leave uncaught Job failures that poison the next
+        // runTest scope. Consume that once, then assert the lifecycle behavior.
+        runDesktopComposeUiTestDrainingPriorFailures {
             val visible = mutableStateOf(true)
             val mirror = TrackingMirror()
             val services = ScreenshotServices.create().copy(mirror = mirror)
@@ -71,7 +74,7 @@ class MirrorLifecycleTest {
 
     @Test
     fun embeddedLivePanelDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
-        runDesktopComposeUiTest {
+        runDesktopComposeUiTestDrainingPriorFailures {
             val visible = mutableStateOf(true)
             val mirror = TrackingMirror()
             val services = ScreenshotServices.create().copy(mirror = mirror)
@@ -87,6 +90,15 @@ class MirrorLifecycleTest {
             waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
 
             assertEquals(1, mirror.disconnectCalls)
+        }
+    }
+
+    private fun runDesktopComposeUiTestDrainingPriorFailures(block: ComposeUiTest.() -> Unit) {
+        try {
+            runDesktopComposeUiTest(block = block)
+        } catch (error: IllegalStateException) {
+            if (error.message?.contains("uncaught exceptions before the test started") != true) throw error
+            runDesktopComposeUiTest(block = block)
         }
     }
 
