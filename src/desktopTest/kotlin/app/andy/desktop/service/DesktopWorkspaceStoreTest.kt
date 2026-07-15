@@ -17,11 +17,15 @@ class DesktopWorkspaceStoreTest {
             agentIconBadgeEnabled = false,
             agentNotificationTiming = AgentNotificationTiming.Always,
             agentNotificationSoundId = "ping",
+            tintId = "violet",
         )
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
 
         file.writeText(file.readText().replace("agentNotificationSoundId=ping", "agentNotificationSoundId=unknown"))
         assertEquals("chime", DesktopWorkspaceStore(file).load().agentNotificationSoundId)
+
+        file.writeText(file.readText().replace("tintId=violet", "tintId=not-a-tint"))
+        assertEquals("andy-blue", DesktopWorkspaceStore(file).load().tintId)
     }
 }

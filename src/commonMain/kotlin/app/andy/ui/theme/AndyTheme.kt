@@ -7,36 +7,151 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-internal object AndyColors {
-    val Neutral100 = Color(0xFFF4F1E8)
-    val Neutral200 = Color(0xFFE4DED0)
-    val Neutral300 = Color(0xFFC6BEAD)
-    val Neutral400 = Color(0xFF8E8779)
-    val Neutral500 = Color(0xFF514D44)
-    val Neutral600 = Color(0xFF302D27)
-    val Neutral700 = Color(0xFF24211C)
-    val Neutral750 = Color(0xFF1D1A16)
-    val Neutral800 = Color(0xFF171511)
-    val Neutral850 = Color(0xFF11100D)
-    val Neutral900 = Color(0xFF0A0908)
+internal enum class AndyTint(val id: String, val label: String, val color: Color) {
+    Default("andy-blue", "Andy blue", Color(0xFF02A8F3)),
+    Sky("sky", "Sky", Color(0xFF38BDF8)),
+    Azure("azure", "Azure", Color(0xFF3B82F6)),
+    Indigo("indigo", "Indigo", Color(0xFF6366F1)),
+    Violet("violet", "Violet", Color(0xFF8B5CF6)),
+    Purple("purple", "Purple", Color(0xFFA855F7)),
+    Fuchsia("fuchsia", "Fuchsia", Color(0xFFD946EF)),
+    Pink("pink", "Pink", Color(0xFFEC4899)),
+    Rose("rose", "Rose", Color(0xFFFB7185)),
+    Coral("coral", "Coral", Color(0xFFFB7C65)),
+    Orange("orange", "Orange", Color(0xFFFB923C)),
+    Amber("amber", "Amber", Color(0xFFFBBF24)),
+    Gold("gold", "Gold", Color(0xFFEAB308)),
+    Lime("lime", "Lime", Color(0xFFA3E635)),
+    Green("green", "Green", Color(0xFF4ADE80)),
+    Emerald("emerald", "Emerald", Color(0xFF34D399)),
+    Teal("teal", "Teal", Color(0xFF14B8A6)),
+    Aqua("aqua", "Aqua", Color(0xFF22D3EE)),
+    Steel("steel", "Steel", Color(0xFF94A3B8)),
+    White("white", "Silver", Color(0xFFE2E8F0));
 
-    val Orange = Color(0xFFD18A4B)
-    val OrangeHover = Color(0xFFE0A56E)
-    val OrangePressed = Color(0xFFB97138)
-    val OrangeSubtle = Color(0xFF2C2117)
-    val OrangeBorder = Color(0xFF8D6746)
-    val Green = Color(0xFF94C17A)
-    val GreenSoft = Color(0xFFB4D59E)
-    val GreenSubtle = Color(0xFF172418)
-    val Blue = Color(0xFF88AFC8)
-    val Warning = Color(0xFFE3B05E)
-    val Error = Color(0xFFE26F5C)
+    companion object {
+        fun fromId(id: String): AndyTint = entries.firstOrNull { it.id == id } ?: Default
+    }
+}
+
+private data class HslColor(val hue: Float, val saturation: Float, val lightness: Float)
+
+private fun Color.toHsl(): HslColor {
+    val maximum = maxOf(red, green, blue)
+    val minimum = minOf(red, green, blue)
+    val delta = maximum - minimum
+    val lightness = (maximum + minimum) / 2f
+    if (delta == 0f) return HslColor(0f, 0f, lightness)
+    val saturation = delta / (1f - kotlin.math.abs(2f * lightness - 1f))
+    val hue = when (maximum) {
+        red -> 60f * (((green - blue) / delta) % 6f)
+        green -> 60f * (((blue - red) / delta) + 2f)
+        else -> 60f * (((red - green) / delta) + 4f)
+    }.let { if (it < 0f) it + 360f else it }
+    return HslColor(hue, saturation, lightness)
+}
+
+private fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
+    val normalizedHue = ((hue % 360f) + 360f) % 360f
+    val chroma = (1f - kotlin.math.abs(2f * lightness - 1f)) * saturation
+    val secondary = chroma * (1f - kotlin.math.abs((normalizedHue / 60f) % 2f - 1f))
+    val (red, green, blue) = when {
+        normalizedHue < 60f -> Triple(chroma, secondary, 0f)
+        normalizedHue < 120f -> Triple(secondary, chroma, 0f)
+        normalizedHue < 180f -> Triple(0f, chroma, secondary)
+        normalizedHue < 240f -> Triple(0f, secondary, chroma)
+        normalizedHue < 300f -> Triple(secondary, 0f, chroma)
+        else -> Triple(chroma, 0f, secondary)
+    }
+    val match = lightness - chroma / 2f
+    return Color(red + match, green + match, blue + match)
+}
+
+private data class AndyTonalPalette(
+    val neutral100: Color,
+    val neutral200: Color,
+    val neutral300: Color,
+    val neutral400: Color,
+    val neutral500: Color,
+    val neutral600: Color,
+    val neutral700: Color,
+    val neutral750: Color,
+    val neutral800: Color,
+    val neutral850: Color,
+    val neutral900: Color,
+    val border: Color,
+) {
+    companion object {
+        fun from(tint: Color): AndyTonalPalette {
+            val hsl = tint.toHsl()
+            val surfaceSaturation = hsl.saturation.coerceIn(0.20f, 0.42f)
+            fun surface(lightness: Float, saturation: Float) = hslColor(hsl.hue, saturation.coerceAtMost(surfaceSaturation), lightness)
+            return AndyTonalPalette(
+                neutral100 = surface(0.94f, 0.08f),
+                neutral200 = surface(0.86f, 0.09f),
+                neutral300 = surface(0.70f, 0.10f),
+                neutral400 = surface(0.50f, 0.12f),
+                neutral500 = surface(0.32f, 0.15f),
+                neutral600 = surface(0.22f, 0.18f),
+                neutral700 = surface(0.15f, 0.24f),
+                neutral750 = surface(0.11f, 0.28f),
+                neutral800 = surface(0.085f, 0.31f),
+                neutral850 = surface(0.062f, 0.34f),
+                neutral900 = surface(0.045f, 0.36f),
+                // Complementary hue gives borders a quiet separating edge without tinting surfaces.
+                border = hslColor(hsl.hue + 180f, 0.18f, 0.64f).copy(alpha = 0.14f),
+            )
+        }
+    }
+}
+
+internal fun windowBackgroundForTint(tintId: String): Color =
+    AndyTonalPalette.from(AndyTint.fromId(tintId).color).neutral850
+
+internal object AndyColors {
+    private var selectedTint by mutableStateOf(AndyTint.Default)
+    private var tonalPalette by mutableStateOf(AndyTonalPalette.from(AndyTint.Default.color))
+
+    fun selectTint(id: String) {
+        selectedTint = AndyTint.fromId(id)
+        tonalPalette = AndyTonalPalette.from(selectedTint.color)
+    }
+
+    // HSL lightness is fixed per role; selected color contributes hue, not a wash of saturation.
+    val Neutral100 get() = tonalPalette.neutral100
+    val Neutral200 get() = tonalPalette.neutral200
+    val Neutral300 get() = tonalPalette.neutral300
+    val Neutral400 get() = tonalPalette.neutral400
+    val Neutral500 get() = tonalPalette.neutral500
+    val Neutral600 get() = tonalPalette.neutral600
+    val Neutral700 get() = tonalPalette.neutral700
+    val Neutral750 get() = tonalPalette.neutral750
+    val Neutral800 get() = tonalPalette.neutral800
+    val Neutral850 get() = tonalPalette.neutral850
+    val Neutral900 get() = tonalPalette.neutral900
+    val tonalPaletteBorder get() = tonalPalette.border
+
+    val Orange get() = selectedTint.color
+    val OrangeHover get() = selectedTint.color.copy(alpha = 0.88f)
+    val OrangePressed get() = selectedTint.color.copy(alpha = 0.68f)
+    val OrangeSubtle get() = selectedTint.color.copy(alpha = 0.20f)
+    val OrangeBorder get() = selectedTint.color.copy(alpha = 0.58f)
+    val Green = Color(0xFF72C5A2)
+    val GreenSoft = Color(0xFF9AD8BF)
+    val GreenSubtle = Color(0xFF102A28)
+    val Blue get() = selectedTint.color
+    val Warning = Color(0xFFE0B45C)
+    val Error = Color(0xFFE37B70)
 }
 
 internal object AndySpace {
@@ -62,21 +177,22 @@ internal val MonoFont = FontFamily.Monospace
  * runtime details stay monospaced so scanning dense developer information remains easy.
  */
 internal val DisplayFont = FontFamily.SansSerif
-internal val Ink = AndyColors.Neutral900
-internal val Panel = AndyColors.Neutral800
-internal val PanelSoft = AndyColors.Neutral700
-internal val Border = AndyColors.Neutral100.copy(alpha = 0.10f)
-internal val PaneDividerTint = AndyColors.OrangeBorder.copy(alpha = 0.72f)
-internal val TextPrimary = AndyColors.Neutral200
-internal val TextSecondary = AndyColors.Neutral400
-internal val Rust = AndyColors.Orange
+internal val Ink get() = AndyColors.Neutral900
+internal val Panel get() = AndyColors.Neutral800
+internal val PanelSoft get() = AndyColors.Neutral700
+internal val Border get() = AndyColors.tonalPaletteBorder
+internal val PaneDividerTint get() = AndyColors.OrangeBorder.copy(alpha = 0.72f)
+internal val TextPrimary get() = AndyColors.Neutral200
+internal val TextSecondary get() = AndyColors.Neutral400
+internal val Rust get() = AndyColors.Orange
 internal val Green = AndyColors.Green
-internal val Cyan = AndyColors.Blue
+internal val Cyan get() = AndyColors.Blue
 internal val Yellow = AndyColors.Warning
 internal val Red = AndyColors.Error
 
 @Composable
-fun AndyTheme(content: @Composable () -> Unit) {
+fun AndyTheme(tintId: String = AndyTint.Default.id, content: @Composable () -> Unit) {
+    SideEffect { AndyColors.selectTint(tintId) }
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Ink,

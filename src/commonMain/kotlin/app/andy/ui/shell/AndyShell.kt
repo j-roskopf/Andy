@@ -53,6 +53,7 @@ import app.andy.ui.settings.UpdateInstallConfirmationDialog
 import app.andy.ui.snapshots.SnapshotsScreen
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyTheme
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Ink
@@ -165,6 +166,7 @@ internal fun AndyShell(
     }
     val proxyRunning = proxyStatus.contains("listening on")
 
+    AndyTheme(tintId = state.workspaceState.tintId) {
     Box(
         Modifier.fillMaxSize()
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
@@ -381,6 +383,7 @@ internal fun AndyShell(
                 }
             }
         }
+    }
         pendingUpdateInstallConfirmation?.let { update ->
             UpdateInstallConfirmationDialog(
                 update = update,

@@ -25,6 +25,7 @@ import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.PendingAgentTaskOpen
 import app.andy.service.OpenAgentTaskRequest
+import app.andy.ui.theme.windowBackgroundForTint
 import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
@@ -133,8 +134,8 @@ fun main() {
                 window.addWindowListener(listener)
                 onDispose { window.removeWindowListener(listener) }
             }
-            LaunchedEffect(window) {
-                configureMacTitleBar(window)
+            LaunchedEffect(window, workspaceState.tintId) {
+                configureMacTitleBar(window, windowBackgroundForTint(workspaceState.tintId))
             }
             MenuBar {
                 Menu("Go") {
@@ -192,6 +193,7 @@ fun main() {
                     serial = serial,
                     deviceName = popOutDeviceName,
                     controlsVisible = popOutControlsVisible,
+                    tintId = workspaceState.tintId,
                 )
             }
         }
@@ -223,13 +225,17 @@ private fun updateDockBadge(count: Int) {
     }
 }
 
-private fun configureMacTitleBar(window: JFrame) {
+private fun configureMacTitleBar(window: JFrame, background: androidx.compose.ui.graphics.Color) {
     runCatching {
         window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
         window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
         window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         window.rootPane.putClientProperty("apple.awt.noTitleBarSeparator", true)
-        window.background = Color(0x14, 0x14, 0x16)
+        window.background = Color(
+            (background.red * 255).toInt(),
+            (background.green * 255).toInt(),
+            (background.blue * 255).toInt(),
+        )
     }
 }
 
