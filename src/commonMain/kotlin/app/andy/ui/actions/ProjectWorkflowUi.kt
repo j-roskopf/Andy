@@ -101,6 +101,8 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -294,10 +296,13 @@ internal fun ProjectWorkflowDetail(
             StatusTag(taskStateLabel(task.state), taskStateColor(task.state))
         }
         task.lastError?.let { WorkflowNotice(it, Red) }
-        task.attempts.asReversed().firstNotNullOfOrNull { attempt ->
-            agentTasks.firstOrNull { it.id == attempt.runId }?.userInputRequest
-                ?.let { request -> attempt.runId to request }
-        }?.let { (runId, request) ->
+        val pendingUserInput = remember(task, agentTasks) {
+            task.attempts.asReversed().firstNotNullOfOrNull { attempt ->
+                agentTasks.firstOrNull { it.id == attempt.runId }?.userInputRequest
+                    ?.let { request -> attempt.runId to request }
+            }
+        }
+        pendingUserInput?.let { (runId, request) ->
             AgentUserInputCard(
                 request = request,
                 onSubmit = { answers -> services.agentRuns.respondToUserInput(runId, request.id, answers) },
@@ -383,8 +388,10 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
     val scope = rememberCoroutineScope()
     val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
     val verification = workflow.tasks.firstOrNull { it.id == build.linkedVerificationTaskId }
-    val runIds = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty()).map { it.runId }.toSet()
-    val cost = runs.filter { it.id in runIds }.sumOf { it.totalCostUsd ?: 0.0 }
+    val cost = remember(build, review, verification, runs) {
+        val runIds = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty()).map { it.runId }.toSet()
+        runs.filter { it.id in runIds }.sumOf { it.totalCostUsd ?: 0.0 }
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         when {
             build.isActive || review?.isActive == true || verification?.isActive == true -> {
@@ -428,7 +435,9 @@ private fun ReviewDetail(task: ProjectTask, runs: List<AgentTask>) {
     )
     if (task.reviewInstructions.isNotBlank()) DetailBlock("CUSTOM REVIEW INSTRUCTIONS", task.reviewInstructions)
     if (task.state == ProjectTaskState.Disabled) WorkflowNotice("Review is disabled. Prior findings and transcripts remain available for audit.", TextSecondary)
-    val latestRun = task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { runId -> runs.firstOrNull { it.id == runId } }
+    val latestRun = remember(task, runs) {
+        task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { runId -> runs.firstOrNull { it.id == runId } }
+    }
     latestRun?.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
         DetailBlock("REVIEW WORKSPACE CHANGES", files.joinToString("\n") { "${it.path} (+${it.additions} -${it.deletions})" })
     }
@@ -508,7 +517,12 @@ internal fun ProjectScratchpadEditor(
     }
     DisposableEffect(projectId) {
         onDispose {
-            if (text != persistedText) scope.launch { services.projectWorkflows.updateScratchpad(projectId, text) }
+            if (text != persistedText) {
+                // Composition scope is cancelled on leave; flush on an independent scope.
+                CoroutineScope(Dispatchers.Default).launch {
+                    services.projectWorkflows.updateScratchpad(projectId, text)
+                }
+            }
         }
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {

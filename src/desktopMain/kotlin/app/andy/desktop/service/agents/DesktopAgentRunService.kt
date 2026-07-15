@@ -285,9 +285,9 @@ class DesktopAgentRunService(
         require(
             existingBuild == null || (
                 existingBuild.kind == ProjectTaskKind.Build &&
-                    !existingBuild.isActive &&
-                    activeLinkedReview?.isActive != true &&
-                    activeLinkedVerification?.isActive != true
+                    !isStageBusy(existingBuild) &&
+                    !isStageBusy(activeLinkedReview) &&
+                    !isStageBusy(activeLinkedVerification)
                 ),
         ) { "active build pairs cannot be edited" }
         val buildId = existingBuild?.id ?: workflowId("build")
@@ -302,12 +302,26 @@ class DesktopAgentRunService(
         }
         val removedReviewId = previousReviewId.takeIf { it != null && reviewId == null }
         val reviewWasEnabled = existingBuild?.reviewEnabled == true
+        val existingReview = reviewId?.let(::projectTask) ?: previousReview
+        val reviewProfile = draft.reviewProfile.normalizedFor(ProjectTaskKind.Review)
+        val reviewInstructions = draft.reviewInstructions.trim()
+        val reviewGateChanged = draft.reviewEnabled &&
+            reviewWasEnabled &&
+            existingReview != null &&
+            (
+                reviewInstructions != existingReview.reviewInstructions ||
+                    reviewProfile != existingReview.profile ||
+                    draft.includeScratchpadInReview != existingReview.includeScratchpad
+                )
+        val invalidatingReview = draft.reviewEnabled && (!reviewWasEnabled || reviewGateChanged)
         val reviewGeneration = when {
-            draft.reviewEnabled && !reviewWasEnabled -> (existingBuild?.reviewGeneration ?: 0) + 1
+            invalidatingReview -> (existingBuild?.reviewGeneration ?: 0) + 1
             else -> existingBuild?.reviewGeneration ?: 0
         }
-        val reopeningCompleted = draft.reviewEnabled && !reviewWasEnabled && existingBuild?.state == ProjectTaskState.Completed
+        val reopeningCompleted = invalidatingReview && existingBuild?.state == ProjectTaskState.Completed
         val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild?.reviewReopenedCompleted == true
+        val pauseForReviewChange = (draft.reviewEnabled != reviewWasEnabled || reviewGateChanged) &&
+            existingBuild?.attempts?.isNotEmpty() == true
         val buildProfile = draft.buildProfile.normalizedFor(ProjectTaskKind.Build).let { requested ->
             if (existingBuild?.attempts?.isNotEmpty() == true) {
                 requested.copy(useWorktree = existingBuild.profile.useWorktree)
@@ -329,7 +343,7 @@ class DesktopAgentRunService(
             planSnapshot = draft.plan,
             buildNotes = draft.buildNotes.trim(),
             reviewEnabled = draft.reviewEnabled,
-            reviewInstructions = draft.reviewInstructions.trim(),
+            reviewInstructions = reviewInstructions,
             reviewGeneration = reviewGeneration,
             verificationInstructions = draft.verificationInstructions.trim(),
             maxBudgetUsd = draft.maxBudgetUsd,
@@ -346,7 +360,7 @@ class DesktopAgentRunService(
             planSnapshot = existingBuild?.planSnapshot ?: draft.plan,
             buildNotes = draft.buildNotes.trim(),
             reviewEnabled = draft.reviewEnabled,
-            reviewInstructions = draft.reviewInstructions.trim(),
+            reviewInstructions = reviewInstructions,
             reviewGeneration = reviewGeneration,
             reviewReopenedCompleted = when {
                 reopeningCompleted -> true
@@ -358,53 +372,51 @@ class DesktopAgentRunService(
             state = when {
                 restoringCompleted -> ProjectTaskState.Completed
                 reopeningCompleted -> ProjectTaskState.Paused
-                draft.reviewEnabled && !reviewWasEnabled && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
+                invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
                 !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Paused
                 else -> existingBuild?.state ?: ProjectTaskState.Draft
             },
             paused = when {
                 restoringCompleted -> false
-                reopeningCompleted -> true
-                draft.reviewEnabled != reviewWasEnabled && existingBuild?.attempts?.isNotEmpty() == true -> true
+                reopeningCompleted || pauseForReviewChange -> true
                 else -> existingBuild?.paused ?: false
             },
             updatedAtMillis = now,
         )
-        val existingReview = reviewId?.let(::projectTask)
         val review = reviewId?.let { id ->
-            (existingReview ?: ProjectTask(
+            (existingReview?.takeIf { it.id == id } ?: ProjectTask(
                 id = id,
                 projectId = draft.projectId,
                 kind = ProjectTaskKind.Review,
                 title = "Review ${draft.title.trim()}",
-                instructions = draft.reviewInstructions.trim(),
-                profile = draft.reviewProfile.normalizedFor(ProjectTaskKind.Review),
+                instructions = reviewInstructions,
+                profile = reviewProfile,
                 includeScratchpad = draft.includeScratchpadInReview,
                 linkedSpecTaskId = draft.plan.sourceSpecTaskId,
                 linkedBuildTaskId = buildId,
                 linkedVerificationTaskId = verificationId,
                 planSnapshot = draft.plan,
                 reviewEnabled = draft.reviewEnabled,
-                reviewInstructions = draft.reviewInstructions.trim(),
+                reviewInstructions = reviewInstructions,
                 reviewGeneration = reviewGeneration,
                 state = if (draft.reviewEnabled) ProjectTaskState.Draft else ProjectTaskState.Disabled,
                 createdAtMillis = now,
                 updatedAtMillis = now,
             )).copy(
                 title = "Review ${draft.title.trim()}",
-                instructions = draft.reviewInstructions.trim(),
-                profile = draft.reviewProfile.normalizedFor(ProjectTaskKind.Review),
+                instructions = reviewInstructions,
+                profile = reviewProfile,
                 includeScratchpad = draft.includeScratchpadInReview,
                 linkedVerificationTaskId = verificationId,
                 reviewEnabled = draft.reviewEnabled,
-                reviewInstructions = draft.reviewInstructions.trim(),
+                reviewInstructions = reviewInstructions,
                 reviewGeneration = reviewGeneration,
                 state = when {
                     !draft.reviewEnabled -> ProjectTaskState.Disabled
-                    draft.reviewEnabled && !reviewWasEnabled && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
-                    else -> existingReview?.state ?: ProjectTaskState.Draft
+                    invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
+                    else -> existingReview?.takeIf { it.id == id }?.state ?: ProjectTaskState.Draft
                 },
-                lastError = if (draft.reviewEnabled) existingReview?.lastError else null,
+                lastError = if (draft.reviewEnabled) existingReview?.takeIf { it.id == id }?.lastError else null,
                 updatedAtMillis = now,
             )
         }
@@ -431,7 +443,7 @@ class DesktopAgentRunService(
             verificationInstructions = draft.verificationInstructions.trim(),
             state = when {
                 restoringCompleted -> ProjectTaskState.Completed
-                draft.reviewEnabled && !reviewWasEnabled && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
+                invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
                 !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Waiting
                 else -> existingVerification?.state ?: ProjectTaskState.Draft
             },
@@ -454,7 +466,7 @@ class DesktopAgentRunService(
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val review = build.linkedReviewTaskId?.let(::projectTask)
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
-        if (build.isActive || review?.isActive == true || verification?.isActive == true || build.state == ProjectTaskState.Completed) return
+        if (isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) || build.state == ProjectTaskState.Completed) return
         updateProjectTask(buildTaskId) { it.copy(paused = false, lastError = null) }
         startBuildAttempt(buildTaskId)
     }
@@ -462,15 +474,15 @@ class DesktopAgentRunService(
     override fun pauseBuildPair(buildTaskId: String) {
         val build = projectTask(buildTaskId) ?: return
         updateProjectTask(buildTaskId) {
-            it.copy(paused = true, state = if (it.isActive) it.state else ProjectTaskState.Paused, updatedAtMillis = System.currentTimeMillis())
+            it.copy(paused = true, state = if (isStageBusy(it)) it.state else ProjectTaskState.Paused, updatedAtMillis = System.currentTimeMillis())
         }
         build.linkedReviewTaskId?.let { reviewId ->
             updateProjectTask(reviewId) {
-                it.copy(state = if (it.isActive) it.state else if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
+                it.copy(state = if (isStageBusy(it)) it.state else if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
             }
         }
         build.linkedVerificationTaskId?.let { verificationId ->
-            updateProjectTask(verificationId) { it.copy(state = if (it.isActive) it.state else ProjectTaskState.Paused) }
+            updateProjectTask(verificationId) { it.copy(state = if (isStageBusy(it)) it.state else ProjectTaskState.Paused) }
         }
         scope.launch { persist() }
     }
@@ -481,7 +493,11 @@ class DesktopAgentRunService(
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
         val activeRunId = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty())
             .sortedByDescending { it.createdAtMillis }
-            .firstOrNull { attempt -> currentTask(attempt.runId)?.isActive == true }
+            .firstOrNull { attempt ->
+                currentTask(attempt.runId)?.let { run ->
+                    run.isActive || run.status == AgentTaskStatus.WaitingForInput
+                } == true
+            }
             ?.runId
         activeRunId?.let(::stop)
         updateProjectTask(buildTaskId) { it.copy(paused = true, state = ProjectTaskState.NeedsAttention, lastError = "current workflow run was stopped") }
@@ -495,7 +511,7 @@ class DesktopAgentRunService(
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val review = build.linkedReviewTaskId?.let(::projectTask)
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
-        if (build.isActive || review?.isActive == true || verification?.isActive == true) return
+        if (isStageBusy(build) || isStageBusy(review) || isStageBusy(verification)) return
         updateProjectTask(buildTaskId) { it.copy(paused = false, reviewReopenedCompleted = false, lastError = null) }
         val buildRun = latestCompletedBuildRun(build)
         val latestReviewVerdict = review?.reviewVerdicts
@@ -700,7 +716,7 @@ class DesktopAgentRunService(
                 unread = false,
             )
         } else {
-            val priorPrompt = task.continuationPrompt ?: task.prompt
+            val priorPrompt = task.continuationPrompt ?: task.implementationPrompt ?: task.prompt
             task.copy(
                 status = AgentTaskStatus.Queued,
                 userInputRequest = null,
@@ -1556,7 +1572,15 @@ class DesktopAgentRunService(
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val linkedReview = build.linkedReviewTaskId?.let(::projectTask)
         val linkedVerification = build.linkedVerificationTaskId?.let(::projectTask)
-        if (build.paused || build.isActive || linkedReview?.isActive == true || linkedVerification?.isActive == true || build.state == ProjectTaskState.Completed) return
+        if (
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(linkedReview) ||
+            isStageBusy(linkedVerification)
+        ) {
+            return
+        }
         if ((linkedVerification?.verdicts?.count { it.status == ProjectVerificationStatus.Failed } ?: 0) >= build.maxVerificationAttempts) {
             setPairAttention(build, "verification reached the ${build.maxVerificationAttempts}-attempt limit")
             persist()
@@ -1589,7 +1613,11 @@ class DesktopAgentRunService(
             lastReviewFailure?.findings.orEmpty().filter { it.severity == ProjectReviewFindingSeverity.Blocking }.map { finding ->
                 buildString {
                     append(finding.title).append(": ").append(finding.details)
-                    finding.file?.let { append(" (").append(it).also { _ -> finding.line?.let { line -> append(':').append(line) } }.append(')') }
+                    finding.file?.let { file ->
+                        append(" (").append(file)
+                        finding.line?.let { line -> append(':').append(line) }
+                        append(')')
+                    }
                 }
             }
         } else {
@@ -1637,7 +1665,16 @@ class DesktopAgentRunService(
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val review = build.linkedReviewTaskId?.let(::projectTask) ?: return
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
-        if (!build.reviewEnabled || build.paused || build.isActive || review.isActive || verification?.isActive == true || build.state == ProjectTaskState.Completed) return
+        if (
+            !build.reviewEnabled ||
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(review) ||
+            isStageBusy(verification)
+        ) {
+            return
+        }
         if (reviewFailureCount(build, review) >= build.maxReviewFailures) {
             setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
             persist()
@@ -1700,7 +1737,15 @@ class DesktopAgentRunService(
     private suspend fun startVerificationAttempt(buildTaskId: String) {
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val verification = build.linkedVerificationTaskId?.let(::projectTask) ?: return
-        if (build.paused || build.isActive || verification.isActive || build.state == ProjectTaskState.Completed) return
+        if (
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(verification) ||
+            isStageBusy(build.linkedReviewTaskId?.let(::projectTask))
+        ) {
+            return
+        }
         val failedVerificationCount = verification.verdicts.count { it.status == ProjectVerificationStatus.Failed }
         if (failedVerificationCount >= build.maxVerificationAttempts) {
             setPairAttention(build, "verification failed ${build.maxVerificationAttempts} times")
@@ -1808,6 +1853,18 @@ class DesktopAgentRunService(
         return cost >= budget
     }
 
+    /**
+     * True while a stage has an in-flight or unanswered agent run.
+     * [ProjectTaskState.Waiting] alone is not busy: the build/review/verify handoff
+     * parks siblings in Waiting before launching the next stage.
+     */
+    private fun isStageBusy(task: ProjectTask?): Boolean {
+        if (task == null) return false
+        if (task.state == ProjectTaskState.Queued || task.state == ProjectTaskState.Running) return true
+        val run = task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let(::currentTask) ?: return false
+        return run.status == AgentTaskStatus.WaitingForInput
+    }
+
     private fun setPairAttention(build: ProjectTask, message: String) {
         updateProjectTask(build.id) { it.copy(state = ProjectTaskState.NeedsAttention, paused = true, lastError = message, updatedAtMillis = System.currentTimeMillis()) }
         build.linkedReviewTaskId?.let { id ->
@@ -1906,8 +1963,8 @@ class DesktopAgentRunService(
 
     private suspend fun reconcileReview(run: AgentTask, review: ProjectTask) {
         val build = review.linkedBuildTaskId?.let(::projectTask) ?: return
-        val attempt = review.attempts.firstOrNull { it.runId == run.id }
-        val reviewedBuildRunId = attempt?.reviewedBuildRunId
+        val attempt = review.attempts.firstOrNull { it.runId == run.id } ?: return
+        val reviewedBuildRunId = attempt.reviewedBuildRunId
         if (reviewedBuildRunId.isNullOrBlank()) {
             setPairAttention(build, "review attempt is missing its build provenance")
             persist()
