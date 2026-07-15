@@ -484,7 +484,12 @@ class CursorPlanBackfillTest {
             )
 
             withTimeout(10_000) {
-                while (service.tasks.value.singleOrNull()?.completedPlanText != recoveredPlan) delay(25)
+                while (
+                    service.tasks.value.singleOrNull()?.completedPlanText != recoveredPlan ||
+                    service.projects.value[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text != recoveredPlan
+                ) {
+                    delay(25)
+                }
             }
             assertEquals(recoveredPlan, service.projects.value[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
 
