@@ -2,7 +2,6 @@ package app.andy.ui.controls
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -140,7 +139,6 @@ internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial
                 ControlSection(
                     title = "Debug behavior",
                     description = "Expose visual diagnostics and control how testable the app lifecycle is.",
-                    accent = AndyColors.Blue,
                 ) {
                     CommandTile(
                         label = "Show taps",
@@ -162,6 +160,13 @@ internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial
                         onPrimary = { run("Bounds on", listOf("setprop", "debug.layout", "true")) },
                         secondaryLabel = "Hide",
                         onSecondary = { run("Bounds off", listOf("setprop", "debug.layout", "false")) },
+                    )
+                    CommandTile(
+                        label = "TalkBack",
+                        primaryLabel = "Enable",
+                        onPrimary = { run("TalkBack on", talkBackCommand(enabled = true)) },
+                        secondaryLabel = "Disable",
+                        onSecondary = { run("TalkBack off", talkBackCommand(enabled = false)) },
                     )
                     CommandTile(
                         label = "Keep activities",
@@ -327,13 +332,41 @@ private fun ControlTile(label: String, content: @Composable () -> Unit) {
             .widthIn(min = 200.dp, max = 216.dp)
             .heightIn(min = 72.dp)
             .background(AndyColors.Neutral900.copy(alpha = 0.44f), shape)
-            .border(1.dp, Border.copy(alpha = 0.80f), shape)
             .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(label, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         content()
     }
+}
+
+private fun talkBackCommand(enabled: Boolean): List<String> {
+    val script = if (enabled) {
+        """
+        talkback='com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService'
+        pm path com.google.android.marvin.talkback >/dev/null 2>&1 || {
+          echo 'TalkBack is not installed on this device' >&2
+          exit 1
+        }
+        current="__DOLLAR__(settings get secure enabled_accessibility_services)"
+        [ "__DOLLAR__current" = 'null' ] && current=''
+        case ":__DOLLAR__current:" in
+          *":__DOLLAR__talkback:"*) ;;
+          *) settings put secure enabled_accessibility_services "__DOLLAR__{current:+__DOLLAR__current:}__DOLLAR__talkback" ;;
+        esac
+        settings put secure accessibility_enabled 1
+        """.trimIndent()
+    } else {
+        """
+        talkback='com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService'
+        current="__DOLLAR__(settings get secure enabled_accessibility_services)"
+        [ "__DOLLAR__current" = 'null' ] && current=''
+        remaining="__DOLLAR__(printf '%s' "__DOLLAR__current" | tr ':' '\n' | grep -Fvx "__DOLLAR__talkback" | paste -sd: -)"
+        settings put secure enabled_accessibility_services "__DOLLAR__remaining"
+        [ -n "__DOLLAR__remaining" ] || settings put secure accessibility_enabled 0
+        """.trimIndent()
+    }
+    return listOf("sh", "-c", script.replace("__DOLLAR__", "\$"))
 }
 
 @Composable

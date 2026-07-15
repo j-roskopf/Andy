@@ -195,7 +195,8 @@ internal object NativeMirrorJni {
 
     fun updateOverlay(
         gridEnabled: Boolean,
-        gridStep: Float,
+        gridStepX: Float,
+        gridStepY: Float,
         gridR: Float,
         gridG: Float,
         gridB: Float,
@@ -207,6 +208,9 @@ internal object NativeMirrorJni {
         rulerG: Float,
         rulerB: Float,
         rulerA: Float,
+        sourceWidth: Float,
+        sourceHeight: Float,
+        pickerEnabled: Boolean,
         highlightLeft: Float,
         highlightTop: Float,
         highlightRight: Float,
@@ -215,11 +219,25 @@ internal object NativeMirrorJni {
         if (loadResult.isSuccess) {
             runCatching {
                 nativeUpdateOverlay(
-                    gridEnabled, gridStep, gridR, gridG, gridB, gridA,
+                    gridEnabled, gridStepX, gridStepY, gridR, gridG, gridB, gridA,
                     rulerEnabled, rulerX, rulerY, rulerR, rulerG, rulerB, rulerA,
+                    sourceWidth, sourceHeight,
+                    pickerEnabled,
                     highlightLeft, highlightTop, highlightRight, highlightBottom,
                 )
             }
+        }
+    }
+
+    /** Moves the native picker lens without waiting for a Compose recomposition. */
+    fun updatePickerPoint(normalizedX: Float?, normalizedY: Float?) {
+        if (!loadResult.isSuccess) return
+        runCatching {
+            nativeUpdatePickerPoint(
+                normalizedX ?: 0f,
+                normalizedY ?: 0f,
+                normalizedX != null && normalizedY != null,
+            )
         }
     }
 
@@ -288,7 +306,8 @@ internal object NativeMirrorJni {
     private external fun nativeLatencyProbeTransitions(): Long
     private external fun nativeUpdateOverlay(
         gridEnabled: Boolean,
-        gridStep: Float,
+        gridStepX: Float,
+        gridStepY: Float,
         gridR: Float,
         gridG: Float,
         gridB: Float,
@@ -300,11 +319,15 @@ internal object NativeMirrorJni {
         rulerG: Float,
         rulerB: Float,
         rulerA: Float,
+        sourceWidth: Float,
+        sourceHeight: Float,
+        pickerEnabled: Boolean,
         highlightLeft: Float,
         highlightTop: Float,
         highlightRight: Float,
         highlightBottom: Float,
     )
+    private external fun nativeUpdatePickerPoint(normalizedX: Float, normalizedY: Float, visible: Boolean)
     private external fun nativeInspectPixel(normalizedX: Float, normalizedY: Float): Int
     private external fun nativeP95InputToPresentMillis(): Float
     private external fun nativeInputToPresentSamplesMillis(): String

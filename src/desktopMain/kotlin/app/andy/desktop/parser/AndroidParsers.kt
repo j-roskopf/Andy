@@ -279,6 +279,26 @@ object AndroidParsers {
         return activities.map { AndroidActivity(it, null) }
     }
 
+    fun parseAppDetails(output: String): AndroidAppDetails {
+        if (output.isBlank() || output.contains("Unable to find package", ignoreCase = true)) return AndroidAppDetails()
+
+        fun field(name: String): String? = Regex("""\b$name=([^\s]+)""").find(output)?.groupValues?.getOrNull(1)
+        val flagLines = output.lineSequence().filter { line ->
+            Regex("""\b(?:pkgFlags|flags)=\[""", RegexOption.IGNORE_CASE).containsMatchIn(line)
+        }.toList()
+        val signingVersion = Regex("""(?i)signatures=.*?\bversion:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)
+            ?: Regex("""(?i)\bsignatureSchemeVersion=(\d+)""").find(output)?.groupValues?.getOrNull(1)
+
+        return AndroidAppDetails(
+            versionName = field("versionName"),
+            versionCode = field("versionCode"),
+            minSdk = field("minSdk"),
+            targetSdk = field("targetSdk"),
+            signingScheme = signingVersion?.let { "v$it" },
+            debuggable = flagLines.takeIf { it.isNotEmpty() }?.any { it.contains("DEBUGGABLE") },
+        )
+    }
+
     fun parseProcessMetrics(output: String): List<ProcessMetric> {
         return output.lineSequence()
             .mapNotNull { line ->

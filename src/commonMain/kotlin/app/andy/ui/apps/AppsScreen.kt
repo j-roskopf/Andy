@@ -40,6 +40,7 @@ import app.andy.ui.components.PendingConfirmation
 import app.andy.loadImageBitmap
 import app.andy.model.AndroidActivity
 import app.andy.model.AndroidApp
+import app.andy.model.AndroidAppDetails
 import app.andy.model.AndroidPermission
 import app.andy.service.AndyServices
 import app.andy.service.AppService
@@ -76,6 +77,8 @@ internal fun AppsScreen(
     var rows by remember { mutableStateOf<List<AndroidApp>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<AndroidApp?>(null) }
+    var appDetails by remember { mutableStateOf<AndroidAppDetails?>(null) }
+    var appDetailsLoading by remember { mutableStateOf(false) }
     var permissions by remember { mutableStateOf<List<AndroidPermission>>(emptyList()) }
     var activities by remember { mutableStateOf<List<AndroidActivity>>(emptyList()) }
     var status by remember { mutableStateOf("Select a device") }
@@ -106,7 +109,29 @@ internal fun AppsScreen(
         }
     }
 
-    LaunchedEffect(serial) { refresh() }
+    LaunchedEffect(serial) {
+        appDetails = null
+        appDetailsLoading = false
+        permissions = emptyList()
+        activities = emptyList()
+        val currentSerial = serial ?: run {
+            status = "Select an online device"
+            return@LaunchedEffect
+        }
+        status = "Loading packages..."
+        runCatching { apps.listApps(currentSerial) }
+            .onSuccess { loadedRows ->
+                rows = loadedRows
+                selected = selected?.let { current ->
+                    loadedRows.firstOrNull { it.packageName == current.packageName }
+                }
+                status = "${loadedRows.size} apps"
+            }
+            .onFailure {
+                rows = emptyList()
+                status = "Unable to load packages"
+            }
+    }
     val filtered = rows.filter { app -> query.isBlank() || app.packageName.contains(query, true) || app.label?.contains(query, true) == true }
 
     Row(Modifier.fillMaxSize()) {
@@ -118,9 +143,19 @@ internal fun AppsScreen(
                 items(filtered) { app ->
                     TableRow(Modifier.clickable {
                         selected = app
+                        appDetails = null
+                        appDetailsLoading = serial != null
                         if (serial != null) scope.launch {
-                            permissions = apps.listPermissions(serial, app.packageName)
-                            activities = apps.listActivities(serial, app.packageName)
+                            val packageName = app.packageName
+                            val details = apps.getAppDetails(serial, packageName)
+                            val packagePermissions = apps.listPermissions(serial, packageName)
+                            val packageActivities = apps.listActivities(serial, packageName)
+                            if (selected?.packageName == packageName) {
+                                appDetails = details
+                                appDetailsLoading = false
+                                permissions = packagePermissions
+                                activities = packageActivities
+                            }
                         }
                     }) {
                         Box(Modifier.width(56.dp)) {
@@ -144,25 +179,30 @@ internal fun AppsScreen(
                 val app = selected
                 Text(app?.packageName ?: "No app selected", color = TextPrimary, fontWeight = FontWeight.Bold)
                 if (app != null && serial != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(onClick = { runAppAction("Launch", app.packageName, app.label) { apps.launch(serial, app.packageName) } }) { Text("Launch") }
-                        OutlinedButton(onClick = { runAppAction("Stop", app.packageName, app.label) { apps.stop(serial, app.packageName) } }) { Text("Stop") }
-                        OutlinedButton(onClick = {
-                            pendingConfirmation = PendingConfirmation("Clear app data?", app.packageName) {
-                                runAppAction("Clear data", app.packageName, app.label) { apps.clearData(serial, app.packageName) }
+                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                Button(onClick = { runAppAction("Launch", app.packageName, app.label) { apps.launch(serial, app.packageName) } }) { Text("Launch") }
+                                OutlinedButton(onClick = { runAppAction("Stop", app.packageName, app.label) { apps.stop(serial, app.packageName) } }) { Text("Stop") }
+                                OutlinedButton(onClick = {
+                                    pendingConfirmation = PendingConfirmation("Clear app data?", app.packageName) {
+                                        runAppAction("Clear data", app.packageName, app.label) { apps.clearData(serial, app.packageName) }
+                                    }
+                                }) { Text("Clear") }
                             }
-                        }) { Text("Clear") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(onClick = { runAppAction("Reset permissions", app.packageName, app.label) { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
-                        OutlinedButton(onClick = {
-                            pendingConfirmation = PendingConfirmation("Uninstall app?", app.packageName) {
-                                runAppAction("Uninstall", app.packageName, app.label) { apps.uninstall(serial, app.packageName) }
+                        }
+                        item {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(onClick = { runAppAction("Reset permissions", app.packageName, app.label) { apps.resetPermissions(serial, app.packageName) } }) { Text("Reset perms") }
+                                OutlinedButton(onClick = {
+                                    pendingConfirmation = PendingConfirmation("Uninstall app?", app.packageName) {
+                                        runAppAction("Uninstall", app.packageName, app.label) { apps.uninstall(serial, app.packageName) }
+                                    }
+                                }, enabled = !app.system) { Text("Uninstall") }
                             }
-                        }, enabled = !app.system) { Text("Uninstall") }
-                    }
-                    Text("Permissions", color = TextPrimary, fontWeight = FontWeight.Bold)
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                        }
+                        item { BuildInstallDetails(app, appDetails, appDetailsLoading) }
+                        item { Text("Permissions", color = TextPrimary, fontWeight = FontWeight.Bold) }
                         items(permissions) { permission ->
                             Text("${permission.granted?.let { if (it) "granted" else "denied" } ?: "declared"}  ${permission.name}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -180,7 +220,17 @@ internal fun AppsScreen(
                 Text(selected?.packageName ?: "Select an app", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(activities) { activity ->
-                        Text(activity.name, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(activity.name, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            val app = selected
+                            if (app != null && serial != null) {
+                                OutlinedButton(onClick = {
+                                    runAppAction("Launch ${activity.name}", app.packageName, app.label) {
+                                        apps.launchActivity(serial, app.packageName, activity.name)
+                                    }
+                                }) { Text("Launch") }
+                            }
+                        }
                     }
                 }
             }
@@ -191,6 +241,40 @@ internal fun AppsScreen(
             pendingConfirmation = null
             confirmation.onConfirm()
         })
+    }
+}
+
+@Composable
+private fun BuildInstallDetails(
+    app: AndroidApp,
+    details: AndroidAppDetails?,
+    loading: Boolean,
+) {
+    fun valueOrPlaceholder(value: String?): String = when {
+        loading -> "Loading…"
+        value.isNullOrBlank() -> "—"
+        else -> value
+    }
+
+    val versionName = details?.versionName ?: app.versionName
+    val versionCode = details?.versionCode ?: app.versionCode
+    val version = listOfNotNull(versionName, versionCode?.let { "($it)" }).joinToString(" ")
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        Text("Build & install", color = TextPrimary, fontWeight = FontWeight.Bold)
+        BuildInstallRow("Version", valueOrPlaceholder(version))
+        BuildInstallRow("Min SDK", valueOrPlaceholder(details?.minSdk))
+        BuildInstallRow("Target SDK", valueOrPlaceholder(details?.targetSdk))
+        BuildInstallRow("Signing", valueOrPlaceholder(details?.signingScheme))
+        BuildInstallRow("Debuggable", valueOrPlaceholder(details?.debuggable?.let { if (it) "yes" else "no" }))
+    }
+}
+
+@Composable
+private fun BuildInstallRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.weight(1f), color = TextSecondary, fontSize = 12.sp)
+        Text(value, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

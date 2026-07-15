@@ -317,7 +317,13 @@ internal fun AndyShell(
                             },
                         )
                         AndyDestination.Actions, AndyDestination.Agents -> Unit
-                        AndyDestination.Snapshots -> SnapshotsScreen(services.avd)
+                        AndyDestination.Snapshots -> SnapshotsScreen(
+                            avd = services.avd,
+                            knownDeviceSerials = { state.devices.map { it.serial }.toSet() },
+                            onEmulatorStarted = state::openStartedEmulator,
+                            startingEmulatorName = state.startingEmulatorName,
+                            startStatus = state.emulatorStartStatus,
+                        )
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, state.selectedSerial)
                         AndyDestination.Performance -> PerformanceScreen(
                             services = services,

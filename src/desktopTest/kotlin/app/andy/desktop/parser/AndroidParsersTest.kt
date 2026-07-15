@@ -295,6 +295,25 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun parsesAppBuildAndInstallDetails() {
+        val output = """
+            versionName=2026.0709.1406-debug
+            versionCode=394 minSdk=26 targetSdk=36
+            signatures=PackageSignatures{abc version:2, signatures:[abcdef]}
+            pkgFlags=[ HAS_CODE ALLOW_CLEAR_USER_DATA DEBUGGABLE ]
+        """.trimIndent()
+
+        val details = AndroidParsers.parseAppDetails(output)
+
+        assertEquals("2026.0709.1406-debug", details.versionName)
+        assertEquals("394", details.versionCode)
+        assertEquals("26", details.minSdk)
+        assertEquals("36", details.targetSdk)
+        assertEquals("v2", details.signingScheme)
+        assertEquals(true, details.debuggable)
+    }
+
+    @Test
     fun parsesProcessMetricsFromTop() {
         val output = """
             Tasks: 303 total,   1 running, 302 sleeping,   0 stopped,   0 zombie

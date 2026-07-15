@@ -48,7 +48,8 @@ class NativeMirrorJniTest {
                 NativeMirrorJni.setPresentationContentSize(40, 80)
                 NativeMirrorJni.updateOverlay(
                     gridEnabled = true,
-                    gridStep = .1f,
+                    gridStepX = .1f,
+                    gridStepY = .05f,
                     gridR = 1f,
                     gridG = 1f,
                     gridB = 1f,
@@ -60,11 +61,15 @@ class NativeMirrorJniTest {
                     rulerG = .4f,
                     rulerB = .2f,
                     rulerA = 1f,
+                    sourceWidth = 1080f,
+                    sourceHeight = 1920f,
+                    pickerEnabled = true,
                     highlightLeft = .2f,
                     highlightTop = .2f,
                     highlightRight = .8f,
                     highlightBottom = .8f,
                 )
+                NativeMirrorJni.updatePickerPoint(.5f, .5f)
                 NativeMirrorHostRegistry.unregister(host)
                 NativeMirrorJni.removeMetalLayer(host)
             } finally {

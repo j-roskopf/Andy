@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,7 +76,13 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 
 @Composable
-internal fun SnapshotsScreen(avd: AvdService) {
+internal fun SnapshotsScreen(
+    avd: AvdService,
+    knownDeviceSerials: () -> Set<String>,
+    onEmulatorStarted: (Set<String>, String) -> Unit,
+    startingEmulatorName: String?,
+    startStatus: String,
+) {
     val scope = rememberCoroutineScope()
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     var selectedAvd by remember { mutableStateOf<VirtualDevice?>(null) }
@@ -117,6 +124,12 @@ internal fun SnapshotsScreen(avd: AvdService) {
             onPrimary = if (isRunning && !savingSnapshot) { { showSaveDialog = true } } else null,
             primaryLabel = "+ Save snapshot"
         )
+        if (startingEmulatorName != null && startStatus.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                Text(startStatus, color = Rust, fontFamily = MonoFont, fontSize = 12.sp)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             avds.forEach { row ->
                 FilterPill(row.name, selectedAvd?.name == row.name, if (row.running) Green else Rust) {
@@ -140,6 +153,9 @@ internal fun SnapshotsScreen(avd: AvdService) {
                     scope = scope,
                     onStatusChange = { status = it },
                     onRefresh = { refresh() },
+                    knownDeviceSerials = knownDeviceSerials,
+                    onEmulatorStarted = onEmulatorStarted,
+                    restoreEnabled = startingEmulatorName == null,
                     onDeleteClick = { snap ->
                         val targetAvd = selectedAvd ?: return@SnapshotCard
                         pendingConfirmation = PendingConfirmation("Delete snapshot?", "${targetAvd.name} / ${snap.name}") {
@@ -217,6 +233,9 @@ private fun SnapshotCard(
     scope: CoroutineScope,
     onStatusChange: (String) -> Unit,
     onRefresh: () -> Unit,
+    knownDeviceSerials: () -> Set<String>,
+    onEmulatorStarted: (Set<String>, String) -> Unit,
+    restoreEnabled: Boolean,
     onDeleteClick: (EmulatorSnapshot) -> Unit,
     onRenameClick: (EmulatorSnapshot) -> Unit,
 ) {
@@ -314,7 +333,7 @@ private fun SnapshotCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (snapshot.compatible) {
+                if (snapshot.compatible && restoreEnabled) {
                     Text(
                         text = "Restore",
                         color = Cyan,
@@ -322,19 +341,30 @@ private fun SnapshotCard(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.clickable {
                             val target = selectedAvd ?: return@clickable
+                            val wasOffline = !target.running
+                            val serialsBeforeRestore = knownDeviceSerials()
                             scope.launch {
                                 onStatusChange("Restoring ${snapshot.name}...")
                                 val result = avd.restoreSnapshot(target.name, snapshot.name)
                                 onStatusChange(if (result.isSuccess) result.stdout.ifBlank { "Restored ${snapshot.name}" } else result.stderr.ifBlank { result.stdout })
                                 onRefresh()
+                                if (result.isSuccess && wasOffline) {
+                                    onEmulatorStarted(serialsBeforeRestore, target.name)
+                                }
                             }
                         }
                     )
-                } else {
+                } else if (!snapshot.compatible) {
                     Text(
                         text = "Incompatible",
                         color = TextSecondary,
                         fontSize = 12.sp
+                    )
+                } else {
+                    Text(
+                        text = "Booting…",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
                     )
                 }
 

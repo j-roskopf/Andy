@@ -9,6 +9,15 @@ data class AndroidApp(
     val versionCode: String? = null,
 )
 
+data class AndroidAppDetails(
+    val versionName: String? = null,
+    val versionCode: String? = null,
+    val minSdk: String? = null,
+    val targetSdk: String? = null,
+    val signingScheme: String? = null,
+    val debuggable: Boolean? = null,
+)
+
 data class AndroidPermission(
     val name: String,
     val granted: Boolean?,

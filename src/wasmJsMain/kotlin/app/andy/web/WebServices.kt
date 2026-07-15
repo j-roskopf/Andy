@@ -303,11 +303,35 @@ private class BrowserAppService(private val devices: BrowserDeviceService) : App
         }.sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
     }
 
+    override suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails {
+        val output = devices.shell(serial, listOf("dumpsys", "package", packageName)).stdout
+        if (output.isBlank() || output.contains("Unable to find package", ignoreCase = true)) return AndroidAppDetails()
+
+        fun field(name: String): String? = Regex("""\b$name=([^\s]+)""").find(output)?.groupValues?.getOrNull(1)
+        val flagLines = output.lineSequence().filter { line ->
+            Regex("""\b(?:pkgFlags|flags)=\[""", RegexOption.IGNORE_CASE).containsMatchIn(line)
+        }.toList()
+        val signingVersion = Regex("""(?i)signatures=.*?\bversion:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)
+            ?: Regex("""(?i)\bsignatureSchemeVersion=(\d+)""").find(output)?.groupValues?.getOrNull(1)
+        return AndroidAppDetails(
+            versionName = field("versionName"),
+            versionCode = field("versionCode"),
+            minSdk = field("minSdk"),
+            targetSdk = field("targetSdk"),
+            signingScheme = signingVersion?.let { "v$it" },
+            debuggable = flagLines.takeIf { it.isNotEmpty() }?.any { it.contains("DEBUGGABLE") },
+        )
+    }
+
     private fun packageSet(output: String) = output.lineSequence()
         .mapNotNull { it.substringAfter("package:", "").trim().takeIf(String::isNotBlank) }.toSet()
 
     override suspend fun launch(serial: String, packageName: String) =
         devices.shell(serial, listOf("monkey", "-p", packageName, "-c", "android.intent.category.LAUNCHER", "1"))
+    override suspend fun launchActivity(serial: String, packageName: String, activityName: String): CommandResult {
+        val componentName = if (activityName.startsWith('.') || activityName.contains('.')) activityName else ".${activityName}"
+        return devices.shell(serial, listOf("am", "start", "-n", "$packageName/$componentName"))
+    }
     override suspend fun stop(serial: String, packageName: String) = devices.shell(serial, listOf("am", "force-stop", packageName))
     override suspend fun clearData(serial: String, packageName: String) = devices.shell(serial, listOf("pm", "clear", packageName))
     override suspend fun resetPermissions(serial: String, packageName: String) = devices.shell(serial, listOf("pm", "reset-permissions", packageName))

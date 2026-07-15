@@ -80,7 +80,9 @@ interface IntentService {
 
 interface AppService {
     suspend fun listApps(serial: String): List<AndroidApp>
+    suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails
     suspend fun launch(serial: String, packageName: String): CommandResult
+    suspend fun launchActivity(serial: String, packageName: String, activityName: String): CommandResult
     suspend fun stop(serial: String, packageName: String): CommandResult
     suspend fun clearData(serial: String, packageName: String): CommandResult
     suspend fun resetPermissions(serial: String, packageName: String): CommandResult
