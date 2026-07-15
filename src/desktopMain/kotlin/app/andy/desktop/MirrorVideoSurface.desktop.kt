@@ -265,6 +265,7 @@ private class MirrorPanel(
 
             override fun mouseExited(event: MouseEvent) {
                 pickerPoint = null
+                if (overlay.pickerColor != null) NativeMirrorJni.updatePickerPoint(null, null)
                 if (!nativeMetadataFrame) repaint()
             }
         }
@@ -432,7 +433,8 @@ private class MirrorPanel(
         val highlight = parseBounds(next.highlightBounds)
         NativeMirrorJni.updateOverlay(
             gridEnabled = next.showGrid && next.gridSize >= 2f,
-            gridStep = (next.gridSize / sourceWidth).coerceIn(0f, 1f),
+            gridStepX = (next.gridSize / sourceWidth).coerceIn(0f, 1f),
+            gridStepY = (next.gridSize / sourceHeight).coerceIn(0f, 1f),
             gridR = gridColor.red,
             gridG = gridColor.green,
             gridB = gridColor.blue,
@@ -444,6 +446,9 @@ private class MirrorPanel(
             rulerG = rulerColor.green,
             rulerB = rulerColor.blue,
             rulerA = rulerColor.alpha,
+            sourceWidth = sourceWidth.toFloat(),
+            sourceHeight = sourceHeight.toFloat(),
+            pickerEnabled = next.pickerColor != null,
             highlightLeft = highlight?.get(0)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 1f,
             highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
             highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
@@ -511,16 +516,19 @@ private class MirrorPanel(
             val color = overlay.gridColor.toAwtColor(alphaOverride = 0.28f)
             g2.color = color
             g2.stroke = BasicStroke(1f)
+            val sourceWidth = (overlay.sourceWidth ?: frameImage.width).coerceAtLeast(1)
+            val sourceHeight = (overlay.sourceHeight ?: frameImage.height).coerceAtLeast(1)
             var x = rect.x.toFloat()
-            val step = overlay.gridSize
+            val stepX = overlay.gridSize * rect.width / sourceWidth
             while (x <= rect.x + rect.width) {
                 g2.drawLine(x.roundToInt(), rect.y, x.roundToInt(), rect.y + rect.height)
-                x += step
+                x += stepX
             }
             var y = rect.y.toFloat()
+            val stepY = overlay.gridSize * rect.height / sourceHeight
             while (y <= rect.y + rect.height) {
                 g2.drawLine(rect.x, y.roundToInt(), rect.x + rect.width, y.roundToInt())
-                y += step
+                y += stepY
             }
         }
         if (overlay.showRuler) {
@@ -640,6 +648,12 @@ private class MirrorPanel(
             return null
         }
         pickerPoint = point
+        if (overlay.pickerColor != null) {
+            NativeMirrorJni.updatePickerPoint(
+                mapped.x.toFloat() / frameImage.width.coerceAtLeast(1),
+                mapped.y.toFloat() / frameImage.height.coerceAtLeast(1),
+            )
+        }
         val nativeHex = NativeMirrorJni.inspectPixel(
             mapped.x.toFloat() / frameImage.width.coerceAtLeast(1),
             mapped.y.toFloat() / frameImage.height.coerceAtLeast(1),

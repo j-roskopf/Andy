@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.desktop.parser.AndroidParsers
 import app.andy.model.AndroidActivity
 import app.andy.model.AndroidApp
+import app.andy.model.AndroidAppDetails
 import app.andy.model.AndroidPermission
 import app.andy.service.AppService
 import app.andy.service.CommandResult
@@ -43,6 +44,11 @@ class DesktopAppService(
                 )
             }
             .sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
+    }
+
+    override suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails {
+        val result = devices.shell(serial, listOf("dumpsys", "package", packageName))
+        return if (result.isSuccess) AndroidParsers.parseAppDetails(result.stdout) else AndroidAppDetails()
     }
 
     private fun getHelperFile(): File? {
@@ -123,6 +129,11 @@ class DesktopAppService(
 
     override suspend fun launch(serial: String, packageName: String): CommandResult {
         return devices.shell(serial, listOf("monkey", "-p", packageName, "-c", "android.intent.category.LAUNCHER", "1"))
+    }
+
+    override suspend fun launchActivity(serial: String, packageName: String, activityName: String): CommandResult {
+        val componentName = if (activityName.startsWith('.') || activityName.contains('.')) activityName else ".${activityName}"
+        return devices.shell(serial, listOf("am", "start", "-n", "$packageName/$componentName"))
     }
 
     override suspend fun stop(serial: String, packageName: String): CommandResult {

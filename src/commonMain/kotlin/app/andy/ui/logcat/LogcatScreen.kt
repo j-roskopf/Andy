@@ -444,7 +444,7 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val scope = rememberCoroutineScope()
     var stickToBottom by remember { mutableStateOf(true) }
-    var timeWidth by remember { mutableStateOf(110f) }
+    var timeWidth by remember { mutableStateOf(152f) }
     var levelWidth by remember { mutableStateOf(32f) }
     var tagWidth by remember { mutableStateOf(180f) }
     val isAtBottom by remember {

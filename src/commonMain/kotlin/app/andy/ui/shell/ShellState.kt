@@ -144,8 +144,6 @@ internal class ShellState(
                     it.kind == DeviceKind.Emulator &&
                         it.state == DeviceConnectionState.Online &&
                         it.serial !in previousSerials
-                } ?: currentDevices.firstOrNull {
-                    it.kind == DeviceKind.Emulator && it.state == DeviceConnectionState.Online
                 }
                 if (started != null) {
                     selectedSerial = started.serial

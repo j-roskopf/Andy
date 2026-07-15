@@ -140,7 +140,9 @@ internal object ScreenshotServices {
 
     private object ScreenshotApps : AppService {
         override suspend fun listApps(serial: String) = listOf(AndroidApp("com.example.garden", "Garden", false, true, "2.4.0", "20400"), AndroidApp("com.example.checkout", "Checkout", false, true, "1.8.2", "10802"), AndroidApp("com.android.settings", "Settings", true, true, "36", "36"))
+        override suspend fun getAppDetails(serial: String, packageName: String) = AndroidAppDetails("2.4.0", "20400", "26", "36", "v2", true)
         override suspend fun launch(serial: String, packageName: String) = CommandResult.success()
+        override suspend fun launchActivity(serial: String, packageName: String, activityName: String) = CommandResult.success()
         override suspend fun stop(serial: String, packageName: String) = CommandResult.success()
         override suspend fun clearData(serial: String, packageName: String) = CommandResult.success()
         override suspend fun resetPermissions(serial: String, packageName: String) = CommandResult.success()

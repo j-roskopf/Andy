@@ -13,13 +13,16 @@
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct {
-    float grid[4];       // enabled, normalized step, unused, unused
+    float grid[4];       // enabled, normalized x step, normalized y step, unused
     float ruler[4];      // enabled, normalized x, normalized y, unused
     float highlight[4];  // normalized left, top, right, bottom; disabled when right <= left
     float grid_color[4];
     float ruler_color[4];
+    float picker[4];     // enabled, normalized x, normalized y, cursor is in content
+    float source_size[4]; // decoded coordinate space used for ruler labels
 } AndyMirrorOverlay;
 
 typedef struct {
@@ -71,6 +74,8 @@ static pthread_mutex_t decoder_lock = PTHREAD_MUTEX_INITIALIZER;
 // sessions instead. Its Metal resources remain owned by `renderer` and are released normally.
 static __strong NSWindow *andy_popout_window = nil;
 static __strong MTKView *andy_popout_view = nil;
+static __strong NSView *andy_popout_content = nil;
+static __strong NSView *andy_guide_overlay = nil;
 static bool andy_inline_overlay = false;
 
 // Coalesce geometry updates: AWT resize callbacks can fire dozens of times per drag. Syncing onto
@@ -83,6 +88,200 @@ static jint andy_pending_overlay_h = 1;
 static jdouble andy_pending_overlay_scale = 1.0;
 static bool andy_overlay_geometry_scheduled = false;
 static bool andy_overlay_suppressed = false;
+
+static NSColor *guide_color(const float components[4]) {
+    return [NSColor colorWithSRGBRed:fmaxf(0.0f, fminf(1.0f, components[0]))
+                               green:fmaxf(0.0f, fminf(1.0f, components[1]))
+                                blue:fmaxf(0.0f, fminf(1.0f, components[2]))
+                               alpha:fmaxf(0.0f, fminf(1.0f, components[3]))];
+}
+
+static void draw_guide_badge(NSString *text, NSPoint origin, NSRect bounds) {
+    NSFont *font = [NSFont monospacedSystemFontOfSize:10.0 weight:NSFontWeightMedium];
+    if (!font) font = [NSFont userFixedPitchFontOfSize:10.0];
+    if (!font) font = [NSFont systemFontOfSize:10.0];
+    // NSDictionary literals throw when any value is nil. Some AppKit configurations do not
+    // provide a monospaced system font, so build the optional text attributes defensively.
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionaryWithCapacity:2];
+    if (font) [attributes setObject:font forKey:NSFontAttributeName];
+    NSColor *foreground = [NSColor whiteColor];
+    if (foreground) [attributes setObject:foreground forKey:NSForegroundColorAttributeName];
+    NSSize text_size = [text sizeWithAttributes:attributes];
+    NSRect rect = NSMakeRect(
+        fmax(NSMinX(bounds) + 4.0, fmin(origin.x, NSMaxX(bounds) - text_size.width - 14.0)),
+        fmax(NSMinY(bounds) + 4.0, fmin(origin.y, NSMaxY(bounds) - text_size.height - 10.0)),
+        text_size.width + 10.0,
+        text_size.height + 6.0
+    );
+    [[NSColor colorWithSRGBRed:0.85 green:0.44 blue:0.29 alpha:0.96] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:5.0 yRadius:5.0] fill];
+    [text drawAtPoint:NSMakePoint(NSMinX(rect) + 5.0, NSMinY(rect) + 3.0) withAttributes:attributes];
+}
+
+/**
+ * The Metal presenter owns the live pixels, so the AppKit guide layer builds the small lens
+ * directly from the latest decoded CVPixelBuffer. This keeps Design inspection visible above
+ * the separate native window without copying full video frames through the JVM.
+ */
+static void draw_picker_magnifier(const AndyMirrorOverlay overlay, NSRect bounds) {
+    if (overlay.picker[0] <= 0.5f || overlay.picker[3] <= 0.5f) return;
+    pthread_mutex_lock(&latest_pixels_lock);
+    CVPixelBufferRef pixels = renderer.latest_pixels;
+    if (pixels) CVPixelBufferRetain(pixels);
+    pthread_mutex_unlock(&latest_pixels_lock);
+    if (!pixels) return;
+
+    const size_t width = CVPixelBufferGetWidthOfPlane(pixels, 0);
+    const size_t height = CVPixelBufferGetHeightOfPlane(pixels, 0);
+    if (!width || !height ||
+        CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        CVPixelBufferRelease(pixels);
+        return;
+    }
+    const int sample_radius = 10;
+    const size_t sample_size = (size_t) (sample_radius * 2 + 1);
+    uint8_t *rgba = calloc(sample_size * sample_size, 4);
+    const uint8_t *y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+    const uint8_t *uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
+    const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+    const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+    const int center_x = (int) fmaxf(0.0f, fminf((float) width - 1.0f, overlay.picker[1] * width));
+    const int center_y = (int) fmaxf(0.0f, fminf((float) height - 1.0f, overlay.picker[2] * height));
+    for (size_t row = 0; row < sample_size; row++) {
+        const int source_y = (int) fmaxf(0.0f, fminf((float) height - 1.0f, center_y + (int) row - sample_radius));
+        for (size_t column = 0; column < sample_size; column++) {
+            const int source_x = (int) fmaxf(0.0f, fminf((float) width - 1.0f, center_x + (int) column - sample_radius));
+            const int yy = y_base[source_y * y_stride + source_x] - 16;
+            const size_t uv_x = (source_x / 2) * 2;
+            const size_t uv_y = source_y / 2;
+            const int uu = uv_base[uv_y * uv_stride + uv_x] - 128;
+            const int vv = uv_base[uv_y * uv_stride + uv_x + 1] - 128;
+            uint8_t *pixel = rgba + (row * sample_size + column) * 4;
+            pixel[0] = (uint8_t) fmax(0, fmin(255, (298 * yy + 409 * vv + 128) >> 8));
+            pixel[1] = (uint8_t) fmax(0, fmin(255, (298 * yy - 100 * uu - 208 * vv + 128) >> 8));
+            pixel[2] = (uint8_t) fmax(0, fmin(255, (298 * yy + 516 * uu + 128) >> 8));
+            pixel[3] = 255;
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferRelease(pixels);
+
+    CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef bitmap = CGBitmapContextCreate(
+        rgba, sample_size, sample_size, 8, sample_size * 4, color_space,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+    );
+    CGColorSpaceRelease(color_space);
+    CGImageRef image = bitmap ? CGBitmapContextCreateImage(bitmap) : NULL;
+    if (image) {
+        const CGFloat x = NSMinX(bounds) + bounds.size.width * overlay.picker[1];
+        const CGFloat y = NSMaxY(bounds) - bounds.size.height * overlay.picker[2];
+        const CGFloat radius = fmin(48.0, bounds.size.height * 0.092);
+        NSBezierPath *clip = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x - radius, y - radius, radius * 2.0, radius * 2.0)];
+        [NSGraphicsContext saveGraphicsState];
+        [clip addClip];
+        CGContextDrawImage(NSGraphicsContext.currentContext.CGContext, NSMakeRect(x - radius, y - radius, radius * 2.0, radius * 2.0), image);
+        [NSGraphicsContext restoreGraphicsState];
+        CGImageRelease(image);
+    }
+    if (bitmap) CGContextRelease(bitmap);
+    free(rgba);
+}
+
+@interface AndyMirrorGuideOverlay : NSView
+@end
+
+@implementation AndyMirrorGuideOverlay
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirty_rect {
+    (void) dirty_rect;
+    const AndyMirrorOverlay overlay = renderer.overlay;
+    const NSRect bounds = self.bounds;
+    if (NSIsEmptyRect(bounds)) return;
+
+    if (overlay.grid[0] > 0.5f && overlay.grid[1] > 0.0f) {
+        const CGFloat step_x = fmax(2.0, bounds.size.width * overlay.grid[1]);
+        // Grid guides are a visual measuring aid, so their cells must be square in the rendered
+        // mirror rather than inheriting a potentially mismatched stream/display aspect ratio.
+        const CGFloat step_y = step_x;
+        NSBezierPath *grid = [NSBezierPath bezierPath];
+        grid.lineWidth = 1.0;
+        for (CGFloat x = NSMinX(bounds); x <= NSMaxX(bounds); x += step_x) {
+            [grid moveToPoint:NSMakePoint(x, NSMinY(bounds))];
+            [grid lineToPoint:NSMakePoint(x, NSMaxY(bounds))];
+        }
+        for (CGFloat y = NSMinY(bounds); y <= NSMaxY(bounds); y += step_y) {
+            [grid moveToPoint:NSMakePoint(NSMinX(bounds), y)];
+            [grid lineToPoint:NSMakePoint(NSMaxX(bounds), y)];
+        }
+        [guide_color(overlay.grid_color) setStroke];
+        [grid stroke];
+    }
+
+    if (overlay.ruler[0] > 0.5f) {
+        const CGFloat x = NSMinX(bounds) + bounds.size.width * overlay.ruler[1];
+        const CGFloat y = NSMaxY(bounds) - bounds.size.height * overlay.ruler[2];
+        NSBezierPath *ruler = [NSBezierPath bezierPath];
+        ruler.lineWidth = 1.5;
+        [ruler moveToPoint:NSMakePoint(x, NSMinY(bounds))];
+        [ruler lineToPoint:NSMakePoint(x, NSMaxY(bounds))];
+        [ruler moveToPoint:NSMakePoint(NSMinX(bounds), y)];
+        [ruler lineToPoint:NSMakePoint(NSMaxX(bounds), y)];
+        [guide_color(overlay.ruler_color) setStroke];
+        [ruler stroke];
+
+        const float source_width = fmaxf(1.0f, overlay.source_size[0]);
+        const float source_height = fmaxf(1.0f, overlay.source_size[1]);
+        const int left = (int) lroundf(overlay.ruler[1] * source_width);
+        const int top = (int) lroundf(overlay.ruler[2] * source_height);
+        draw_guide_badge([NSString stringWithFormat:@"L %d", left], NSMakePoint(x + 8.0, NSMaxY(bounds) - 24.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"R %d", (int) lroundf(source_width) - left], NSMakePoint(x - 70.0, NSMinY(bounds) + 8.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"T %d", top], NSMakePoint(NSMinX(bounds) + 8.0, y - 24.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"B %d", (int) lroundf(source_height) - top], NSMakePoint(NSMaxX(bounds) - 74.0, y + 8.0), bounds);
+    }
+
+    if (overlay.picker[0] > 0.5f && overlay.picker[3] > 0.5f) {
+        const CGFloat x = NSMinX(bounds) + bounds.size.width * overlay.picker[1];
+        const CGFloat y = NSMaxY(bounds) - bounds.size.height * overlay.picker[2];
+        const CGFloat radius = fmin(48.0, bounds.size.height * 0.092);
+        draw_picker_magnifier(overlay, bounds);
+        NSBezierPath *lens = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x - radius, y - radius, radius * 2.0, radius * 2.0)];
+        lens.lineWidth = 2.0;
+        [[NSColor colorWithSRGBRed:0.85 green:0.44 blue:0.29 alpha:1.0] setStroke];
+        [lens stroke];
+        NSBezierPath *crosshair = [NSBezierPath bezierPath];
+        [crosshair moveToPoint:NSMakePoint(x - 7.0, y)];
+        [crosshair lineToPoint:NSMakePoint(x + 7.0, y)];
+        [crosshair moveToPoint:NSMakePoint(x, y - 7.0)];
+        [crosshair lineToPoint:NSMakePoint(x, y + 7.0)];
+        crosshair.lineWidth = 1.5;
+        [crosshair stroke];
+        draw_guide_badge(@"5×", NSMakePoint(x + radius + 6.0, y - 8.0), bounds);
+    }
+}
+
+@end
+
+static void invalidate_guide_overlay(void) {
+    if (!andy_guide_overlay) return;
+    void (^redraw)(void) = ^{
+        // setNeedsDisplay alone waits for AppKit's next display cycle. That can be held until
+        // the next pointer event while a transparent child window is above the Swing host.
+        // Flush this small guide view now so turning a guide off never leaves cached lines up.
+        if (!andy_guide_overlay) return;
+        [andy_guide_overlay setNeedsDisplay:YES];
+        [andy_guide_overlay displayIfNeeded];
+    };
+    if ([NSThread isMainThread]) {
+        redraw();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), redraw);
+    }
+}
 
 static void
 close_popout_window(void) {
@@ -108,14 +307,24 @@ close_popout_window(void) {
 
 static void
 ensure_metal_view(NSRect content_rect) {
+    if (!andy_popout_content) {
+        andy_popout_content = [[NSView alloc] initWithFrame:content_rect];
+    }
     if (!andy_popout_view) {
         andy_popout_view = [[MTKView alloc] initWithFrame:content_rect device:renderer.device];
         andy_popout_view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
         andy_popout_view.framebufferOnly = YES;
         andy_popout_view.paused = YES;
         andy_popout_view.enableSetNeedsDisplay = NO;
+        andy_popout_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [andy_popout_content addSubview:andy_popout_view];
     } else {
         andy_popout_view.device = renderer.device;
+    }
+    if (!andy_guide_overlay) {
+        andy_guide_overlay = [[AndyMirrorGuideOverlay alloc] initWithFrame:content_rect];
+        andy_guide_overlay.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [andy_popout_content addSubview:andy_guide_overlay];
     }
 }
 
@@ -141,6 +350,8 @@ open_inline_overlay_window(void) {
             [andy_popout_window orderOut:nil];
             andy_popout_window = nil;
             andy_popout_view = nil;
+            andy_popout_content = nil;
+            andy_guide_overlay = nil;
         }
         if (!andy_popout_window) {
             andy_popout_window = [[NSWindow alloc] initWithContentRect:content_rect
@@ -151,7 +362,7 @@ open_inline_overlay_window(void) {
                 return;
             }
             ensure_metal_view(content_rect);
-            andy_popout_window.contentView = andy_popout_view;
+            andy_popout_window.contentView = andy_popout_content;
             andy_popout_window.opaque = YES;
             andy_popout_window.backgroundColor = NSColor.blackColor;
             andy_popout_window.hasShadow = NO;
@@ -161,7 +372,7 @@ open_inline_overlay_window(void) {
                 NSWindowCollectionBehaviorFullScreenAuxiliary;
         } else {
             ensure_metal_view(andy_popout_view.bounds);
-            andy_popout_window.contentView = andy_popout_view;
+            andy_popout_window.contentView = andy_popout_content;
         }
         andy_inline_overlay = true;
         andy_overlay_suppressed = false;
@@ -204,15 +415,18 @@ apply_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdou
     const NSRect frame = NSMakeRect(awt_x, screen_height - awt_y - h, w, h);
     const CGFloat backing_scale = scale > 0.0 ? (CGFloat) scale :
         (andy_popout_window.backingScaleFactor > 0.0 ? andy_popout_window.backingScaleFactor : 1.0);
-    // Attach as a child once so the overlay tracks the Andy window. Re-probing on every resize
-    // reparents mid-drag and can freeze the UI.
-    if (andy_popout_window.parentWindow == nil) {
-        NSPoint probe = NSMakePoint(NSMidX(frame), NSMidY(frame));
-        const NSInteger window_number = [NSWindow windowNumberAtPoint:probe belowWindowWithWindowNumber:0];
-        NSWindow *under = [NSApp windowWithWindowNumber:window_number];
-        if (under && under != andy_popout_window) {
-            [under addChildWindow:andy_popout_window ordered:NSWindowAbove];
+    // The presenter is shared by the main Live Canvas and Compose's separate pop-out Window.
+    // Reparent only when that active Canvas changes its top-level window. Keeping the original
+    // parent leaves the pop-out Canvas black: the Metal surface remains above the main window.
+    NSPoint probe = NSMakePoint(NSMidX(frame), NSMidY(frame));
+    const NSInteger window_number = [NSWindow windowNumberAtPoint:probe belowWindowWithWindowNumber:0];
+    NSWindow *under = [NSApp windowWithWindowNumber:window_number];
+    NSWindow *parent = andy_popout_window.parentWindow;
+    if (under && under != andy_popout_window && parent != under) {
+        if (parent) {
+            [parent removeChildWindow:andy_popout_window];
         }
+        [under addChildWindow:andy_popout_window ordered:NSWindowAbove];
     }
     if (!NSEqualRects(andy_popout_window.frame, frame)) {
         // display:NO avoids a synchronous redraw while AWT is still inside componentResized.
@@ -295,6 +509,8 @@ open_popout_window(void) {
             [andy_popout_window orderOut:nil];
             andy_popout_window = nil;
             andy_popout_view = nil;
+            andy_popout_content = nil;
+            andy_guide_overlay = nil;
         }
         andy_inline_overlay = false;
         if (!andy_popout_window) {
@@ -306,7 +522,7 @@ open_popout_window(void) {
                 return;
             }
             ensure_metal_view(content_rect);
-            andy_popout_window.contentView = andy_popout_view;
+            andy_popout_window.contentView = andy_popout_content;
             andy_popout_window.title = @"Andy GPU Mirror";
             andy_popout_window.contentAspectRatio = NSMakeSize(390, 844);
             andy_popout_window.minSize = NSMakeSize(240, 520);
@@ -344,25 +560,45 @@ static NSString *const shader_source = @
     "  float2 uvs[4] = {float2(0,1), float2(1,1), float2(0,0), float2(1,0)};\n"
     "  VertexOut out; out.position=float4(positions[id],0,1); out.uv=uvs[id]; return out;\n"
     "}\n"
-    "struct Overlay { float4 grid; float4 ruler; float4 highlight; float4 grid_color; float4 ruler_color; };\n"
+    "struct Overlay { float4 grid; float4 ruler; float4 highlight; float4 grid_color; float4 ruler_color; float4 picker; };\n"
+    "float3 sampled_rgb(texture2d<float> y_tex, texture2d<float> uv_tex, sampler sample, float2 coord) {\n"
+    "  float y = 1.1643 * (y_tex.sample(sample, coord).r - 0.0625);\n"
+    "  float2 uv = uv_tex.sample(sample, coord).rg - float2(0.5, 0.5);\n"
+    "  return float3(y + 1.5958 * uv.y, y - 0.39173 * uv.x - 0.81290 * uv.y, y + 2.017 * uv.x);\n"
+    "}\n"
     "fragment half4 fragment_main(VertexOut in [[stage_in]], texture2d<float> y_tex [[texture(0)]], texture2d<float> uv_tex [[texture(1)]], constant Overlay &overlay [[buffer(0)]]) {\n"
-    "  constexpr sampler s(address::clamp_to_edge, filter::linear);\n"
-    "  float y = 1.1643 * (y_tex.sample(s, in.uv).r - 0.0625);\n"
-    "  float2 uv = uv_tex.sample(s, in.uv).rg - float2(0.5, 0.5);\n"
-    "  float3 rgb = float3(y + 1.5958 * uv.y, y - 0.39173 * uv.x - 0.81290 * uv.y, y + 2.017 * uv.x);\n"
-    "  if (overlay.grid.x > 0.5 && overlay.grid.y > 0.0) {\n"
-    "    float2 cell = abs(fract(in.uv / overlay.grid.y) - 0.5);\n"
-    "    float edge = min(cell.x, cell.y);\n"
-    "    if (edge > 0.485) rgb = mix(rgb, overlay.grid_color.rgb, overlay.grid_color.a);\n"
-    "  }\n"
+    "  constexpr sampler linear_sampler(address::clamp_to_edge, filter::linear);\n"
+    "  constexpr sampler nearest_sampler(address::clamp_to_edge, filter::nearest);\n"
+    "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, in.uv);\n"
     "  if (overlay.ruler.x > 0.5) {\n"
-    "    float line = min(abs(in.uv.x - overlay.ruler.y) * y_tex.get_width(), abs(in.uv.y - overlay.ruler.z) * y_tex.get_height());\n"
-    "    if (line < 1.5) rgb = mix(rgb, overlay.ruler_color.rgb, overlay.ruler_color.a);\n"
+    "    float x_width = max(fwidth(in.uv.x), 0.001);\n"
+    "    float y_width = max(fwidth(in.uv.y), 0.001);\n"
+    "    float vertical = 1.0 - smoothstep(x_width * 0.6, x_width * 1.6, abs(in.uv.x - overlay.ruler.y));\n"
+    "    float horizontal = 1.0 - smoothstep(y_width * 0.6, y_width * 1.6, abs(in.uv.y - overlay.ruler.z));\n"
+    "    rgb = mix(rgb, overlay.ruler_color.rgb, overlay.ruler_color.a * max(vertical, horizontal));\n"
     "  }\n"
     "  if (overlay.highlight.z > overlay.highlight.x && overlay.highlight.w > overlay.highlight.y) {\n"
     "    bool inside = in.uv.x >= overlay.highlight.x && in.uv.x <= overlay.highlight.z && in.uv.y >= overlay.highlight.y && in.uv.y <= overlay.highlight.w;\n"
     "    float edge = min(min(abs(in.uv.x - overlay.highlight.x) * y_tex.get_width(), abs(in.uv.x - overlay.highlight.z) * y_tex.get_width()), min(abs(in.uv.y - overlay.highlight.y) * y_tex.get_height(), abs(in.uv.y - overlay.highlight.w) * y_tex.get_height()));\n"
     "    if (inside && edge < 2.0) rgb = float3(0.85, 0.44, 0.29);\n"
+    "  }\n"
+    "  if (overlay.picker.x > 0.5 && overlay.picker.w > 0.5) {\n"
+    "    float2 delta = in.uv - overlay.picker.yz;\n"
+    "    float aspect = float(y_tex.get_width()) / max(1.0, float(y_tex.get_height()));\n"
+    "    float lens_distance = length(float2(delta.x * aspect, delta.y));\n"
+    "    const float lens_radius = 0.092;\n"
+    "    if (lens_distance <= lens_radius) {\n"
+    "      if (lens_distance >= lens_radius - 0.004) {\n"
+    "        rgb = float3(0.85, 0.44, 0.29);\n"
+    "      } else {\n"
+    "        float2 magnified_uv = overlay.picker.yz + delta / 5.0;\n"
+    "        rgb = sampled_rgb(y_tex, uv_tex, nearest_sampler, magnified_uv);\n"
+    "        float2 pixel = magnified_uv * float2(y_tex.get_width(), y_tex.get_height());\n"
+    "        float2 pixel_edge = abs(fract(pixel) - 0.5);\n"
+    "        if (max(pixel_edge.x, pixel_edge.y) > 0.47) rgb = mix(rgb, float3(0.0), 0.22);\n"
+    "        if (abs(delta.x * aspect) < 0.002 || abs(delta.y) < 0.002) rgb = mix(rgb, float3(0.85, 0.44, 0.29), 0.9);\n"
+    "      }\n"
+    "    }\n"
     "  }\n"
     "  return half4(half3(rgb), 1);\n"
     "}\n";
@@ -578,7 +814,8 @@ remember_latest_pixels(CVPixelBufferRef pixels) {
 }
 
 static void
-render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t packet_ticks, uint64_t transport_ticks) {
+render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t packet_ticks,
+                    uint64_t transport_ticks, bool record_presentation_metrics) {
     @autoreleasepool {
         if (!renderer.layer || !renderer.texture_cache || !renderer.pipeline) {
             return;
@@ -633,17 +870,19 @@ render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t 
         [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         [encoder endEncoding];
         [command presentDrawable:drawable];
-        [command addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-            (void) buffer;
-            pthread_mutex_lock(&stats_lock);
-            renderer.frames_presented++;
-            pthread_mutex_unlock(&stats_lock);
-            record_packet_to_present(packet_ticks);
-            record_transport_to_present(transport_ticks);
-            if (input_changed_probe) {
-                record_input_to_present();
-            }
-        }];
+        if (record_presentation_metrics) {
+            [command addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+                (void) buffer;
+                pthread_mutex_lock(&stats_lock);
+                renderer.frames_presented++;
+                pthread_mutex_unlock(&stats_lock);
+                record_packet_to_present(packet_ticks);
+                record_transport_to_present(transport_ticks);
+                if (input_changed_probe) {
+                    record_input_to_present();
+                }
+            }];
+        }
         [command commit];
         CFRelease(y_ref);
         CFRelease(uv_ref);
@@ -671,7 +910,22 @@ decoded_frame(void *decompression_output_refcon, void *source_frame_refcon,
     pthread_mutex_lock(&stats_lock);
     const uint64_t transport_ticks = renderer.transport_ingress_ticks;
     pthread_mutex_unlock(&stats_lock);
-    render_pixel_buffer(pixels, latency_probe_changed(pixels), packet_ticks, transport_ticks);
+    render_pixel_buffer(pixels, latency_probe_changed(pixels), packet_ticks, transport_ticks, true);
+}
+
+/**
+ * Overlay controls must repaint a paused Android screen too. Re-submit the latest decoded
+ * frame with the new shader constants instead of waiting for the next H.264 access unit.
+ */
+static void
+present_latest_frame_for_overlay(void) {
+    pthread_mutex_lock(&latest_pixels_lock);
+    CVPixelBufferRef pixels = renderer.latest_pixels;
+    if (pixels) CVPixelBufferRetain(pixels);
+    pthread_mutex_unlock(&latest_pixels_lock);
+    if (!pixels) return;
+    render_pixel_buffer(pixels, false, 0, 0, false);
+    CVPixelBufferRelease(pixels);
 }
 
 static bool
@@ -1279,15 +1533,19 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeConfigureLatencyProbe
 JNIEXPORT void JNICALL
 Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeUpdateOverlay(
         JNIEnv *env, jclass clazz,
-        jboolean grid_enabled, jfloat grid_step,
+        jboolean grid_enabled, jfloat grid_step_x, jfloat grid_step_y,
         jfloat grid_r, jfloat grid_g, jfloat grid_b, jfloat grid_a,
         jboolean ruler_enabled, jfloat ruler_x, jfloat ruler_y,
         jfloat ruler_r, jfloat ruler_g, jfloat ruler_b, jfloat ruler_a,
+        jfloat source_width, jfloat source_height,
+        jboolean picker_enabled,
         jfloat highlight_left, jfloat highlight_top, jfloat highlight_right, jfloat highlight_bottom) {
     (void) env;
     (void) clazz;
+    const AndyMirrorOverlay previous = renderer.overlay;
     renderer.overlay.grid[0] = grid_enabled ? 1.0f : 0.0f;
-    renderer.overlay.grid[1] = fmaxf(0.0f, fminf(1.0f, grid_step));
+    renderer.overlay.grid[1] = fmaxf(0.0f, fminf(1.0f, grid_step_x));
+    renderer.overlay.grid[2] = fmaxf(0.0f, fminf(1.0f, grid_step_y));
     renderer.overlay.grid_color[0] = fmaxf(0.0f, fminf(1.0f, grid_r));
     renderer.overlay.grid_color[1] = fmaxf(0.0f, fminf(1.0f, grid_g));
     renderer.overlay.grid_color[2] = fmaxf(0.0f, fminf(1.0f, grid_b));
@@ -1299,10 +1557,30 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeUpdateOverlay(
     renderer.overlay.ruler_color[1] = fmaxf(0.0f, fminf(1.0f, ruler_g));
     renderer.overlay.ruler_color[2] = fmaxf(0.0f, fminf(1.0f, ruler_b));
     renderer.overlay.ruler_color[3] = fmaxf(0.0f, fminf(1.0f, ruler_a));
+    renderer.overlay.source_size[0] = fmaxf(1.0f, source_width);
+    renderer.overlay.source_size[1] = fmaxf(1.0f, source_height);
+    renderer.overlay.picker[0] = picker_enabled ? 1.0f : 0.0f;
+    if (!picker_enabled) {
+        renderer.overlay.picker[3] = 0.0f;
+    }
     renderer.overlay.highlight[0] = fmaxf(0.0f, fminf(1.0f, highlight_left));
     renderer.overlay.highlight[1] = fmaxf(0.0f, fminf(1.0f, highlight_top));
     renderer.overlay.highlight[2] = fmaxf(0.0f, fminf(1.0f, highlight_right));
     renderer.overlay.highlight[3] = fmaxf(0.0f, fminf(1.0f, highlight_bottom));
+    if (memcmp(&previous, &renderer.overlay, sizeof(AndyMirrorOverlay)) == 0) return;
+    invalidate_guide_overlay();
+    present_latest_frame_for_overlay();
+}
+
+JNIEXPORT void JNICALL
+Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeUpdatePickerPoint(
+        JNIEnv *env, jclass clazz, jfloat normalized_x, jfloat normalized_y, jboolean visible) {
+    (void) env;
+    (void) clazz;
+    renderer.overlay.picker[1] = fmaxf(0.0f, fminf(1.0f, normalized_x));
+    renderer.overlay.picker[2] = fmaxf(0.0f, fminf(1.0f, normalized_y));
+    renderer.overlay.picker[3] = visible ? 1.0f : 0.0f;
+    invalidate_guide_overlay();
 }
 
 JNIEXPORT jlong JNICALL

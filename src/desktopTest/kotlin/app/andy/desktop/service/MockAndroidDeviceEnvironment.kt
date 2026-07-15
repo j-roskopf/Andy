@@ -452,6 +452,10 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun packageDump() = """
+        versionName=2026.0709.1406-debug
+        versionCode=394 minSdk=26 targetSdk=36
+        signatures=PackageSignatures{abc version:2, signatures:[abcdef]}
+        pkgFlags=[ HAS_CODE ALLOW_CLEAR_USER_DATA DEBUGGABLE ]
         requested permissions:
           android.permission.CAMERA
           android.permission.POST_NOTIFICATIONS
