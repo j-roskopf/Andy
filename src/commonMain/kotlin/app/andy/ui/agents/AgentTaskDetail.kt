@@ -227,7 +227,6 @@ internal fun AgentTaskDetail(
                 fontSize = 11.sp,
             )
         }
-
         AgentTranscript(
             events,
             isActive = task.isActive,
@@ -245,6 +244,14 @@ internal fun AgentTaskDetail(
                 }
             } else {
                 null
+            },
+            pendingContent = task.userInputRequest?.let { request ->
+                {
+                    AgentUserInputCard(
+                        request = request,
+                        onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
+                    )
+                }
             },
             originalPrompt = task.prompt,
             completedContent = {
@@ -308,7 +315,7 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (task.status == AgentTaskStatus.Completed && task.planMode) {
+        if (task.status == AgentTaskStatus.Completed && task.planMode && task.workflowTaskId == null) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -349,7 +356,7 @@ internal fun AgentTaskDetail(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (supportsResume) {
+                    if (supportsResume && task.userInputRequest == null) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             task.goal?.let { goal ->
                                 OutlinedButton(
@@ -625,13 +632,13 @@ private fun AgentTaskHeader(
                 )
             }
             StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
-            if (task.isActive) {
+            if (task.isActive || task.status == AgentTaskStatus.WaitingForInput) {
                 Button(
                     onClick = onStop,
                     colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text("stop", fontSize = 11.sp) }
+                ) { Text(if (task.status == AgentTaskStatus.WaitingForInput) "cancel" else "stop", fontSize = 11.sp) }
             }
             if (task.status == AgentTaskStatus.Failed) {
                 Button(

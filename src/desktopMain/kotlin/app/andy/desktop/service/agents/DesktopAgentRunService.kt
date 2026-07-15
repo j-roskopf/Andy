@@ -14,8 +14,27 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentSandboxMode
+import app.andy.model.ProjectAgentProfile
+import app.andy.model.ProjectBuildPairDraft
+import app.andy.model.ProjectPlanSnapshot
+import app.andy.model.ProjectPlanVersion
+import app.andy.model.ProjectReviewFinding
+import app.andy.model.ProjectReviewFindingSeverity
+import app.andy.model.ProjectReviewStatus
+import app.andy.model.ProjectReviewVerdict
+import app.andy.model.ProjectSpecDraft
+import app.andy.model.ProjectTask
+import app.andy.model.ProjectTaskAttempt
+import app.andy.model.ProjectTaskKind
+import app.andy.model.ProjectTaskState
+import app.andy.model.ProjectVerificationStatus
+import app.andy.model.ProjectVerificationVerdict
+import app.andy.model.ProjectWorkflowStage
+import app.andy.model.ProjectWorkflowState
+import app.andy.model.toProjectProfile
 import app.andy.model.estimatedTokenCostUsd
 import app.andy.model.promptWithGoalHint
 import app.andy.model.promptWithSkillHints
@@ -24,6 +43,7 @@ import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
 import app.andy.service.AgentRunService
 import app.andy.service.McpServerService
+import app.andy.service.ProjectWorkflowService
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +62,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
 import java.io.FileOutputStream
@@ -52,6 +76,8 @@ import java.util.concurrent.TimeUnit
 
 private const val MAX_EVENTS_IN_MEMORY = 3000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
+private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
+private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
 
 class DesktopAgentRunService(
     private val scope: CoroutineScope,
@@ -62,7 +88,7 @@ class DesktopAgentRunService(
     private val mcp: McpServerService,
     private val workspaceStore: WorkspaceStore,
     private val actionConfig: ActionConfigStore,
-) : AgentRunService {
+) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var process: Process? = null,
         @Volatile var job: Job? = null,
@@ -86,6 +112,9 @@ class DesktopAgentRunService(
 
     private val _lastUsedAgent = MutableStateFlow<AgentKind?>(null)
     override val lastUsedAgent: StateFlow<AgentKind?> = _lastUsedAgent
+
+    private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
+    override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects
 
     private data class SkillScope(val agent: AgentKind, val directory: String?)
 
@@ -122,6 +151,9 @@ class DesktopAgentRunService(
             storedMaxConcurrent = state.maxConcurrent
             slots = Semaphore(state.maxConcurrent)
             _tasks.value = state.tasks
+            _projects.value = recoverInterruptedWorkflows(state.projectWorkflows, state.tasks)
+                .mapValues { (_, workflow) -> workflow.withMissingProfiles() }
+            migrateLegacyProjectNotes()
             ready.complete(Unit)
             scope.launch(Dispatchers.IO) { restoreProviderQuotas(state.tasks) }
             refreshCliStatuses()
@@ -147,10 +179,392 @@ class DesktopAgentRunService(
         return flow
     }
 
+    override suspend fun ensureProject(projectId: String) {
+        ready.await()
+        if (projectId in _projects.value) return
+        _projects.update { it + (projectId to defaultProjectState(projectId)) }
+        persist()
+    }
+
+    override suspend fun updateScratchpad(projectId: String, text: String) {
+        ensureProject(projectId)
+        updateProject(projectId) { it.copy(scratchpad = text) }
+        persist()
+    }
+
+    override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) {
+        ensureProject(projectId)
+        val normalized = profile.normalizedFor(kind)
+        updateProject(projectId) { it.copy(profiles = it.profiles + (kind to normalized)) }
+        persist()
+    }
+
+    override suspend fun saveSpec(draft: ProjectSpecDraft): String {
+        ready.await()
+        require(draft.title.isNotBlank()) { "spec title is required" }
+        require(draft.brief.isNotBlank()) { "spec brief is required" }
+        ensureProject(draft.projectId)
+        val now = System.currentTimeMillis()
+        val existing = draft.taskId?.let(::projectTask)
+        require(existing == null || (existing.kind == ProjectTaskKind.Spec && !existing.isActive)) { "active specs cannot be edited" }
+        val id = existing?.id ?: workflowId("spec")
+        val task = (existing ?: ProjectTask(
+            id = id,
+            projectId = draft.projectId,
+            kind = ProjectTaskKind.Spec,
+            title = draft.title.trim(),
+            instructions = draft.brief.trim(),
+            profile = draft.profile,
+            includeScratchpad = draft.includeScratchpad,
+            grillMeEnabled = draft.grillMeEnabled,
+            createdAtMillis = now,
+            updatedAtMillis = now,
+        )).copy(
+            title = draft.title.trim(),
+            instructions = draft.brief.trim(),
+            profile = draft.profile.normalizedFor(ProjectTaskKind.Spec),
+            includeScratchpad = draft.includeScratchpad,
+            grillMeEnabled = draft.grillMeEnabled,
+            updatedAtMillis = now,
+        )
+        upsertProjectTask(task)
+        persist()
+        return id
+    }
+
+    override suspend fun runSpec(taskId: String, revisionRequest: String?) {
+        ready.await()
+        val spec = projectTask(taskId)?.takeIf { it.kind == ProjectTaskKind.Spec } ?: return
+        if (spec.isActive) return
+        val project = _projects.value[spec.projectId] ?: return
+        val directory = projectDirectory(spec.projectId)
+        if (directory == null) {
+            updateProjectTask(taskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = "project directory is unavailable") }
+            persist()
+            return
+        }
+        val installedSkills = withContext(Dispatchers.IO) { discoverSkills(spec.profile.agent, directory) }
+        val grillMe = installedSkills.firstOrNull { it.name == "grill-me" }
+        if (spec.grillMeEnabled && grillMe == null) {
+            updateProjectTask(taskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = "grill-me is not installed for ${spec.profile.agent.label}") }
+            persist()
+            return
+        }
+        val scratchpad = project.scratchpad.takeIf { spec.includeScratchpad && it.isNotBlank() }
+        val attempt = spec.attempts.count { it.stage == ProjectWorkflowStage.Spec } + 1
+        val prompt = specPrompt(spec, scratchpad, revisionRequest)
+        updateProjectTask(taskId) { it.copy(state = ProjectTaskState.Queued, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+        persist()
+        val run = createAndStart(
+            spec.profile.toAgentDraft(
+                title = "Spec: ${spec.title}",
+                prompt = prompt,
+                projectId = spec.projectId,
+                directory = directory,
+                planMode = true,
+                skills = listOfNotNull(grillMe.takeIf { spec.grillMeEnabled }),
+                workflowTaskId = spec.id,
+                stage = ProjectWorkflowStage.Spec,
+                attempt = attempt,
+            ),
+        )
+        appendAttempt(spec.id, run, ProjectWorkflowStage.Spec, attempt, prompt, spec.profile, scratchpad)
+        reconcileWorkflowRun(run.id)
+    }
+
+    override suspend fun saveBuildPair(draft: ProjectBuildPairDraft): String {
+        ready.await()
+        require(draft.title.isNotBlank()) { "build title is required" }
+        require(draft.plan.text.isNotBlank()) { "implementation plan is required" }
+        require(draft.verificationInstructions.isNotBlank()) { "verification instructions are required" }
+        ensureProject(draft.projectId)
+        val now = System.currentTimeMillis()
+        val existingBuild = draft.buildTaskId?.let(::projectTask)
+        val activeLinkedVerification = existingBuild?.linkedVerificationTaskId?.let(::projectTask)
+        val activeLinkedReview = existingBuild?.linkedReviewTaskId?.let(::projectTask)
+        require(
+            existingBuild == null || (
+                existingBuild.kind == ProjectTaskKind.Build &&
+                    !isStageBusy(existingBuild) &&
+                    !isStageBusy(activeLinkedReview) &&
+                    !isStageBusy(activeLinkedVerification)
+                ),
+        ) { "active build pairs cannot be edited" }
+        val buildId = existingBuild?.id ?: workflowId("build")
+        val verificationId = existingBuild?.linkedVerificationTaskId ?: workflowId("verify")
+        val previousReviewId = existingBuild?.linkedReviewTaskId
+        val previousReview = previousReviewId?.let(::projectTask)
+        val retainDisabledReview = previousReview?.let { it.attempts.isNotEmpty() || it.reviewVerdicts.isNotEmpty() } == true
+        val reviewId = when {
+            draft.reviewEnabled -> previousReviewId ?: workflowId("review")
+            retainDisabledReview -> previousReviewId
+            else -> null
+        }
+        val removedReviewId = previousReviewId.takeIf { it != null && reviewId == null }
+        val reviewWasEnabled = existingBuild?.reviewEnabled == true
+        val existingReview = reviewId?.let(::projectTask) ?: previousReview
+        val reviewProfile = draft.reviewProfile.normalizedFor(ProjectTaskKind.Review)
+        val reviewInstructions = draft.reviewInstructions.trim()
+        val reviewGateChanged = draft.reviewEnabled &&
+            reviewWasEnabled &&
+            existingReview != null &&
+            (
+                reviewInstructions != existingReview.reviewInstructions ||
+                    reviewProfile != existingReview.profile ||
+                    draft.includeScratchpadInReview != existingReview.includeScratchpad
+                )
+        val invalidatingReview = draft.reviewEnabled && (!reviewWasEnabled || reviewGateChanged)
+        val reviewGeneration = when {
+            invalidatingReview -> (existingBuild?.reviewGeneration ?: 0) + 1
+            else -> existingBuild?.reviewGeneration ?: 0
+        }
+        val reopeningCompleted = invalidatingReview && existingBuild?.state == ProjectTaskState.Completed
+        val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild?.reviewReopenedCompleted == true
+        val pauseForReviewChange = (draft.reviewEnabled != reviewWasEnabled || reviewGateChanged) &&
+            existingBuild?.attempts?.isNotEmpty() == true
+        val buildProfile = draft.buildProfile.normalizedFor(ProjectTaskKind.Build).let { requested ->
+            if (existingBuild?.attempts?.isNotEmpty() == true) {
+                requested.copy(useWorktree = existingBuild.profile.useWorktree)
+            } else {
+                requested
+            }
+        }
+        val build = (existingBuild ?: ProjectTask(
+            id = buildId,
+            projectId = draft.projectId,
+            kind = ProjectTaskKind.Build,
+            title = draft.title.trim(),
+            instructions = draft.buildNotes.trim(),
+            profile = buildProfile,
+            includeScratchpad = draft.includeScratchpadInBuild,
+            linkedSpecTaskId = draft.plan.sourceSpecTaskId,
+            linkedReviewTaskId = reviewId,
+            linkedVerificationTaskId = verificationId,
+            planSnapshot = draft.plan,
+            buildNotes = draft.buildNotes.trim(),
+            reviewEnabled = draft.reviewEnabled,
+            reviewInstructions = reviewInstructions,
+            reviewGeneration = reviewGeneration,
+            verificationInstructions = draft.verificationInstructions.trim(),
+            maxBudgetUsd = draft.maxBudgetUsd,
+            createdAtMillis = now,
+            updatedAtMillis = now,
+        )).copy(
+            title = draft.title.trim(),
+            instructions = draft.buildNotes.trim(),
+            profile = buildProfile,
+            includeScratchpad = draft.includeScratchpadInBuild,
+            linkedSpecTaskId = existingBuild?.linkedSpecTaskId ?: draft.plan.sourceSpecTaskId,
+            linkedReviewTaskId = reviewId,
+            linkedVerificationTaskId = verificationId,
+            planSnapshot = existingBuild?.planSnapshot ?: draft.plan,
+            buildNotes = draft.buildNotes.trim(),
+            reviewEnabled = draft.reviewEnabled,
+            reviewInstructions = reviewInstructions,
+            reviewGeneration = reviewGeneration,
+            reviewReopenedCompleted = when {
+                reopeningCompleted -> true
+                restoringCompleted -> false
+                else -> existingBuild?.reviewReopenedCompleted ?: false
+            },
+            verificationInstructions = draft.verificationInstructions.trim(),
+            maxBudgetUsd = draft.maxBudgetUsd?.takeIf { it > 0.0 },
+            state = when {
+                restoringCompleted -> ProjectTaskState.Completed
+                reopeningCompleted -> ProjectTaskState.Paused
+                invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
+                !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Paused
+                else -> existingBuild?.state ?: ProjectTaskState.Draft
+            },
+            paused = when {
+                restoringCompleted -> false
+                reopeningCompleted || pauseForReviewChange -> true
+                else -> existingBuild?.paused ?: false
+            },
+            updatedAtMillis = now,
+        )
+        val review = reviewId?.let { id ->
+            (existingReview?.takeIf { it.id == id } ?: ProjectTask(
+                id = id,
+                projectId = draft.projectId,
+                kind = ProjectTaskKind.Review,
+                title = "Review ${draft.title.trim()}",
+                instructions = reviewInstructions,
+                profile = reviewProfile,
+                includeScratchpad = draft.includeScratchpadInReview,
+                linkedSpecTaskId = draft.plan.sourceSpecTaskId,
+                linkedBuildTaskId = buildId,
+                linkedVerificationTaskId = verificationId,
+                planSnapshot = draft.plan,
+                reviewEnabled = draft.reviewEnabled,
+                reviewInstructions = reviewInstructions,
+                reviewGeneration = reviewGeneration,
+                state = if (draft.reviewEnabled) ProjectTaskState.Draft else ProjectTaskState.Disabled,
+                createdAtMillis = now,
+                updatedAtMillis = now,
+            )).copy(
+                title = "Review ${draft.title.trim()}",
+                instructions = reviewInstructions,
+                profile = reviewProfile,
+                includeScratchpad = draft.includeScratchpadInReview,
+                linkedVerificationTaskId = verificationId,
+                reviewEnabled = draft.reviewEnabled,
+                reviewInstructions = reviewInstructions,
+                reviewGeneration = reviewGeneration,
+                state = when {
+                    !draft.reviewEnabled -> ProjectTaskState.Disabled
+                    invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
+                    else -> existingReview?.takeIf { it.id == id }?.state ?: ProjectTaskState.Draft
+                },
+                lastError = if (draft.reviewEnabled) existingReview?.takeIf { it.id == id }?.lastError else null,
+                updatedAtMillis = now,
+            )
+        }
+        val existingVerification = projectTask(verificationId)
+        val verification = (existingVerification ?: ProjectTask(
+            id = verificationId,
+            projectId = draft.projectId,
+            kind = ProjectTaskKind.Verification,
+            title = "Verify ${draft.title.trim()}",
+            instructions = draft.verificationInstructions.trim(),
+            profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
+            includeScratchpad = draft.includeScratchpadInVerification,
+            linkedSpecTaskId = draft.plan.sourceSpecTaskId,
+            linkedBuildTaskId = buildId,
+            planSnapshot = draft.plan,
+            verificationInstructions = draft.verificationInstructions.trim(),
+            createdAtMillis = now,
+            updatedAtMillis = now,
+        )).copy(
+            title = "Verify ${draft.title.trim()}",
+            instructions = draft.verificationInstructions.trim(),
+            profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
+            includeScratchpad = draft.includeScratchpadInVerification,
+            verificationInstructions = draft.verificationInstructions.trim(),
+            state = when {
+                restoringCompleted -> ProjectTaskState.Completed
+                invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
+                !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Waiting
+                else -> existingVerification?.state ?: ProjectTaskState.Draft
+            },
+            updatedAtMillis = now,
+        )
+        updateProject(draft.projectId) { state ->
+            val pair = listOfNotNull(build, review, verification).associateBy { it.id }
+            val existingIds = state.tasks.mapTo(mutableSetOf()) { it.id }
+            state.copy(
+                tasks = state.tasks.filterNot { it.id == removedReviewId }.map { pair[it.id] ?: it } +
+                    listOfNotNull(build, review, verification).filterNot { it.id in existingIds },
+            )
+        }
+        persist()
+        return buildId
+    }
+
+    override suspend fun startBuildPair(buildTaskId: String) {
+        ready.await()
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        if (isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) || build.state == ProjectTaskState.Completed) return
+        updateProjectTask(buildTaskId) { it.copy(paused = false, lastError = null) }
+        startBuildAttempt(buildTaskId)
+    }
+
+    override fun pauseBuildPair(buildTaskId: String) {
+        val build = projectTask(buildTaskId) ?: return
+        updateProjectTask(buildTaskId) {
+            it.copy(paused = true, state = if (isStageBusy(it)) it.state else ProjectTaskState.Paused, updatedAtMillis = System.currentTimeMillis())
+        }
+        build.linkedReviewTaskId?.let { reviewId ->
+            updateProjectTask(reviewId) {
+                it.copy(state = if (isStageBusy(it)) it.state else if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
+            }
+        }
+        build.linkedVerificationTaskId?.let { verificationId ->
+            updateProjectTask(verificationId) { it.copy(state = if (isStageBusy(it)) it.state else ProjectTaskState.Paused) }
+        }
+        scope.launch { persist() }
+    }
+
+    override fun stopBuildPair(buildTaskId: String) {
+        val build = projectTask(buildTaskId) ?: return
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        val activeRunId = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty())
+            .sortedByDescending { it.createdAtMillis }
+            .firstOrNull { attempt ->
+                currentTask(attempt.runId)?.let { run ->
+                    run.isActive || run.status == AgentTaskStatus.WaitingForInput
+                } == true
+            }
+            ?.runId
+        activeRunId?.let(::stop)
+        updateProjectTask(buildTaskId) { it.copy(paused = true, state = ProjectTaskState.NeedsAttention, lastError = "current workflow run was stopped") }
+        review?.let { item -> updateProjectTask(item.id) { it.copy(state = ProjectTaskState.NeedsAttention) } }
+        verification?.let { item -> updateProjectTask(item.id) { it.copy(state = ProjectTaskState.NeedsAttention) } }
+        scope.launch { persist() }
+    }
+
+    override suspend fun resumeBuildPair(buildTaskId: String) {
+        ready.await()
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        if (isStageBusy(build) || isStageBusy(review) || isStageBusy(verification)) return
+        updateProjectTask(buildTaskId) { it.copy(paused = false, reviewReopenedCompleted = false, lastError = null) }
+        val buildRun = latestCompletedBuildRun(build)
+        val latestReviewVerdict = review?.reviewVerdicts
+            ?.lastOrNull { it.reviewedBuildRunId == buildRun?.id && it.reviewGeneration == build.reviewGeneration }
+        when {
+            buildRun == null -> startBuildAttempt(buildTaskId)
+            build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested -> startBuildAttempt(buildTaskId)
+            build.reviewEnabled && currentReviewApproval(review, buildRun.id, build.reviewGeneration) == null -> startReviewAttempt(buildTaskId)
+            else -> startVerificationAttempt(buildTaskId)
+        }
+    }
+
+    override suspend fun deleteTask(taskId: String, cascade: Boolean) {
+        ready.await()
+        val task = projectTask(taskId) ?: return
+        val removeIds = when (task.kind) {
+            ProjectTaskKind.Spec -> {
+                val children = _projects.value[task.projectId]?.tasks.orEmpty().filter { it.linkedSpecTaskId == task.id }
+                if (children.isNotEmpty() && !cascade) return
+                setOf(task.id) + children.map { it.id } + children.mapNotNull { it.linkedReviewTaskId } + children.mapNotNull { it.linkedVerificationTaskId }
+            }
+            ProjectTaskKind.Build -> setOfNotNull(task.id, task.linkedReviewTaskId, task.linkedVerificationTaskId)
+            ProjectTaskKind.Review, ProjectTaskKind.Verification -> {
+                val linkedBuild = task.linkedBuildTaskId?.let(::projectTask)
+                setOfNotNull(linkedBuild?.id, linkedBuild?.linkedReviewTaskId, linkedBuild?.linkedVerificationTaskId)
+            }
+        }
+        if (_projects.value[task.projectId]?.tasks.orEmpty().any { it.id in removeIds && it.isActive }) return
+        updateProject(task.projectId) { state -> state.copy(tasks = state.tasks.filterNot { it.id in removeIds }) }
+        persist()
+    }
+
+    override suspend fun deleteProject(projectId: String) {
+        ready.await()
+        val workflow = _projects.value[projectId]
+        val runIds = workflow?.tasks.orEmpty().flatMap { it.attempts }.map { it.runId }.distinct()
+        runIds.forEach { runId ->
+            currentTask(runId)?.let { delete(runId, removeWorktree = it.ownsWorktree) }
+        }
+        _projects.update { it - projectId }
+        persist()
+    }
+
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
         ready.await()
         _providerDefaults.update { it + (draft.agent to draft.providerDefaults()) }
         _lastUsedAgent.value = draft.agent
+        val discoveredSkillPaths = if (draft.skills.isEmpty()) {
+            emptySet()
+        } else {
+            withContext(Dispatchers.IO) { discoverSkills(draft.agent, draft.existingWorktreePath ?: draft.directory) }
+                .mapTo(mutableSetOf()) { it.path }
+        }
         val now = System.currentTimeMillis()
         val id = "task-" + UUID.randomUUID().toString().replace("-", "").take(10)
         var task = AgentTask(
@@ -159,9 +573,15 @@ class DesktopAgentRunService(
             prompt = draft.prompt,
             agent = draft.agent,
             projectId = draft.projectId,
-            cwd = draft.directory,
+            cwd = draft.existingWorktreePath ?: draft.directory,
             originDir = draft.directory,
             useWorktree = draft.useWorktree,
+            worktreePath = draft.existingWorktreePath,
+            branchName = draft.existingBranchName,
+            ownsWorktree = false,
+            workflowTaskId = draft.workflowTaskId,
+            workflowStage = draft.workflowStage,
+            workflowAttempt = draft.workflowAttempt,
             attachAndyMcp = draft.attachAndyMcp,
             autonomy = draft.autonomy,
             sandboxMode = draft.sandboxMode,
@@ -170,9 +590,7 @@ class DesktopAgentRunService(
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
             imagePaths = draft.imagePaths,
-            skills = draft.skills.filter { skill ->
-                skills(draft.agent, draft.directory).value.any { it.path == skill.path }
-            },
+            skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
             maxBudgetUsd = draft.maxBudgetUsd,
             status = AgentTaskStatus.Queued,
@@ -208,7 +626,7 @@ class DesktopAgentRunService(
             }
             val created = withContext(Dispatchers.IO) { worktrees.create(originDir, task.id, task.agent, task.title) }
             task = created.fold(
-                onSuccess = { task.copy(cwd = it.path, worktreePath = it.path, branchName = it.branch) },
+                onSuccess = { task.copy(cwd = it.path, worktreePath = it.path, branchName = it.branch, ownsWorktree = true) },
                 onFailure = {
                     task.copy(
                         status = AgentTaskStatus.Failed,
@@ -240,6 +658,9 @@ class DesktopAgentRunService(
 
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
         val task = currentTask(taskId) ?: return
+        // A decision checkpoint has structured answers and must be resolved by
+        // its chooser so a freeform chat message cannot leave stale UI behind.
+        if (task.userInputRequest != null) return
         if (task.isActive) return
         val adapter = adapters[task.agent] ?: return
         if (!adapter.supportsHeadlessResume || task.vendorSessionId == null) return
@@ -269,11 +690,62 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
+        val task = currentTask(taskId) ?: return
+        val request = task.userInputRequest?.takeIf { it.id == requestId } ?: return
+        if (task.status != AgentTaskStatus.WaitingForInput) return
+        val normalizedAnswers = request.questions.associate { question ->
+            question.id to answers[question.id].orEmpty().trim()
+        }
+        if (normalizedAnswers.values.any { it.isBlank() }) return
+
+        val response = request.responseForAgent(normalizedAnswers)
+        val now = System.currentTimeMillis()
+        appendEvents(taskId, listOf(AgentEvent.UserMessage(now, response)))
+        writeAndyTranscriptLine(taskId, response, emptyList(), now)
+
+        val adapter = adapters[task.agent] ?: return
+        val canResume = adapter.supportsHeadlessResume && task.vendorSessionId != null
+        val next = if (canResume) {
+            task.copy(
+                status = AgentTaskStatus.Queued,
+                userInputRequest = null,
+                exitCode = null,
+                errorMessage = null,
+                finishedAtMillis = null,
+                unread = false,
+            )
+        } else {
+            val priorPrompt = task.continuationPrompt ?: task.implementationPrompt ?: task.prompt
+            task.copy(
+                status = AgentTaskStatus.Queued,
+                userInputRequest = null,
+                continuationPrompt = "$priorPrompt\n\nDecision checkpoint answers:\n$response",
+                exitCode = null,
+                errorMessage = null,
+                finishedAtMillis = null,
+                unread = false,
+            )
+        }
+        upsertTask(next)
+        scope.launch { persist() }
+        if (canResume) {
+            launchRun(next) { resumeAdapter, binary, mcpUrl ->
+                resumeAdapter.buildResumeCommand(binary, currentTask(taskId) ?: next, response, emptyList(), mcpUrl)
+                    ?: error("resume not supported")
+            }
+        } else {
+            launchRun(next) { nextAdapter, binary, mcpUrl ->
+                nextAdapter.buildCommand(binary, currentTask(taskId) ?: next, mcpUrl)
+            }
+        }
+    }
+
     override suspend fun startImplementation(taskId: String) {
         ready.await()
         val task = currentTask(taskId) ?: return
         val completedPlan = task.completedPlanText?.takeIf { it.isNotBlank() } ?: return
-        if (task.status != AgentTaskStatus.Completed || !task.planMode || task.isActive) return
+        if (task.status != AgentTaskStatus.Completed || !task.planMode || task.isActive || task.workflowTaskId != null) return
 
         _lastUsedAgent.value = task.agent
         val now = System.currentTimeMillis()
@@ -434,6 +906,7 @@ class DesktopAgentRunService(
 
         updateTask(taskId) { it.copy(status = AgentTaskStatus.Running, startedAtMillis = System.currentTimeMillis()) }
         persist()
+        reconcileWorkflowRun(taskId)
 
         val process = runCatching {
             ProcessBuilder(argv)
@@ -459,6 +932,7 @@ class DesktopAgentRunService(
         var lastResult: AgentEvent.TaskResult? = null
         var lastError: String? = null
         var lastAssistantText: String? = null
+        var requestedInput: AgentUserInputRequest? = null
         val rawTail = ArrayDeque<String>()
         val rawPlanOutput = StringBuilder()
 
@@ -482,6 +956,25 @@ class DesktopAgentRunService(
                         val now = System.currentTimeMillis()
                         val events = runCatching { adapter.parseLine(line, now) }
                             .getOrElse { listOf(AgentEvent.Raw(now, line)) }
+                            .mapNotNull { event ->
+                                val parsed = when (event) {
+                                    is AgentEvent.AssistantText -> parseAgentUserInput(event.text)
+                                    is AgentEvent.TaskResult -> event.finalText?.let(::parseAgentUserInput)
+                                    is AgentEvent.Raw -> parseAgentUserInput(event.line)
+                                    else -> null
+                                }
+                                if (parsed == null) {
+                                    event
+                                } else {
+                                    if (requestedInput == null) requestedInput = parsed.request
+                                    when (event) {
+                                        is AgentEvent.AssistantText -> event.copy(text = parsed.visibleText).takeIf { it.text.isNotBlank() }
+                                        is AgentEvent.TaskResult -> event.copy(finalText = parsed.visibleText.takeIf { it.isNotBlank() })
+                                        is AgentEvent.Raw -> event.copy(line = parsed.visibleText).takeIf { it.line.isNotBlank() }
+                                        else -> event
+                                    }
+                                }
+                            }
                             .withEstimatedCosts(currentTask(taskId) ?: task)
                         for (event in events) {
                             when (event) {
@@ -515,7 +1008,9 @@ class DesktopAgentRunService(
                                 else -> Unit
                             }
                         }
-                        batch += events
+                        // The CLI's normal terminal event would look like a completed
+                        // task while Andy is showing an unanswered checkpoint.
+                        batch += if (requestedInput == null) events else events.filterNot { it is AgentEvent.TaskResult }
                         if (batch.size >= 64 || System.currentTimeMillis() - lastFlush >= 100) flush()
                     }
                     flush()
@@ -525,8 +1020,10 @@ class DesktopAgentRunService(
 
         val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
         val result = lastResult
+        val waitingForInput = requestedInput?.takeIf { exitCode == 0 && lastError == null && !handle.stopRequested }
         val status = when {
             handle.stopRequested -> AgentTaskStatus.Stopped
+            waitingForInput != null -> AgentTaskStatus.WaitingForInput
             exitCode == 0 && result?.success != false && lastError == null -> AgentTaskStatus.Completed
             else -> AgentTaskStatus.Failed
         }
@@ -539,7 +1036,7 @@ class DesktopAgentRunService(
         } else {
             null
         }
-        if (result == null && status != AgentTaskStatus.Stopped) {
+        if (result == null && status != AgentTaskStatus.Stopped && status != AgentTaskStatus.WaitingForInput) {
             // Adapters without structured output (or failed runs) still get a terminal event.
             appendEvents(
                 taskId,
@@ -559,7 +1056,18 @@ class DesktopAgentRunService(
                 inputTokens = result?.inputTokens ?: current.inputTokens,
                 outputTokens = result?.outputTokens ?: current.outputTokens,
                 completedPlanText = completedPlanText ?: current.completedPlanText,
+                completedResultText = if (status == AgentTaskStatus.WaitingForInput) {
+                    current.completedResultText
+                } else {
+                    result?.finalText?.takeIf { it.isNotBlank() }
+                        ?: fallbackText
+                        ?: current.completedResultText
+                },
             )
+        }
+        if (waitingForInput != null) {
+            waitForUserInput(taskId, waitingForInput, exitCode)
+            return
         }
         finishTask(
             taskId = taskId,
@@ -571,6 +1079,27 @@ class DesktopAgentRunService(
                 null
             },
         )
+    }
+
+    private fun waitForUserInput(taskId: String, request: AgentUserInputRequest, exitCode: Int) {
+        updateTask(taskId) { task ->
+            if (task.status == AgentTaskStatus.Running) {
+                task.copy(
+                    status = AgentTaskStatus.WaitingForInput,
+                    userInputRequest = request,
+                    exitCode = exitCode,
+                    finishedAtMillis = System.currentTimeMillis(),
+                    unread = true,
+                )
+            } else {
+                task
+            }
+        }
+        handles.remove(taskId)
+        scope.launch {
+            persist()
+            reconcileWorkflowRun(taskId)
+        }
     }
 
     private fun authFailureHint(tail: String?, taskId: String): String? {
@@ -590,6 +1119,22 @@ class DesktopAgentRunService(
     }
 
     override fun stop(taskId: String) {
+        val waiting = currentTask(taskId)?.takeIf { it.status == AgentTaskStatus.WaitingForInput }
+        if (waiting != null) {
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentTaskStatus.Stopped,
+                    userInputRequest = null,
+                    errorMessage = null,
+                    finishedAtMillis = System.currentTimeMillis(),
+                )
+            }
+            scope.launch {
+                persist()
+                reconcileWorkflowRun(taskId)
+            }
+            return
+        }
         val handle = handles[taskId] ?: return
         handle.stopRequested = true
         scope.launch(Dispatchers.IO) {
@@ -615,7 +1160,7 @@ class DesktopAgentRunService(
         _tasks.update { list -> list.filterNot { it.id == taskId } }
         store.deleteTranscript(taskId)
         val worktreePath = task.worktreePath
-        if (removeWorktree && worktreePath != null) {
+        if (removeWorktree && task.ownsWorktree && worktreePath != null) {
             task.originDir?.let { originDir ->
                 withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
             }
@@ -799,6 +1344,881 @@ class DesktopAgentRunService(
             ?: "${agent.cliName} CLI not found — install it or set a binary override in ~/.andy/agents.toml"
     }
 
+    private fun defaultProjectState(projectId: String): ProjectWorkflowState {
+        val agent = _lastUsedAgent.value ?: AgentKind.Codex
+        val base = _providerDefaults.value[agent]?.toProjectProfile(agent) ?: ProjectAgentProfile(agent = agent)
+        return ProjectWorkflowState(
+            projectId = projectId,
+            profiles = mapOf(
+                ProjectTaskKind.Spec to base.normalizedFor(ProjectTaskKind.Spec),
+                ProjectTaskKind.Build to base.normalizedFor(ProjectTaskKind.Build),
+                ProjectTaskKind.Review to base.normalizedFor(ProjectTaskKind.Review),
+                ProjectTaskKind.Verification to base.normalizedFor(ProjectTaskKind.Verification),
+            ),
+        )
+    }
+
+    private fun ProjectAgentProfile.normalizedFor(kind: ProjectTaskKind): ProjectAgentProfile {
+        val normalized = copy(
+            model = model?.trim()?.takeIf { it.isNotBlank() },
+            maxBudgetUsd = maxBudgetUsd?.takeIf { it > 0.0 },
+        )
+        return when (kind) {
+            ProjectTaskKind.Spec -> normalized.copy(
+                autonomy = app.andy.model.AgentAutonomy.ReadOnly,
+                sandboxMode = AgentSandboxMode.ReadOnly,
+                useWorktree = false,
+            )
+            ProjectTaskKind.Build -> normalized
+            ProjectTaskKind.Review -> normalized.copy(useWorktree = false)
+            ProjectTaskKind.Verification -> normalized.copy(useWorktree = false)
+        }
+    }
+
+    private fun ProjectWorkflowState.withMissingProfiles(): ProjectWorkflowState {
+        if (ProjectTaskKind.entries.all { it in profiles }) return this
+        val agent = _lastUsedAgent.value ?: AgentKind.Codex
+        val base = _providerDefaults.value[agent]?.toProjectProfile(agent) ?: ProjectAgentProfile(agent = agent)
+        return copy(
+            profiles = ProjectTaskKind.entries.associateWith { kind ->
+                profiles[kind] ?: base.normalizedFor(kind)
+            },
+        )
+    }
+
+    private suspend fun projectDirectory(projectId: String): String? =
+        runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.contextDir }.getOrNull()
+
+    private fun projectTask(taskId: String): ProjectTask? =
+        _projects.value.values.asSequence().flatMap { it.tasks.asSequence() }.firstOrNull { it.id == taskId }
+
+    private fun updateProject(projectId: String, transform: (ProjectWorkflowState) -> ProjectWorkflowState) {
+        _projects.update { current ->
+            val state = current[projectId] ?: defaultProjectState(projectId)
+            current + (projectId to transform(state))
+        }
+    }
+
+    private fun upsertProjectTask(task: ProjectTask) {
+        updateProject(task.projectId) { state ->
+            state.copy(tasks = if (state.tasks.any { it.id == task.id }) {
+                state.tasks.map { if (it.id == task.id) task else it }
+            } else {
+                state.tasks + task
+            })
+        }
+    }
+
+    private fun updateProjectTask(taskId: String, transform: (ProjectTask) -> ProjectTask) {
+        val task = projectTask(taskId) ?: return
+        updateProject(task.projectId) { state ->
+            state.copy(tasks = state.tasks.map { if (it.id == taskId) transform(it) else it })
+        }
+    }
+
+    private fun workflowId(prefix: String): String =
+        "$prefix-" + UUID.randomUUID().toString().replace("-", "").take(10)
+
+    private fun ProjectAgentProfile.toAgentDraft(
+        title: String,
+        prompt: String,
+        projectId: String,
+        directory: String?,
+        planMode: Boolean,
+        skills: List<AgentSkill> = emptyList(),
+        workflowTaskId: String,
+        stage: ProjectWorkflowStage,
+        attempt: Int,
+        existingWorktreePath: String? = null,
+        existingBranchName: String? = null,
+    ): AgentTaskDraft = AgentTaskDraft(
+        title = title,
+        prompt = prompt,
+        agent = agent,
+        projectId = projectId,
+        directory = directory,
+        useWorktree = useWorktree && existingWorktreePath == null,
+        attachAndyMcp = attachAndyMcp,
+        autonomy = autonomy,
+        sandboxMode = if (planMode) AgentSandboxMode.ReadOnly else sandboxMode,
+        planMode = planMode,
+        model = model,
+        reasoningEffort = reasoningEffort,
+        fastMode = fastMode,
+        skills = skills,
+        maxBudgetUsd = maxBudgetUsd,
+        existingWorktreePath = existingWorktreePath,
+        existingBranchName = existingBranchName,
+        workflowTaskId = workflowTaskId,
+        workflowStage = stage,
+        workflowAttempt = attempt,
+    )
+
+    private fun specPrompt(spec: ProjectTask, scratchpad: String?, revisionRequest: String?): String = buildString {
+        append("Create a decision-complete implementation specification for this project task. Do not implement it.\n\n")
+        append("Task:\n").append(spec.instructions.trim())
+        spec.planVersions.lastOrNull()?.let { previous ->
+            append("\n\nPrevious plan (version ").append(previous.version).append("):\n").append(previous.text.trim())
+        }
+        revisionRequest?.takeIf { it.isNotBlank() }?.let { request ->
+            append("\n\nRevision request:\n").append(request.trim())
+        }
+        scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
+        append("\n\nReturn the complete implementation plan as the final response, including interfaces, edge cases, and verification steps.")
+    }
+
+    private fun buildPrompt(
+        build: ProjectTask,
+        scratchpad: String?,
+        previousFeedback: List<String>,
+        previousReviewRun: AgentTask?,
+    ): String = buildString {
+        append("Implement the frozen plan below in the current project workspace. The linked verifier decides when this build is complete.\n\n")
+        append("Implementation plan (source: ").append(build.planSnapshot?.sourceLabel ?: "unknown").append("):\n")
+        append(build.planSnapshot?.text.orEmpty().trim())
+        build.buildNotes.takeIf { it.isNotBlank() }?.let { append("\n\nBuild notes:\n").append(it.trim()) }
+        append("\n\nVerification requirements:\n").append(build.verificationInstructions.trim())
+        if (previousFeedback.isNotEmpty()) {
+            append("\n\nThe previous quality gate requested changes. Fix every finding:\n")
+            previousFeedback.forEach { append("- ").append(it).append('\n') }
+        }
+        previousReviewRun?.completedChanges?.let { changes ->
+            append("\n\nWorkspace diff produced by the previous Review:\n")
+            changes.diffs.values.forEach { diff ->
+                append("--- ").append(diff.path).append('\n')
+                if (diff.isBinary) {
+                    append("(binary file changed)\n")
+                } else {
+                    diff.lines.forEach { line ->
+                        append(
+                            when (line.kind) {
+                                app.andy.model.DiffLineKind.Context -> ' '
+                                app.andy.model.DiffLineKind.Addition -> '+'
+                                app.andy.model.DiffLineKind.Deletion -> '-'
+                            },
+                        ).append(line.text).append('\n')
+                    }
+                }
+            }
+        }
+        scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
+        append("\n\nMake the edits and run useful checks, but do not claim the workflow is finished; verification is a separate stage.")
+    }
+
+    private fun reviewPrompt(
+        build: ProjectTask,
+        buildRun: AgentTask,
+        scratchpad: String?,
+    ): String = buildString {
+        append("Review the current workspace as a blocking code-quality gate. Inspect the actual files and run useful checks. ")
+        append("You may edit the workspace only when your configured autonomy and sandbox allow it.\n\n")
+        append("Implementation plan:\n").append(build.planSnapshot?.text.orEmpty().trim())
+        buildRun.completedResultText?.takeIf { it.isNotBlank() }?.let { append("\n\nBuilder result:\n").append(it.trim()) }
+        buildRun.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
+            append("\n\nBuilder changed files:\n")
+            files.forEach { append("- ").append(it.path).append(" (+").append(it.additions).append(" -").append(it.deletions).append(")\n") }
+        }
+        append("\n\nStandard review rubric:\n")
+        append("- Correctness: behavior, edge cases, regressions, and failure handling.\n")
+        append("- Plan alignment: the frozen implementation plan is fully and accurately implemented.\n")
+        append("- Maintainability: clear design, appropriate tests, and no unnecessary complexity.\n")
+        append("- Security: unsafe input, data exposure, permissions, and dependency risks.\n")
+        append("- Scope: no unrelated or accidental changes.\n")
+        build.reviewInstructions.takeIf { it.isNotBlank() }?.let { append("\nCustom review instructions:\n").append(it.trim()) }
+        scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
+        append(
+            "\n\nEnd the final response with exactly one terminal machine-readable block and nothing after it:\n" +
+                "<andy_review>{\"status\":\"approved|changes_requested\",\"summary\":\"...\",\"findings\":[{\"severity\":\"blocking|warning|nit\",\"title\":\"...\",\"details\":\"...\",\"file\":\"optional\",\"line\":123}]}</andy_review>\n" +
+                "Approved forbids blocking findings. Changes requested requires at least one blocking finding.",
+        )
+    }
+
+    private fun verificationPrompt(
+        build: ProjectTask,
+        buildRun: AgentTask,
+        reviewRun: AgentTask?,
+        reviewVerdict: ProjectReviewVerdict?,
+        scratchpad: String?,
+    ): String = buildString {
+        append("Verify the current workspace against the frozen plan and the explicit verification requirements. Inspect the actual files and run the relevant checks. Do not edit tracked source files.\n\n")
+        append("Implementation plan:\n").append(build.planSnapshot?.text.orEmpty().trim())
+        append("\n\nVerification requirements:\n").append(build.verificationInstructions.trim())
+        buildRun.completedResultText?.takeIf { it.isNotBlank() }?.let { append("\n\nBuilder result:\n").append(it.trim()) }
+        buildRun.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
+            append("\n\nBuilder changed files:\n")
+            files.forEach { append("- ").append(it.path).append(" (+").append(it.additions).append(" -").append(it.deletions).append(")\n") }
+        }
+        reviewVerdict?.let { verdict ->
+            append("\n\nReview approval:\n").append(verdict.summary.trim())
+            verdict.findings.filter { it.severity != ProjectReviewFindingSeverity.Blocking }.takeIf { it.isNotEmpty() }?.let { findings ->
+                append("\nReview observations:\n")
+                findings.forEach { finding -> append("- ").append(finding.severity.name.lowercase()).append(": ").append(finding.title).append(" — ").append(finding.details).append('\n') }
+            }
+        }
+        reviewRun?.completedResultText?.takeIf { it.isNotBlank() }?.let { append("\n\nReviewer result:\n").append(it.trim()) }
+        reviewRun?.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
+            append("\n\nReviewer changed files:\n")
+            files.forEach { append("- ").append(it.path).append(" (+").append(it.additions).append(" -").append(it.deletions).append(")\n") }
+        }
+        scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
+        append(
+            "\n\nEnd the final response with exactly one machine-readable block and no second block:\n" +
+                "<andy_verification>{\"status\":\"passed|failed\",\"summary\":\"...\",\"evidence\":[\"...\"],\"failures\":[\"...\"]}</andy_verification>\n" +
+                "A passed result requires non-empty evidence and an empty failures list. A failed result requires at least one failure.",
+        )
+    }
+
+    private suspend fun startBuildAttempt(buildTaskId: String) {
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
+        val linkedReview = build.linkedReviewTaskId?.let(::projectTask)
+        val linkedVerification = build.linkedVerificationTaskId?.let(::projectTask)
+        if (
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(linkedReview) ||
+            isStageBusy(linkedVerification)
+        ) {
+            return
+        }
+        if ((linkedVerification?.verdicts?.count { it.status == ProjectVerificationStatus.Failed } ?: 0) >= build.maxVerificationAttempts) {
+            setPairAttention(build, "verification reached the ${build.maxVerificationAttempts}-attempt limit")
+            persist()
+            return
+        }
+        if (build.reviewEnabled && reviewFailureCount(build, linkedReview) >= build.maxReviewFailures) {
+            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+            persist()
+            return
+        }
+        if (workflowBudgetReached(build)) {
+            setPairAttention(build, "reported workflow cost reached the configured budget")
+            persist()
+            return
+        }
+        val project = _projects.value[build.projectId] ?: return
+        val directory = projectDirectory(build.projectId)
+        if (directory == null) {
+            setPairAttention(build, "project directory is unavailable")
+            persist()
+            return
+        }
+        val attempt = build.attempts.count { it.stage == ProjectWorkflowStage.Build } + 1
+        val scratchpad = project.scratchpad.takeIf { build.includeScratchpad && it.isNotBlank() }
+        val verification = linkedVerification
+        val lastReviewFailure = linkedReview?.reviewVerdicts
+            ?.lastOrNull { it.status == ProjectReviewStatus.ChangesRequested && it.reviewGeneration == build.reviewGeneration }
+        val lastVerificationFailure = verification?.verdicts?.lastOrNull { it.status == ProjectVerificationStatus.Failed }
+        val feedback = if ((lastReviewFailure?.createdAtMillis ?: Long.MIN_VALUE) > (lastVerificationFailure?.createdAtMillis ?: Long.MIN_VALUE)) {
+            lastReviewFailure?.findings.orEmpty().filter { it.severity == ProjectReviewFindingSeverity.Blocking }.map { finding ->
+                buildString {
+                    append(finding.title).append(": ").append(finding.details)
+                    finding.file?.let { file ->
+                        append(" (").append(file)
+                        finding.line?.let { line -> append(':').append(line) }
+                        append(')')
+                    }
+                }
+            }
+        } else {
+            lastVerificationFailure?.failures.orEmpty()
+        }
+        val previousReviewRun = lastReviewFailure?.runId?.let(::currentTask)
+            ?.takeIf { (lastReviewFailure.createdAtMillis) > (lastVerificationFailure?.createdAtMillis ?: Long.MIN_VALUE) }
+        val prompt = buildPrompt(build, scratchpad, feedback, previousReviewRun)
+        updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Queued, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+        linkedReview?.let { item ->
+            updateProjectTask(item.id) {
+                it.copy(state = if (build.reviewEnabled) ProjectTaskState.Waiting else ProjectTaskState.Disabled, lastError = null)
+            }
+        }
+        verification?.let { item -> updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting) } }
+        persist()
+        val run = createAndStart(
+            build.profile.toAgentDraft(
+                title = "Build: ${build.title}",
+                prompt = prompt,
+                projectId = build.projectId,
+                directory = directory,
+                planMode = false,
+                workflowTaskId = build.id,
+                stage = ProjectWorkflowStage.Build,
+                attempt = attempt,
+                existingWorktreePath = build.worktreePath,
+                existingBranchName = build.branchName,
+            ),
+        )
+        appendAttempt(build.id, run, ProjectWorkflowStage.Build, attempt, prompt, build.profile, scratchpad)
+        updateProjectTask(build.id) {
+            it.copy(
+                workspacePath = run.cwd ?: it.workspacePath,
+                worktreePath = run.worktreePath ?: it.worktreePath,
+                branchName = run.branchName ?: it.branchName,
+                worktreeOwnerRunId = if (run.ownsWorktree) run.id else it.worktreeOwnerRunId,
+            )
+        }
+        persist()
+        reconcileWorkflowRun(run.id)
+    }
+
+    private suspend fun startReviewAttempt(buildTaskId: String) {
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
+        val review = build.linkedReviewTaskId?.let(::projectTask) ?: return
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        if (
+            !build.reviewEnabled ||
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(review) ||
+            isStageBusy(verification)
+        ) {
+            return
+        }
+        if (reviewFailureCount(build, review) >= build.maxReviewFailures) {
+            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+            persist()
+            return
+        }
+        if (workflowBudgetReached(build)) {
+            setPairAttention(build, "reported workflow cost reached the configured budget")
+            persist()
+            return
+        }
+        val buildRun = latestCompletedBuildRun(build)
+        if (buildRun == null) {
+            setPairAttention(build, "the latest build did not complete successfully")
+            persist()
+            return
+        }
+        if (build.worktreePath != null && !File(build.worktreePath).isDirectory) {
+            setPairAttention(build, "the retained workflow worktree is missing")
+            persist()
+            return
+        }
+        val project = _projects.value[build.projectId] ?: return
+        val scratchpad = project.scratchpad.takeIf { review.includeScratchpad && it.isNotBlank() }
+        val prompt = reviewPrompt(build, buildRun, scratchpad)
+        val attempt = review.attempts.count { it.stage == ProjectWorkflowStage.Review } + 1
+        val directory = projectDirectory(build.projectId)
+        updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, reviewReopenedCompleted = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+        updateProjectTask(review.id) { it.copy(state = ProjectTaskState.Queued, lastError = null) }
+        verification?.let { item -> updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting) } }
+        persist()
+        val run = createAndStart(
+            review.profile.copy(useWorktree = false).toAgentDraft(
+                title = "Review: ${build.title}",
+                prompt = prompt,
+                projectId = build.projectId,
+                directory = directory ?: build.workspacePath,
+                planMode = false,
+                workflowTaskId = review.id,
+                stage = ProjectWorkflowStage.Review,
+                attempt = attempt,
+                existingWorktreePath = build.worktreePath,
+                existingBranchName = build.branchName,
+            ),
+        )
+        appendAttempt(
+            review.id,
+            run,
+            ProjectWorkflowStage.Review,
+            attempt,
+            prompt,
+            review.profile,
+            scratchpad,
+            reviewedBuildRunId = buildRun.id,
+            reviewGeneration = build.reviewGeneration,
+        )
+        persist()
+        reconcileWorkflowRun(run.id)
+    }
+
+    private suspend fun startVerificationAttempt(buildTaskId: String) {
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
+        val verification = build.linkedVerificationTaskId?.let(::projectTask) ?: return
+        if (
+            build.paused ||
+            build.state == ProjectTaskState.Completed ||
+            isStageBusy(build) ||
+            isStageBusy(verification) ||
+            isStageBusy(build.linkedReviewTaskId?.let(::projectTask))
+        ) {
+            return
+        }
+        val failedVerificationCount = verification.verdicts.count { it.status == ProjectVerificationStatus.Failed }
+        if (failedVerificationCount >= build.maxVerificationAttempts) {
+            setPairAttention(build, "verification failed ${build.maxVerificationAttempts} times")
+            persist()
+            return
+        }
+        if (workflowBudgetReached(build)) {
+            setPairAttention(build, "reported workflow cost reached the configured budget")
+            persist()
+            return
+        }
+        val buildRun = latestCompletedBuildRun(build)
+        if (buildRun == null) {
+            setPairAttention(build, "the latest build did not complete successfully")
+            persist()
+            return
+        }
+        val project = _projects.value[build.projectId] ?: return
+        val scratchpad = project.scratchpad.takeIf { verification.includeScratchpad && it.isNotBlank() }
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val reviewVerdict = if (build.reviewEnabled) currentReviewApproval(review, buildRun.id, build.reviewGeneration) else null
+        if (build.reviewEnabled && reviewVerdict == null) {
+            setPairAttention(build, "the latest build has not received a fresh review approval")
+            persist()
+            return
+        }
+        val reviewRun = reviewVerdict?.runId?.let(::currentTask)
+        val prompt = verificationPrompt(build, buildRun, reviewRun, reviewVerdict, scratchpad)
+        val attempt = verification.attempts.count { it.stage == ProjectWorkflowStage.Verification } + 1
+        val directory = projectDirectory(build.projectId)
+        updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, updatedAtMillis = System.currentTimeMillis()) }
+        updateProjectTask(verification.id) { it.copy(state = ProjectTaskState.Queued, lastError = null) }
+        persist()
+        val run = createAndStart(
+            verification.profile.copy(useWorktree = false).toAgentDraft(
+                title = "Verify: ${build.title}",
+                prompt = prompt,
+                projectId = build.projectId,
+                directory = directory ?: build.workspacePath,
+                planMode = false,
+                workflowTaskId = verification.id,
+                stage = ProjectWorkflowStage.Verification,
+                attempt = attempt,
+                existingWorktreePath = build.worktreePath,
+                existingBranchName = build.branchName,
+            ),
+        )
+        appendAttempt(
+            verification.id,
+            run,
+            ProjectWorkflowStage.Verification,
+            attempt,
+            prompt,
+            verification.profile,
+            scratchpad,
+            reviewedBuildRunId = buildRun.id,
+            reviewGeneration = build.reviewGeneration,
+        )
+        persist()
+        reconcileWorkflowRun(run.id)
+    }
+
+    private fun appendAttempt(
+        projectTaskId: String,
+        run: AgentTask,
+        stage: ProjectWorkflowStage,
+        attempt: Int,
+        prompt: String,
+        profile: ProjectAgentProfile,
+        scratchpad: String?,
+        reviewedBuildRunId: String? = null,
+        reviewGeneration: Int = 0,
+    ) {
+        updateProjectTask(projectTaskId) { task ->
+            if (task.attempts.any { it.runId == run.id }) task else task.copy(
+                attempts = task.attempts + ProjectTaskAttempt(
+                    run.id,
+                    stage,
+                    attempt,
+                    prompt,
+                    profile,
+                    scratchpad,
+                    run.createdAtMillis,
+                    reviewedBuildRunId,
+                    reviewGeneration,
+                ),
+                state = when (run.status) {
+                    AgentTaskStatus.Queued -> ProjectTaskState.Queued
+                    AgentTaskStatus.Running -> ProjectTaskState.Running
+                    AgentTaskStatus.WaitingForInput -> ProjectTaskState.Waiting
+                    AgentTaskStatus.Completed -> ProjectTaskState.Waiting
+                    else -> ProjectTaskState.NeedsAttention
+                },
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    private fun workflowBudgetReached(build: ProjectTask): Boolean {
+        val budget = build.maxBudgetUsd ?: return false
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        val runIds = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty()).map { it.runId }.toSet()
+        val cost = _tasks.value.filter { it.id in runIds }.sumOf { it.totalCostUsd ?: 0.0 }
+        return cost >= budget
+    }
+
+    /**
+     * True while a stage has an in-flight or unanswered agent run.
+     * [ProjectTaskState.Waiting] alone is not busy: the build/review/verify handoff
+     * parks siblings in Waiting before launching the next stage.
+     */
+    private fun isStageBusy(task: ProjectTask?): Boolean {
+        if (task == null) return false
+        if (task.state == ProjectTaskState.Queued || task.state == ProjectTaskState.Running) return true
+        val run = task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let(::currentTask) ?: return false
+        return run.status == AgentTaskStatus.WaitingForInput
+    }
+
+    private fun setPairAttention(build: ProjectTask, message: String) {
+        updateProjectTask(build.id) { it.copy(state = ProjectTaskState.NeedsAttention, paused = true, lastError = message, updatedAtMillis = System.currentTimeMillis()) }
+        build.linkedReviewTaskId?.let { id ->
+            updateProjectTask(id) {
+                it.copy(
+                    state = if (build.reviewEnabled) ProjectTaskState.NeedsAttention else ProjectTaskState.Disabled,
+                    lastError = message,
+                    updatedAtMillis = System.currentTimeMillis(),
+                )
+            }
+        }
+        build.linkedVerificationTaskId?.let { id ->
+            updateProjectTask(id) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = message, updatedAtMillis = System.currentTimeMillis()) }
+        }
+    }
+
+    private suspend fun reconcileWorkflowRun(runId: String) {
+        val run = currentTask(runId) ?: return
+        val projectTaskId = run.workflowTaskId ?: return
+        val typedTask = projectTask(projectTaskId) ?: return
+        if (run.status == AgentTaskStatus.WaitingForInput) {
+            updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.Waiting, lastError = null) }
+            persist()
+            return
+        }
+        if (run.isActive) {
+            updateProjectTask(projectTaskId) {
+                it.copy(state = if (run.status == AgentTaskStatus.Queued) ProjectTaskState.Queued else ProjectTaskState.Running)
+            }
+            persist()
+            return
+        }
+        if (run.status != AgentTaskStatus.Completed) {
+            val message = run.errorMessage ?: when (run.status) {
+                AgentTaskStatus.Unknown -> "the app restarted while this workflow stage was active"
+                AgentTaskStatus.Stopped -> "workflow stage was stopped"
+                else -> "workflow stage failed"
+            }
+            if (typedTask.kind == ProjectTaskKind.Spec) {
+                updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = message) }
+            } else {
+                val build = if (typedTask.kind == ProjectTaskKind.Build) typedTask else typedTask.linkedBuildTaskId?.let(::projectTask)
+                build?.let { setPairAttention(it, message) }
+            }
+            persist()
+            return
+        }
+        when (run.workflowStage) {
+            ProjectWorkflowStage.Spec -> {
+                val plan = run.completedPlanText?.takeIf { it.isNotBlank() }
+                if (plan == null) {
+                    updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = "the planning run returned no final plan") }
+                } else {
+                    updateProjectTask(projectTaskId) { task ->
+                        if (task.planVersions.any { it.runId == run.id }) task else task.copy(
+                            planVersions = task.planVersions + ProjectPlanVersion(
+                                version = (task.planVersions.maxOfOrNull { it.version } ?: 0) + 1,
+                                text = plan,
+                                runId = run.id,
+                                createdAtMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
+                            ),
+                            state = ProjectTaskState.Completed,
+                            lastError = null,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                    }
+                }
+                persist()
+            }
+            ProjectWorkflowStage.Build -> {
+                val build = projectTask(projectTaskId) ?: return
+                if (build.paused) {
+                    updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused) }
+                    build.linkedReviewTaskId?.let { reviewId ->
+                        updateProjectTask(reviewId) {
+                            it.copy(state = if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
+                        }
+                    }
+                    persist()
+                } else {
+                    updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, lastError = null) }
+                    build.linkedReviewTaskId?.let { reviewId ->
+                        updateProjectTask(reviewId) {
+                            it.copy(state = if (build.reviewEnabled) ProjectTaskState.Waiting else ProjectTaskState.Disabled, lastError = null)
+                        }
+                    }
+                    persist()
+                    if (build.reviewEnabled) startReviewAttempt(build.id) else startVerificationAttempt(build.id)
+                }
+            }
+            ProjectWorkflowStage.Review -> reconcileReview(run, typedTask)
+            ProjectWorkflowStage.Verification -> reconcileVerification(run, typedTask)
+            null -> Unit
+        }
+    }
+
+    private suspend fun reconcileReview(run: AgentTask, review: ProjectTask) {
+        val build = review.linkedBuildTaskId?.let(::projectTask) ?: return
+        val attempt = review.attempts.firstOrNull { it.runId == run.id } ?: return
+        val reviewedBuildRunId = attempt.reviewedBuildRunId
+        if (reviewedBuildRunId.isNullOrBlank()) {
+            setPairAttention(build, "review attempt is missing its build provenance")
+            persist()
+            return
+        }
+        val parsed = parseReviewVerdict(
+            text = run.completedResultText,
+            runId = run.id,
+            reviewedBuildRunId = reviewedBuildRunId,
+            reviewGeneration = attempt.reviewGeneration,
+            atMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
+        )
+        if (parsed == null) {
+            setPairAttention(build, "review did not return one valid terminal Andy review block")
+            persist()
+            return
+        }
+        updateProjectTask(review.id) { task ->
+            if (task.reviewVerdicts.any { it.runId == run.id }) task else task.copy(
+                reviewVerdicts = task.reviewVerdicts + parsed,
+                state = if (parsed.status == ProjectReviewStatus.Approved) ProjectTaskState.Completed else ProjectTaskState.Failed,
+                lastError = null,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+        if (parsed.status == ProjectReviewStatus.Approved) {
+            if (build.paused) {
+                updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+                persist()
+            } else if (workflowBudgetReached(build)) {
+                setPairAttention(build, "reported workflow cost reached the configured budget")
+                persist()
+            } else {
+                persist()
+                startVerificationAttempt(build.id)
+            }
+            return
+        }
+        val refreshedReview = projectTask(review.id) ?: review
+        if (reviewFailureCount(build, refreshedReview) >= build.maxReviewFailures) {
+            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+            persist()
+        } else if (build.paused) {
+            updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+            persist()
+        } else if (workflowBudgetReached(build)) {
+            setPairAttention(build, "reported workflow cost reached the configured budget")
+            persist()
+        } else {
+            persist()
+            startBuildAttempt(build.id)
+        }
+    }
+
+    private suspend fun reconcileVerification(run: AgentTask, verification: ProjectTask) {
+        val build = verification.linkedBuildTaskId?.let(::projectTask) ?: return
+        val attempt = verification.attempts.firstOrNull { it.runId == run.id }
+        val parsed = parseVerificationVerdict(
+            text = run.completedResultText,
+            runId = run.id,
+            atMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
+            reviewedBuildRunId = attempt?.reviewedBuildRunId,
+            reviewGeneration = attempt?.reviewGeneration ?: 0,
+        )
+        if (parsed == null) {
+            setPairAttention(build, "verification did not return one valid Andy verdict block")
+            persist()
+            return
+        }
+        updateProjectTask(verification.id) { task ->
+            if (task.verdicts.any { it.runId == run.id }) task else task.copy(
+                verdicts = task.verdicts + parsed,
+                state = if (parsed.status == ProjectVerificationStatus.Passed) ProjectTaskState.Completed else ProjectTaskState.Failed,
+                lastError = null,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+        if (parsed.status == ProjectVerificationStatus.Passed) {
+            updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Completed, paused = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+            persist()
+            return
+        }
+        val refreshedVerification = projectTask(verification.id) ?: verification
+        val failedVerdicts = refreshedVerification.verdicts.count { it.status == ProjectVerificationStatus.Failed }
+        if (failedVerdicts >= build.maxVerificationAttempts) {
+            setPairAttention(build, "verification failed ${build.maxVerificationAttempts} times")
+            persist()
+        } else if (build.paused) {
+            updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+            persist()
+        } else if (workflowBudgetReached(build)) {
+            setPairAttention(build, "reported workflow cost reached the configured budget")
+            persist()
+        } else {
+            startBuildAttempt(build.id)
+        }
+    }
+
+    private fun parseReviewVerdict(
+        text: String?,
+        runId: String,
+        reviewedBuildRunId: String,
+        reviewGeneration: Int,
+        atMillis: Long,
+    ): ProjectReviewVerdict? {
+        val output = text.orEmpty()
+        val matches = REVIEW_BLOCK.findAll(output).toList()
+        if (matches.size != 1 || matches.single().range.last != output.trimEnd().lastIndex) return null
+        return runCatching {
+            val value = Json.parseToJsonElement(matches.single().groupValues[1]).jsonObject
+            val status = when (value["status"]?.jsonPrimitive?.content?.lowercase()) {
+                "approved" -> ProjectReviewStatus.Approved
+                "changes_requested" -> ProjectReviewStatus.ChangesRequested
+                else -> return null
+            }
+            val summary = value["summary"]?.jsonPrimitive?.content?.trim().orEmpty()
+            if (summary.isBlank()) return null
+            val findings = value["findings"]?.jsonArray?.map { element ->
+                val finding = element.jsonObject
+                val severity = when (finding["severity"]?.jsonPrimitive?.content?.lowercase()) {
+                    "blocking" -> ProjectReviewFindingSeverity.Blocking
+                    "warning" -> ProjectReviewFindingSeverity.Warning
+                    "nit" -> ProjectReviewFindingSeverity.Nit
+                    else -> return null
+                }
+                val title = finding["title"]?.jsonPrimitive?.content?.trim().orEmpty()
+                val details = finding["details"]?.jsonPrimitive?.content?.trim().orEmpty()
+                if (title.isBlank() || details.isBlank()) return null
+                val file = finding["file"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotBlank() }
+                val line = finding["line"]?.jsonPrimitive?.content?.toIntOrNull()
+                if (line != null && line <= 0) return null
+                ProjectReviewFinding(severity, title, details, file, line)
+            }.orEmpty()
+            val blocking = findings.count { it.severity == ProjectReviewFindingSeverity.Blocking }
+            if (status == ProjectReviewStatus.Approved && blocking > 0) return null
+            if (status == ProjectReviewStatus.ChangesRequested && blocking == 0) return null
+            ProjectReviewVerdict(status, summary, findings, runId, reviewedBuildRunId, reviewGeneration, atMillis)
+        }.getOrNull()
+    }
+
+    private fun parseVerificationVerdict(
+        text: String?,
+        runId: String,
+        atMillis: Long,
+        reviewedBuildRunId: String?,
+        reviewGeneration: Int,
+    ): ProjectVerificationVerdict? {
+        val output = text.orEmpty()
+        val matches = VERIFICATION_BLOCK.findAll(output).toList()
+        if (matches.size != 1) return null
+        if (matches.single().range.last != output.trimEnd().lastIndex) return null
+        return runCatching {
+            val value = Json.parseToJsonElement(matches.single().groupValues[1]).jsonObject
+            val statusText = value["status"]?.jsonPrimitive?.content ?: return null
+            val status = when (statusText.lowercase()) {
+                "passed" -> ProjectVerificationStatus.Passed
+                "failed" -> ProjectVerificationStatus.Failed
+                else -> return null
+            }
+            val summary = value["summary"]?.jsonPrimitive?.content?.trim().orEmpty()
+            val evidence = value["evidence"]?.jsonArray?.map { it.jsonPrimitive.content.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            val failures = value["failures"]?.jsonArray?.map { it.jsonPrimitive.content.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            if (summary.isBlank()) return null
+            if (status == ProjectVerificationStatus.Passed && (evidence.isEmpty() || failures.isNotEmpty())) return null
+            if (status == ProjectVerificationStatus.Failed && failures.isEmpty()) return null
+            ProjectVerificationVerdict(status, summary, evidence, failures, runId, atMillis, reviewedBuildRunId, reviewGeneration)
+        }.getOrNull()
+    }
+
+    private fun latestCompletedBuildRun(build: ProjectTask): AgentTask? {
+        val latest = build.attempts.filter { it.stage == ProjectWorkflowStage.Build }.maxByOrNull { it.createdAtMillis } ?: return null
+        return currentTask(latest.runId)?.takeIf { it.status == AgentTaskStatus.Completed }
+    }
+
+    private fun currentReviewApproval(review: ProjectTask?, buildRunId: String, generation: Int): ProjectReviewVerdict? =
+        review?.reviewVerdicts?.lastOrNull {
+            it.status == ProjectReviewStatus.Approved &&
+                it.reviewedBuildRunId == buildRunId &&
+                it.reviewGeneration == generation
+        }
+
+    private fun reviewFailureCount(build: ProjectTask, review: ProjectTask?): Int =
+        review?.reviewVerdicts?.count {
+            it.status == ProjectReviewStatus.ChangesRequested && it.reviewGeneration == build.reviewGeneration
+        } ?: 0
+
+    private fun recoverInterruptedWorkflows(
+        workflows: Map<String, ProjectWorkflowState>,
+        tasks: List<AgentTask>,
+    ): Map<String, ProjectWorkflowState> = workflows.mapValues { (_, state) ->
+        val interruptedIds = state.tasks.mapNotNull { workflowTask ->
+            val lastRun = workflowTask.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { id -> tasks.firstOrNull { it.id == id } }
+            workflowTask.id.takeIf {
+                workflowTask.state in setOf(ProjectTaskState.Queued, ProjectTaskState.Running, ProjectTaskState.Waiting) && lastRun?.status == AgentTaskStatus.Unknown
+            }
+        }.toSet()
+        val affectedBuildIds = state.tasks.mapNotNull { workflowTask ->
+            when {
+                workflowTask.id !in interruptedIds -> null
+                workflowTask.kind == ProjectTaskKind.Build -> workflowTask.id
+                workflowTask.kind == ProjectTaskKind.Review || workflowTask.kind == ProjectTaskKind.Verification -> workflowTask.linkedBuildTaskId
+                else -> null
+            }
+        }.toSet()
+        val affectedReviewIds = state.tasks.filter { it.kind == ProjectTaskKind.Build && it.id in affectedBuildIds }
+            .mapNotNull { it.linkedReviewTaskId }.toSet()
+        val affectedVerificationIds = state.tasks.filter { it.kind == ProjectTaskKind.Build && it.id in affectedBuildIds }
+            .mapNotNull { it.linkedVerificationTaskId }.toSet()
+        state.copy(tasks = state.tasks.map { workflowTask ->
+            val affected = workflowTask.id in interruptedIds || workflowTask.id in affectedBuildIds ||
+                workflowTask.id in affectedReviewIds || workflowTask.id in affectedVerificationIds
+            if (affected) workflowTask.copy(
+                state = if (workflowTask.kind == ProjectTaskKind.Review && !workflowTask.reviewEnabled) {
+                    ProjectTaskState.Disabled
+                } else {
+                    ProjectTaskState.NeedsAttention
+                },
+                paused = workflowTask.kind != ProjectTaskKind.Spec,
+                lastError = "the app restarted while this workflow stage was active",
+            ) else workflowTask
+        })
+    }
+
+    private suspend fun migrateLegacyProjectNotes() {
+        val config = runCatching { actionConfig.load() }.getOrNull() ?: return
+        var changedWorkflows = false
+        val projectIdsToClear = mutableSetOf<String>()
+        config.projects.forEach { project ->
+            if (project.notes.isEmpty()) return@forEach
+            val existing = _projects.value[project.id] ?: defaultProjectState(project.id)
+            projectIdsToClear += project.id
+            if (existing.legacyNotesMigrated) return@forEach
+            val block = buildString {
+                append("## Migrated todos\n")
+                project.notes.forEach { note ->
+                    append("- [").append(if (note.completed) 'x' else ' ').append("] ").append(note.title.trim()).append('\n')
+                    if (note.body.isNotEmpty()) {
+                        note.body.lines().forEach { append("  ").append(it).append('\n') }
+                    }
+                }
+            }.trimEnd()
+            val scratchpad = listOf(existing.scratchpad.trim(), block).filter { it.isNotBlank() }.joinToString("\n\n")
+            _projects.update { it + (project.id to existing.copy(scratchpad = scratchpad, legacyNotesMigrated = true)) }
+            changedWorkflows = true
+        }
+        if (changedWorkflows) persist()
+        if (projectIdsToClear.isEmpty()) return
+        actionConfig.save(
+            config.copy(projects = config.projects.map { project ->
+                if (project.id in projectIdsToClear) project.copy(notes = emptyList()) else project
+            }),
+        )
+    }
+
     private fun currentTask(taskId: String): AgentTask? = _tasks.value.firstOrNull { it.id == taskId }
 
     private fun upsertTask(task: AgentTask) {
@@ -943,7 +2363,10 @@ class DesktopAgentRunService(
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
         } else {
-            scope.launch { persist() }
+            scope.launch {
+                persist()
+                reconcileWorkflowRun(taskId)
+            }
         }
     }
 
@@ -957,6 +2380,7 @@ class DesktopAgentRunService(
                     quotaAccess = _quotaAccess.value,
                     lastUsedAgent = _lastUsedAgent.value,
                     maxConcurrent = storedMaxConcurrent,
+                    projectWorkflows = _projects.value,
                 ),
             )
         }

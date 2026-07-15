@@ -26,9 +26,18 @@ internal enum class AndyScreenshotScenario(
     DeviceFiles("desktop-device-files.png", AndyDestination.Files),
     ComputerFiles("desktop-computer-files.png", AndyDestination.ComputerFiles),
     NetworkCapture("desktop-network-capture.png", AndyDestination.Network),
-    ProjectsPopulated("desktop-projects-populated.png", AndyDestination.Actions),
-    ProjectsActions("desktop-projects-actions.png", AndyDestination.Actions),
-    ProjectsNotes("desktop-projects-notes.png", AndyDestination.Actions),
+    ProjectsWorkflows("desktop-projects-workflows.png", AndyDestination.Actions),
+    ProjectsSpecDetail("desktop-projects-spec-detail.png", AndyDestination.Actions),
+    ProjectsBuildDetail("desktop-projects-build-detail.png", AndyDestination.Actions),
+    ProjectsVerification("desktop-projects-verification.png", AndyDestination.Actions),
+    ProjectsReviewBlocking("desktop-projects-review-blocking.png", AndyDestination.Actions),
+    ProjectsReviewDisabled("desktop-projects-review-disabled.png", AndyDestination.Actions),
+    ProjectsProfiles("desktop-projects-profiles.png", AndyDestination.Actions),
+    ProjectsNewSpec("desktop-projects-new-spec.png", AndyDestination.Actions),
+    ProjectsNewBuild("desktop-projects-new-build.png", AndyDestination.Actions),
+    ProjectsRunbook("desktop-projects-runbook.png", AndyDestination.Actions),
+    ProjectsScratchpad("desktop-projects-scratchpad.png", AndyDestination.Actions),
+    ProjectsScratchpadEditor("desktop-projects-scratchpad-editor.png", AndyDestination.Actions),
     AgentsCompletedDiff("desktop-agents-completed-diff.png", AndyDestination.Agents),
     SnapshotsPopulated("desktop-snapshots-populated.png", AndyDestination.Snapshots),
     ControlsHardware("desktop-controls-hardware.png", AndyDestination.Controls),
@@ -61,6 +70,21 @@ internal fun AndyScreenshotApp(
             services = services,
             requestedDestination = scenario.destination,
             contentTopPadding = 0.dp,
+            initialProjectTaskId = when (scenario) {
+                AndyScreenshotScenario.ProjectsSpecDetail -> "spec-checkout"
+                AndyScreenshotScenario.ProjectsBuildDetail -> "build-checkout"
+                AndyScreenshotScenario.ProjectsVerification -> "verify-checkout"
+                AndyScreenshotScenario.ProjectsReviewBlocking -> "review-checkout"
+                AndyScreenshotScenario.ProjectsReviewDisabled -> "review-search"
+                else -> null
+            },
+            initialProjectTab = when (scenario) {
+                AndyScreenshotScenario.ProjectsRunbook -> "runbook"
+                AndyScreenshotScenario.ProjectsScratchpad,
+                AndyScreenshotScenario.ProjectsScratchpadEditor,
+                -> "scratchpad"
+                else -> null
+            },
         )
     }
 }

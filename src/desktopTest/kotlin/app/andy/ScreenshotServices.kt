@@ -52,6 +52,7 @@ internal object ScreenshotServices {
             actionConfig = ScreenshotActionConfig,
             actionRuns = ScreenshotActionRuns,
             agentRuns = ScreenshotAgentRuns,
+            projectWorkflows = ScreenshotProjectWorkflows,
         )
     }
 
@@ -253,7 +254,7 @@ internal object ScreenshotServices {
     }
 
     private object ScreenshotActionConfig : ActionConfigStore {
-        private val config = ActionsConfig(listOf(ActionProject("garden", "Garden Android", "/workspace/sample-app", mapOf("ANDROID_HOME" to "/Android/sdk"), listOf(ProjectAction("test", "Run unit tests", "run", "./gradlew test"), ProjectAction("lint", "Lint", "check", "./gradlew lint")), listOf(ProjectNote("note-1", "Verify checkout empty state", "Capture the validation flow before release.")))))
+        private val config = ActionsConfig(listOf(ActionProject("garden", "Garden Android", "/workspace/sample-app", mapOf("ANDROID_HOME" to "/Android/sdk"), listOf(ProjectAction("test", "Run unit tests", "run", "./gradlew test"), ProjectAction("lint", "Lint", "check", "./gradlew lint")))))
         override suspend fun load() = config
         override suspend fun save(config: ActionsConfig) = Unit
     }
@@ -282,6 +283,7 @@ internal object ScreenshotServices {
         override fun stop(taskId: String) = Unit
         override suspend fun retry(taskId: String) = Unit
         override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+        override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
         override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
         override fun updateGoal(taskId: String, goal: String?) = Unit
@@ -297,5 +299,178 @@ internal object ScreenshotServices {
         override suspend fun fileDiff(taskId: String, relativePath: String) = AgentFileDiff(relativePath, listOf(DiffLine(DiffLineKind.Context, "fun validatePostalCode(value: String) {", 12, 12), DiffLine(DiffLineKind.Deletion, "  return value.isNotBlank()", 13, null), DiffLine(DiffLineKind.Addition, "  return value.matches(POSTAL_CODE)", null, 13)))
         override suspend fun refreshCliStatuses() = Unit
         override suspend fun isGitRepo(dir: String) = true
+    }
+
+    private object ScreenshotProjectWorkflows : ProjectWorkflowService {
+        private val specProfile = ProjectAgentProfile(
+            agent = AgentKind.Codex,
+            model = "gpt-5.6-sol",
+            reasoningEffort = AgentReasoningEffort.ExtraHigh,
+            autonomy = AgentAutonomy.ReadOnly,
+            sandboxMode = AgentSandboxMode.ReadOnly,
+        )
+        private val buildProfile = ProjectAgentProfile(
+            agent = AgentKind.ClaudeCode,
+            model = "sonnet",
+            reasoningEffort = AgentReasoningEffort.Medium,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            useWorktree = true,
+        )
+        private val reviewProfile = ProjectAgentProfile(
+            agent = AgentKind.Codex,
+            model = "gpt-5.6-orbit",
+            reasoningEffort = AgentReasoningEffort.High,
+            autonomy = AgentAutonomy.Standard,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            attachAndyMcp = true,
+        )
+        private val verifyProfile = ProjectAgentProfile(
+            agent = AgentKind.Codex,
+            model = "gpt-5.6-terra",
+            reasoningEffort = AgentReasoningEffort.High,
+            sandboxMode = AgentSandboxMode.ReadOnly,
+        )
+        private val planText = """
+            1. Introduce typed Spec, Build, and Verification records with immutable attempt inputs.
+            2. Freeze the selected plan when creating each Build/Verification pair.
+            3. Alternate fresh build and verifier sessions in one reusable worktree.
+            4. Complete only after a structured passing verifier verdict.
+        """.trimIndent()
+        private val spec = ProjectTask(
+            id = "spec-checkout", projectId = "garden", kind = ProjectTaskKind.Spec,
+            title = "Checkout resilience", instructions = "Plan a robust checkout validation workflow.",
+            profile = specProfile, includeScratchpad = true, state = ProjectTaskState.Completed,
+            planVersions = listOf(
+                ProjectPlanVersion(1, planText.substringBeforeLast("\n"), "run-spec-1", now - 80_000),
+                ProjectPlanVersion(2, planText, "run-spec-2", now - 60_000),
+            ),
+            grillMeEnabled = true,
+            attempts = listOf(
+                ProjectTaskAttempt("run-spec-1", ProjectWorkflowStage.Spec, 1, "Plan checkout", specProfile, "Release before Friday", now - 90_000),
+                ProjectTaskAttempt("run-spec-2", ProjectWorkflowStage.Spec, 2, "Revise the plan", specProfile, "Release before Friday", now - 70_000),
+            ),
+            createdAtMillis = now - 100_000, updatedAtMillis = now - 60_000,
+        )
+        private val build = ProjectTask(
+            id = "build-checkout", projectId = "garden", kind = ProjectTaskKind.Build,
+            title = "Checkout validation", instructions = "Preserve the public reducer API.",
+            profile = buildProfile, includeScratchpad = false, state = ProjectTaskState.NeedsAttention,
+            linkedSpecTaskId = spec.id, linkedReviewTaskId = "review-checkout", linkedVerificationTaskId = "verify-checkout",
+            planSnapshot = ProjectPlanSnapshot(planText, spec.id, 2, "Checkout resilience · v2"),
+            buildNotes = "Keep the existing state shape and add focused regression coverage.",
+            reviewEnabled = true,
+            reviewInstructions = "Pay special attention to validation bypasses and reducer state compatibility.",
+            reviewGeneration = 2,
+            verificationInstructions = "Run compileKotlinDesktop and the checkout reducer tests.",
+            maxBudgetUsd = 2.0, paused = true, workspacePath = "/workspace/.andy/worktrees/checkout",
+            worktreePath = "/workspace/.andy/worktrees/checkout", branchName = "andy/claude/checkout-validation",
+            worktreeOwnerRunId = "run-build-1",
+            attempts = listOf(
+                ProjectTaskAttempt("run-build-1", ProjectWorkflowStage.Build, 1, "Implement frozen plan", buildProfile, null, now - 50_000),
+                ProjectTaskAttempt("run-build-2", ProjectWorkflowStage.Build, 2, "Fix verifier findings", buildProfile, null, now - 25_000),
+            ),
+            lastError = "review requested changes; inspect the blocking validation finding",
+            createdAtMillis = now - 58_000, updatedAtMillis = now - 5_000,
+        )
+        private val review = ProjectTask(
+            id = "review-checkout", projectId = "garden", kind = ProjectTaskKind.Review,
+            title = "Review Checkout validation", instructions = build.reviewInstructions,
+            profile = reviewProfile, includeScratchpad = false, state = ProjectTaskState.Failed,
+            linkedSpecTaskId = spec.id, linkedBuildTaskId = build.id, linkedVerificationTaskId = "verify-checkout",
+            planSnapshot = build.planSnapshot, reviewEnabled = true, reviewInstructions = build.reviewInstructions,
+            reviewGeneration = 2,
+            attempts = listOf(
+                ProjectTaskAttempt("run-review-1", ProjectWorkflowStage.Review, 1, "Review first build", reviewProfile, null, now - 43_000, "run-build-1", 2),
+                ProjectTaskAttempt("run-review-2", ProjectWorkflowStage.Review, 2, "Review rebuilt checkout", reviewProfile, null, now - 10_000, "run-build-2", 2),
+            ),
+            reviewVerdicts = listOf(
+                ProjectReviewVerdict(
+                    ProjectReviewStatus.Approved,
+                    "The first implementation is maintainable and aligned with the plan.",
+                    listOf(ProjectReviewFinding(ProjectReviewFindingSeverity.Nit, "Test naming", "The reducer case name could be more direct.")),
+                    "run-review-1", "run-build-1", 2, now - 41_000,
+                ),
+                ProjectReviewVerdict(
+                    ProjectReviewStatus.ChangesRequested,
+                    "One validation path can still accept an empty postal code.",
+                    listOf(
+                        ProjectReviewFinding(
+                            ProjectReviewFindingSeverity.Blocking,
+                            "Empty postal code bypasses validation",
+                            "The fallback branch returns success before the shared address validator runs.",
+                            "src/commonMain/kotlin/checkout/CheckoutReducer.kt",
+                            184,
+                        ),
+                        ProjectReviewFinding(ProjectReviewFindingSeverity.Warning, "Missing negative case", "Add coverage for whitespace-only postal codes."),
+                    ),
+                    "run-review-2", "run-build-2", 2, now - 5_000,
+                ),
+            ),
+            createdAtMillis = now - 58_000, updatedAtMillis = now - 5_000,
+        )
+        private val verification = ProjectTask(
+            id = "verify-checkout", projectId = "garden", kind = ProjectTaskKind.Verification,
+            title = "Verify Checkout validation", instructions = "Run compileKotlinDesktop and the checkout reducer tests.",
+            profile = verifyProfile, includeScratchpad = false, state = ProjectTaskState.Waiting,
+            linkedSpecTaskId = spec.id, linkedBuildTaskId = build.id,
+            planSnapshot = build.planSnapshot, verificationInstructions = build.verificationInstructions,
+            attempts = listOf(
+                ProjectTaskAttempt("run-verify-1", ProjectWorkflowStage.Verification, 1, "Verify attempt one", verifyProfile, null, now - 35_000, "run-build-1", 2),
+            ),
+            verdicts = listOf(
+                ProjectVerificationVerdict(ProjectVerificationStatus.Failed, "The empty postal-code case still regresses.", listOf("Desktop compilation passed", "41 reducer tests passed"), listOf("CheckoutReducerTest.empty postal code failed"), "run-verify-1", now - 30_000, "run-build-1", 2),
+            ),
+            createdAtMillis = now - 58_000, updatedAtMillis = now - 5_000,
+        )
+        private val completedBuild = ProjectTask(
+            id = "build-search", projectId = "garden", kind = ProjectTaskKind.Build,
+            title = "Search indexing", instructions = "", profile = buildProfile.copy(useWorktree = false),
+            includeScratchpad = false, state = ProjectTaskState.Completed,
+            linkedReviewTaskId = "review-search", linkedVerificationTaskId = "verify-search",
+            planSnapshot = ProjectPlanSnapshot("Keep indexing incremental and deterministic."),
+            reviewEnabled = false, reviewGeneration = 1, verificationInstructions = "Run search index tests.",
+            attempts = listOf(ProjectTaskAttempt("run-build-search", ProjectWorkflowStage.Build, 1, "Build search indexing", buildProfile, null, now - 180_000)),
+            createdAtMillis = now - 200_000, updatedAtMillis = now - 120_000,
+        )
+        private val disabledReview = ProjectTask(
+            id = "review-search", projectId = "garden", kind = ProjectTaskKind.Review,
+            title = "Review Search indexing", instructions = "Review index invalidation.", profile = reviewProfile,
+            includeScratchpad = false, state = ProjectTaskState.Disabled, linkedBuildTaskId = completedBuild.id,
+            linkedVerificationTaskId = "verify-search", planSnapshot = completedBuild.planSnapshot,
+            reviewEnabled = false, reviewInstructions = "Review index invalidation.", reviewGeneration = 1,
+            attempts = listOf(ProjectTaskAttempt("run-review-search", ProjectWorkflowStage.Review, 1, "Review search", reviewProfile, null, now - 160_000, "run-build-search", 1)),
+            reviewVerdicts = listOf(ProjectReviewVerdict(ProjectReviewStatus.Approved, "Index invalidation is scoped and deterministic.", emptyList(), "run-review-search", "run-build-search", 1, now - 150_000)),
+            createdAtMillis = now - 190_000, updatedAtMillis = now - 100_000,
+        )
+        private val completedVerification = ProjectTask(
+            id = "verify-search", projectId = "garden", kind = ProjectTaskKind.Verification,
+            title = "Verify Search indexing", instructions = "Run search index tests.", profile = verifyProfile,
+            includeScratchpad = false, state = ProjectTaskState.Completed, linkedBuildTaskId = completedBuild.id,
+            planSnapshot = completedBuild.planSnapshot, verificationInstructions = "Run search index tests.",
+            createdAtMillis = now - 190_000, updatedAtMillis = now - 100_000,
+        )
+        override val projects = MutableStateFlow(
+            mapOf(
+                "garden" to ProjectWorkflowState(
+                    projectId = "garden",
+                    scratchpad = "Release before Friday.\n\nKeep checkout state source-compatible.\n\nUseful command: ./gradlew desktopTest --tests '*CheckoutReducerTest*'",
+                    profiles = mapOf(ProjectTaskKind.Spec to specProfile, ProjectTaskKind.Build to buildProfile, ProjectTaskKind.Review to reviewProfile, ProjectTaskKind.Verification to verifyProfile),
+                    tasks = listOf(spec, build, review, verification, completedBuild, disabledReview, completedVerification),
+                    legacyNotesMigrated = true,
+                ),
+            ),
+        )
+        override suspend fun ensureProject(projectId: String) = Unit
+        override suspend fun updateScratchpad(projectId: String, text: String) = Unit
+        override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit
+        override suspend fun saveSpec(draft: ProjectSpecDraft) = spec.id
+        override suspend fun runSpec(taskId: String, revisionRequest: String?) = Unit
+        override suspend fun saveBuildPair(draft: ProjectBuildPairDraft) = build.id
+        override suspend fun startBuildPair(buildTaskId: String) = Unit
+        override fun pauseBuildPair(buildTaskId: String) = Unit
+        override fun stopBuildPair(buildTaskId: String) = Unit
+        override suspend fun resumeBuildPair(buildTaskId: String) = Unit
+        override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
+        override suspend fun deleteProject(projectId: String) = Unit
     }
 }

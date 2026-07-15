@@ -920,6 +920,7 @@ fun createWebServices(): AndyServices {
         actionConfig = EmptyActionConfigStore,
         actionRuns = UnavailableActionRunService,
         agentRuns = UnavailableAgentRunService,
+        projectWorkflows = UnavailableProjectWorkflowService,
         capabilities = PlatformCapabilities.Web,
         web = WebServices(connection, storage),
     )

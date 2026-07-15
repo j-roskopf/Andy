@@ -54,6 +54,8 @@ fun AndyApp(
     onPopOutMirrorRequestConsumed: () -> Unit = {},
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
+    initialProjectTaskId: String? = null,
+    initialProjectTab: String? = null,
 ) {
     AndyTheme {
         AndyShell(
@@ -64,6 +66,8 @@ fun AndyApp(
             onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
             onPopOutMirror = onPopOutMirror,
             contentTopPadding = contentTopPadding,
+            initialProjectTaskId = initialProjectTaskId,
+            initialProjectTab = initialProjectTab,
         )
     }
 }

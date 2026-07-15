@@ -164,9 +164,25 @@ internal fun PanelCard(
 }
 
 @Composable
-internal fun EmptyState(text: String) {
-    Box(Modifier.fillMaxWidth().height(150.dp).background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)), contentAlignment = Alignment.Center) {
-        Text(text.lowercase(), color = TextSecondary, fontFamily = MonoFont)
+internal fun EmptyState(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(150.dp)
+            .background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = AndySpace.S5, vertical = AndySpace.S4),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text.lowercase(),
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

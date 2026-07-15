@@ -213,6 +213,8 @@ interface AgentRunService {
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
     )
+    /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
+    fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
     /** Holds a follow-up until the active run completes successfully. */
     fun queueFollowUp(
         taskId: String,
@@ -238,6 +240,22 @@ interface AgentRunService {
     suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff?
     suspend fun refreshCliStatuses()
     suspend fun isGitRepo(dir: String): Boolean
+}
+
+interface ProjectWorkflowService {
+    val projects: StateFlow<Map<String, ProjectWorkflowState>>
+    suspend fun ensureProject(projectId: String)
+    suspend fun updateScratchpad(projectId: String, text: String)
+    suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile)
+    suspend fun saveSpec(draft: ProjectSpecDraft): String
+    suspend fun runSpec(taskId: String, revisionRequest: String? = null)
+    suspend fun saveBuildPair(draft: ProjectBuildPairDraft): String
+    suspend fun startBuildPair(buildTaskId: String)
+    fun pauseBuildPair(buildTaskId: String)
+    fun stopBuildPair(buildTaskId: String)
+    suspend fun resumeBuildPair(buildTaskId: String)
+    suspend fun deleteTask(taskId: String, cascade: Boolean = false)
+    suspend fun deleteProject(projectId: String)
 }
 
 data class CommandResult(
@@ -496,6 +514,7 @@ data class AndyServices(
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
     val agentRuns: AgentRunService,
+    val projectWorkflows: ProjectWorkflowService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

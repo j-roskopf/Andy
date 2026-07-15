@@ -181,6 +181,7 @@ object UnavailableAgentRunService : AgentRunService {
     override fun stop(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+    override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
     override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
@@ -196,4 +197,20 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = null
     override suspend fun refreshCliStatuses() = Unit
     override suspend fun isGitRepo(dir: String) = false
+}
+
+object UnavailableProjectWorkflowService : ProjectWorkflowService {
+    override val projects = MutableStateFlow(emptyMap<String, ProjectWorkflowState>())
+    override suspend fun ensureProject(projectId: String) = Unit
+    override suspend fun updateScratchpad(projectId: String, text: String) = Unit
+    override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit
+    override suspend fun saveSpec(draft: ProjectSpecDraft): String = error(BrowserUnavailable)
+    override suspend fun runSpec(taskId: String, revisionRequest: String?) = error(BrowserUnavailable)
+    override suspend fun saveBuildPair(draft: ProjectBuildPairDraft): String = error(BrowserUnavailable)
+    override suspend fun startBuildPair(buildTaskId: String) = Unit
+    override fun pauseBuildPair(buildTaskId: String) = Unit
+    override fun stopBuildPair(buildTaskId: String) = Unit
+    override suspend fun resumeBuildPair(buildTaskId: String) = Unit
+    override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
+    override suspend fun deleteProject(projectId: String) = Unit
 }
