@@ -873,7 +873,7 @@ private class WorkflowAdapter(
     override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
 
     override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> {
-        val final = when (line) {
+        val final = when (line.trim()) {
             "spec" -> "1. Add typed workflow models\n2. Implement the guarded loop\n3. Verify it"
             "build" -> "Implementation complete; checks are ready for the verifier."
             "review-approved" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Code matches the plan\",\"findings\":[]}</andy_review>"
