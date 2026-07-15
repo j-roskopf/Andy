@@ -131,7 +131,7 @@ internal fun SettingsScreen(
     services: AndyServices
 ) {
     services.web?.let { web ->
-        WebSettingsScreen(web)
+        WebSettingsScreen(web, workspaceState, onUpdateWorkspace)
         return
     }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
@@ -519,7 +519,11 @@ private fun AgentNotificationsPanel(
 }
 
 @Composable
-private fun WebSettingsScreen(web: WebServices) {
+private fun WebSettingsScreen(
+    web: WebServices,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val connection by web.connection.state.collectAsState()
     val storage by web.storage.state.collectAsState()
@@ -534,6 +538,8 @@ private fun WebSettingsScreen(web: WebServices) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        AppearancePanel(workspaceState, onUpdateWorkspace)
 
         PanelCard {
             Text("Connection", color = TextPrimary, fontWeight = FontWeight.Bold)
