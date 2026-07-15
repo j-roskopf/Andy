@@ -321,6 +321,10 @@ class DesktopAgentRunService(
         }
         val removedReviewId = previousReviewId.takeIf { it != null && reviewId == null }
         val reviewWasEnabled = existingBuild?.reviewEnabled == true
+        val verificationWasPresent = previousVerificationId != null
+        val invalidatingVerification = verificationInstructions.isNotBlank() &&
+            !verificationWasPresent &&
+            existingBuild?.attempts?.isNotEmpty() == true
         val existingReview = reviewId?.let(::projectTask) ?: previousReview
         val reviewProfile = draft.reviewProfile.normalizedFor(ProjectTaskKind.Review)
         val reviewInstructions = draft.reviewInstructions.trim()
@@ -338,6 +342,7 @@ class DesktopAgentRunService(
             else -> existingBuild?.reviewGeneration ?: 0
         }
         val reopeningCompleted = invalidatingReview && existingBuild?.state == ProjectTaskState.Completed
+        val reopeningForVerification = invalidatingVerification && existingBuild?.state == ProjectTaskState.Completed
         val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild.reviewReopenedCompleted == true
         val pauseForReviewChange = (draft.reviewEnabled != reviewWasEnabled || reviewGateChanged) &&
             existingBuild?.attempts?.isNotEmpty() == true
@@ -390,14 +395,14 @@ class DesktopAgentRunService(
             maxBudgetUsd = draft.maxBudgetUsd?.takeIf { it > 0.0 },
             state = when {
                 restoringCompleted -> ProjectTaskState.Completed
-                reopeningCompleted -> ProjectTaskState.Paused
+                reopeningCompleted || reopeningForVerification -> ProjectTaskState.Paused
                 invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
                 !draft.reviewEnabled && reviewWasEnabled && existingBuild.state != ProjectTaskState.Completed -> ProjectTaskState.Paused
                 else -> existingBuild?.state ?: ProjectTaskState.Draft
             },
             paused = when {
                 restoringCompleted -> false
-                reopeningCompleted || pauseForReviewChange -> true
+                reopeningCompleted || reopeningForVerification || pauseForReviewChange -> true
                 else -> existingBuild?.paused ?: false
             },
             updatedAtMillis = now,
@@ -463,6 +468,7 @@ class DesktopAgentRunService(
                 verificationInstructions = verificationInstructions,
                 state = when {
                     restoringCompleted -> ProjectTaskState.Completed
+                    reopeningForVerification -> ProjectTaskState.Draft
                     invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
                     !draft.reviewEnabled && reviewWasEnabled && existingBuild.state != ProjectTaskState.Completed -> ProjectTaskState.Waiting
                     else -> existingVerification?.state ?: ProjectTaskState.Draft

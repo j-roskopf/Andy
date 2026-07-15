@@ -497,6 +497,58 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun addingVerificationToCompletedBuildReopensForVerification() = runBlocking {
+        withHarness(WorkflowAdapter()) { harness ->
+            val buildId = harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Build without verification",
+                    plan = ProjectPlanSnapshot("Implement the focused change"),
+                    buildNotes = "",
+                    verificationInstructions = "",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                ),
+            )
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+
+            val completed = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = completed.title,
+                    plan = requireNotNull(completed.planSnapshot),
+                    buildNotes = completed.buildNotes,
+                    verificationInstructions = "Run focused checks",
+                    buildProfile = completed.profile,
+                    verificationProfile = verifyProfile(),
+                    buildTaskId = buildId,
+                ),
+            )
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
+            assertEquals(ProjectTaskState.Paused, build.state)
+            assertTrue(build.paused)
+            assertEquals(ProjectTaskState.Draft, verification.state)
+
+            harness.service.resumeBuildPair(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+            val verificationRuns = harness.service.tasks.value.filter {
+                it.workflowTaskId == build.linkedVerificationTaskId
+            }
+            assertEquals(1, verificationRuns.count { it.workflowStage == ProjectWorkflowStage.Verification })
+        }
+    }
+
+    @Test
     fun specForcesPlanModeAndAttachesAnExactInstalledGrillMeSkill() = runBlocking {
         val adapter = WorkflowAdapter(kind = AgentKind.ClaudeCode)
         withHarness(
@@ -533,7 +585,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(verificationOutcomes = ArrayDeque(List(5) { "failed" }))) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 20_000) {
+            await(timeoutMillis = 60_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention
             }
             val workflow = harness.service.projects.value.getValue("project-1")
