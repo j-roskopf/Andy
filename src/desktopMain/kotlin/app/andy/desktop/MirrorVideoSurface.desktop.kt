@@ -520,15 +520,19 @@ private class MirrorPanel(
             val sourceHeight = (overlay.sourceHeight ?: frameImage.height).coerceAtLeast(1)
             var x = rect.x.toFloat()
             val stepX = overlay.gridSize * rect.width / sourceWidth
-            while (x <= rect.x + rect.width) {
-                g2.drawLine(x.roundToInt(), rect.y, x.roundToInt(), rect.y + rect.height)
-                x += stepX
+            if (stepX > 0f) {
+                while (x <= rect.x + rect.width) {
+                    g2.drawLine(x.roundToInt(), rect.y, x.roundToInt(), rect.y + rect.height)
+                    x += stepX
+                }
             }
             var y = rect.y.toFloat()
             val stepY = overlay.gridSize * rect.height / sourceHeight
-            while (y <= rect.y + rect.height) {
-                g2.drawLine(rect.x, y.roundToInt(), rect.x + rect.width, y.roundToInt())
-                y += stepY
+            if (stepY > 0f) {
+                while (y <= rect.y + rect.height) {
+                    g2.drawLine(rect.x, y.roundToInt(), rect.x + rect.width, y.roundToInt())
+                    y += stepY
+                }
             }
         }
         if (overlay.showRuler) {

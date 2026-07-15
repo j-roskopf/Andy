@@ -141,6 +141,11 @@ static void draw_picker_magnifier(const AndyMirrorOverlay overlay, NSRect bounds
     const int sample_radius = 10;
     const size_t sample_size = (size_t) (sample_radius * 2 + 1);
     uint8_t *rgba = calloc(sample_size * sample_size, 4);
+    if (!rgba) {
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(pixels);
+        return;
+    }
     const uint8_t *y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
     const uint8_t *uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
     const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);

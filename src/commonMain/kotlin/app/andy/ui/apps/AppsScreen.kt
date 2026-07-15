@@ -114,7 +114,23 @@ internal fun AppsScreen(
         appDetailsLoading = false
         permissions = emptyList()
         activities = emptyList()
-        refresh()
+        val currentSerial = serial ?: run {
+            status = "Select an online device"
+            return@LaunchedEffect
+        }
+        status = "Loading packages..."
+        runCatching { apps.listApps(currentSerial) }
+            .onSuccess { loadedRows ->
+                rows = loadedRows
+                selected = selected?.let { current ->
+                    loadedRows.firstOrNull { it.packageName == current.packageName }
+                }
+                status = "${loadedRows.size} apps"
+            }
+            .onFailure {
+                rows = emptyList()
+                status = "Unable to load packages"
+            }
     }
     val filtered = rows.filter { app -> query.isBlank() || app.packageName.contains(query, true) || app.label?.contains(query, true) == true }
 
