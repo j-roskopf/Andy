@@ -41,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentNotificationSound
+import app.andy.model.AgentNotificationTiming
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AvailableUpdate
@@ -142,6 +144,8 @@ internal fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
 
         PanelCard {
             Text("HTTP debug proxy", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -406,6 +410,54 @@ internal fun SettingsScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AgentNotificationsPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    services: AndyServices,
+) {
+    var timingExpanded by remember { mutableStateOf(false) }
+    var soundExpanded by remember { mutableStateOf(false) }
+    val sound = AgentNotificationSound.entries.firstOrNull { it.id == workspace.agentNotificationSoundId } ?: AgentNotificationSound.Chime
+    PanelCard {
+        Text("Agent notifications", color = TextPrimary, fontWeight = FontWeight.Bold)
+        Text("Choose how Andy calls attention to completed work and input requests.", color = TextSecondary, fontSize = 12.sp)
+        listOf(
+            "OS notifications" to workspace.agentOsNotificationsEnabled,
+            "Notification sound" to workspace.agentNotificationSoundEnabled,
+            "Dock icon badge" to workspace.agentIconBadgeEnabled,
+        ).forEach { (label, checked) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked, { value -> update { state -> when (label) {
+                    "OS notifications" -> state.copy(agentOsNotificationsEnabled = value)
+                    "Notification sound" -> state.copy(agentNotificationSoundEnabled = value)
+                    else -> state.copy(agentIconBadgeEnabled = value)
+                } } })
+                Text(label, color = TextPrimary, fontSize = 13.sp)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("When to notify", color = TextSecondary, fontSize = 13.sp)
+            Box {
+                Button(onClick = { timingExpanded = true }) { Text(if (workspace.agentNotificationTiming == AgentNotificationTiming.Always) "Always" else "Background only") }
+                DropdownMenu(timingExpanded, { timingExpanded = false }) {
+                    AgentNotificationTiming.entries.forEach { timing -> DropdownMenuItem({ Text(if (timing == AgentNotificationTiming.Always) "Always" else "Background only") }, { update { it.copy(agentNotificationTiming = timing) }; timingExpanded = false }) }
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Sound", color = if (workspace.agentNotificationSoundEnabled) TextSecondary else TextSecondary.copy(alpha = .5f), fontSize = 13.sp)
+            Box {
+                Button(onClick = { soundExpanded = true }, enabled = workspace.agentNotificationSoundEnabled) { Text(sound.label) }
+                DropdownMenu(soundExpanded, { soundExpanded = false }) {
+                    AgentNotificationSound.entries.forEach { option -> DropdownMenuItem({ Text(option.label) }, { update { it.copy(agentNotificationSoundId = option.id) }; soundExpanded = false }) }
+                }
+            }
+            Button(onClick = { services.notificationSounds.play(sound.id) }) { Text("Preview") }
         }
     }
 }

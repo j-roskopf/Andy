@@ -167,6 +167,21 @@ interface WorkspaceStore {
     suspend fun save(state: WorkspaceState)
 }
 
+enum class AgentAttentionKind { Completed, NeedsInput, Failed }
+
+data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
+data class OpenAgentTaskRequest(val taskId: String, val projectId: String?)
+
+interface OsNotificationService { fun show(event: AgentAttentionEvent) }
+interface NotificationSoundPlayer { fun play(soundId: String) }
+interface AgentAttentionCoordinator {
+    fun start()
+    fun onTasksChanged(tasks: List<AgentTask>)
+}
+
+object NoopOsNotificationService : OsNotificationService { override fun show(event: AgentAttentionEvent) = Unit }
+object NoopNotificationSoundPlayer : NotificationSoundPlayer { override fun play(soundId: String) = Unit }
+
 interface ActionConfigStore {
     suspend fun load(): ActionsConfig
     suspend fun save(config: ActionsConfig)
@@ -201,6 +216,8 @@ interface AgentRunService {
      * slash completion never offers skills from a different provider's convention.
      */
     fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>>
+    /** Re-scans the provider's skill locations after an external installation. */
+    fun refreshSkills(agent: AgentKind, directory: String?)
     suspend fun createAndStart(draft: AgentTaskDraft): AgentTask
     /** Starts a fresh writable provider run from a completed plan-mode task. */
     suspend fun startImplementation(taskId: String)
@@ -254,6 +271,10 @@ interface ProjectWorkflowService {
     fun pauseBuildPair(buildTaskId: String)
     fun stopBuildPair(buildTaskId: String)
     suspend fun resumeBuildPair(buildTaskId: String)
+    /** Adds a freeform fix thread to a completed workflow without auto-running its gates. */
+    suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String?
+    /** Runs one explicit cumulative review after manual recovery testing is finished. */
+    suspend fun startRecoveryReview(buildTaskId: String): String?
     suspend fun deleteTask(taskId: String, cascade: Boolean = false)
     suspend fun deleteProject(projectId: String)
 }
@@ -515,6 +536,7 @@ data class AndyServices(
     val actionRuns: ActionRunService,
     val agentRuns: AgentRunService,
     val projectWorkflows: ProjectWorkflowService,
+    val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

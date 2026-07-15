@@ -154,6 +154,7 @@ class DesktopAgentRunService(
             _projects.value = recoverInterruptedWorkflows(state.projectWorkflows, state.tasks)
                 .mapValues { (_, workflow) -> workflow.withMissingProfiles() }
             migrateLegacyProjectNotes()
+            backfillCursorPlansFromTranscripts()
             ready.complete(Unit)
             scope.launch(Dispatchers.IO) { restoreProviderQuotas(state.tasks) }
             refreshCliStatuses()
@@ -177,6 +178,18 @@ class DesktopAgentRunService(
             }
         }
         return flow
+    }
+
+    override fun refreshSkills(agent: AgentKind, directory: String?) {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = SkillScope(agent, normalizedDirectory)
+        val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
+        loadedSkillScopes.add(skillScope)
+        scope.launch(Dispatchers.IO) {
+            flow.value = discoverSkills(agent, normalizedDirectory)
+        }
     }
 
     override suspend fun ensureProject(projectId: String) {
@@ -276,7 +289,6 @@ class DesktopAgentRunService(
         ready.await()
         require(draft.title.isNotBlank()) { "build title is required" }
         require(draft.plan.text.isNotBlank()) { "implementation plan is required" }
-        require(draft.verificationInstructions.isNotBlank()) { "verification instructions are required" }
         ensureProject(draft.projectId)
         val now = System.currentTimeMillis()
         val existingBuild = draft.buildTaskId?.let(::projectTask)
@@ -291,7 +303,14 @@ class DesktopAgentRunService(
                 ),
         ) { "active build pairs cannot be edited" }
         val buildId = existingBuild?.id ?: workflowId("build")
-        val verificationId = existingBuild?.linkedVerificationTaskId ?: workflowId("verify")
+        val verificationInstructions = draft.verificationInstructions.trim()
+        val previousVerificationId = existingBuild?.linkedVerificationTaskId
+        val verificationId = if (verificationInstructions.isNotBlank()) {
+            previousVerificationId ?: workflowId("verify")
+        } else {
+            null
+        }
+        val removedVerificationId = previousVerificationId.takeIf { it != null && verificationId == null }
         val previousReviewId = existingBuild?.linkedReviewTaskId
         val previousReview = previousReviewId?.let(::projectTask)
         val retainDisabledReview = previousReview?.let { it.attempts.isNotEmpty() || it.reviewVerdicts.isNotEmpty() } == true
@@ -319,7 +338,7 @@ class DesktopAgentRunService(
             else -> existingBuild?.reviewGeneration ?: 0
         }
         val reopeningCompleted = invalidatingReview && existingBuild?.state == ProjectTaskState.Completed
-        val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild?.reviewReopenedCompleted == true
+        val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild.reviewReopenedCompleted == true
         val pauseForReviewChange = (draft.reviewEnabled != reviewWasEnabled || reviewGateChanged) &&
             existingBuild?.attempts?.isNotEmpty() == true
         val buildProfile = draft.buildProfile.normalizedFor(ProjectTaskKind.Build).let { requested ->
@@ -345,7 +364,7 @@ class DesktopAgentRunService(
             reviewEnabled = draft.reviewEnabled,
             reviewInstructions = reviewInstructions,
             reviewGeneration = reviewGeneration,
-            verificationInstructions = draft.verificationInstructions.trim(),
+            verificationInstructions = verificationInstructions,
             maxBudgetUsd = draft.maxBudgetUsd,
             createdAtMillis = now,
             updatedAtMillis = now,
@@ -367,13 +386,13 @@ class DesktopAgentRunService(
                 restoringCompleted -> false
                 else -> existingBuild?.reviewReopenedCompleted ?: false
             },
-            verificationInstructions = draft.verificationInstructions.trim(),
+            verificationInstructions = verificationInstructions,
             maxBudgetUsd = draft.maxBudgetUsd?.takeIf { it > 0.0 },
             state = when {
                 restoringCompleted -> ProjectTaskState.Completed
                 reopeningCompleted -> ProjectTaskState.Paused
                 invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Paused
-                !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Paused
+                !draft.reviewEnabled && reviewWasEnabled && existingBuild.state != ProjectTaskState.Completed -> ProjectTaskState.Paused
                 else -> existingBuild?.state ?: ProjectTaskState.Draft
             },
             paused = when {
@@ -420,40 +439,42 @@ class DesktopAgentRunService(
                 updatedAtMillis = now,
             )
         }
-        val existingVerification = projectTask(verificationId)
-        val verification = (existingVerification ?: ProjectTask(
-            id = verificationId,
-            projectId = draft.projectId,
-            kind = ProjectTaskKind.Verification,
-            title = "Verify ${draft.title.trim()}",
-            instructions = draft.verificationInstructions.trim(),
-            profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
-            includeScratchpad = draft.includeScratchpadInVerification,
-            linkedSpecTaskId = draft.plan.sourceSpecTaskId,
-            linkedBuildTaskId = buildId,
-            planSnapshot = draft.plan,
-            verificationInstructions = draft.verificationInstructions.trim(),
-            createdAtMillis = now,
-            updatedAtMillis = now,
-        )).copy(
-            title = "Verify ${draft.title.trim()}",
-            instructions = draft.verificationInstructions.trim(),
-            profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
-            includeScratchpad = draft.includeScratchpadInVerification,
-            verificationInstructions = draft.verificationInstructions.trim(),
-            state = when {
-                restoringCompleted -> ProjectTaskState.Completed
-                invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
-                !draft.reviewEnabled && reviewWasEnabled && existingBuild?.state != ProjectTaskState.Completed -> ProjectTaskState.Waiting
-                else -> existingVerification?.state ?: ProjectTaskState.Draft
-            },
-            updatedAtMillis = now,
-        )
+        val verification = verificationId?.let { id ->
+            val existingVerification = projectTask(id)
+            (existingVerification ?: ProjectTask(
+                id = id,
+                projectId = draft.projectId,
+                kind = ProjectTaskKind.Verification,
+                title = "Verify ${draft.title.trim()}",
+                instructions = verificationInstructions,
+                profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
+                includeScratchpad = draft.includeScratchpadInVerification,
+                linkedSpecTaskId = draft.plan.sourceSpecTaskId,
+                linkedBuildTaskId = buildId,
+                planSnapshot = draft.plan,
+                verificationInstructions = verificationInstructions,
+                createdAtMillis = now,
+                updatedAtMillis = now,
+            )).copy(
+                title = "Verify ${draft.title.trim()}",
+                instructions = verificationInstructions,
+                profile = draft.verificationProfile.normalizedFor(ProjectTaskKind.Verification),
+                includeScratchpad = draft.includeScratchpadInVerification,
+                verificationInstructions = verificationInstructions,
+                state = when {
+                    restoringCompleted -> ProjectTaskState.Completed
+                    invalidatingReview && existingBuild?.attempts?.isNotEmpty() == true -> ProjectTaskState.Waiting
+                    !draft.reviewEnabled && reviewWasEnabled && existingBuild.state != ProjectTaskState.Completed -> ProjectTaskState.Waiting
+                    else -> existingVerification?.state ?: ProjectTaskState.Draft
+                },
+                updatedAtMillis = now,
+            )
+        }
         updateProject(draft.projectId) { state ->
             val pair = listOfNotNull(build, review, verification).associateBy { it.id }
             val existingIds = state.tasks.mapTo(mutableSetOf()) { it.id }
             state.copy(
-                tasks = state.tasks.filterNot { it.id == removedReviewId }.map { pair[it.id] ?: it } +
+                tasks = state.tasks.filterNot { it.id == removedReviewId || it.id == removedVerificationId }.map { pair[it.id] ?: it } +
                     listOfNotNull(build, review, verification).filterNot { it.id in existingIds },
             )
         }
@@ -520,8 +541,93 @@ class DesktopAgentRunService(
             buildRun == null -> startBuildAttempt(buildTaskId)
             build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested -> startBuildAttempt(buildTaskId)
             build.reviewEnabled && currentReviewApproval(review, buildRun.id, build.reviewGeneration) == null -> startReviewAttempt(buildTaskId)
-            else -> startVerificationAttempt(buildTaskId)
+            build.linkedVerificationTaskId != null -> startVerificationAttempt(buildTaskId)
+            else -> completeBuildWithoutVerification(buildTaskId)
         }
+    }
+
+    override suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String? {
+        ready.await()
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build }
+            ?: return "This Build workflow is no longer available."
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        when {
+            followUp.isBlank() -> return "Describe the issue found during testing before starting a follow-up."
+            !build.recoveryMode && build.state != ProjectTaskState.Completed -> return "Finish or pause the current workflow stage before adding a follow-up."
+            isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) -> return "Wait for the current workflow run to finish before adding another follow-up."
+            workflowBudgetReached(build) -> return "The workflow's reported-cost guardrail has been reached."
+        }
+        val project = _projects.value[build.projectId] ?: return "This Project is no longer available."
+        val directory = projectDirectory(build.projectId) ?: return "The Project directory is unavailable."
+        val recoveryWorkspace = build.worktreePath ?: build.workspacePath ?: directory
+        if (!File(recoveryWorkspace).isDirectory) {
+            setPairAttention(build, "the retained workflow worktree is missing")
+            persist()
+            return "The retained workflow workspace is missing."
+        }
+        val beginsRecovery = !build.recoveryMode
+        val generation = if (beginsRecovery) build.reviewGeneration + 1 else build.reviewGeneration
+        val attempt = build.attempts.count { it.stage == ProjectWorkflowStage.Build } + 1
+        val scratchpad = project.scratchpad.takeIf { build.includeScratchpad && it.isNotBlank() }
+        val prompt = recoveryBuildPrompt(build, followUp.trim(), scratchpad)
+        updateProjectTask(build.id) {
+            it.copy(
+                state = ProjectTaskState.Queued,
+                paused = false,
+                recoveryMode = true,
+                reviewStale = true,
+                reviewGeneration = generation,
+                lastError = null,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+        review?.let { item ->
+            updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting, reviewGeneration = generation, lastError = null) }
+        }
+        persist()
+        val run = createAndStart(
+            build.profile.toAgentDraft(
+                title = "Build follow-up: ${build.title}",
+                prompt = prompt,
+                projectId = build.projectId,
+                directory = directory,
+                planMode = false,
+                workflowTaskId = build.id,
+                stage = ProjectWorkflowStage.Build,
+                attempt = attempt,
+                existingWorktreePath = recoveryWorkspace,
+                existingBranchName = build.branchName,
+            ),
+        )
+        appendAttempt(build.id, run, ProjectWorkflowStage.Build, attempt, prompt, build.profile, scratchpad, isRecoveryFollowUp = true)
+        updateProjectTask(build.id) {
+            it.copy(
+                workspacePath = run.cwd ?: it.workspacePath,
+                worktreePath = run.worktreePath ?: it.worktreePath,
+                branchName = run.branchName ?: it.branchName,
+                worktreeOwnerRunId = if (run.ownsWorktree) run.id else it.worktreeOwnerRunId,
+            )
+        }
+        persist()
+        reconcileWorkflowRun(run.id)
+        return null
+    }
+
+    override suspend fun startRecoveryReview(buildTaskId: String): String? {
+        ready.await()
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build }
+            ?: return "This Build workflow is no longer available."
+        val review = build.linkedReviewTaskId?.let(::projectTask) ?: return "Enable a Review gate before starting a recovery review."
+        val verification = build.linkedVerificationTaskId?.let(::projectTask)
+        when {
+            !build.recoveryMode || !build.reviewStale -> return "Add and finish at least one recovery follow-up before reviewing."
+            !build.reviewEnabled -> return "Enable a Review gate before starting a recovery review."
+            isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) -> return "Wait for the current workflow run to finish before reviewing."
+            workflowBudgetReached(build) -> return "The workflow's reported-cost guardrail has been reached."
+        }
+        startReviewAttempt(buildTaskId, manualRecovery = true)
+        return null
     }
 
     override suspend fun deleteTask(taskId: String, cascade: Boolean) {
@@ -935,6 +1041,7 @@ class DesktopAgentRunService(
         var requestedInput: AgentUserInputRequest? = null
         val rawTail = ArrayDeque<String>()
         val rawPlanOutput = StringBuilder()
+        var structuredPlanText: String? = null
 
         val transcript = store.transcriptFile(taskId)
         transcript.parentFile?.mkdirs()
@@ -952,7 +1059,10 @@ class DesktopAgentRunService(
                     }
                     for (line in lines) {
                         writer.appendLine(line)
-                        if (task.planMode) rawPlanOutput.appendLine(line)
+                        if (task.planMode) {
+                            rawPlanOutput.appendLine(line)
+                            successfulCursorPlanText(line)?.let { structuredPlanText = it }
+                        }
                         val now = System.currentTimeMillis()
                         val events = runCatching { adapter.parseLine(line, now) }
                             .getOrElse { listOf(AgentEvent.Raw(now, line)) }
@@ -1029,7 +1139,8 @@ class DesktopAgentRunService(
         }
         val fallbackText = lastAssistantText ?: rawTail.joinToString("\n").takeIf { it.isNotBlank() }
         val completedPlanText = if (status == AgentTaskStatus.Completed && task.planMode) {
-            result?.finalText?.takeIf { it.isNotBlank() }
+            structuredPlanText
+                ?: result?.finalText?.takeIf { it.isNotBlank() }
                 ?: lastAssistantText?.takeIf { it.isNotBlank() }
                 ?: rawPlanOutput.toString().trim().takeIf { it.isNotBlank() }
                 ?: fallbackText
@@ -1159,6 +1270,7 @@ class DesktopAgentRunService(
         historyLoaded.remove(taskId)
         _tasks.update { list -> list.filterNot { it.id == taskId } }
         store.deleteTranscript(taskId)
+        task.workflowTaskId?.let { projectTaskId -> detachDeletedWorkflowRun(projectTaskId, taskId) }
         val worktreePath = task.worktreePath
         if (removeWorktree && task.ownsWorktree && worktreePath != null) {
             task.originDir?.let { originDir ->
@@ -1166,6 +1278,33 @@ class DesktopAgentRunService(
             }
         }
         persist()
+    }
+
+    private fun detachDeletedWorkflowRun(projectTaskId: String, runId: String) {
+        val workflowTask = projectTask(projectTaskId) ?: return
+        if (workflowTask.attempts.none { it.runId == runId }) return
+        updateProjectTask(projectTaskId) { task ->
+            val attempts = task.attempts.filterNot { it.runId == runId }
+            when (task.kind) {
+                ProjectTaskKind.Spec -> task.copy(
+                    attempts = attempts,
+                    state = when {
+                        task.planVersions.isNotEmpty() -> ProjectTaskState.Completed
+                        attempts.isEmpty() -> ProjectTaskState.Draft
+                        else -> task.state
+                    },
+                    lastError = when {
+                        task.planVersions.isNotEmpty() || attempts.isEmpty() -> null
+                        else -> task.lastError
+                    },
+                    updatedAtMillis = System.currentTimeMillis(),
+                )
+                else -> task.copy(
+                    attempts = attempts,
+                    updatedAtMillis = System.currentTimeMillis(),
+                )
+            }
+        }
     }
 
     override fun events(taskId: String): StateFlow<List<AgentEvent>> {
@@ -1505,13 +1644,27 @@ class DesktopAgentRunService(
         append("\n\nMake the edits and run useful checks, but do not claim the workflow is finished; verification is a separate stage.")
     }
 
+    private fun recoveryBuildPrompt(build: ProjectTask, followUp: String, scratchpad: String?): String = buildString {
+        append("Continue the completed workflow in its existing workspace. This is a user-directed fix after manual testing; make only the requested correction and run useful focused checks. Do not start or claim a review or verification pass.\n\n")
+        append("Original implementation plan (source: ").append(build.planSnapshot?.sourceLabel ?: "unknown").append("):\n")
+        append(build.planSnapshot?.text.orEmpty().trim())
+        append("\n\nUser follow-up:\n").append(followUp)
+        build.buildNotes.takeIf { it.isNotBlank() }?.let { append("\n\nBuild notes:\n").append(it.trim()) }
+        scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
+        append("\n\nWhen the fix is ready, summarize the edits and checks. The user will decide when to run one cumulative review.")
+    }
+
     private fun reviewPrompt(
         build: ProjectTask,
         buildRun: AgentTask,
         scratchpad: String?,
+        manualRecovery: Boolean = false,
     ): String = buildString {
         append("Review the current workspace as a blocking code-quality gate. Inspect the actual files and run useful checks. ")
         append("You may edit the workspace only when your configured autonomy and sandbox allow it.\n\n")
+        if (manualRecovery) {
+            append("This is a manually triggered cumulative re-review after user testing. Review the entire current workflow workspace against the original plan, including all earlier implementation and every recovery follow-up; do not limit the assessment to the latest builder result.\n\n")
+        }
         append("Implementation plan:\n").append(build.planSnapshot?.text.orEmpty().trim())
         buildRun.completedResultText?.takeIf { it.isNotBlank() }?.let { append("\n\nBuilder result:\n").append(it.trim()) }
         buildRun.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
@@ -1661,14 +1814,14 @@ class DesktopAgentRunService(
         reconcileWorkflowRun(run.id)
     }
 
-    private suspend fun startReviewAttempt(buildTaskId: String) {
+    private suspend fun startReviewAttempt(buildTaskId: String, manualRecovery: Boolean = false) {
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
         val review = build.linkedReviewTaskId?.let(::projectTask) ?: return
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
         if (
             !build.reviewEnabled ||
             build.paused ||
-            build.state == ProjectTaskState.Completed ||
+            (!manualRecovery && build.state == ProjectTaskState.Completed) ||
             isStageBusy(build) ||
             isStageBusy(review) ||
             isStageBusy(verification)
@@ -1698,7 +1851,7 @@ class DesktopAgentRunService(
         }
         val project = _projects.value[build.projectId] ?: return
         val scratchpad = project.scratchpad.takeIf { review.includeScratchpad && it.isNotBlank() }
-        val prompt = reviewPrompt(build, buildRun, scratchpad)
+        val prompt = reviewPrompt(build, buildRun, scratchpad, manualRecovery)
         val attempt = review.attempts.count { it.stage == ProjectWorkflowStage.Review } + 1
         val directory = projectDirectory(build.projectId)
         updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, reviewReopenedCompleted = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
@@ -1729,9 +1882,22 @@ class DesktopAgentRunService(
             scratchpad,
             reviewedBuildRunId = buildRun.id,
             reviewGeneration = build.reviewGeneration,
+            isRecoveryFollowUp = manualRecovery,
         )
         persist()
         reconcileWorkflowRun(run.id)
+    }
+
+    private suspend fun completeBuildWithoutVerification(buildTaskId: String) {
+        updateProjectTask(buildTaskId) {
+            it.copy(
+                state = ProjectTaskState.Completed,
+                paused = false,
+                lastError = null,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+        persist()
     }
 
     private suspend fun startVerificationAttempt(buildTaskId: String) {
@@ -1818,6 +1984,7 @@ class DesktopAgentRunService(
         scratchpad: String?,
         reviewedBuildRunId: String? = null,
         reviewGeneration: Int = 0,
+        isRecoveryFollowUp: Boolean = false,
     ) {
         updateProjectTask(projectTaskId) { task ->
             if (task.attempts.any { it.runId == run.id }) task else task.copy(
@@ -1831,6 +1998,7 @@ class DesktopAgentRunService(
                     run.createdAtMillis,
                     reviewedBuildRunId,
                     reviewGeneration,
+                    isRecoveryFollowUp,
                 ),
                 state = when (run.status) {
                     AgentTaskStatus.Queued -> ProjectTaskState.Queued
@@ -1904,7 +2072,14 @@ class DesktopAgentRunService(
                 else -> "workflow stage failed"
             }
             if (typedTask.kind == ProjectTaskKind.Spec) {
-                updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = message) }
+                // A stopped/failed refine shouldn't bury a previously completed plan.
+                if (run.status == AgentTaskStatus.Stopped && typedTask.planVersions.isNotEmpty()) {
+                    updateProjectTask(projectTaskId) {
+                        it.copy(state = ProjectTaskState.Completed, lastError = null, updatedAtMillis = System.currentTimeMillis())
+                    }
+                } else {
+                    updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = message) }
+                }
             } else {
                 val build = if (typedTask.kind == ProjectTaskKind.Build) typedTask else typedTask.linkedBuildTaskId?.let(::projectTask)
                 build?.let { setPairAttention(it, message) }
@@ -1936,12 +2111,27 @@ class DesktopAgentRunService(
             }
             ProjectWorkflowStage.Build -> {
                 val build = projectTask(projectTaskId) ?: return
+                val recoveryAttempt = build.attempts.firstOrNull { it.runId == run.id }?.isRecoveryFollowUp == true
                 if (build.paused) {
                     updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused) }
                     build.linkedReviewTaskId?.let { reviewId ->
                         updateProjectTask(reviewId) {
                             it.copy(state = if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
                         }
+                    }
+                    persist()
+                } else if (recoveryAttempt) {
+                    updateProjectTask(build.id) {
+                        it.copy(
+                            state = ProjectTaskState.Paused,
+                            recoveryMode = true,
+                            reviewStale = true,
+                            lastError = null,
+                            updatedAtMillis = System.currentTimeMillis(),
+                        )
+                    }
+                    build.linkedReviewTaskId?.let { reviewId ->
+                        updateProjectTask(reviewId) { it.copy(state = ProjectTaskState.Paused, lastError = null) }
                     }
                     persist()
                 } else {
@@ -1952,7 +2142,11 @@ class DesktopAgentRunService(
                         }
                     }
                     persist()
-                    if (build.reviewEnabled) startReviewAttempt(build.id) else startVerificationAttempt(build.id)
+                    when {
+                        build.reviewEnabled -> startReviewAttempt(build.id)
+                        build.linkedVerificationTaskId != null -> startVerificationAttempt(build.id)
+                        else -> completeBuildWithoutVerification(build.id)
+                    }
                 }
             }
             ProjectWorkflowStage.Review -> reconcileReview(run, typedTask)
@@ -1964,6 +2158,7 @@ class DesktopAgentRunService(
     private suspend fun reconcileReview(run: AgentTask, review: ProjectTask) {
         val build = review.linkedBuildTaskId?.let(::projectTask) ?: return
         val attempt = review.attempts.firstOrNull { it.runId == run.id } ?: return
+        val recoveryReview = attempt.isRecoveryFollowUp
         val reviewedBuildRunId = attempt.reviewedBuildRunId
         if (reviewedBuildRunId.isNullOrBlank()) {
             setPairAttention(build, "review attempt is missing its build provenance")
@@ -1990,6 +2185,24 @@ class DesktopAgentRunService(
                 updatedAtMillis = System.currentTimeMillis(),
             )
         }
+        if (recoveryReview) {
+            updateProjectTask(build.id) {
+                it.copy(
+                    state = when {
+                        build.paused -> ProjectTaskState.Paused
+                        parsed.status == ProjectReviewStatus.Approved -> ProjectTaskState.Completed
+                        else -> ProjectTaskState.Paused
+                    },
+                    paused = false,
+                    recoveryMode = build.paused || parsed.status != ProjectReviewStatus.Approved,
+                    reviewStale = build.paused || parsed.status != ProjectReviewStatus.Approved,
+                    lastError = null,
+                    updatedAtMillis = System.currentTimeMillis(),
+                )
+            }
+            persist()
+            return
+        }
         if (parsed.status == ProjectReviewStatus.Approved) {
             if (build.paused) {
                 updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
@@ -1999,7 +2212,11 @@ class DesktopAgentRunService(
                 persist()
             } else {
                 persist()
-                startVerificationAttempt(build.id)
+                if (build.linkedVerificationTaskId != null) {
+                    startVerificationAttempt(build.id)
+                } else {
+                    completeBuildWithoutVerification(build.id)
+                }
             }
             return
         }
@@ -2155,6 +2372,7 @@ class DesktopAgentRunService(
         workflows: Map<String, ProjectWorkflowState>,
         tasks: List<AgentTask>,
     ): Map<String, ProjectWorkflowState> = workflows.mapValues { (_, state) ->
+        val liveRunIds = tasks.mapTo(mutableSetOf()) { it.id }
         val interruptedIds = state.tasks.mapNotNull { workflowTask ->
             val lastRun = workflowTask.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { id -> tasks.firstOrNull { it.id == id } }
             workflowTask.id.takeIf {
@@ -2174,17 +2392,42 @@ class DesktopAgentRunService(
         val affectedVerificationIds = state.tasks.filter { it.kind == ProjectTaskKind.Build && it.id in affectedBuildIds }
             .mapNotNull { it.linkedVerificationTaskId }.toSet()
         state.copy(tasks = state.tasks.map { workflowTask ->
-            val affected = workflowTask.id in interruptedIds || workflowTask.id in affectedBuildIds ||
-                workflowTask.id in affectedReviewIds || workflowTask.id in affectedVerificationIds
-            if (affected) workflowTask.copy(
-                state = if (workflowTask.kind == ProjectTaskKind.Review && !workflowTask.reviewEnabled) {
-                    ProjectTaskState.Disabled
-                } else {
-                    ProjectTaskState.NeedsAttention
-                },
-                paused = workflowTask.kind != ProjectTaskKind.Spec,
-                lastError = "the app restarted while this workflow stage was active",
-            ) else workflowTask
+            val prunedAttempts = workflowTask.attempts.filter { it.runId in liveRunIds }
+            val attemptsChanged = prunedAttempts.size != workflowTask.attempts.size
+            val recovered = if (
+                workflowTask.id in interruptedIds ||
+                workflowTask.id in affectedBuildIds ||
+                workflowTask.id in affectedReviewIds ||
+                workflowTask.id in affectedVerificationIds
+            ) {
+                workflowTask.copy(
+                    state = if (workflowTask.kind == ProjectTaskKind.Review && !workflowTask.reviewEnabled) {
+                        ProjectTaskState.Disabled
+                    } else {
+                        ProjectTaskState.NeedsAttention
+                    },
+                    paused = workflowTask.kind != ProjectTaskKind.Spec,
+                    lastError = "the app restarted while this workflow stage was active",
+                )
+            } else {
+                workflowTask
+            }
+            when {
+                recovered.kind == ProjectTaskKind.Spec && attemptsChanged -> recovered.copy(
+                    attempts = prunedAttempts,
+                    state = when {
+                        recovered.planVersions.isNotEmpty() -> ProjectTaskState.Completed
+                        prunedAttempts.isEmpty() -> ProjectTaskState.Draft
+                        else -> recovered.state
+                    },
+                    lastError = when {
+                        recovered.planVersions.isNotEmpty() || prunedAttempts.isEmpty() -> null
+                        else -> recovered.lastError
+                    },
+                )
+                attemptsChanged -> recovered.copy(attempts = prunedAttempts)
+                else -> recovered
+            }
         })
     }
 
@@ -2217,6 +2460,48 @@ class DesktopAgentRunService(
                 if (project.id in projectIdsToClear) project.copy(notes = emptyList()) else project
             }),
         )
+    }
+
+    /** Repairs Cursor plan-mode runs saved before structured `createPlan` output was retained. */
+    private suspend fun backfillCursorPlansFromTranscripts() {
+        val recoveredPlans = withContext(Dispatchers.IO) {
+            _tasks.value.asSequence()
+                .filter { task ->
+                    task.agent == AgentKind.Cursor &&
+                        task.planMode &&
+                        task.status == AgentTaskStatus.Completed
+                }
+                .mapNotNull { task ->
+                    val plan = runCatching {
+                        store.transcriptFile(task.id).takeIf { it.isFile }?.useLines { lines ->
+                            lines.mapNotNull(::successfulCursorPlanText).lastOrNull()
+                        }
+                    }.getOrNull()
+                    plan?.let { task.id to it }
+                }
+                .toMap()
+        }
+        if (recoveredPlans.isEmpty()) return
+
+        val repairedTasks = _tasks.value.map { task ->
+            recoveredPlans[task.id]?.let { plan ->
+                if (task.completedPlanText == plan) task else task.copy(completedPlanText = plan)
+            } ?: task
+        }
+        val repairedWorkflows = _projects.value.mapValues { (_, workflow) ->
+            workflow.copy(tasks = workflow.tasks.map { task ->
+                task.copy(planVersions = task.planVersions.map { version ->
+                    recoveredPlans[version.runId]?.let { plan ->
+                        if (version.text == plan) version else version.copy(text = plan)
+                    } ?: version
+                })
+            })
+        }
+        if (repairedTasks == _tasks.value && repairedWorkflows == _projects.value) return
+
+        _tasks.value = repairedTasks
+        _projects.value = repairedWorkflows
+        persist()
     }
 
     private fun currentTask(taskId: String): AgentTask? = _tasks.value.firstOrNull { it.id == taskId }

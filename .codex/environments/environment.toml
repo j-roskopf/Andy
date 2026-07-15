@@ -8,7 +8,7 @@ script = ""
 [[actions]]
 name = "Desktop"
 icon = "run"
-command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew :run"
+command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew runDistributable"
 
 [[actions]]
 name = "Web"

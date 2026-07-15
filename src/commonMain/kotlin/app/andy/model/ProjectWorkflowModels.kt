@@ -108,6 +108,8 @@ data class ProjectTaskAttempt(
     val createdAtMillis: Long,
     val reviewedBuildRunId: String? = null,
     val reviewGeneration: Int = 0,
+    /** A user-directed fix thread added after the original workflow completed. */
+    val isRecoveryFollowUp: Boolean = false,
 )
 
 data class ProjectTask(
@@ -132,6 +134,10 @@ data class ProjectTask(
     val reviewGeneration: Int = 0,
     val maxReviewFailures: Int = 5,
     val reviewReopenedCompleted: Boolean = false,
+    /** True while a completed workflow is collecting manually tested fix threads. */
+    val recoveryMode: Boolean = false,
+    /** The latest approval no longer covers the workspace after a recovery follow-up. */
+    val reviewStale: Boolean = false,
     val verificationInstructions: String = "",
     val maxVerificationAttempts: Int = 5,
     val maxBudgetUsd: Double? = null,
