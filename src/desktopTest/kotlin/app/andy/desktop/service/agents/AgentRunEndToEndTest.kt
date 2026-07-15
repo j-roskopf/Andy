@@ -484,10 +484,15 @@ class CursorPlanBackfillTest {
             )
 
             withTimeout(10_000) {
-                while (
-                    service.tasks.value.singleOrNull()?.completedPlanText != recoveredPlan ||
-                    service.projects.value[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text != recoveredPlan
-                ) {
+                while (true) {
+                    val saved = store.load()
+                    val memoryHasRecoveredPlan =
+                        service.tasks.value.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            service.projects.value[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    val storeHasRecoveredPlan =
+                        saved.tasks.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            saved.projectWorkflows[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    if (memoryHasRecoveredPlan && storeHasRecoveredPlan) break
                     delay(25)
                 }
             }
