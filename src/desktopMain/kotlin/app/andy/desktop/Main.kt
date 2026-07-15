@@ -35,9 +35,6 @@ import javax.swing.JFrame
 import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import org.jetbrains.compose.resources.painterResource
 
 fun main() {
@@ -82,7 +79,7 @@ fun main() {
         }
         LaunchedEffect(Unit) {
             DesktopAgentAttentionCoordinator(
-                scope = CoroutineScope(SupervisorJob() + Dispatchers.Default), tasks = services.agentRuns.tasks,
+                scope = this, tasks = services.agentRuns.tasks,
                 workspace = { workspaceStore.state.value }, isForeground = appFocus::isForeground,
                 notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
             ).start()

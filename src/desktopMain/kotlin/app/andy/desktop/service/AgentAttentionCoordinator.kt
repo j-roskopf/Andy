@@ -45,5 +45,6 @@ class DesktopAgentAttentionCoordinator(
             if (prefs.agentOsNotificationsEnabled) notifications.show(event)
             if (prefs.agentNotificationSoundEnabled) sounds.play(prefs.agentNotificationSoundId)
         }
+        previousStatuses.keys.retainAll(tasks.map { it.id }.toSet())
     }
 }
