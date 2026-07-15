@@ -231,11 +231,7 @@ private fun configureMacTitleBar(window: JFrame, background: androidx.compose.ui
         window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
         window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         window.rootPane.putClientProperty("apple.awt.noTitleBarSeparator", true)
-        window.background = Color(
-            (background.red * 255).toInt(),
-            (background.green * 255).toInt(),
-            (background.blue * 255).toInt(),
-        )
+        window.background = Color(background.red, background.green, background.blue)
     }
 }
 

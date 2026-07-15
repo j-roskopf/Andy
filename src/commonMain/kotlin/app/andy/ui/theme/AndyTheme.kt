@@ -7,9 +7,9 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -74,7 +74,11 @@ private fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
         else -> Triple(chroma, 0f, secondary)
     }
     val match = lightness - chroma / 2f
-    return Color(red + match, green + match, blue + match)
+    return Color(
+        (red + match).coerceIn(0f, 1f),
+        (green + match).coerceIn(0f, 1f),
+        (blue + match).coerceIn(0f, 1f),
+    )
 }
 
 private data class AndyTonalPalette(
@@ -123,8 +127,10 @@ internal object AndyColors {
     private var tonalPalette by mutableStateOf(AndyTonalPalette.from(AndyTint.Default.color))
 
     fun selectTint(id: String) {
-        selectedTint = AndyTint.fromId(id)
-        tonalPalette = AndyTonalPalette.from(selectedTint.color)
+        val tint = AndyTint.fromId(id)
+        if (selectedTint == tint) return
+        selectedTint = tint
+        tonalPalette = AndyTonalPalette.from(tint.color)
     }
 
     // HSL lightness is fixed per role; selected color contributes hue, not a wash of saturation.
@@ -192,7 +198,7 @@ internal val Red = AndyColors.Error
 
 @Composable
 fun AndyTheme(tintId: String = AndyTint.Default.id, content: @Composable () -> Unit) {
-    SideEffect { AndyColors.selectTint(tintId) }
+    remember(tintId) { AndyColors.selectTint(tintId) }
     MaterialTheme(
         colorScheme = darkColorScheme(
             background = Ink,

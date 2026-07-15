@@ -33,7 +33,7 @@ class DesktopWorkspaceStore(
             proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
-            tintId = props.getProperty("tintId")?.takeIf { id -> AndyTint.entries.any { it.id == id } } ?: AndyTint.Default.id,
+            tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             proxyRules = loadProxyRules(props),
