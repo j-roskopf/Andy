@@ -596,7 +596,7 @@ class ProjectWorkflowServiceTest {
         val store = DesktopAgentTaskStore(File(root, "agents.toml"))
         store.save(
             AgentStoreState(
-                binaryOverrides = mapOf(AgentKind.Codex.cliName to "/bin/sh"),
+                binaryOverrides = mapOf(AgentKind.Codex.cliName to workflowShellBinary()),
                 projectWorkflows = mapOf(
                     "project-1" to app.andy.model.ProjectWorkflowState(
                         projectId = "project-1",
@@ -699,7 +699,7 @@ class ProjectWorkflowServiceTest {
         store.save(
             AgentStoreState(
                 tasks = listOf(run),
-                binaryOverrides = mapOf(AgentKind.Codex.cliName to "/bin/sh"),
+                binaryOverrides = mapOf(AgentKind.Codex.cliName to workflowShellBinary()),
                 projectWorkflows = mapOf("project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(build, verification))),
             ),
         )
@@ -814,7 +814,7 @@ private suspend fun withHarness(
         ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
     )
     val store = DesktopAgentTaskStore(File(root, "agents.toml"))
-    store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to "/bin/sh")))
+    store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to workflowShellBinary())))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     try {
         val service = DesktopAgentRunService(
@@ -857,6 +857,18 @@ private class WorkflowAdapter(
             ProjectWorkflowStage.Verification -> "verify-${if (verificationOutcomes.isEmpty()) "passed" else verificationOutcomes.removeFirst()}"
             null -> "generic"
         }
+        if (isWindows()) {
+            val command = if (task.workflowStage == failStage) {
+                "exit /b 7"
+            } else {
+                buildString {
+                    if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
+                    if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) append("echo reviewed change>review-edit.txt & ")
+                    append("echo ").append(marker)
+                }
+            }
+            return listOf(binary, "/d", "/c", command)
+        }
         val command = if (task.workflowStage == failStage) {
             "exit 7"
         } else {
@@ -893,6 +905,14 @@ private class WorkflowAdapter(
         }
         return listOf(AgentEvent.AssistantText(nowMillis, final), AgentEvent.TaskResult(nowMillis, success = true, finalText = final, costUsd = reportedCostUsd))
     }
+}
+
+private fun isWindows(): Boolean = System.getProperty("os.name").contains("windows", ignoreCase = true)
+
+private fun workflowShellBinary(): String = if (isWindows()) {
+    checkNotNull(System.getenv("ComSpec")) { "ComSpec is required to run workflow tests on Windows" }
+} else {
+    "/bin/sh"
 }
 
 private class MutableActionConfig(var value: ActionsConfig) : ActionConfigStore {
