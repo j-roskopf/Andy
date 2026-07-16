@@ -517,6 +517,7 @@ internal fun HostFilesScreen(
                         path = tab.path,
                         text = tab.content,
                         languageHint = tab.languageHint,
+                        syntaxThemeId = workspaceState.editorSyntaxThemeId,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         onTextChange = ::updateEditorTextForPath,
                         onSave = ::saveEditorContentForPath,

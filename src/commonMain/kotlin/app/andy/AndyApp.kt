@@ -21,6 +21,7 @@ import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.shell.AndyShell
+import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.AndyTheme
 import kotlinx.coroutines.flow.collectLatest
@@ -83,8 +84,9 @@ fun AndyMirrorPopOut(
     deviceName: String? = null,
     controlsVisible: Boolean = false,
     tintId: String = AndyTint.Default.id,
+    surfaceModeId: String = AndySurfaceMode.Tinted.id,
 ) {
-    AndyTheme(tintId) {
+    AndyTheme(tintId, surfaceModeId) {
         val scope = rememberCoroutineScope()
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }

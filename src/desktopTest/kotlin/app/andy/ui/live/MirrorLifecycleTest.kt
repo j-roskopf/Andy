@@ -131,7 +131,7 @@ class MirrorLifecycleTest {
             return CommandResult.success("Connected")
         }
 
-        override suspend fun disconnect() {
+        override suspend fun disconnect(immediate: Boolean) {
             disconnectCalls += 1
             mutableStatus.value = "Disconnected"
         }

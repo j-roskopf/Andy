@@ -167,7 +167,10 @@ internal object NativeMirrorJni {
             updateMetalLayerGeometry(remaining)
             return
         }
-        destroyPresentation()
+        // Destination switches briefly have zero hosts. Keep VideoToolbox/Metal warm so the next
+        // Live/Design/Accessibility surface can rebind; DesktopMirrorEngine.disconnect() still
+        // tears presentation down when the session is truly released.
+        lastGeometryKey = null
     }
 
     /** Sends one parser-bounded Annex-B H.264 access unit to the VideoToolbox/Metal renderer. */

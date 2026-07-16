@@ -114,6 +114,8 @@ kotlin {
                 implementation("org.jetbrains.compose.components:components-resources:1.11.1")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+                implementation("com.mikepenz:multiplatform-markdown-renderer:0.43.0")
+                implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.43.0")
             }
         }
         val commonTest by getting {

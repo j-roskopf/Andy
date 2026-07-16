@@ -10,6 +10,23 @@ enum class AgentNotificationSound(val id: String, val label: String) {
     Soft("soft", "Soft"),
 }
 
+/** Desktop host-file editor highlighting schemes (RSyntaxTextArea). */
+enum class EditorSyntaxTheme(val id: String, val label: String) {
+    Andy("andy", "Andy"),
+    Dark("dark", "Dark"),
+    Monokai("monokai", "Monokai"),
+    Druid("druid", "Druid"),
+    Idea("idea", "IntelliJ"),
+    Eclipse("eclipse", "Eclipse"),
+    Vs("vs", "Visual Studio"),
+    Default("default", "Default"),
+    DefaultAlt("default-alt", "Default alt");
+
+    companion object {
+        fun fromId(id: String): EditorSyntaxTheme = entries.firstOrNull { it.id == id } ?: Andy
+    }
+}
+
 @Serializable
 data class WorkspaceState(
     val selectedSdkPath: String? = null,
@@ -26,6 +43,8 @@ data class WorkspaceState(
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
     val tintId: String = "andy-blue",
+    val surfaceModeId: String = "tinted",
+    val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,
     val workspaceSidebarExpanded: Boolean = true,
     val projectsIntroductionCompleted: Boolean = false,
     val liveDevicePaneWidth: Float = 720f,

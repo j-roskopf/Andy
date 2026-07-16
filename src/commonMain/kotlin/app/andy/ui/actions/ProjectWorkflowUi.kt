@@ -384,6 +384,7 @@ private fun SpecDetail(
     canEdit: Boolean,
 ) {
     var selectedVersion by remember(task.id, task.planVersions.size) { mutableStateOf(task.planVersions.lastOrNull()?.version) }
+    var planExpanded by remember(task.id, selectedVersion) { mutableStateOf(false) }
     var refineOpen by remember(task.id) { mutableStateOf(false) }
     var refinementInstructions by remember(task.id) { mutableStateOf("") }
     val version = task.planVersions.firstOrNull { it.version == selectedVersion } ?: task.planVersions.lastOrNull()
@@ -413,7 +414,15 @@ private fun SpecDetail(
                 FilterPill("v${plan.version}", selectedVersion == plan.version, Rust) { selectedVersion = plan.version }
             }
         }
-        version?.let { DetailBlock("IMPLEMENTATION PLAN · V${it.version}", it.text, selectable = true) }
+        version?.let {
+            CollapsibleDetailBlock(
+                label = "IMPLEMENTATION PLAN · V${it.version}",
+                value = it.text,
+                expanded = planExpanded,
+                onToggle = { planExpanded = !planExpanded },
+                collapsedPreviewLines = 4,
+            )
+        }
     }
     if (refineOpen) {
         AlertDialog(
@@ -620,7 +629,11 @@ private fun CollapsibleDetailBlock(
     value: String,
     expanded: Boolean,
     onToggle: () -> Unit,
+    collapsedPreviewLines: Int = 0,
 ) {
+    val preview = remember(value, collapsedPreviewLines) {
+        if (collapsedPreviewLines <= 0) "" else collapsedPlanPreview(value, collapsedPreviewLines)
+    }
     Column(
         Modifier.fillMaxWidth()
             .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
@@ -634,6 +647,21 @@ private fun CollapsibleDetailBlock(
         ) {
             Text(label, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp, modifier = Modifier.weight(1f))
             Text(if (expanded) "v" else ">", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+        }
+        if (!expanded && preview.isNotBlank()) {
+            Text(
+                preview,
+                color = TextPrimary.copy(alpha = 0.78f),
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                lineHeight = 17.sp,
+                maxLines = collapsedPreviewLines,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            )
         }
         AnimatedVisibility(
             visible = expanded,
@@ -652,6 +680,13 @@ private fun CollapsibleDetailBlock(
             }
         }
     }
+}
+
+private fun collapsedPlanPreview(value: String, maxLines: Int): String {
+    val lines = value.trimEnd().lines()
+    if (lines.isEmpty() || lines.all { it.isBlank() }) return ""
+    val taken = lines.take(maxLines).joinToString("\n")
+    return if (lines.size > maxLines) taken.trimEnd() + "…" else taken
 }
 
 @Composable
@@ -712,7 +747,11 @@ internal fun ProjectScratchpadEditor(
             Text("Loose context, constraints, and reminders. Tasks snapshot this only when enabled.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         }
         if (previewing) {
-            MarkdownPreview(text = text, modifier = Modifier.fillMaxSize())
+            MarkdownPreview(
+                text = text,
+                modifier = Modifier.fillMaxSize(),
+                onTextChange = { text = it },
+            )
         } else {
             TextField(
                 value = text,

@@ -62,7 +62,12 @@ interface MirrorEngine {
 
     val status: Flow<String>
     suspend fun connect(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult
-    suspend fun disconnect()
+    /**
+     * Release the live session. By default implementations may keep the stream warm briefly so
+     * navigating between Live/Design/Accessibility can reuse scrcpy instead of black-screening.
+     * Pass [immediate] for shutdown, device changes, or other cases that must tear down now.
+     */
+    suspend fun disconnect(immediate: Boolean = false)
     suspend fun sendInput(input: MirrorInput): CommandResult
     suspend fun screenshot(serial: String): ByteArray?
 }

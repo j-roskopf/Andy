@@ -124,7 +124,7 @@ private class FakeMirrorEngine : MirrorEngine {
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = CommandResult.success()
-    override suspend fun disconnect() = Unit
+    override suspend fun disconnect(immediate: Boolean) = Unit
     override suspend fun sendInput(input: MirrorInput): CommandResult = CommandResult.success()
     override suspend fun screenshot(serial: String): ByteArray? = null
 }

@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Text
@@ -61,8 +62,10 @@ import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
+import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
@@ -72,7 +75,8 @@ internal fun CatalogScreen(avd: AvdService) {
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     var profiles by remember { mutableStateOf<List<AvdProfile>>(emptyList()) }
     var query by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
+    var hasLoaded by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
 
@@ -84,13 +88,23 @@ internal fun CatalogScreen(avd: AvdService) {
     fun refresh() {
         scope.launch {
             loading = true
-            images = avd.listSystemImages()
-            avds = avd.listVirtualDevices()
-            profiles = avd.listProfiles()
-            loading = false
+            status = ""
+            try {
+                images = avd.listSystemImages()
+                avds = avd.listVirtualDevices()
+                profiles = avd.listProfiles()
+                hasLoaded = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                status = error.message?.takeIf { it.isNotBlank() } ?: "Failed to refresh catalog"
+            } finally {
+                loading = false
+            }
         }
     }
     LaunchedEffect(Unit) { refresh() }
+    val showInitialLoading = loading && !hasLoaded
 
     val apiBounds = remember(images) {
         val levels = images.map { it.apiLevel }
@@ -118,72 +132,101 @@ internal fun CatalogScreen(avd: AvdService) {
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Toolbar("System images", "${images.count { it.installed }} installed · ${avds.size} AVDs · ${profiles.size} profiles", onPrimary = { refresh() }, primaryLabel = if (loading) "Loading" else "Refresh catalog")
+        Toolbar(
+            title = "System images",
+            subtitle = when {
+                showInitialLoading -> "Loading system images…"
+                else -> "${images.count { it.installed }} installed · ${avds.size} AVDs · ${profiles.size} profiles"
+            },
+            onPrimary = { refresh() },
+            primaryLabel = if (loading) "Loading" else "Refresh catalog",
+            primaryEnabled = !loading,
+        )
         if (status.isNotBlank()) Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            CatalogFilterSidebar(
-                apiBounds = apiBounds,
-                activeRange = activeRange,
-                onRangeChange = { apiRange = it },
-                availableVariants = availableVariants,
-                selectedVariants = selectedVariants,
-                onVariantsChange = { selectedVariants = it },
-                availableAbis = availableAbis,
-                selectedAbis = selectedAbis,
-                onAbisChange = { selectedAbis = it },
-                selectedStates = selectedStates,
-                onStatesChange = { selectedStates = it },
-                onReset = { resetFilters() },
-            )
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search package, variant, api", color = TextSecondary) }, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-                Text("${filtered.size} of ${images.size} images", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                TableHeader(listOf("API" to 70.dp, "Variant" to 340.dp, "ABI" to 130.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
-                LazyColumn {
-                    items(filtered.take(240)) { image ->
-                        TableRow {
-                            MonoCell(image.api, 70.dp, TextPrimary)
-                            Row(Modifier.width(340.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(image.variant, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                image.badges.forEach { badge -> SystemImageBadgeChip(badge) }
-                            }
-                            MonoCell(image.abi, 130.dp, TextSecondary)
-                            MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
-                            Box(Modifier.width(100.dp)) {
-                                if (image.installed) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val refs = avds.filter { it.referencesImage(image) }
-                                            if (refs.isNotEmpty()) {
-                                                status = "Blocked: used by ${refs.joinToString { it.name }}"
-                                            } else {
-                                                pendingConfirmation = PendingConfirmation("Delete system image?", image.packageId) {
-                                                    scope.launch {
-                                                        val result = avd.uninstallSystemImage(image.packageId)
-                                                        status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
-                                                        refresh()
+        if (showInitialLoading) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Panel, RoundedCornerShape(AndyRadius.R3))
+                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                    Text("Loading system image catalog…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CatalogFilterSidebar(
+                    apiBounds = apiBounds,
+                    activeRange = activeRange,
+                    onRangeChange = { apiRange = it },
+                    availableVariants = availableVariants,
+                    selectedVariants = selectedVariants,
+                    onVariantsChange = { selectedVariants = it },
+                    availableAbis = availableAbis,
+                    selectedAbis = selectedAbis,
+                    onAbisChange = { selectedAbis = it },
+                    selectedStates = selectedStates,
+                    onStatesChange = { selectedStates = it },
+                    onReset = { resetFilters() },
+                )
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search package, variant, api", color = TextSecondary) }, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    Text(
+                        if (loading) "Refreshing… · ${filtered.size} of ${images.size} images" else "${filtered.size} of ${images.size} images",
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                    )
+                    TableHeader(listOf("API" to 70.dp, "Variant" to 340.dp, "ABI" to 130.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
+                    LazyColumn {
+                        items(filtered.take(240)) { image ->
+                            TableRow {
+                                MonoCell(image.api, 70.dp, TextPrimary)
+                                Row(Modifier.width(340.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(image.variant, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    image.badges.forEach { badge -> SystemImageBadgeChip(badge) }
+                                }
+                                MonoCell(image.abi, 130.dp, TextSecondary)
+                                MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
+                                Box(Modifier.width(100.dp)) {
+                                    if (image.installed) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                val refs = avds.filter { it.referencesImage(image) }
+                                                if (refs.isNotEmpty()) {
+                                                    status = "Blocked: used by ${refs.joinToString { it.name }}"
+                                                } else {
+                                                    pendingConfirmation = PendingConfirmation("Delete system image?", image.packageId) {
+                                                        scope.launch {
+                                                            val result = avd.uninstallSystemImage(image.packageId)
+                                                            status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                                            refresh()
+                                                        }
                                                     }
                                                 }
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    ) { Text("Delete", fontSize = 11.sp) }
-                                } else {
-                                    Button(
-                                        onClick = {
-                                            scope.launch {
-                                                status = "Downloading ${image.packageId}..."
-                                                val result = avd.installSystemImage(image.packageId)
-                                                status = if (result.isSuccess) result.stdout.ifBlank { "Installed ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
-                                                refresh()
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        colors = primaryButtonColors(),
-                                    ) { Text("Download", fontSize = 11.sp) }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        ) { Text("Delete", fontSize = 11.sp) }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                scope.launch {
+                                                    status = "Downloading ${image.packageId}..."
+                                                    val result = avd.installSystemImage(image.packageId)
+                                                    status = if (result.isSuccess) result.stdout.ifBlank { "Installed ${image.packageId}" } else result.stderr.ifBlank { result.stdout }
+                                                    refresh()
+                                                }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            colors = primaryButtonColors(),
+                                        ) { Text("Download", fontSize = 11.sp) }
+                                    }
                                 }
+                                MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
                             }
-                            MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
                         }
                     }
                 }

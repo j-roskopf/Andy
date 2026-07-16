@@ -166,7 +166,10 @@ internal fun AndyShell(
     }
     val proxyRunning = proxyStatus.contains("listening on")
 
-    AndyTheme(tintId = state.workspaceState.tintId) {
+    AndyTheme(
+        tintId = state.workspaceState.tintId,
+        surfaceModeId = state.workspaceState.surfaceModeId,
+    ) {
     Box(
         Modifier.fillMaxSize()
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
@@ -221,6 +224,7 @@ internal fun AndyShell(
                 ) {
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents
+                    val computerFilesActive = state.destination == AndyDestination.ComputerFiles
                     RetainedDestination(active = actionsActive) {
                         ActionsScreen(
                             services = services,
@@ -246,6 +250,13 @@ internal fun AndyShell(
                             services = services, active = agentsActive,
                             requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = onOpenAgentTaskConsumed,
+                        )
+                    }
+                    RetainedDestination(active = computerFilesActive) {
+                        HostFilesScreen(
+                            service = services.hostFiles,
+                            workspaceState = state.workspaceState,
+                            onUpdateWorkspace = { state.updateWorkspace(it) },
                         )
                     }
                     when (state.destination) {
@@ -315,11 +326,6 @@ internal fun AndyShell(
                             serial = state.selectedSerial,
                             transfer = state.transfer,
                         )
-                        AndyDestination.ComputerFiles -> HostFilesScreen(
-                            service = services.hostFiles,
-                            workspaceState = state.workspaceState,
-                            onUpdateWorkspace = { state.updateWorkspace(it) },
-                        )
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
                             sdk = state.sdk,
@@ -339,7 +345,7 @@ internal fun AndyShell(
                                 state.updateWorkspace { it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() }) }
                             },
                         )
-                        AndyDestination.Actions, AndyDestination.Agents -> Unit
+                        AndyDestination.Actions, AndyDestination.Agents, AndyDestination.ComputerFiles -> Unit
                         AndyDestination.Snapshots -> SnapshotsScreen(
                             avd = services.avd,
                             knownDeviceSerials = { state.devices.map { it.serial }.toSet() },

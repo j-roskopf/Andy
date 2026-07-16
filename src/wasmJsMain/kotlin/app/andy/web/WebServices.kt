@@ -687,7 +687,8 @@ private class BrowserMirrorEngine(
         }
     }
 
-    override suspend fun disconnect() {
+    override suspend fun disconnect(immediate: Boolean) {
+        // Browser mirror keeps a single WebUSB session; always tear down immediately.
         generation++
         sessionId?.let { webAdbStopMirror(it).await<JsAny?>() }
         sessionId = null
