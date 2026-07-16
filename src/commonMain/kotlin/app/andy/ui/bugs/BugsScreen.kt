@@ -229,24 +229,26 @@ internal fun BugsScreen(bugs: BugService) {
                     val availableForSidePanes = maxWidth - paneGuttersWidth - minimumVideoWidth
                     val maximumStepsWidth = (availableForSidePanes - minimumDetailsWidth).coerceAtLeast(minimumStepsWidth)
                     val maximumDetailsWidth = (availableForSidePanes - minimumStepsWidth).coerceAtLeast(minimumDetailsWidth)
-
-                    LaunchedEffect(maxWidth) {
+                    val (displayStepsWidth, displayDetailsWidth) = remember(
+                        maxWidth,
+                        state.stepsPaneWidth,
+                        state.bugDetailsPaneWidth,
+                    ) {
                         val maxSteps = maximumStepsWidth.value.coerceIn(minimumStepsWidth.value, 1_400f)
                         val maxDetails = maximumDetailsWidth.value.coerceIn(minimumDetailsWidth.value, 900f)
-                        state.stepsPaneWidth = state.stepsPaneWidth.coerceIn(minimumStepsWidth.value, maxSteps)
-                        state.bugDetailsPaneWidth = state.bugDetailsPaneWidth.coerceIn(minimumDetailsWidth.value, maxDetails)
-                        val overflow = state.stepsPaneWidth + state.bugDetailsPaneWidth - availableForSidePanes.value
+                        var steps = state.stepsPaneWidth.coerceIn(minimumStepsWidth.value, maxSteps)
+                        var details = state.bugDetailsPaneWidth.coerceIn(minimumDetailsWidth.value, maxDetails)
+                        val overflow = steps + details - availableForSidePanes.value
                         if (overflow > 0f) {
-                            val stepsShare = state.stepsPaneWidth / (state.stepsPaneWidth + state.bugDetailsPaneWidth)
-                            state.stepsPaneWidth = (state.stepsPaneWidth - overflow * stepsShare)
-                                .coerceAtLeast(minimumStepsWidth.value)
-                            state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - overflow * (1f - stepsShare))
-                                .coerceAtLeast(minimumDetailsWidth.value)
+                            val stepsShare = steps / (steps + details)
+                            steps = (steps - overflow * stepsShare).coerceAtLeast(minimumStepsWidth.value)
+                            details = (details - overflow * (1f - stepsShare)).coerceAtLeast(minimumDetailsWidth.value)
                         }
+                        steps to details
                     }
 
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PanelCard(Modifier.width(state.stepsPaneWidth.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.width(displayStepsWidth.dp).fillMaxHeight()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             Text("${report.actions.size} events", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
@@ -300,11 +302,11 @@ internal fun BugsScreen(bugs: BugService) {
                     }
                     PaneDivider(
                         onDrag = { dragX ->
-                            val maxSteps = (availableForSidePanes - state.bugDetailsPaneWidth.dp)
+                            val maxSteps = (availableForSidePanes - displayDetailsWidth.dp)
                                 .coerceAtLeast(minimumStepsWidth)
                                 .value
                                 .coerceAtMost(1_400f)
-                            state.stepsPaneWidth = (state.stepsPaneWidth + dragX)
+                            state.stepsPaneWidth = (displayStepsWidth + dragX)
                                 .coerceIn(minimumStepsWidth.value, maxSteps)
                         },
                     )
@@ -364,15 +366,15 @@ internal fun BugsScreen(bugs: BugService) {
                     }
                     PaneDivider(
                         onDrag = { dragX ->
-                            val maxDetails = (availableForSidePanes - state.stepsPaneWidth.dp)
+                            val maxDetails = (availableForSidePanes - displayStepsWidth.dp)
                                 .coerceAtLeast(minimumDetailsWidth)
                                 .value
                                 .coerceAtMost(900f)
-                            state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - dragX)
+                            state.bugDetailsPaneWidth = (displayDetailsWidth - dragX)
                                 .coerceIn(minimumDetailsWidth.value, maxDetails)
                         },
                     )
-                    PanelCard(Modifier.width(state.bugDetailsPaneWidth.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.width(displayDetailsWidth.dp).fillMaxHeight()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterPill("Details", state.selectedTab == "Details", Rust) { state.selectedTab = "Details" }
                             FilterPill("Logcat", state.selectedTab == "Logcat", Rust) { state.selectedTab = "Logcat" }
