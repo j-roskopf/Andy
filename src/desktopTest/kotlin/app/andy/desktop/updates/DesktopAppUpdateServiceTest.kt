@@ -52,6 +52,8 @@ class DesktopAppUpdateServiceTest {
         assertTrue(script.contains("with administrator privileges"))
         assertTrue(script.contains("should_reopen=1"))
         assertTrue(script.contains("reopen_current_app"))
+        assertTrue(script.contains("trap 'exit 1' HUP INT TERM"))
+        assertTrue(script.contains("trap cleanup EXIT"))
         assertTrue(script.contains("/usr/bin/open \"${'$'}target_app\""))
     }
 

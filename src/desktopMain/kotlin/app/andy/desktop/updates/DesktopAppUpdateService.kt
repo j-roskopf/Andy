@@ -487,7 +487,8 @@ internal fun macDmgInstallerHelperScript(
             reopen_current_app
           fi
         }
-        trap cleanup EXIT HUP INT TERM
+        trap 'exit 1' HUP INT TERM
+        trap cleanup EXIT
 
         # Wait for Andy itself rather than relying on a fixed delay before changing its bundle.
         while /bin/kill -0 "${'$'}parent_pid" 2>/dev/null; do
