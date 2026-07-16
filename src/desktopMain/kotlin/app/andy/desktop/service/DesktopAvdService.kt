@@ -82,11 +82,11 @@ class DesktopAvdService(
         (parsedInstalled + parsedAvailable).distinctBy { it.packageId }
     }
 
-    override suspend fun listProfiles(): List<AvdProfile> {
-        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
+    override suspend fun listProfiles(): List<AvdProfile> = withContext(Dispatchers.IO) {
+        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return@withContext emptyList()
         val result = runner.run(listOf(avdManager, "list", "device"), 20)
-        if (!result.isSuccess) return emptyList()
-        return AndroidParsers.parseProfiles(result.stdout)
+        if (!result.isSuccess) return@withContext emptyList()
+        AndroidParsers.parseProfiles(result.stdout)
     }
 
     override suspend fun listVirtualDevices(): List<VirtualDevice> {

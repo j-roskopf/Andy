@@ -1,18 +1,25 @@
 package app.andy
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andy.model.EditorSyntaxTheme
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.TextPrimary
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 import org.fife.ui.rtextarea.RTextScrollPane
@@ -28,12 +35,26 @@ internal actual fun EditorSyntaxThemePreview(
     modifier: Modifier,
 ) {
     val panelBackground = remember(syntaxThemeId) { editorPanelBackground(syntaxThemeId) }
+    val chrome = modifier
+        .fillMaxWidth()
+        .height(132.dp)
+        .clip(RoundedCornerShape(AndyRadius.R3))
+        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+    // Roborazzi's off-window scene cannot host heavyweight Swing interop.
+    if (System.getProperty("andy.screenshot.renderer") == "compose") {
+        Box(chrome.background(panelBackground).padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(
+                EditorSyntaxThemeSample,
+                color = TextPrimary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+        }
+        return
+    }
     SwingPanel(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(132.dp)
-            .clip(RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)),
+        modifier = chrome,
         background = panelBackground,
         factory = { EditorSyntaxThemePreviewPanel() },
         update = { panel -> panel.updateTheme(syntaxThemeId) },
@@ -64,6 +85,7 @@ private class EditorSyntaxThemePreviewPanel : JPanel(BorderLayout()) {
     }
 
     init {
+        isOpaque = true
         add(scrollPane, BorderLayout.CENTER)
         updateTheme(EditorSyntaxTheme.Andy.id)
     }
@@ -73,6 +95,8 @@ private class EditorSyntaxThemePreviewPanel : JPanel(BorderLayout()) {
         if (currentThemeId == themeId) return
         currentThemeId = themeId
         applyEditorSyntaxTheme(editor, scrollPane, themeId)
+        background = editor.background
+        isOpaque = true
         editor.isEditable = false
         editor.isEnabled = false
         editor.highlightCurrentLine = false
