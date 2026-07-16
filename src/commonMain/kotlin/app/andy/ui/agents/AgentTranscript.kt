@@ -499,7 +499,9 @@ private fun ChatAttachedImage(
 ) {
     val fileName = path.substringAfterLast('/').substringAfterLast('\\')
     val bitmap by produceState<ImageBitmap?>(initialValue = null, path) {
-        value = withContext(Dispatchers.Default) { loadImageBitmap(path) }
+        value = withContext(Dispatchers.Default) {
+            runCatching { loadImageBitmap(path) }.getOrNull()
+        }
     }
     var previewOpen by remember(path) { mutableStateOf(false) }
     val image = bitmap
@@ -637,13 +639,15 @@ private fun CompactToolCallsBlock(
             is AgentEvent.ToolResult -> event.toolName?.takeIf { it.isNotBlank() }
             else -> null
         }
-    }
+    }.distinct()
+    val maxHeadlineNames = 3
     val headline = buildString {
         append(events.size)
         append(if (events.size == 1) " tool" else " tools")
         if (toolNames.isNotEmpty()) {
             append(": ")
-            append(toolNames.joinToString(", "))
+            append(toolNames.take(maxHeadlineNames).joinToString(", "))
+            if (toolNames.size > maxHeadlineNames) append(", …")
         }
     }
     val hasError = events.any { it is AgentEvent.ToolResult && it.isError }

@@ -207,8 +207,12 @@ internal fun LiveScreen(
     LaunchedEffect(transfer.status) {
         if (transfer.status.isNotBlank()) liveActionStatus = transfer.status
     }
-    LaunchedEffect(recordingRequestId) {
+    // Keying on the device keeps a mid-countdown disconnect from starting a recording:
+    // the old coroutine is cancelled and the new one bails out below.
+    LaunchedEffect(recordingRequestId, serial, device?.state) {
         if (recordingRequestId == 0) return@LaunchedEffect
+        if (serial == null || device?.state != DeviceConnectionState.Online) return@LaunchedEffect
+        if (recordingState !is LiveRecordingState.Countdown) return@LaunchedEffect
         for (seconds in 3 downTo 1) {
             recordingState = LiveRecordingState.Countdown(seconds)
             delay(1_000)

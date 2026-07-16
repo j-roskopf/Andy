@@ -38,9 +38,14 @@ internal object MacOsNotificationBridge {
         val resourcePath = resourcePath() ?: error("No macOS notification bridge for this platform")
         val target = File(System.getProperty("user.home"), ".andy/notifications/$resourcePath")
         target.parentFile.mkdirs()
-        javaClass.classLoader.getResourceAsStream(resourcePath)?.use {
-            Files.copy(it, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } ?: error("Missing packaged notification bridge: $resourcePath")
+        try {
+            javaClass.classLoader.getResourceAsStream(resourcePath)?.use {
+                Files.copy(it, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } ?: error("Missing packaged notification bridge: $resourcePath")
+        } catch (error: Exception) {
+            // Another Andy instance may hold the dylib open; fall back to the copy on disk.
+            if (!target.isFile) throw error
+        }
         System.load(target.absolutePath)
     }
 
