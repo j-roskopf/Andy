@@ -20,8 +20,10 @@ import app.andy.service.MirrorSession
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +61,8 @@ private const val NATIVE_HOST_WAIT_NANOS = 750_000_000L
 private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
 private const val SCRCPY_FRAME_HEADER_BYTES = 12
 private const val MAX_SCRCPY_FRAME_BYTES = 16 * 1024 * 1024
+/** Keep scrcpy warm across AndyShell destination switches (Live ↔ Design ↔ Accessibility). */
+private const val MIRROR_RELEASE_GRACE_MILLIS = 500L
 private val EMULATOR_WM_SIZE_REGEX = Regex("""(?:Physical|Override) size:\s*(\d+)x(\d+)""")
 
 internal data class EmulatorDisplaySize(val width: Int, val height: Int)
@@ -222,12 +226,26 @@ class DesktopMirrorEngine(
     private var lastEmulatorDisplaySizeRefreshNanos: Long = 0L
     private var nativeHost: java.awt.Canvas? = null
     private val controlLock = Any()
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var pendingRelease: Job? = null
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
-        if (connectedSerial == serial && connectedConfig == config && videoJob?.isActive == true) {
-            return CommandResult.success("Embedded mirror already connected for $serial")
+        val handingOff = pendingRelease?.isActive == true
+        pendingRelease?.cancel()
+        pendingRelease = null
+
+        if (connectedSerial == serial && videoJob?.isActive == true) {
+            // Same config, or warm handoff from another live destination — keep scrcpy running.
+            if (connectedConfig == config || handingOff) {
+                rebindPresentationHost(config)
+                return CommandResult.success("Embedded mirror already connected for $serial")
+            }
+            // Explicit quality/preset change while the session is held — restart.
+            tearDownSession()
+        } else if (videoJob?.isActive == true || connectedSerial != null) {
+            tearDownSession()
         }
-        disconnect()
+
         connectedSerial = serial
         connectedConfig = config
         connectedAtNanos = System.nanoTime()
@@ -288,13 +306,40 @@ class DesktopMirrorEngine(
                 return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
             }
         status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
-        videoJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+        videoJob = engineScope.launch {
             runNativeVideoLoop(adb, serial, scrcpyServer, config)
         }
         return CommandResult.success("Embedded mirror starting for $serial")
     }
 
-    override suspend fun disconnect() {
+    override suspend fun disconnect(immediate: Boolean) {
+        pendingRelease?.cancel()
+        pendingRelease = null
+        if (immediate) {
+            tearDownSession()
+            return
+        }
+        // Destination switches dispose the old screen before composing the next. Delay teardown
+        // so Live/Design/Accessibility can reclaim the same scrcpy session within the grace window.
+        pendingRelease = engineScope.launch {
+            delay(MIRROR_RELEASE_GRACE_MILLIS)
+            tearDownSession()
+        }
+    }
+
+    private suspend fun rebindPresentationHost(config: MirrorVideoConfig) {
+        if (config.rendererMode == MirrorRendererMode.Legacy) return
+        if (!NativeMirrorJni.isEmbeddedPresentationSupported()) return
+        val host = awaitNativeHost() ?: return
+        nativeHost = host
+        if (NativeMirrorJni.isMetalInlineOverlayOpen()) {
+            NativeMirrorJni.updateMetalLayerGeometry(host)
+        } else if (!NativeMirrorJni.openMetalInlineOverlay(host) && config.rendererMode == MirrorRendererMode.Accelerated) {
+            status.value = "Accelerated mirror unavailable · VideoToolbox/Metal inline overlay initialization failed"
+        }
+    }
+
+    private suspend fun tearDownSession() {
         val job = videoJob
         videoJob = null
         job?.cancel()
@@ -317,6 +362,7 @@ class DesktopMirrorEngine(
             }
         }
         videoForwardPort = null
+        connectedSerial = null
         connectedConfig = null
         connectedAtNanos = 0L
         lastEmulatorDisplaySizeRefreshNanos = 0L

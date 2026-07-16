@@ -42,6 +42,7 @@ actual fun HostCodeEditor(
     text: String,
     languageHint: String,
     modifier: Modifier,
+    syntaxThemeId: String,
     onTextChange: (String, String) -> Unit,
     onSave: (String, String) -> Unit,
     onClose: () -> Unit,
@@ -50,6 +51,14 @@ actual fun HostCodeEditor(
     onSearchContents: () -> Unit,
 ) {
     Box(modifier) { Text(text) }
+}
+
+@Composable
+internal actual fun EditorSyntaxThemePreview(
+    syntaxThemeId: String,
+    modifier: Modifier,
+) {
+    Text(EditorSyntaxThemeSample, modifier = modifier)
 }
 
 @Composable

@@ -47,9 +47,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.EditorSyntaxThemePreview
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
+import app.andy.model.EditorSyntaxTheme
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AvailableUpdate
@@ -61,6 +63,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
@@ -431,6 +434,7 @@ private fun AppearancePanel(
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
     val selectedTint = AndyTint.fromId(workspace.tintId)
+    val selectedSurface = AndySurfaceMode.fromId(workspace.surfaceModeId)
     PanelCard {
         Text("Appearance", color = TextPrimary, fontWeight = FontWeight.Bold)
         Text(
@@ -467,6 +471,80 @@ private fun AppearancePanel(
             }
         }
         Text("Selected: ${selectedTint.label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+        Spacer(Modifier.height(12.dp))
+        Text("Background", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text(
+            "Tinted keeps a subtle hue wash from the accent. Dark uses true black surfaces. Light flips the shell to a bright workspace.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AndySurfaceMode.entries.forEach { mode ->
+                val selected = mode == selectedSurface
+                TextButton(
+                    onClick = { update { it.copy(surfaceModeId = mode.id) } },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
+                    ),
+                    modifier = Modifier
+                        .background(
+                            if (selected) AndyColors.OrangeSubtle else PanelSoft,
+                            RoundedCornerShape(AndyRadius.R3),
+                        )
+                        .border(
+                            1.dp,
+                            if (selected) AndyColors.OrangeBorder else Border,
+                            RoundedCornerShape(AndyRadius.R3),
+                        )
+                        .semantics { contentDescription = "${mode.label} background" },
+                ) {
+                    Text(mode.label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Code editor theme", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Text(
+            "Syntax highlighting colors for Computer Files. Andy is the built-in scheme; the rest are RSyntaxTextArea presets.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val selectedTheme = EditorSyntaxTheme.fromId(workspace.editorSyntaxThemeId)
+            EditorSyntaxTheme.entries.forEach { theme ->
+                val selected = theme == selectedTheme
+                TextButton(
+                    onClick = { update { it.copy(editorSyntaxThemeId = theme.id) } },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
+                    ),
+                    modifier = Modifier
+                        .background(
+                            if (selected) AndyColors.OrangeSubtle else PanelSoft,
+                            RoundedCornerShape(AndyRadius.R3),
+                        )
+                        .border(
+                            1.dp,
+                            if (selected) AndyColors.OrangeBorder else Border,
+                            RoundedCornerShape(AndyRadius.R3),
+                        )
+                        .semantics { contentDescription = "${theme.label} editor theme" },
+                ) {
+                    Text(theme.label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
+        }
+        Text("Selected: ${EditorSyntaxTheme.fromId(workspace.editorSyntaxThemeId).label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+        EditorSyntaxThemePreview(
+            syntaxThemeId = workspace.editorSyntaxThemeId,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

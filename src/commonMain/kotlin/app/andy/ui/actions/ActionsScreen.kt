@@ -163,7 +163,7 @@ private fun ProjectCockpit(
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     var sessionsVisibleCount by remember { mutableStateOf(InitialSessionVisibleCount) }
-    var dockWidth by remember { mutableStateOf(680f) }
+    var dockWidth by remember { mutableStateOf(520f) }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }

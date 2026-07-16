@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,22 @@ internal enum class AndyTint(val id: String, val label: String, val color: Color
 
     companion object {
         fun fromId(id: String): AndyTint = entries.firstOrNull { it.id == id } ?: Default
+    }
+}
+
+/**
+ * Background treatment independent of accent tint.
+ * Tinted / Dark stay on the dark scheme; Light inverts the tonal scale for light surfaces.
+ */
+internal enum class AndySurfaceMode(val id: String, val label: String) {
+    Tinted("tinted", "Tinted"),
+    PitchBlack("pitch-black", "Dark"),
+    Light("light", "Light");
+
+    val isLight: Boolean get() = this == Light
+
+    companion object {
+        fun fromId(id: String): AndySurfaceMode = entries.firstOrNull { it.id == id } ?: Tinted
     }
 }
 
@@ -96,7 +113,15 @@ private data class AndyTonalPalette(
     val border: Color,
 ) {
     companion object {
-        fun from(tint: Color): AndyTonalPalette {
+        fun from(tint: Color, surfaceMode: AndySurfaceMode = AndySurfaceMode.Tinted): AndyTonalPalette {
+            return when (surfaceMode) {
+                AndySurfaceMode.PitchBlack -> pitchBlack()
+                AndySurfaceMode.Light -> light(tint)
+                AndySurfaceMode.Tinted -> tinted(tint)
+            }
+        }
+
+        fun tinted(tint: Color): AndyTonalPalette {
             val hsl = tint.toHsl()
             val surfaceSaturation = hsl.saturation.coerceIn(0.20f, 0.42f)
             fun surface(lightness: Float, saturation: Float) = hslColor(hsl.hue, saturation.coerceAtMost(surfaceSaturation), lightness)
@@ -116,22 +141,72 @@ private data class AndyTonalPalette(
                 border = hslColor(hsl.hue + 180f, 0.18f, 0.64f).copy(alpha = 0.14f),
             )
         }
+
+        /**
+         * Inverts the tonal ladder so existing Neutral900/Ink backgrounds and Neutral100/200
+         * text call sites stay correct without rewriting every screen.
+         */
+        fun light(tint: Color): AndyTonalPalette {
+            val hsl = tint.toHsl()
+            val surfaceSaturation = hsl.saturation.coerceIn(0.08f, 0.22f)
+            fun surface(lightness: Float, saturation: Float) =
+                hslColor(hsl.hue, saturation.coerceAtMost(surfaceSaturation), lightness)
+            return AndyTonalPalette(
+                neutral100 = surface(0.16f, 0.10f),
+                neutral200 = surface(0.24f, 0.09f),
+                neutral300 = surface(0.38f, 0.08f),
+                neutral400 = surface(0.48f, 0.07f),
+                neutral500 = surface(0.62f, 0.06f),
+                neutral600 = surface(0.78f, 0.05f),
+                neutral700 = surface(0.88f, 0.05f),
+                neutral750 = surface(0.92f, 0.04f),
+                neutral800 = surface(0.95f, 0.04f),
+                neutral850 = surface(0.97f, 0.03f),
+                neutral900 = surface(0.985f, 0.02f),
+                border = hslColor(hsl.hue + 180f, 0.10f, 0.42f).copy(alpha = 0.18f),
+            )
+        }
+
+        fun pitchBlack() = AndyTonalPalette(
+            neutral100 = Color(0xFFF5F5F5),
+            neutral200 = Color(0xFFE0E0E0),
+            neutral300 = Color(0xFFB0B0B0),
+            neutral400 = Color(0xFF808080),
+            neutral500 = Color(0xFF525252),
+            neutral600 = Color(0xFF3A3A3A),
+            neutral700 = Color(0xFF1F1F1F),
+            neutral750 = Color(0xFF141414),
+            neutral800 = Color(0xFF0A0A0A),
+            neutral850 = Color.Black,
+            neutral900 = Color.Black,
+            border = Color.White.copy(alpha = 0.12f),
+        )
     }
 }
 
-internal fun windowBackgroundForTint(tintId: String): Color =
-    AndyTonalPalette.from(AndyTint.fromId(tintId).color).neutral850
+internal fun windowBackgroundForTint(
+    tintId: String,
+    surfaceModeId: String = AndySurfaceMode.Tinted.id,
+): Color = AndyTonalPalette.from(
+    AndyTint.fromId(tintId).color,
+    AndySurfaceMode.fromId(surfaceModeId),
+).neutral850
 
 internal object AndyColors {
     private var selectedTint by mutableStateOf(AndyTint.Default)
+    private var selectedSurfaceMode by mutableStateOf(AndySurfaceMode.Tinted)
     private var tonalPalette by mutableStateOf(AndyTonalPalette.from(AndyTint.Default.color))
 
-    fun selectTint(id: String) {
+    fun selectTint(id: String, surfaceModeId: String = AndySurfaceMode.Tinted.id) {
         val tint = AndyTint.fromId(id)
-        if (selectedTint == tint) return
+        val surfaceMode = AndySurfaceMode.fromId(surfaceModeId)
+        if (selectedTint == tint && selectedSurfaceMode == surfaceMode) return
         selectedTint = tint
-        tonalPalette = AndyTonalPalette.from(tint.color)
+        selectedSurfaceMode = surfaceMode
+        tonalPalette = AndyTonalPalette.from(tint.color, surfaceMode)
     }
+
+    val isLight: Boolean get() = selectedSurfaceMode.isLight
 
     // HSL lightness is fixed per role; selected color contributes hue, not a wash of saturation.
     val Neutral100 get() = tonalPalette.neutral100
@@ -150,11 +225,11 @@ internal object AndyColors {
     val Orange get() = selectedTint.color
     val OrangeHover get() = selectedTint.color.copy(alpha = 0.88f)
     val OrangePressed get() = selectedTint.color.copy(alpha = 0.68f)
-    val OrangeSubtle get() = selectedTint.color.copy(alpha = 0.20f)
-    val OrangeBorder get() = selectedTint.color.copy(alpha = 0.58f)
+    val OrangeSubtle get() = selectedTint.color.copy(alpha = if (isLight) 0.14f else 0.20f)
+    val OrangeBorder get() = selectedTint.color.copy(alpha = if (isLight) 0.48f else 0.58f)
     val Green = Color(0xFF72C5A2)
     val GreenSoft = Color(0xFF9AD8BF)
-    val GreenSubtle = Color(0xFF102A28)
+    val GreenSubtle get() = if (isLight) Color(0xFFDCEFE7) else Color(0xFF102A28)
     val Blue get() = selectedTint.color
     val Warning = Color(0xFFE0B45C)
     val Error = Color(0xFFE37B70)
@@ -197,10 +272,14 @@ internal val Yellow = AndyColors.Warning
 internal val Red = AndyColors.Error
 
 @Composable
-fun AndyTheme(tintId: String = AndyTint.Default.id, content: @Composable () -> Unit) {
-    remember(tintId) { AndyColors.selectTint(tintId) }
-    MaterialTheme(
-        colorScheme = darkColorScheme(
+fun AndyTheme(
+    tintId: String = AndyTint.Default.id,
+    surfaceModeId: String = AndySurfaceMode.Tinted.id,
+    content: @Composable () -> Unit,
+) {
+    remember(tintId, surfaceModeId) { AndyColors.selectTint(tintId, surfaceModeId) }
+    val colorScheme = if (AndySurfaceMode.fromId(surfaceModeId).isLight) {
+        lightColorScheme(
             background = Ink,
             surface = Panel,
             surfaceVariant = PanelSoft,
@@ -211,7 +290,23 @@ fun AndyTheme(tintId: String = AndyTint.Default.id, content: @Composable () -> U
             onSurfaceVariant = TextSecondary,
             outline = Border,
             error = Red,
-        ),
+        )
+    } else {
+        darkColorScheme(
+            background = Ink,
+            surface = Panel,
+            surfaceVariant = PanelSoft,
+            primary = Rust,
+            secondary = Green,
+            onBackground = TextPrimary,
+            onSurface = TextPrimary,
+            onSurfaceVariant = TextSecondary,
+            outline = Border,
+            error = Red,
+        )
+    }
+    MaterialTheme(
+        colorScheme = colorScheme,
         typography = Typography(
             displayLarge = LocalTextStyle.current.copy(fontFamily = DisplayFont, fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp),
             headlineLarge = LocalTextStyle.current.copy(fontFamily = DisplayFont, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),

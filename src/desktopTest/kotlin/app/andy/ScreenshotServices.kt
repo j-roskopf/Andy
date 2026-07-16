@@ -118,7 +118,7 @@ internal object ScreenshotServices {
         override val frames: Flow<MirrorFrame> = flowOf(frame)
         override val status: Flow<String> = flowOf("Connected · 59.8 fps · H.264")
         override suspend fun connect(serial: String, config: MirrorVideoConfig) = CommandResult.success("Connected to Pixel 8 API 36")
-        override suspend fun disconnect() = Unit
+        override suspend fun disconnect(immediate: Boolean) = Unit
         override suspend fun sendInput(input: MirrorInput) = CommandResult.success()
         override suspend fun screenshot(serial: String) = ByteArray(32) { it.toByte() }
     }

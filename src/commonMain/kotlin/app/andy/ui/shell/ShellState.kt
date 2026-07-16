@@ -117,7 +117,7 @@ internal class ShellState(
         if (device.kind != DeviceKind.Emulator || device.state != DeviceConnectionState.Online) return
         scope.launch {
             stoppingEmulatorSerial = device.serial
-            services.mirror.disconnect()
+            services.mirror.disconnect(immediate = true)
             val result = services.avd.stopVirtualDevice(device.displayName)
             emulatorStopStatus = if (result.isSuccess) {
                 result.stdout.ifBlank { "Stopped ${device.displayName}" }

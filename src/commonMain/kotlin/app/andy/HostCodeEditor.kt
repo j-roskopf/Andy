@@ -2,6 +2,7 @@ package app.andy
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import app.andy.model.EditorSyntaxTheme
 
 @Composable
 expect fun HostCodeEditor(
@@ -9,6 +10,7 @@ expect fun HostCodeEditor(
     text: String,
     languageHint: String,
     modifier: Modifier = Modifier,
+    syntaxThemeId: String = EditorSyntaxTheme.Andy.id,
     onTextChange: (String, String) -> Unit,
     onSave: (String, String) -> Unit,
     onClose: () -> Unit,

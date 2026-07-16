@@ -60,15 +60,23 @@ class DesktopAvdService(
 
     override suspend fun listSystemImages(): List<SystemImage> = withContext(Dispatchers.IO) {
         val sdk = locator.discover(preferredSdkPath())
-        val sdkManager = sdk.sdkManagerPath ?: return@withContext emptyList()
-        val installed = runner.run(listOf(sdkManager, "--list_installed"), 30).stdout
-        val available = runner.run(listOf(sdkManager, "--list"), 45).stdout
-        val parsedInstalled = AndroidParsers.parseSystemImages(installed).map { img ->
+        val sdkManager = sdk.sdkManagerPath
+            ?: throw IllegalStateException("Android SDK cmdline-tools (sdkmanager) not found")
+        val installedResult = runner.run(listOf(sdkManager, "--list_installed"), 30)
+        val availableResult = runner.run(listOf(sdkManager, "--list"), 45)
+        if (!installedResult.isSuccess && !availableResult.isSuccess) {
+            val detail = listOf(installedResult.stderr, availableResult.stderr, installedResult.stdout, availableResult.stdout)
+                .firstOrNull { it.isNotBlank() }
+                ?.lineSequence()?.firstOrNull { it.isNotBlank() }
+                ?.trim()
+            throw IllegalStateException(detail ?: "sdkmanager failed to list system images")
+        }
+        val parsedInstalled = AndroidParsers.parseSystemImages(installedResult.stdout).map { img ->
             val dir = File(sdk.sdkPath, img.packageId.replace(';', File.separatorChar))
             val size = if (dir.exists()) getDirectorySize(dir) else 0L
             img.copy(installed = true, sizeOnDisk = size)
         }
-        val parsedAvailable = AndroidParsers.parseSystemImages(available).map { img ->
+        val parsedAvailable = AndroidParsers.parseSystemImages(availableResult.stdout).map { img ->
             img.copy(sizeOnDisk = estimateSize(img.packageId))
         }
         (parsedInstalled + parsedAvailable).distinctBy { it.packageId }
@@ -76,7 +84,9 @@ class DesktopAvdService(
 
     override suspend fun listProfiles(): List<AvdProfile> {
         val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return emptyList()
-        return AndroidParsers.parseProfiles(runner.run(listOf(avdManager, "list", "device"), 20).stdout)
+        val result = runner.run(listOf(avdManager, "list", "device"), 20)
+        if (!result.isSuccess) return emptyList()
+        return AndroidParsers.parseProfiles(result.stdout)
     }
 
     override suspend fun listVirtualDevices(): List<VirtualDevice> {

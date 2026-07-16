@@ -27,5 +27,20 @@ class DesktopWorkspaceStoreTest {
 
         file.writeText(file.readText().replace("tintId=violet", "tintId=not-a-tint"))
         assertEquals("andy-blue", DesktopWorkspaceStore(file).load().tintId)
+
+        DesktopWorkspaceStore(file).save(saved.copy(surfaceModeId = "pitch-black"))
+        assertEquals("pitch-black", DesktopWorkspaceStore(file).load().surfaceModeId)
+
+        DesktopWorkspaceStore(file).save(saved.copy(surfaceModeId = "light"))
+        assertEquals("light", DesktopWorkspaceStore(file).load().surfaceModeId)
+
+        file.writeText(file.readText().replace("surfaceModeId=light", "surfaceModeId=not-a-mode"))
+        assertEquals("tinted", DesktopWorkspaceStore(file).load().surfaceModeId)
+
+        DesktopWorkspaceStore(file).save(saved.copy(editorSyntaxThemeId = "monokai"))
+        assertEquals("monokai", DesktopWorkspaceStore(file).load().editorSyntaxThemeId)
+
+        file.writeText(file.readText().replace("editorSyntaxThemeId=monokai", "editorSyntaxThemeId=not-a-theme"))
+        assertEquals("andy", DesktopWorkspaceStore(file).load().editorSyntaxThemeId)
     }
 }

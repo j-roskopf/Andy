@@ -71,7 +71,7 @@ fun main() {
             requestPopOutMirror = true
         }
         fun quitApp() {
-            runBlocking { services.mirror.disconnect() }
+            runBlocking { services.mirror.disconnect(immediate = true) }
             exitApplication()
         }
         DisposableEffect(Unit) {
@@ -134,8 +134,11 @@ fun main() {
                 window.addWindowListener(listener)
                 onDispose { window.removeWindowListener(listener) }
             }
-            LaunchedEffect(window, workspaceState.tintId) {
-                configureMacTitleBar(window, windowBackgroundForTint(workspaceState.tintId))
+            LaunchedEffect(window, workspaceState.tintId, workspaceState.surfaceModeId) {
+                configureMacTitleBar(
+                    window,
+                    windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
+                )
             }
             MenuBar {
                 Menu("Go") {
@@ -194,6 +197,7 @@ fun main() {
                     deviceName = popOutDeviceName,
                     controlsVisible = popOutControlsVisible,
                     tintId = workspaceState.tintId,
+                    surfaceModeId = workspaceState.surfaceModeId,
                 )
             }
         }

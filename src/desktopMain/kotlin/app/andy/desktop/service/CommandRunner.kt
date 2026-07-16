@@ -21,6 +21,7 @@ class CommandRunner(
         runCatching {
             val process = ProcessBuilder(command)
                 .redirectErrorStream(false)
+                .also { ensureJavaHome(it.environment()) }
                 .start()
             val readerPool = Executors.newFixedThreadPool(2)
             val stdoutFuture = readerPool.submit(Callable { process.inputStream.bufferedReader().readText() })
@@ -59,5 +60,44 @@ class CommandRunner(
         if (path.isNullOrBlank()) return null
         val file = File(path)
         return file.takeIf { it.exists() && it.canExecute() }?.absolutePath
+    }
+}
+
+/**
+ * Packaged Andy launched from Finder/Dock often inherits no usable `JAVA_HOME`.
+ * Android cmdline-tools (`sdkmanager`, `avdmanager`) need one, so point them at
+ * the JVM already running Andy when the inherited value is missing or invalid.
+ */
+internal fun ensureJavaHome(
+    env: MutableMap<String, String>,
+    javaHomeProperty: String? = System.getProperty("java.home"),
+) {
+    val candidate = resolveJavaHome(javaHomeProperty) ?: return
+    val existing = env.entries.firstOrNull { it.key.equals("JAVA_HOME", ignoreCase = true) }?.value
+    val existingUsable = !existing.isNullOrBlank() &&
+        (File(existing, "bin/java").canExecute() || File(existing, "bin/java.exe").canExecute())
+    if (!existingUsable) {
+        env.keys.filter { it.equals("JAVA_HOME", ignoreCase = true) }.forEach(env::remove)
+        env["JAVA_HOME"] = candidate.absolutePath
+    }
+    val bin = File(candidate, "bin").absolutePath
+    val pathKey = env.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
+    val pathParts = env[pathKey].orEmpty().split(File.pathSeparator).filter { it.isNotBlank() }
+    if (pathParts.none { it == bin }) {
+        env[pathKey] = (listOf(bin) + pathParts).joinToString(File.pathSeparator)
+    }
+}
+
+private fun resolveJavaHome(javaHomeProperty: String?): File? {
+    if (javaHomeProperty.isNullOrBlank()) return null
+    val home = File(javaHomeProperty)
+    val direct = home.takeIf {
+        File(it, "bin/java").canExecute() || File(it, "bin/java.exe").canExecute()
+    }
+    if (direct != null) return direct
+    // Some JREs nest under a `jre` directory; climb one level if needed.
+    val parent = home.parentFile ?: return null
+    return parent.takeIf {
+        File(it, "bin/java").canExecute() || File(it, "bin/java.exe").canExecute()
     }
 }

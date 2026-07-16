@@ -132,6 +132,7 @@ internal fun Toolbar(
     subtitle: String,
     onPrimary: (() -> Unit)? = null,
     primaryLabel: String = "Run",
+    primaryEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Row(modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -147,7 +148,15 @@ internal fun Toolbar(
                 Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp)
             }
         }
-        if (onPrimary != null) Button(onClick = onPrimary, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        if (onPrimary != null) {
+            Button(
+                onClick = onPrimary,
+                enabled = primaryEnabled,
+                colors = primaryButtonColors(),
+                shape = RoundedCornerShape(AndyRadius.R2),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            ) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
 
