@@ -24,8 +24,8 @@ internal class BugsScreenState(
     var playbackStartFrameIndex by mutableStateOf(0)
     var isInspectingPlayback by mutableStateOf(false)
     var status by mutableStateOf("")
-    var stepsPaneWidth by mutableStateOf(380f)
-    var bugDetailsPaneWidth by mutableStateOf(320f)
+    var stepsPaneWidth by mutableStateOf(260f)
+    var bugDetailsPaneWidth by mutableStateOf(240f)
     val expandedStepIds = mutableStateMapOf<String, Boolean>()
 
     fun toggleReplay() {
