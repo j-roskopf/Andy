@@ -270,11 +270,16 @@ class DesktopAppUpdateService(
             }
             UpdatePlatform.MacOs -> {
                 val helper = helperFile("andy-update.sh")
-                helper.writeText(macPkgInstallerHelperScript(file.absolutePath))
+                helper.writeText(
+                    macDmgInstallerHelperScript(
+                        dmgPath = file.absolutePath,
+                        targetAppBundle = currentMacAppBundle(),
+                        parentProcessId = ProcessHandle.current().pid(),
+                    ),
+                )
                 helper.setExecutable(true)
-                // Keep the helper fully detached from Andy. In particular, it
-                // must only hand the archive to macOS and never share the
-                // app's streams or run a follow-up relaunch command.
+                // Keep the helper fully detached from Andy so it can replace the app bundle
+                // only after the running JVM has released it.
                 macInstallerProcessBuilder(helper.absolutePath).start()
                 exitProcess(0)
             }
@@ -445,14 +450,117 @@ internal fun windowsInstallerHelperScript(
     """.trimIndent()
 }
 
-internal fun macPkgInstallerHelperScript(pkgPath: String): String {
+internal fun macDmgInstallerHelperScript(
+    dmgPath: String,
+    targetAppBundle: String?,
+    parentProcessId: Long,
+): String {
+    if (targetAppBundle == null) return macDmgOpenHelperScript(dmgPath)
+
     return """
         #!/bin/sh
-        sleep 1
-        # exec makes this a one-way handoff: once macOS opens the update
-        # archive, there is no helper shell left that could reopen Andy.
-        exec /usr/bin/open -W ${pkgPath.shellQuote()}
+        set -eu
+
+        dmg_path=${dmgPath.shellQuote()}
+        target_app=${targetAppBundle.shellQuote()}
+        parent_pid=$parentProcessId
+        work_dir="${'$'}(/usr/bin/mktemp -d "${'$'}{TMPDIR:-/tmp}/andy-update.XXXXXX")"
+        mount_point="${'$'}work_dir/mount"
+        staging_app="${'$'}{target_app}.update"
+        backup_app="${'$'}{target_app}.previous"
+
+        shell_quote() {
+          printf "'%s'" "${'$'}(printf '%s' "${'$'}1" | /usr/bin/sed "s/'/'\\\"'\\\"'/g")"
+        }
+
+        cleanup() {
+          /usr/bin/hdiutil detach "${'$'}mount_point" -quiet >/dev/null 2>&1 || true
+          /bin/rm -rf "${'$'}work_dir"
+        }
+        trap cleanup EXIT HUP INT TERM
+
+        # Wait for Andy itself rather than relying on a fixed delay before changing its bundle.
+        while /bin/kill -0 "${'$'}parent_pid" 2>/dev/null; do
+          /bin/sleep 0.1
+        done
+
+        /usr/bin/mkdir -p "${'$'}mount_point"
+        /usr/bin/hdiutil attach "${'$'}dmg_path" -nobrowse -readonly -mountpoint "${'$'}mount_point" >/dev/null
+        source_app=""
+        for candidate in "${'$'}mount_point"/*.app; do
+          if [ -d "${'$'}candidate" ]; then
+            source_app="${'$'}candidate"
+            break
+          fi
+        done
+        if [ -z "${'$'}source_app" ]; then
+          echo "The update disk image does not contain an app bundle." >&2
+          exit 1
+        fi
+        /usr/bin/codesign --verify --deep --strict "${'$'}source_app"
+
+        install_app() {
+          /bin/rm -rf "${'$'}staging_app" "${'$'}backup_app"
+          /usr/bin/ditto "${'$'}source_app" "${'$'}staging_app"
+          if [ -e "${'$'}target_app" ]; then
+            /bin/mv "${'$'}target_app" "${'$'}backup_app"
+          fi
+          if /bin/mv "${'$'}staging_app" "${'$'}target_app"; then
+            /bin/rm -rf "${'$'}backup_app"
+          else
+            [ ! -e "${'$'}backup_app" ] || /bin/mv "${'$'}backup_app" "${'$'}target_app"
+            return 1
+          fi
+        }
+
+        reopen_current_app() {
+          [ ! -d "${'$'}target_app" ] || /usr/bin/open "${'$'}target_app"
+        }
+
+        if [ -w "${'$'}(/usr/bin/dirname "${'$'}target_app")" ]; then
+          if ! install_app; then
+            reopen_current_app
+            exit 1
+          fi
+        else
+          # Use the system authorization prompt only when the existing install location needs it.
+          admin_command="/bin/rm -rf ${'$'}(shell_quote "${'$'}staging_app") ${'$'}(shell_quote "${'$'}backup_app"); /usr/bin/ditto ${'$'}(shell_quote "${'$'}source_app") ${'$'}(shell_quote "${'$'}staging_app"); if [ -e ${'$'}(shell_quote "${'$'}target_app") ]; then /bin/mv ${'$'}(shell_quote "${'$'}target_app") ${'$'}(shell_quote "${'$'}backup_app"); fi; if /bin/mv ${'$'}(shell_quote "${'$'}staging_app") ${'$'}(shell_quote "${'$'}target_app"); then /bin/rm -rf ${'$'}(shell_quote "${'$'}backup_app"); else if [ -e ${'$'}(shell_quote "${'$'}backup_app") ]; then /bin/mv ${'$'}(shell_quote "${'$'}backup_app") ${'$'}(shell_quote "${'$'}target_app"); fi; exit 1; fi"
+          escaped_command="${'$'}(printf '%s' "${'$'}admin_command" | /usr/bin/sed 's/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g')"
+          if ! /usr/bin/osascript -e "do shell script \"${'$'}escaped_command\" with administrator privileges"; then
+            reopen_current_app
+            exit 1
+          fi
+        fi
+
+        /usr/bin/open "${'$'}target_app"
     """.trimIndent() + "\n"
+}
+
+internal fun macDmgOpenHelperScript(dmgPath: String): String =
+    """
+        #!/bin/sh
+        sleep 1
+        exec /usr/bin/open -W ${dmgPath.shellQuote()}
+    """.trimIndent() + "\n"
+
+private fun currentMacAppBundle(): String? {
+    val launcherPath = ProcessHandle.current().info().command().orElse(null)
+    val packagedCodePath = runCatching {
+        File(DesktopAppUpdateService::class.java.protectionDomain.codeSource.location.toURI()).absolutePath
+    }.getOrNull()
+    return sequenceOf(launcherPath, packagedCodePath)
+        .mapNotNull(::macAppBundleForPath)
+        .firstOrNull()
+}
+
+internal fun macAppBundleForPath(path: String?): String? {
+    if (path == null) return null
+    // Accept both separators so the pure path logic stays testable on Windows CI.
+    val markerIndex = sequenceOf(".app/", ".app\\")
+        .mapNotNull { marker -> path.indexOf(marker).takeIf { it >= 0 } }
+        .minOrNull() ?: return null
+    return path.substring(0, markerIndex + ".app".length)
+        .takeIf { File(it).isDirectory }
 }
 
 internal fun macInstallerProcessBuilder(helperPath: String): ProcessBuilder =

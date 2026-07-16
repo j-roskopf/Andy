@@ -1,6 +1,7 @@
 package app.andy.desktop.updates
 
 import app.andy.service.UpdatePlatform
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -35,11 +36,66 @@ class DesktopAppUpdateServiceTest {
     }
 
     @Test
-    fun macInstallerDoesNotRelaunchAndy() {
-        val script = macPkgInstallerHelperScript("/tmp/Andy-1.2.3.pkg")
+    fun macDmgInstallerReplacesAndRelaunchesAppBundle() {
+        val script = macDmgInstallerHelperScript(
+            dmgPath = "/tmp/Andy-1.2.3.dmg",
+            targetAppBundle = "/Applications/Andy.app",
+            parentProcessId = 1234,
+        )
 
-        assertTrue(script.contains("exec /usr/bin/open -W '/tmp/Andy-1.2.3.pkg'"))
-        assertTrue(!script.contains("open -a Andy"))
+        assertTrue(script.contains("/usr/bin/hdiutil attach \"${'$'}dmg_path\""))
+        assertTrue(script.contains("/usr/bin/codesign --verify --deep --strict \"${'$'}source_app\""))
+        assertTrue(script.contains("/usr/bin/ditto \"${'$'}source_app\" \"${'$'}staging_app\""))
+        assertTrue(script.contains("with administrator privileges"))
+        assertTrue(script.contains("reopen_current_app"))
+        assertTrue(script.contains("/usr/bin/open \"${'$'}target_app\""))
+    }
+
+    @Test
+    fun macDmgInstallerFallsBackToOpeningTheDmgOutsideAnAppBundle() {
+        val script = macDmgInstallerHelperScript(
+            dmgPath = "/tmp/Andy-1.2.3.dmg",
+            targetAppBundle = null,
+            parentProcessId = 1234,
+        )
+
+        assertTrue(script.contains("exec /usr/bin/open -W '/tmp/Andy-1.2.3.dmg'"))
+    }
+
+    @Test
+    fun macDmgInstallerIsValidShell() {
+        // The syntax check needs a POSIX shell, which Windows CI lacks.
+        if (!java.io.File("/bin/sh").exists()) return
+        val script = macDmgInstallerHelperScript(
+            dmgPath = "/tmp/Andy-1.2.3.dmg",
+            targetAppBundle = "/Applications/Andy.app",
+            parentProcessId = 1234,
+        )
+        val file = Files.createTempFile("andy-update", ".sh").toFile()
+        try {
+            file.writeText(script)
+            val process = ProcessBuilder("/bin/sh", "-n", file.absolutePath).start()
+            assertEquals(0, process.waitFor(), process.errorStream.bufferedReader().readText())
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun recognizesPackagedMacAppFromLauncherAndJarPaths() {
+        val tempDir = Files.createTempDirectory("andy-update")
+        val app = tempDir.resolve("Andy.app")
+        try {
+            val launcher = app.resolve("Contents/MacOS/Andy")
+            val jar = app.resolve("Contents/app/andy.jar")
+            Files.createDirectories(launcher.parent)
+            Files.createDirectories(jar.parent)
+
+            assertEquals(app.toString(), macAppBundleForPath(launcher.toString()))
+            assertEquals(app.toString(), macAppBundleForPath(jar.toString()))
+        } finally {
+            tempDir.toFile().deleteRecursively()
+        }
     }
 
     @Test

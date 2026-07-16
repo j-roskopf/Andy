@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -75,7 +74,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-private fun AgentCommandCenter(services: AndyServices, active: Boolean, requestedTaskId: String?, onRequestedTaskConsumed: () -> Unit) {
+private fun AgentCommandCenter(
+    services: AndyServices,
+    active: Boolean,
+    requestedTaskId: String?,
+    onRequestedTaskConsumed: () -> Unit,
+    compactToolCalls: Boolean,
+) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
     val statuses by services.agentRuns.cliStatuses.collectAsState()
@@ -122,8 +127,12 @@ private fun AgentCommandCenter(services: AndyServices, active: Boolean, requeste
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     FilterPill("All", !activeOnly, Cyan) { activeOnly = false }
                     FilterPill("Live", activeOnly, Green) { activeOnly = true }
-                    Spacer(Modifier.weight(1f))
-                    Text("${statuses.count { it.ready }}/${statuses.size}", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                }
+                if (statuses.isNotEmpty()) {
+                    AgentReadinessStrip(
+                        readyCount = statuses.count { it.ready },
+                        totalCount = statuses.size,
+                    )
                 }
                 if (inbox.isEmpty()) EmptyState(if (query.isBlank()) "No tasks yet" else "No matching tasks") else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
                     items(inbox, key = { it.id }) { task -> AgentTaskCard(task, null, !composing && task.id == selected?.id, nowMillis, onClick = { selectedTaskId = task.id; composing = false; if (task.unread) services.agentRuns.markRead(task.id) }, onMarkUnread = { services.agentRuns.markUnread(task.id) }) }
@@ -131,12 +140,44 @@ private fun AgentCommandCenter(services: AndyServices, active: Boolean, requeste
             }
             PaneDivider(onDrag = {})
             PanelCard(Modifier.fillMaxSize()) {
-                if (composing) {
-                    AgentTaskComposerPane(services, statuses, null, onCancel = { composing = false }, onSubmit = { draft -> scope.launch { selectedTaskId = services.agentRuns.createAndStart(draft).id; composing = false } }, modifier = Modifier.fillMaxSize())
-                } else if (selected == null) {
-                    EmptyState("Select a task or start a new one")
-                } else {
-                    AgentTaskDetail(services, selected, nowMillis, onDelete = { task -> pendingConfirmation = PendingConfirmation("Delete task?", task.title) { scope.launch { services.agentRuns.delete(task.id, task.worktreePath != null); selectedTaskId = null } } }, modifier = Modifier.fillMaxSize())
+                Box(Modifier.fillMaxSize()) {
+                    // Keep the composer mounted so draft text/images survive opening a transcript.
+                    RetainedDestination(active = composing) {
+                        AgentTaskComposerPane(
+                            services,
+                            statuses,
+                            null,
+                            onCancel = { composing = false },
+                            onSubmit = { draft ->
+                                scope.launch {
+                                    selectedTaskId = services.agentRuns.createAndStart(draft).id
+                                    composing = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    if (!composing) {
+                        if (selected == null) {
+                            EmptyState("Select a task or start a new one")
+                        } else {
+                            AgentTaskDetail(
+                                services,
+                                selected,
+                                nowMillis,
+                                onDelete = { task ->
+                                    pendingConfirmation = PendingConfirmation("Delete task?", task.title) {
+                                        scope.launch {
+                                            services.agentRuns.delete(task.id, task.worktreePath != null)
+                                            selectedTaskId = null
+                                        }
+                                    }
+                                },
+                                compactToolCalls = compactToolCalls,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -150,20 +191,9 @@ internal fun AgentsScreen(
     active: Boolean = true,
     requestedTaskId: String? = null,
     onRequestedTaskConsumed: () -> Unit = {},
+    compactToolCalls: Boolean = true,
 ) {
-    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed)
-}
-
-@Composable
-private fun AgentSessionLabel(title: String, count: Int) {
-    Row(
-        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, color = TextSecondary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-        Text("$count", color = TextSecondary.copy(alpha = 0.72f), fontFamily = MonoFont, fontSize = 10.sp)
-    }
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, compactToolCalls)
 }
 
 @Composable
@@ -288,12 +318,6 @@ private fun AgentTaskCard(
             )
         }
     }
-}
-
-private enum class AgentSessionFilter(val label: String) {
-    All("All"),
-    Active("Active"),
-    Finished("Finished"),
 }
 
 @Composable

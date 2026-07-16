@@ -47,6 +47,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -371,6 +372,7 @@ private fun rememberAgentTaskComposerForm(
         directory = directory,
         showModelSection = showModelSection,
         selectedModel = selectedModel,
+        availableSkills = availableSkills,
         slashCommand = slashCommand,
         matchingCommands = matchingCommands,
         matchingSkills = matchingSkills,
@@ -388,6 +390,7 @@ private class AgentTaskComposerForm(
     val directory: String?,
     val showModelSection: Boolean,
     val selectedModel: AgentModelOption?,
+    val availableSkills: List<AgentSkill>,
     val slashCommand: ComposerSlashCommand?,
     val matchingCommands: List<AgentNativeSlashCommand>,
     val matchingSkills: List<AgentSkill>,
@@ -442,6 +445,41 @@ private class AgentTaskComposerForm(
 }
 
 @Composable
+private fun rememberComposerSlashHighlight(form: AgentTaskComposerForm) =
+    rememberComposerSlashHighlight(
+        agent = form.state.agent,
+        availableSkills = form.availableSkills,
+    )
+
+@Composable
+internal fun rememberComposerSlashHighlight(
+    agent: AgentKind,
+    availableSkills: List<AgentSkill>,
+): VisualTransformation {
+    val skillNames = remember(availableSkills) { availableSkills.mapTo(linkedSetOf()) { it.name } }
+    val commandNames = remember(agent) {
+        AgentNativeSlashCommands.forAgent(agent).mapTo(linkedSetOf()) { it.name }
+    }
+    return rememberComposerSlashHighlight(
+        skillNames = skillNames,
+        commandNames = commandNames,
+    )
+}
+
+@Composable
+internal fun rememberComposerSlashHighlight(
+    skillNames: Set<String>,
+    commandNames: Set<String>,
+) = remember(skillNames, commandNames, Cyan, Green) {
+    composerSlashTokenTransformation(
+        skillNames = skillNames,
+        commandNames = commandNames,
+        skillColor = Cyan,
+        commandColor = Green,
+    )
+}
+
+@Composable
 private fun AgentChatComposer(
     form: AgentTaskComposerForm,
     showOptions: Boolean,
@@ -455,6 +493,7 @@ private fun AgentChatComposer(
     var effortMenuExpanded by remember { mutableStateOf(false) }
     var sandboxMenuExpanded by remember { mutableStateOf(false) }
     val canSubmit = form.canSubmit
+    val slashHighlight = rememberComposerSlashHighlight(form)
 
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
@@ -495,6 +534,7 @@ private fun AgentChatComposer(
                     ),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
                 colors = fieldColors(),
+                visualTransformation = slashHighlight,
                 placeholder = {
                     Text(
                         if (state.imageDragActive) "release to attach image" else "What should ${state.agent.label} work on?",
@@ -561,16 +601,23 @@ private fun AgentChatComposer(
         }
 
         if (form.selectedSkills.isNotEmpty() || state.imagePaths.isNotEmpty()) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                form.selectedSkills.forEach { skill ->
-                    FilterPill("/${skill.name} ×", true, Cyan) {
-                        state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (form.selectedSkills.isNotEmpty()) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        form.selectedSkills.forEach { skill ->
+                            FilterPill("/${skill.name} ×", true, Cyan) {
+                                state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
+                            }
+                        }
                     }
                 }
-                state.imagePaths.forEach { path ->
-                    FilterPill("${imageFileName(path)} ×", false, Cyan) {
-                        state.imagePaths = state.imagePaths.filterNot { it == path }
-                    }
+                if (state.imagePaths.isNotEmpty()) {
+                    ChatAttachedImages(
+                        paths = state.imagePaths,
+                        onRemove = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
+                        maxWidth = 140.dp,
+                        maxHeight = 100.dp,
+                    )
                 }
             }
         }
@@ -695,6 +742,7 @@ private fun AgentTaskComposerFields(
 ) {
     val state = form.state
     val scope = form.scope
+    val slashHighlight = rememberComposerSlashHighlight(form)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (showProjectHeader && form.projectContext != null) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -758,6 +806,7 @@ private fun AgentTaskComposerFields(
                         ),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     colors = fieldColors(),
+                    visualTransformation = slashHighlight,
                     placeholder = {
                         Text("type / for ${state.agent.label} commands or skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
                     },
@@ -822,13 +871,12 @@ private fun AgentTaskComposerFields(
             Text("drop image files onto the prompt to attach them", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         } else if (showPrompt) {
             Text("Attached images", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.imagePaths.forEach { path ->
-                    FilterPill("${imageFileName(path)} ×", false, Cyan) {
-                        state.imagePaths = state.imagePaths.filterNot { it == path }
-                    }
-                }
-            }
+            ChatAttachedImages(
+                paths = state.imagePaths,
+                onRemove = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
+                maxWidth = 140.dp,
+                maxHeight = 100.dp,
+            )
         }
 
         if (showContextPicker) {
@@ -924,8 +972,6 @@ private fun AgentTaskComposerFields(
 }
 
 private const val CUSTOM_MODEL_ID = "__custom__"
-
-private fun imageFileName(path: String): String = path.substringAfterLast('/').substringAfterLast('\\')
 
 internal fun String.toMaxBudgetUsd(): Double? = trim()
     .toDoubleOrNull()

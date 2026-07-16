@@ -136,14 +136,20 @@ class AndyDesktopScreenshotTest {
                     waitForIdle()
                     when (scenario) {
                         AndyScreenshotScenario.ProjectsProfiles -> {
+                            onNodeWithText("tasks").performClick()
+                            waitForIdle()
                             onNodeWithText("Profiles").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.ProjectsNewBuild -> {
+                            onNodeWithText("tasks").performClick()
+                            waitForIdle()
                             onNodeWithText("New build").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.ProjectsNewSpec -> {
+                            onNodeWithText("tasks").performClick()
+                            waitForIdle()
                             onNodeWithText("New spec").performClick()
                             waitForIdle()
                             onNodeWithTag("spec-title-field").performTextInput("Postal code edge cases")

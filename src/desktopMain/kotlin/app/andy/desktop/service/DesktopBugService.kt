@@ -63,6 +63,7 @@ class DesktopBugService(
     private var captureSerial: String? = null
     private var captureDevice: AndroidDevice? = null
     private var captureStartedAtMillis: Long = 0L
+    private var recordingActive = false
     private var frameJob: Job? = null
     private var encodedJob: Job? = null
     private var logJob: Job? = null
@@ -76,14 +77,11 @@ class DesktopBugService(
         if (captureSerial == serial && status.value.active) return
         stopCapture()
         synchronized(lock) {
-            actions.clear()
-            logs.clear()
-            frames.clear()
-            h264Units.clear()
-            latestH264Config = null
+            clearCaptureLocked()
             captureSerial = serial
             captureDevice = device
             captureStartedAtMillis = System.currentTimeMillis()
+            recordingActive = false
             lastFrameSampledAtMillis = 0L
         }
         status.value = BugCaptureStatus(active = true, deviceSerial = serial, message = "Recording last 30s for $serial")
@@ -171,8 +169,22 @@ class DesktopBugService(
             captureSerial = null
             captureDevice = null
             captureStartedAtMillis = 0L
+            recordingActive = false
         }
         status.value = BugCaptureStatus(message = "Bug capture idle")
+    }
+
+    override suspend fun beginRecording() {
+        val serial = synchronized(lock) {
+            checkNotNull(captureSerial) { "Connect to a device before recording." }
+            clearCaptureLocked()
+            captureStartedAtMillis = System.currentTimeMillis()
+            recordingActive = true
+            captureSerial
+        }
+        synchronized(lock) {
+            publishStatusLocked("Recording screen and inputs for $serial")
+        }
     }
 
     override fun recordAction(kind: String, label: String, detail: String?) {
@@ -223,7 +235,32 @@ class DesktopBugService(
         return parseForegroundScreen(activityOutput, windowOutput, semantic)
     }
 
-    override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = withContext(Dispatchers.IO) {
+    override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = saveCapture(
+        draft = draft,
+        device = device,
+        idPrefix = "bug-",
+    )
+
+    override suspend fun saveRecording(device: AndroidDevice?): BugReport {
+        val report = saveCapture(
+            draft = BugCaptureDraft(title = "Screen recording"),
+            device = device,
+            idPrefix = "recording-",
+        )
+        synchronized(lock) {
+            clearCaptureLocked()
+            captureStartedAtMillis = System.currentTimeMillis()
+            recordingActive = false
+            publishStatusLocked("Bug capture ready")
+        }
+        return report
+    }
+
+    private suspend fun saveCapture(
+        draft: BugCaptureDraft,
+        device: AndroidDevice?,
+        idPrefix: String,
+    ): BugReport = withContext(Dispatchers.IO) {
         val title = draft.title.trim()
         require(title.isNotBlank()) { "Bug title is required" }
         val now = System.currentTimeMillis()
@@ -240,7 +277,7 @@ class DesktopBugService(
                 h264Config = latestH264Config?.copyOf(),
             )
         }
-        val reportId = "bug-$now"
+        val reportId = "$idPrefix$now"
         val reportDir = File(bugsDir, reportId).apply { mkdirs() }
         val captureFile = File(reportDir, "capture.mp4")
         val logFile = File(reportDir, "logcat.txt")
@@ -288,11 +325,11 @@ class DesktopBugService(
     }
 
     override suspend fun listBugs(): List<BugReport> = withContext(Dispatchers.IO) {
-        bugsDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { readReport(it) }
-            ?.sortedByDescending { it.capturedAtMillis }
-            ?: emptyList()
+        listReports("bug-")
+    }
+
+    override suspend fun listRecordings(): List<BugReport> = withContext(Dispatchers.IO) {
+        listReports("recording-")
     }
 
     override suspend fun loadBug(id: String): BugReport? = withContext(Dispatchers.IO) {
@@ -355,6 +392,11 @@ class DesktopBugService(
                 val image = converter.convert(grabbed) ?: continue
                 emit(image.toMirrorFrame(frameNumber))
             }
+        } catch (_: Throwable) {
+            // Older captures may have been written by the packet-copy path as a header-only MP4.
+            // Preserve their logs/actions and leave the replay surface empty instead of failing a
+            // Compose collector on the AWT event thread.
+            return@flow
         } finally {
             runCatching { grabber.stop() }
             runCatching { grabber.release() }
@@ -405,8 +447,9 @@ class DesktopBugService(
     private fun encodeCaptureVideo(snapshot: BugSnapshot, captureFile: File): VideoEncodeMeta {
         if (snapshot.h264Units.isNotEmpty()) {
             val meta = remuxH264Mp4(snapshot.h264Units, snapshot.h264Config, captureFile)
-            if (captureFile.isFile && captureFile.length() > 0L) return meta
+            if (isPlayableCapture(captureFile)) return meta
         }
+        captureFile.delete()
         encodeArgbMp4(snapshot.frames, captureFile)
         return VideoEncodeMeta(
             frameRate = ARGB_FALLBACK_FRAME_RATE,
@@ -493,17 +536,34 @@ class DesktopBugService(
             // Prefer bitstream copy (full live FPS/quality). OpenH264 re-encode is fallback only —
             // the bundled FFmpeg has no libx264, and VT H.264 encode races the live decoder.
             packetCopyH264(raw, file, width, height, estimatedFps)
-            if (!file.isFile || file.length() == 0L) {
+            // Packet copy can leave a tiny MP4 with a `moov` box but no video track. Validate by
+            // decoding a frame instead of trusting its size before accepting that fast path.
+            if (!isPlayableCapture(file)) {
+                file.delete()
                 transcodeH264(raw, file, width, height, estimatedFps)
             }
         } catch (_: Throwable) {
-            if (!file.isFile || file.length() == 0L) {
-                file.writeBytes(ByteArray(0))
-            }
+            file.writeBytes(ByteArray(0))
         } finally {
             raw.delete()
         }
         return meta
+    }
+
+    private fun isPlayableCapture(file: File): Boolean {
+        if (!file.isFile || file.length() == 0L) return false
+        val grabber = FFmpegFrameGrabber(file)
+        val converter = Java2DFrameConverter()
+        return try {
+            grabber.start()
+            generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert) != null
+        } catch (_: Throwable) {
+            false
+        } finally {
+            runCatching { grabber.stop() }
+            runCatching { grabber.release() }
+            converter.close()
+        }
     }
 
     private fun packetCopyH264(raw: File, file: File, width: Int, height: Int, frameRate: Double) {
@@ -597,12 +657,30 @@ class DesktopBugService(
     }
 
     private fun trimLocked(now: Long) {
+        if (recordingActive) return
         val cutoff = now - WINDOW_MILLIS
         while (actions.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) actions.removeFirst()
         while (logs.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) logs.removeFirst()
         while (frames.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) frames.removeFirst()
         while (h264Units.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) h264Units.removeFirst()
     }
+
+    private fun clearCaptureLocked() {
+        actions.clear()
+        logs.clear()
+        frames.clear()
+        h264Units.clear()
+        latestH264Config = null
+        lastFrameSampledAtMillis = 0L
+    }
+
+    private fun listReports(idPrefix: String): List<BugReport> = bugsDir.listFiles()
+        ?.asSequence()
+        ?.filter { it.isDirectory && it.name.startsWith(idPrefix) }
+        ?.mapNotNull(::readReport)
+        ?.sortedByDescending { it.capturedAtMillis }
+        ?.toList()
+        ?: emptyList()
 
     private fun publishStatusLocked(message: String) {
         status.value = BugCaptureStatus(

@@ -210,9 +210,12 @@ internal object ScreenshotServices {
         override val status = flowOf(BugCaptureStatus(true, serial, 2, 18, 3, "Capturing Pixel 8 API 36"))
         override suspend fun startCapture(serial: String, device: AndroidDevice?) = Unit
         override suspend fun stopCapture() = Unit
+        override suspend fun beginRecording() = Unit
         override fun recordAction(kind: String, label: String, detail: String?) = Unit
         override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?) = report
+        override suspend fun saveRecording(device: AndroidDevice?) = report.copy(id = "recording-001", title = "Screen recording")
         override suspend fun listBugs() = listOf(report)
+        override suspend fun listRecordings() = listOf(report.copy(id = "recording-001", title = "Screen recording"))
         override suspend fun loadBug(id: String) = report.takeIf { it.id == id }
         override suspend fun loadBugLog(id: String) = "01-01 12:00:00 E Checkout: Address validation rejected postal code"
         override suspend fun deleteBug(id: String) = true

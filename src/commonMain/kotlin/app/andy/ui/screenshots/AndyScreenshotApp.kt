@@ -80,6 +80,7 @@ internal fun AndyScreenshotApp(
                 else -> null
             },
             initialProjectTab = when (scenario) {
+                AndyScreenshotScenario.ProjectsWorkflows -> "tasks"
                 AndyScreenshotScenario.ProjectsRunbook -> "runbook"
                 AndyScreenshotScenario.ProjectsSessions -> "sessions"
                 AndyScreenshotScenario.ProjectsScratchpad,

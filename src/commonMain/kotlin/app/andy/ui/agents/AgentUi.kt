@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
@@ -104,6 +106,15 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
         modifier
             .size(6.dp)
             .background(Cyan, CircleShape),
+    )
+}
+
+@Composable
+internal fun ProjectActivityIndicator(size: Dp = 10.dp) {
+    CircularProgressIndicator(
+        modifier = Modifier.size(size),
+        color = Cyan,
+        strokeWidth = 1.5.dp,
     )
 }
 

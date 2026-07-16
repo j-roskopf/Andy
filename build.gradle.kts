@@ -228,10 +228,20 @@ val verifyScrcpyServer by tasks.registering {
 }
 
 tasks.named<Copy>("desktopProcessResources") {
-    dependsOn("buildAndyMirrorJniMacArm64", "buildAndyMirrorJniMacX64", verifyScrcpyServer)
+    dependsOn(
+        "buildAndyMirrorJniMacArm64",
+        "buildAndyMirrorJniMacX64",
+        "buildAndyNotificationsJniMacArm64",
+        "buildAndyNotificationsJniMacX64",
+        verifyScrcpyServer,
+    )
     from(layout.buildDirectory.dir("native/andy-mirror")) {
         include("**/andy-mirror-jni.dylib")
         into("andy-mirror")
+    }
+    from(layout.buildDirectory.dir("native/andy-notifications")) {
+        include("**/andy-notifications-jni.dylib")
+        into("andy-notifications")
     }
 }
 
@@ -303,6 +313,60 @@ val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
         "-framework", "CoreVideo",
         "-L${System.getProperty("java.home")}/lib",
         "-ljawt",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+val buildAndyNotificationsJniMacArm64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS arm64 Notification Center bridge."
+    val source = layout.projectDirectory.file("native/andy-notifications/jni/andy_notifications_jni.m")
+    val output = layout.buildDirectory.file("native/andy-notifications/macos-arm64/andy-notifications-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "arm64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS x64 Notification Center bridge."
+    val source = layout.projectDirectory.file("native/andy-notifications/jni/andy_notifications_jni.m")
+    val output = layout.buildDirectory.file("native/andy-notifications/macos-x86_64/andy-notifications-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("x86_64", "amd64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "x86_64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
         "-o", output.get().asFile.absolutePath,
     )
 }

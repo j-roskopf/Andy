@@ -105,6 +105,7 @@ internal fun AgentTaskDetail(
     nowMillis: Long,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
+    compactToolCalls: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -147,6 +148,10 @@ internal fun AgentTaskDetail(
     val selectedSkills = remember(followUp, availableSkills) {
         availableSkills.filter { skill -> followUp.referencesSkill(skill) }
     }
+    val slashHighlight = rememberComposerSlashHighlight(
+        agent = task.agent,
+        availableSkills = availableSkills,
+    )
 
     fun selectSkill(skill: AgentSkill) {
         val command = findActiveSlashCommand(followUp) ?: return
@@ -231,6 +236,7 @@ internal fun AgentTaskDetail(
             events,
             isActive = task.isActive,
             agentLabel = task.agent.label,
+            compactToolCalls = compactToolCalls,
             headerContent = if (showHeader) {
                 {
                     AgentTaskHeader(
@@ -254,6 +260,7 @@ internal fun AgentTaskDetail(
                 }
             },
             originalPrompt = task.prompt,
+            originalImagePaths = task.imagePaths,
             completedContent = {
                 changeSummary?.takeIf { it.files.isNotEmpty() }?.let { summary ->
                     AgentChangeSummaryCard(
@@ -441,6 +448,7 @@ internal fun AgentTaskDetail(
                                     ),
                                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
                                 colors = fieldColors(),
+                                visualTransformation = slashHighlight,
                                 placeholder = {
                                     Text(
                                         if (followUpImageDragActive) {
@@ -533,15 +541,12 @@ internal fun AgentTaskDetail(
                     ) { Text(if (copiedHint) "opened" else "terminal", fontSize = 11.sp) }
                 }
                 if (followUpImagePaths.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        followUpImagePaths.forEach { path ->
-                            OutlinedButton(
-                                onClick = { followUpImagePaths = followUpImagePaths.filterNot { it == path } },
-                                modifier = Modifier.height(26.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
-                            ) { Text("${path.substringAfterLast('/').substringAfterLast('\\')} ×", fontSize = 10.sp) }
-                        }
-                    }
+                    ChatAttachedImages(
+                        paths = followUpImagePaths,
+                        onRemove = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
+                        maxWidth = 120.dp,
+                        maxHeight = 84.dp,
+                    )
                 }
             }
         }
@@ -608,19 +613,17 @@ private fun AgentTaskHeader(
     ) {
         Row(
             Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             AgentBadge(task.agent)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    task.title,
+                    task.prompt.ifBlank { task.title },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "${task.agent.label}  ${task.modelConfigurationLabel()}",

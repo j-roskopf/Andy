@@ -6,11 +6,13 @@ import app.andy.service.AgentAttentionKind
 import app.andy.service.NotificationSoundPlayer
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OsNotificationService
-import java.io.BufferedInputStream
 import java.awt.Image
 import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.image.BufferedImage
+import java.io.BufferedInputStream
+import java.io.File
+import javax.imageio.ImageIO
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.Clip
@@ -18,12 +20,28 @@ import kotlin.concurrent.thread
 
 object PendingAgentTaskOpen {
     @Volatile var request: OpenAgentTaskRequest? = null
+    @Volatile private var onActivate: (() -> Unit)? = null
+
     fun consume(): OpenAgentTaskRequest? = request.also { request = null }
+
+    fun setActivationHandler(handler: (() -> Unit)?) {
+        onActivate = handler
+    }
+
+    fun offer(request: OpenAgentTaskRequest) {
+        this.request = request
+    }
+
+    /** Notification click (or equivalent): stash the task and bring Andy forward. */
+    fun activate(request: OpenAgentTaskRequest) {
+        this.request = request
+        onActivate?.invoke()
+    }
 }
 
 class DesktopOsNotificationService : OsNotificationService {
     override fun show(event: AgentAttentionEvent) {
-        PendingAgentTaskOpen.request = OpenAgentTaskRequest(event.taskId, event.projectId)
+        PendingAgentTaskOpen.offer(OpenAgentTaskRequest(event.taskId, event.projectId))
         val subtitle = when (event.kind) {
             AgentAttentionKind.NeedsInput -> "Needs your input"
             AgentAttentionKind.Completed -> "Agent completed"
@@ -31,14 +49,31 @@ class DesktopOsNotificationService : OsNotificationService {
         }
         val os = System.getProperty("os.name").orEmpty()
         when {
-            os.contains("mac", true) -> runCatching {
-                ProcessBuilder(
-                    "osascript", "-e",
-                    "display notification \"${appleScriptString(event.title)}\" with title \"Andy\" subtitle \"$subtitle\"",
-                ).start()
+            os.contains("mac", true) -> {
+                if (MacOsNotificationBridge.isAvailable()) {
+                    MacOsNotificationBridge.show(
+                        title = "Andy",
+                        subtitle = subtitle,
+                        body = event.title,
+                        taskId = event.taskId,
+                        projectId = event.projectId,
+                    )
+                } else {
+                    // Last resort: osascript shows a banner but click opens Script Editor.
+                    runCatching {
+                        ProcessBuilder(
+                            "osascript", "-e",
+                            "display notification \"${appleScriptString(event.title)}\" with title \"Andy\" subtitle \"$subtitle\"",
+                        ).start()
+                    }
+                }
             }
             os.contains("linux", true) -> runCatching {
-                ProcessBuilder("notify-send", "Andy", "$subtitle: ${event.title}").start()
+                val command = mutableListOf("notify-send", "Andy", "$subtitle: ${event.title}")
+                resolveAppIconFile()?.absolutePath?.let { path ->
+                    command += listOf("--icon", path)
+                }
+                ProcessBuilder(command).start()
             }
             os.contains("windows", true) -> WindowsNotifications.show(subtitle, event.title)
         }
@@ -48,6 +83,23 @@ class DesktopOsNotificationService : OsNotificationService {
 private fun appleScriptString(value: String): String =
     value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
 
+private fun resolveAppIconFile(): File? {
+    val candidates = listOf(
+        File("src/desktopMain/resources/icons/andy.png"),
+        File("src/commonMain/composeResources/drawable/andy_robot.png"),
+    )
+    candidates.firstOrNull { it.isFile }?.let { return it }
+    val packaged = File(System.getProperty("user.home"), ".andy/icons/andy.png")
+    if (packaged.isFile) return packaged
+    return runCatching {
+        val stream = DesktopOsNotificationService::class.java.getResourceAsStream("/icons/andy.png")
+            ?: return@runCatching null
+        packaged.parentFile.mkdirs()
+        stream.use { input -> packaged.outputStream().use { input.copyTo(it) } }
+        packaged.takeIf { it.isFile }
+    }.getOrNull()
+}
+
 /** Best-effort Windows notification fallback via a dedicated AWT tray icon. */
 private object WindowsNotifications {
     private var trayIcon: TrayIcon? = null
@@ -56,7 +108,7 @@ private object WindowsNotifications {
     fun show(title: String, body: String) {
         if (!SystemTray.isSupported()) return
         val icon = trayIcon ?: runCatching {
-            TrayIcon(transparentImage(), "Andy").apply {
+            TrayIcon(loadTrayImage(), "Andy").apply {
                 isImageAutoSize = true
                 SystemTray.getSystemTray().add(this)
             }
@@ -64,7 +116,12 @@ private object WindowsNotifications {
         runCatching { icon.displayMessage(title, body, TrayIcon.MessageType.INFO) }
     }
 
-    private fun transparentImage(): Image = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+    private fun loadTrayImage(): Image {
+        resolveAppIconFile()?.let { file ->
+            runCatching { ImageIO.read(file) }.getOrNull()?.let { return it }
+        }
+        return BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+    }
 }
 
 class DesktopNotificationSoundPlayer : NotificationSoundPlayer {

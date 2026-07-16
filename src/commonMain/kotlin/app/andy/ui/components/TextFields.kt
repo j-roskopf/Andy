@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +51,7 @@ internal fun TextField(
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+    visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val enabledAlpha = if (enabled) 1f else 0.48f
     val effectiveTextStyle = textStyle.copy(fontFamily = MonoFont, color = if (textStyle.color == Color.Unspecified) TextPrimary else textStyle.color)
@@ -69,6 +71,7 @@ internal fun TextField(
         singleLine = singleLine,
         maxLines = maxLines,
         minLines = minLines,
+        visualTransformation = visualTransformation,
         cursorBrush = SolidColor(Rust),
         decorationBox = { innerTextField ->
             Box(
@@ -101,6 +104,7 @@ internal fun TextField(
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
     shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.R2),
+    visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     val enabledAlpha = if (enabled) 1f else 0.48f
     val effectiveTextStyle = textStyle.copy(fontFamily = MonoFont, color = if (textStyle.color == Color.Unspecified) TextPrimary else textStyle.color)
@@ -119,6 +123,7 @@ internal fun TextField(
         singleLine = singleLine,
         maxLines = maxLines,
         minLines = minLines,
+        visualTransformation = visualTransformation,
         cursorBrush = SolidColor(Rust),
         decorationBox = { innerTextField ->
             Box(

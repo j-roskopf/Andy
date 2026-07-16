@@ -2,7 +2,6 @@ package app.andy.ui.bugs
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,15 +35,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.BugLogcatTextSurface
+import app.andy.MirrorGestureOverlay
+import app.andy.MirrorOverlay
 import app.andy.MirrorVideoSurface
 import app.andy.domain.activeBugActionIndex
 import app.andy.domain.activeBugPointerEvent
@@ -64,7 +63,6 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.live.fittedRect
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -78,15 +76,17 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun BugsScreen(bugs: BugService) {
+internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
     val scope = rememberCoroutineScope()
     val state = remember(bugs) { BugsScreenState(bugs) }
     val stepsListState = rememberLazyListState()
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    val pageTitle = if (recordings) "Recordings" else "Bugs"
+    val itemLabel = if (recordings) "recording" else "bug report"
 
     fun refreshReports() {
         scope.launch {
-            state.reports = state.bugs.listBugs()
+            state.reports = if (recordings) state.bugs.listRecordings() else state.bugs.listBugs()
             if (state.selectedId == null || state.reports.none { it.id == state.selectedId }) {
                 state.selectedId = state.reports.firstOrNull()?.id
             }
@@ -129,9 +129,9 @@ internal fun BugsScreen(bugs: BugService) {
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         PanelCard(Modifier.width(250.dp).fillMaxHeight()) {
-            Toolbar("Bugs", "${state.reports.size} reports", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
+            Toolbar(pageTitle, "${state.reports.size} ${if (recordings) "recordings" else "reports"}", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
             if (state.reports.isEmpty()) {
-                EmptyState("No bug reports yet")
+                EmptyState(if (recordings) "No recordings yet" else "No bug reports yet")
             } else {
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(state.reports) { report ->
@@ -156,7 +156,7 @@ internal fun BugsScreen(bugs: BugService) {
         val report = state.selected
         if (report == null) {
             Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                Text("Save a bug from Live to see its replay here.", color = TextSecondary)
+                Text(if (recordings) "Start a recording from Live to see its replay here." else "Save a bug from Live to see its replay here.", color = TextSecondary)
             }
         } else {
             val playbackMillis = bugPlaybackMillis(report, state.playbackFrameIndex, state.playbackFrameCount)
@@ -194,7 +194,7 @@ internal fun BugsScreen(bugs: BugService) {
                         onClick = { toggleBugReplay() },
                         colors = primaryButtonColors(),
                         shape = RoundedCornerShape(10.dp),
-                    ) { Text(if (state.isReplaying) "Pause" else "Reproduce") }
+                    ) { Text(if (state.isReplaying) "Pause" else if (recordings) "Play" else "Reproduce") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = {
                         scope.launch {
@@ -205,7 +205,7 @@ internal fun BugsScreen(bugs: BugService) {
                     OutlinedButton(
                         onClick = {
                             pendingConfirmation = PendingConfirmation(
-                                title = "Delete bug report?",
+                                title = "Delete $itemLabel?",
                                 message = "\"${report.title}\" will be permanently deleted.",
                                 confirmLabel = "Delete",
                             ) {
@@ -329,13 +329,13 @@ internal fun BugsScreen(bugs: BugService) {
                                             onInput = {},
                                             passThroughInput = false,
                                             onDevicePointClick = { _, _ -> toggleBugReplay() },
+                                            overlay = pointerEvent?.toMirrorGestureOverlay()?.let { gesture ->
+                                                MirrorOverlay(gesture = gesture)
+                                            } ?: MirrorOverlay(),
                                         )
-                                        pointerEvent?.let { event ->
-                                            BugPointerOverlay(frame, event)
-                                        }
                                     }
                                 } else {
-                                    Text("Press Reproduce to play capture.mp4", color = TextSecondary, fontSize = 12.sp)
+                                    Text(if (recordings) "Press Play to watch capture.mp4" else "Press Reproduce to play capture.mp4", color = TextSecondary, fontSize = 12.sp)
                                 }
                             }
                             if (state.playbackFrameCount > 0) {
@@ -444,45 +444,14 @@ private fun BugStepExpandedRow(label: String, value: String) {
 
 private fun formatMillis(value: Long): String = if (value <= 0L) "-" else value.toString()
 
-@Composable
-private fun BugPointerOverlay(frame: MirrorFrame, event: BugPointerEvent) {
-    Canvas(Modifier.fillMaxSize()) {
-        val rect = fittedRect(size.width, size.height, frame.width, frame.height)
-        val scaleX = rect.width / frame.width.coerceAtLeast(1)
-        val scaleY = rect.height / frame.height.coerceAtLeast(1)
-        val center = Offset(rect.left + event.x * scaleX, rect.top + event.y * scaleY)
-        val alpha = (1f - event.progress).coerceIn(0f, 1f)
-        val radius = 14.dp.toPx() + 20.dp.toPx() * event.progress
-        drawCircle(
-            color = Rust.copy(alpha = 0.20f * alpha),
-            radius = radius,
-            center = center,
-        )
-        drawCircle(
-            color = Rust.copy(alpha = 0.95f * alpha),
-            radius = radius,
-            center = center,
-            style = Stroke(width = 2.dp.toPx()),
-        )
-        drawCircle(
-            color = AndyColors.Neutral100.copy(alpha = 0.90f * alpha),
-            radius = 4.dp.toPx(),
-            center = center,
-        )
-        drawLine(
-            color = Rust.copy(alpha = 0.75f * alpha),
-            start = Offset(center.x - 18.dp.toPx(), center.y),
-            end = Offset(center.x + 18.dp.toPx(), center.y),
-            strokeWidth = 1.dp.toPx(),
-        )
-        drawLine(
-            color = Rust.copy(alpha = 0.75f * alpha),
-            start = Offset(center.x, center.y - 18.dp.toPx()),
-            end = Offset(center.x, center.y + 18.dp.toPx()),
-            strokeWidth = 1.dp.toPx(),
-        )
-    }
-}
+private fun BugPointerEvent.toMirrorGestureOverlay() = MirrorGestureOverlay(
+    startX = x,
+    startY = y,
+    endX = endX,
+    endY = endY,
+    fadeProgress = progress,
+    swipeProgress = swipeProgress,
+)
 
 private fun relativeSeconds(timestampMillis: Long, endMillis: Long): String {
     val seconds = ((timestampMillis - endMillis) / 1000.0)

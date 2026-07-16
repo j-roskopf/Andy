@@ -48,7 +48,7 @@ fun main() {
         // Dock/tray/title reflect every finished chat waiting for review.
         // In-app, unread still routes to Agents vs Actions by projectId.
         val unreadCount = agentTasks.count { it.unread }
-        val windowState = rememberWindowState(width = 1800.dp, height = 1040.dp)
+        val windowState = rememberWindowState(width = 1800.dp, height = 1072.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
         var requestedOpenAgentTask by remember { mutableStateOf<OpenAgentTaskRequest?>(null) }
@@ -66,6 +66,10 @@ fun main() {
         fun consumePendingOpen() {
             PendingAgentTaskOpen.consume()?.let { requestedOpenAgentTask = it }
         }
+        fun openFromNotification() {
+            visible = true
+            consumePendingOpen()
+        }
         fun openPopOutMirror() {
             visible = true
             requestPopOutMirror = true
@@ -75,8 +79,15 @@ fun main() {
             exitApplication()
         }
         DisposableEffect(Unit) {
-            val listener = installDockReopenHandler { visible = true; consumePendingOpen() }
-            onDispose { removeDockReopenHandler(listener) }
+            PendingAgentTaskOpen.setActivationHandler {
+                // Native notification clicks arrive off the Compose clock.
+                java.awt.EventQueue.invokeLater { openFromNotification() }
+            }
+            val listener = installDockReopenHandler { openFromNotification() }
+            onDispose {
+                PendingAgentTaskOpen.setActivationHandler(null)
+                removeDockReopenHandler(listener)
+            }
         }
         LaunchedEffect(Unit) {
             DesktopAgentAttentionCoordinator(
@@ -93,9 +104,9 @@ fun main() {
         Tray(
             icon = Res.drawable.andy_robot,
             tooltip = if (unreadCount > 0) "Andy ($unreadCount unread)" else "Andy",
-            primaryAction = { visible = true; consumePendingOpen() },
+            primaryAction = { openFromNotification() },
         ) {
-            Item(label = "Show Andy") { visible = true; consumePendingOpen() }
+            Item(label = "Show Andy") { openFromNotification() }
             Item(label = "Quit") {
                 dispose()
                 quitApp()
@@ -289,6 +300,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.Design -> KeyShortcut(Key.E, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Accessibility -> KeyShortcut(Key.A, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Bugs -> KeyShortcut(Key.B, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Recordings -> KeyShortcut(Key.R, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Settings -> KeyShortcut(Key.Comma, meta = meta, ctrl = ctrl)
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,9 +65,17 @@ internal fun TopChrome(
     actionConfig: ActionsConfig,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
+    onMenuExpandedChange: (Boolean) -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
+    var projectMenuExpanded by remember { mutableStateOf(false) }
+    var actionMenuExpanded by remember { mutableStateOf(false) }
+    var deviceMenuExpanded by remember { mutableStateOf(false) }
+    val anyMenuExpanded = projectMenuExpanded || actionMenuExpanded || deviceMenuExpanded
+    SideEffect {
+        onMenuExpandedChange(anyMenuExpanded)
+    }
 
     Row(
         Modifier.fillMaxWidth().height(62.dp)
@@ -89,6 +98,10 @@ internal fun TopChrome(
             ActionRunnerSelector(
                 config = actionConfig,
                 onRunAction = onRunAction,
+                projectExpanded = projectMenuExpanded,
+                onProjectExpandedChange = { projectMenuExpanded = it },
+                actionExpanded = actionMenuExpanded,
+                onActionExpandedChange = { actionMenuExpanded = it },
             )
             Spacer(Modifier.width(10.dp))
         }
@@ -107,7 +120,13 @@ internal fun TopChrome(
             Text("Refresh", color = TextPrimary, fontSize = 12.sp)
         }
         Spacer(Modifier.width(10.dp))
-        DevicePicker(devices, selectedDevice?.serial, onSelectDevice)
+        DevicePicker(
+            devices = devices,
+            selectedSerial = selectedDevice?.serial,
+            expanded = deviceMenuExpanded,
+            onExpandedChange = { deviceMenuExpanded = it },
+            onSelect = onSelectDevice,
+        )
     }
 }
 
@@ -130,10 +149,12 @@ private fun ProxyToolbarIndicator() {
 private fun ActionRunnerSelector(
     config: ActionsConfig,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
+    projectExpanded: Boolean,
+    onProjectExpandedChange: (Boolean) -> Unit,
+    actionExpanded: Boolean,
+    onActionExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var projectExpanded by remember { mutableStateOf(false) }
-    var actionExpanded by remember { mutableStateOf(false) }
     var selectedProjectId by remember { mutableStateOf<String?>(null) }
     var selectedActionId by remember { mutableStateOf<String?>(null) }
 
@@ -150,7 +171,7 @@ private fun ActionRunnerSelector(
     ) {
         Box {
             Button(
-                onClick = { projectExpanded = true },
+                onClick = { onProjectExpandedChange(true) },
                 colors = secondaryButtonColors(),
                 shape = RoundedCornerShape(AndyRadius.R2),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
@@ -160,14 +181,14 @@ private fun ActionRunnerSelector(
                 Spacer(Modifier.width(6.dp))
                 Text(project?.name ?: "project", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = projectExpanded, onDismissRequest = { projectExpanded = false }, containerColor = AndyColors.Neutral750) {
+            DropdownMenu(expanded = projectExpanded, onDismissRequest = { onProjectExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
                 config.projects.forEach { item ->
                     DropdownMenuItem(
                         text = { Text(item.name, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
                             selectedProjectId = item.id
                             selectedActionId = item.actions.firstOrNull()?.id
-                            projectExpanded = false
+                            onProjectExpandedChange(false)
                         },
                     )
                 }
@@ -176,7 +197,7 @@ private fun ActionRunnerSelector(
 
         Box {
             Button(
-                onClick = { actionExpanded = true },
+                onClick = { onActionExpandedChange(true) },
                 enabled = project?.actions?.isNotEmpty() == true,
                 colors = secondaryButtonColors(),
                 shape = RoundedCornerShape(AndyRadius.R2),
@@ -187,13 +208,13 @@ private fun ActionRunnerSelector(
                 Spacer(Modifier.width(6.dp))
                 Text(action?.name ?: "no actions", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = actionExpanded, onDismissRequest = { actionExpanded = false }, containerColor = AndyColors.Neutral750) {
+            DropdownMenu(expanded = actionExpanded, onDismissRequest = { onActionExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
                 project?.actions.orEmpty().forEach { item ->
                     DropdownMenuItem(
                         text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
                             selectedActionId = item.id
-                            actionExpanded = false
+                            onActionExpandedChange(false)
                         },
                     )
                 }
@@ -219,19 +240,24 @@ private fun ActionRunnerSelector(
 }
 
 @Composable
-private fun DevicePicker(devices: List<AndroidDevice>, selectedSerial: String?, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
+private fun DevicePicker(
+    devices: List<AndroidDevice>,
+    selectedSerial: String?,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (String) -> Unit,
+) {
     Box {
-        Button(onClick = { expanded = true }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+        Button(onClick = { onExpandedChange(true) }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
             Text("•", color = Green, fontSize = 18.sp)
             Spacer(Modifier.width(6.dp))
             Text(selectedSerial ?: "no device", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = AndyColors.Neutral750) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
             devices.forEach { device ->
                 DropdownMenuItem(text = { Text("${device.serial}  ${device.displayName}", color = TextPrimary) }, onClick = {
                     onSelect(device.serial)
-                    expanded = false
+                    onExpandedChange(false)
                 })
             }
         }

@@ -18,6 +18,7 @@ class DesktopWorkspaceStoreTest {
             agentNotificationTiming = AgentNotificationTiming.Always,
             agentNotificationSoundId = "ping",
             tintId = "violet",
+            compactToolCalls = false,
         )
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
@@ -42,5 +43,8 @@ class DesktopWorkspaceStoreTest {
 
         file.writeText(file.readText().replace("editorSyntaxThemeId=monokai", "editorSyntaxThemeId=not-a-theme"))
         assertEquals("andy", DesktopWorkspaceStore(file).load().editorSyntaxThemeId)
+
+        file.writeText(file.readText().replace("compactToolCalls=false", "compactToolCalls=not-a-bool"))
+        assertEquals(true, DesktopWorkspaceStore(file).load().compactToolCalls)
     }
 }
