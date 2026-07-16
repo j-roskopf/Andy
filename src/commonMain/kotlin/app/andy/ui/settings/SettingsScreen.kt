@@ -2,14 +2,17 @@ package app.andy.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,14 +59,18 @@ import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.service.McpServerService
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
+import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
+import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.Border
@@ -73,6 +82,28 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 
+private enum class DesktopSettingsCategory(
+    val label: String,
+    val subtitle: String,
+) {
+    Appearance("Appearance", "Tint, background, and editor theme"),
+    Agents("Agents", "Transcript and notification preferences"),
+    Proxy("Proxy", "HTTP debug capture proxy"),
+    Mcp("MCP", "Server, tools, and client setup"),
+    Onboarding("Onboarding", "Replay guided introductions"),
+}
+
+private enum class WebSettingsCategory(
+    val label: String,
+    val subtitle: String,
+) {
+    Appearance("Appearance", "Tint, background, and editor theme"),
+    Agents("Agents", "How tool activity appears in chats"),
+    Connection("Connection", "ADB WebSocket and WebUSB"),
+    Data("Data", "Browser storage and authorization"),
+    About("About", "Origins and platform support"),
+}
+
 @Composable
 internal fun SettingsScreen(
     workspaceState: WorkspaceState,
@@ -83,295 +114,235 @@ internal fun SettingsScreen(
         WebSettingsScreen(web, workspaceState, onUpdateWorkspace)
         return
     }
+    var category by remember { mutableStateOf(DesktopSettingsCategory.Appearance) }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
-    val clientOptions = remember { services.mcp.getClients() }
     val toolNames = remember { services.mcp.getToolNames() }
-    var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
-    var dropdownExpanded by remember { mutableStateOf(false) }
-    var operationStatus by remember { mutableStateOf<String?>(null) }
-    val copyText = rememberCopyText()
 
     val mcpStatus by services.mcp.status.collectAsState("stopped")
     val mcpRunning by services.mcp.running.collectAsState(false)
     val proxyStatus by services.proxy.status.collectAsState("Proxy stopped")
     val proxyRunning = proxyStatus.contains("listening on")
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+    SettingsShell(
+        title = "Settings",
+        subtitle = category.subtitle,
+        categories = DesktopSettingsCategory.entries.map { it.label to it.subtitle },
+        selectedIndex = category.ordinal,
+        onSelect = { category = DesktopSettingsCategory.entries[it] },
     ) {
-        Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
-
-        AppearancePanel(workspaceState, onUpdateWorkspace)
-
-        AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
-
-        AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
-
-        PanelCard {
-            Text("HTTP debug proxy", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                "Start Andy's mitmdump capture proxy automatically when the app opens.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Checkbox(
-                        checked = workspaceState.proxyStartOnLaunch,
-                        onCheckedChange = { checked ->
-                            onUpdateWorkspace { it.copy(proxyStartOnLaunch = checked) }
-                        }
-                    )
-                    Text("Start proxy on app launch", color = TextPrimary, fontSize = 13.sp)
-                }
-
-                Spacer(Modifier.width(16.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Proxy Status:", color = TextSecondary, fontSize = 12.sp)
-                    GlowingDot(proxyRunning)
-                    Text(proxyStatus, color = if (proxyRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
-                }
+        when (category) {
+            DesktopSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
+            DesktopSettingsCategory.Agents -> {
+                AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
+                AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                "Corporate TLS inspection: if your Mac routes through a security proxy that re-signs HTTPS, point Andy at the corporate root CA or enable insecure upstream.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
+            DesktopSettingsCategory.Proxy -> ProxyPanel(
+                workspaceState = workspaceState,
+                onUpdateWorkspace = onUpdateWorkspace,
+                proxyStatus = proxyStatus,
+                proxyRunning = proxyRunning,
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(
-                    checked = workspaceState.proxySslInsecure,
-                    onCheckedChange = { checked ->
-                        onUpdateWorkspace { it.copy(proxySslInsecure = checked) }
-                    },
+            DesktopSettingsCategory.Mcp -> {
+                McpServerPanel(
+                    workspaceState = workspaceState,
+                    onUpdateWorkspace = onUpdateWorkspace,
+                    portText = portText,
+                    onPortTextChange = { portText = it },
+                    mcpStatus = mcpStatus,
+                    mcpRunning = mcpRunning,
                 )
-                Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 13.sp)
+                McpToolsPanel(toolNames)
+                McpClientsPanel(
+                    mcpService = services.mcp,
+                    mcpServerPort = workspaceState.mcpServerPort,
+                )
             }
-            TextField(
-                value = workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
-                onValueChange = { value ->
-                    onUpdateWorkspace {
-                        it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() })
-                    }
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                colors = fieldColors(),
-                placeholder = {
-                    Text("Corporate root CA path (optional)", color = TextSecondary, fontSize = 13.sp)
-                },
-            )
+            DesktopSettingsCategory.Onboarding -> OnboardingPanel(workspaceState, onUpdateWorkspace)
         }
+    }
+}
 
-        PanelCard {
-            Text("Model Context Protocol (MCP) Server", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                "Expose Andy's Android control automation capabilities as an MCP server. This allows external AI coding assistants (e.g. Claude Code, Codex, Cursor) to interact with connected emulators and devices.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+@Composable
+private fun SettingsShell(
+    title: String,
+    subtitle: String,
+    categories: List<Pair<String, String>>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+    ) {
+        Toolbar(title, subtitle)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val wide = maxWidth >= 820.dp
+            if (wide) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.S4),
                 ) {
-                    Checkbox(
-                        workspaceState.mcpServerEnabled,
-                        { checked ->
-                            onUpdateWorkspace { it.copy(mcpServerEnabled = checked) }
-                        }
+                    SettingsCategoryRail(
+                        categories = categories,
+                        selectedIndex = selectedIndex,
+                        onSelect = onSelect,
+                        modifier = Modifier.width(200.dp).fillMaxHeight(),
                     )
-                    Text("Enable MCP Server", color = TextPrimary, fontSize = 13.sp)
+                    SettingsCategoryBody(
+                        selectedIndex = selectedIndex,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        content = content,
+                    )
                 }
-
-                Spacer(Modifier.width(16.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            } else {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
                 ) {
-                    Text("Port:", color = TextSecondary, fontSize = 13.sp)
-                    TextField(
-                        portText,
-                        {
-                            val filtered = it.filter(Char::isDigit).take(5)
-                            portText = filtered
-                            filtered.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let { newPort ->
-                                onUpdateWorkspace { state -> state.copy(mcpServerPort = newPort) }
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(96.dp).height(50.dp),
-                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                        colors = fieldColors(),
+                    SettingsCategoryPills(
+                        categories = categories,
+                        selectedIndex = selectedIndex,
+                        onSelect = onSelect,
+                    )
+                    SettingsCategoryBody(
+                        selectedIndex = selectedIndex,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        content = content,
                     )
                 }
             }
-
-            Spacer(Modifier.height(4.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Server Status:", color = TextSecondary, fontSize = 12.sp)
-                GlowingDot(mcpRunning)
-                Text(mcpStatus, color = if (mcpRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
-            }
         }
+    }
+}
 
-        PanelCard {
-            Text("Available Tools", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text("${toolNames.size} MCP tool calls exposed by Andy", color = TextSecondary, fontSize = 12.sp)
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                toolNames.sorted().forEach { tool ->
-                    Box(
-                        Modifier
-                            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Pill))
-                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Pill))
-                            .padding(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                        Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                    }
-                }
-            }
-        }
-
-        PanelCard {
-            Text("Client Configurations", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                "Configure your local AI coding tool to connect to Andy's MCP endpoint.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp
-            )
-
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text("Client:", color = TextSecondary, fontSize = 13.sp)
-                Box {
-                    Button(
-                        onClick = { dropdownExpanded = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750)
-                    ) {
-                        Text(selectedClientLabel, color = TextPrimary)
-                    }
-                    DropdownMenu(
-                        expanded = dropdownExpanded,
-                        onDismissRequest = { dropdownExpanded = false },
-                        containerColor = AndyColors.Neutral750
-                    ) {
-                        clientOptions.forEach { client ->
-                            DropdownMenuItem(
-                                text = { Text(client, color = TextPrimary) },
-                                onClick = {
-                                    selectedClientLabel = client
-                                    dropdownExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val isAutoWriteSupported = services.mcp.isAutoWriteSupported(selectedClientLabel)
-
-                Button(
-                    onClick = {
-                        val success = services.mcp.writeConfig(selectedClientLabel, workspaceState.mcpServerPort)
-                        operationStatus = if (success) {
-                            "Successfully updated configuration for $selectedClientLabel (backed up original)."
-                        } else {
-                            "Failed to write configuration file."
-                        }
-                    },
-                    enabled = isAutoWriteSupported
-                ) {
-                    Text("Add to config")
-                }
-
-                Button(
-                    onClick = {
-                        val snippet = services.mcp.getSnippet(selectedClientLabel, workspaceState.mcpServerPort)
-                        copyText(snippet)
-                        operationStatus = "Snippet copied to clipboard!"
-                    }
-                ) {
-                    Text("Copy snippet")
-                }
-            }
-
-            operationStatus?.let { status ->
-                Text(status, color = Rust, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
-            }
-
-            Spacer(Modifier.height(4.dp))
-
+@Composable
+private fun SettingsCategoryRail(
+    categories: List<Pair<String, String>>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .background(AndyColors.Neutral800.copy(alpha = 0.82f), RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(AndySpace.S2),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            "categories",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        )
+        categories.forEachIndexed { index, (label, hint) ->
+            val selected = index == selectedIndex
             Column(
-                Modifier
+                modifier = Modifier
                     .fillMaxWidth()
-                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R3))
-                    .padding(12.dp)
-            ) {
-                Text("Configuration Snippet ($selectedClientLabel)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                Spacer(Modifier.height(6.dp))
-                val snippet = services.mcp.getSnippet(selectedClientLabel, workspaceState.mcpServerPort)
-                SelectionContainer {
-                    Text(
-                        snippet,
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
+                    .clip(RoundedCornerShape(AndyRadius.R2))
+                    .background(if (selected) AndyColors.OrangeSubtle else AndyColors.Neutral800.copy(alpha = 0f))
+                    .border(
+                        1.dp,
+                        if (selected) AndyColors.OrangeBorder else AndyColors.Neutral800.copy(alpha = 0f),
+                        RoundedCornerShape(AndyRadius.R2),
                     )
-                }
+                    .clickable { onSelect(index) }
+                    .semantics { contentDescription = "$label settings" }
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    label,
+                    color = if (selected) AndyColors.Neutral100 else TextPrimary,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    hint,
+                    color = TextSecondary.copy(alpha = if (selected) 0.92f else 0.72f),
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SettingsCategoryPills(
+    categories: List<Pair<String, String>>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        categories.forEachIndexed { index, (label, _) ->
+            val selected = index == selectedIndex
+            TextButton(
+                onClick = { onSelect(index) },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
+                ),
+                modifier = Modifier
+                    .background(
+                        if (selected) AndyColors.OrangeSubtle else PanelSoft,
+                        RoundedCornerShape(AndyRadius.R3),
+                    )
+                    .border(
+                        1.dp,
+                        if (selected) AndyColors.OrangeBorder else Border,
+                        RoundedCornerShape(AndyRadius.R3),
+                    )
+                    .semantics { contentDescription = "$label settings" },
+            ) {
+                Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCategoryBody(
+    selectedIndex: Int,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    key(selectedIndex) {
+        Column(
+            modifier
+                .verticalScroll(rememberScrollState())
+                .padding(end = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+        ) {
+            content()
+            Spacer(Modifier.height(AndySpace.S4))
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    description: String,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            title,
+            modifier = Modifier.semantics { heading() },
+            color = TextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.sp,
+        )
+        Text(description, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
     }
 }
 
@@ -384,12 +355,9 @@ private fun AppearancePanel(
     val selectedTint = AndyTint.fromId(workspace.tintId)
     val selectedSurface = AndySurfaceMode.fromId(workspace.surfaceModeId)
     PanelCard {
-        Text("Appearance", color = TextPrimary, fontWeight = FontWeight.Bold)
-        Text(
-            "Choose the accent tint used for selection, controls, and emphasis. Andy blue is the default.",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+        SettingsSectionHeader(
+            title = "Accent tint",
+            description = "Used for selection, controls, and emphasis. Andy blue is the default.",
         )
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -419,13 +387,11 @@ private fun AppearancePanel(
             }
         }
         Text("Selected: ${selectedTint.label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
-        Spacer(Modifier.height(12.dp))
-        Text("Background", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-        Text(
-            "Tinted keeps a subtle hue wash from the accent. Dark uses true black surfaces. Light flips the shell to a bright workspace.",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+    }
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Background",
+            description = "Tinted keeps a subtle hue wash from the accent. Dark uses true black surfaces. Light flips the shell to a bright workspace.",
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AndySurfaceMode.entries.forEach { mode ->
@@ -451,13 +417,11 @@ private fun AppearancePanel(
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Text("Code editor theme", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-        Text(
-            "Syntax highlighting colors for Computer Files. Andy is the built-in scheme; the rest are RSyntaxTextArea presets.",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+    }
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Code editor theme",
+            description = "Syntax highlighting for Computer Files. Andy is the built-in scheme; the rest are RSyntaxTextArea presets.",
         )
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -497,17 +461,48 @@ private fun AppearancePanel(
 }
 
 @Composable
+private fun OnboardingPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    var status by remember { mutableStateOf<String?>(null) }
+    val completed = workspace.projectsIntroductionCompleted
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Projects",
+            description = "The Projects intro walks through specs, builds, verification, and runbooks. Reset it to show the guided tour again the next time you open Projects.",
+        )
+        Text(
+            if (completed) "Status: completed" else "Status: not completed",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+        )
+        Button(
+            onClick = {
+                update { it.copy(projectsIntroductionCompleted = false) }
+                status = "Project onboarding reset. Open Projects to view the intro again."
+            },
+            enabled = completed,
+            colors = primaryButtonColors(),
+        ) {
+            Text("Reset project onboarding")
+        }
+        status?.let {
+            Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
 private fun AgentTranscriptPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
     PanelCard {
-        Text("Agent transcript", color = TextPrimary, fontWeight = FontWeight.Bold)
-        Text(
-            "Control how tool activity appears in agent chats.",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            lineHeight = 16.sp,
+        SettingsSectionHeader(
+            title = "Transcript",
+            description = "Control how tool activity appears in agent chats.",
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -540,8 +535,10 @@ private fun AgentNotificationsPanel(
     var soundExpanded by remember { mutableStateOf(false) }
     val sound = AgentNotificationSound.entries.firstOrNull { it.id == workspace.agentNotificationSoundId } ?: AgentNotificationSound.Chime
     PanelCard {
-        Text("Agent notifications", color = TextPrimary, fontWeight = FontWeight.Bold)
-        Text("Choose how Andy calls attention to completed work and input requests.", color = TextSecondary, fontSize = 12.sp)
+        SettingsSectionHeader(
+            title = "Notifications",
+            description = "How Andy calls attention to completed work and input requests.",
+        )
         listOf(
             "OS notifications" to workspace.agentOsNotificationsEnabled,
             "Notification sound" to workspace.agentNotificationSoundEnabled,
@@ -579,6 +576,270 @@ private fun AgentNotificationsPanel(
 }
 
 @Composable
+private fun ProxyPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    proxyStatus: String,
+    proxyRunning: Boolean,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "HTTP debug proxy",
+            description = "Start Andy's mitmdump capture proxy automatically when the app opens.",
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(
+                    checked = workspaceState.proxyStartOnLaunch,
+                    onCheckedChange = { checked ->
+                        onUpdateWorkspace { it.copy(proxyStartOnLaunch = checked) }
+                    },
+                )
+                Text("Start proxy on app launch", color = TextPrimary, fontSize = 13.sp)
+            }
+            Spacer(Modifier.width(16.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Proxy Status:", color = TextSecondary, fontSize = 12.sp)
+                GlowingDot(proxyRunning)
+                Text(proxyStatus, color = if (proxyRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Corporate TLS",
+            description = "If your Mac routes through a security proxy that re-signs HTTPS, point Andy at the corporate root CA or enable insecure upstream.",
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Checkbox(
+                checked = workspaceState.proxySslInsecure,
+                onCheckedChange = { checked ->
+                    onUpdateWorkspace { it.copy(proxySslInsecure = checked) }
+                },
+            )
+            Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 13.sp)
+        }
+        TextField(
+            value = workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
+            onValueChange = { value ->
+                onUpdateWorkspace {
+                    it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() })
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            colors = fieldColors(),
+            placeholder = {
+                Text("Corporate root CA path (optional)", color = TextSecondary, fontSize = 13.sp)
+            },
+        )
+    }
+}
+
+@Composable
+private fun McpServerPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    portText: String,
+    onPortTextChange: (String) -> Unit,
+    mcpStatus: String,
+    mcpRunning: Boolean,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Server",
+            description = "Expose Andy's Android control automation as an MCP server for Claude Code, Codex, Cursor, and similar tools.",
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(
+                    workspaceState.mcpServerEnabled,
+                    { checked ->
+                        onUpdateWorkspace { it.copy(mcpServerEnabled = checked) }
+                    },
+                )
+                Text("Enable MCP Server", color = TextPrimary, fontSize = 13.sp)
+            }
+            Spacer(Modifier.width(16.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Port:", color = TextSecondary, fontSize = 13.sp)
+                TextField(
+                    portText,
+                    {
+                        val filtered = it.filter(Char::isDigit).take(5)
+                        onPortTextChange(filtered)
+                        filtered.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let { newPort ->
+                            onUpdateWorkspace { state -> state.copy(mcpServerPort = newPort) }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.width(96.dp).height(50.dp),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                    colors = fieldColors(),
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Server Status:", color = TextSecondary, fontSize = 12.sp)
+            GlowingDot(mcpRunning)
+            Text(mcpStatus, color = if (mcpRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun McpToolsPanel(toolNames: List<String>) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Available tools",
+            description = "${toolNames.size} MCP tool calls exposed by Andy",
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            toolNames.sorted().forEach { tool ->
+                Box(
+                    Modifier
+                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Pill))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Pill))
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun McpClientsPanel(
+    mcpService: McpServerService,
+    mcpServerPort: Int,
+) {
+    val clientOptions = remember { mcpService.getClients() }
+    var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    var operationStatus by remember { mutableStateOf<String?>(null) }
+    val copyText = rememberCopyText()
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Client configurations",
+            description = "Configure your local AI coding tool to connect to Andy's MCP endpoint.",
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Client:", color = TextSecondary, fontSize = 13.sp)
+            Box {
+                Button(
+                    onClick = { dropdownExpanded = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                ) {
+                    Text(selectedClientLabel, color = TextPrimary)
+                }
+                DropdownMenu(
+                    expanded = dropdownExpanded,
+                    onDismissRequest = { dropdownExpanded = false },
+                    containerColor = AndyColors.Neutral750,
+                ) {
+                    clientOptions.forEach { client ->
+                        DropdownMenuItem(
+                            text = { Text(client, color = TextPrimary) },
+                            onClick = {
+                                selectedClientLabel = client
+                                dropdownExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = {
+                    val success = mcpService.writeConfig(selectedClientLabel, mcpServerPort)
+                    operationStatus = if (success) {
+                        "Successfully updated configuration for $selectedClientLabel (backed up original)."
+                    } else {
+                        "Failed to write configuration file."
+                    }
+                },
+                enabled = mcpService.isAutoWriteSupported(selectedClientLabel),
+            ) {
+                Text("Add to config")
+            }
+            Button(
+                onClick = {
+                    copyText(mcpService.getSnippet(selectedClientLabel, mcpServerPort))
+                    operationStatus = "Snippet copied to clipboard"
+                },
+            ) {
+                Text("Copy snippet")
+            }
+        }
+        operationStatus?.let { status ->
+            Text(status, color = Rust, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+                .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R3))
+                .padding(12.dp),
+        ) {
+            Text("Configuration snippet ($selectedClientLabel)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Spacer(Modifier.height(6.dp))
+            val snippet = mcpService.getSnippet(selectedClientLabel, mcpServerPort)
+            SelectionContainer {
+                Text(
+                    snippet,
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun WebSettingsScreen(
     web: WebServices,
     workspaceState: WorkspaceState,
@@ -587,115 +848,119 @@ private fun WebSettingsScreen(
     val scope = rememberCoroutineScope()
     val connection by web.connection.state.collectAsState()
     val storage by web.storage.state.collectAsState()
+    var category by remember { mutableStateOf(WebSettingsCategory.Appearance) }
     var operationStatus by remember { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var confirmForgetUsb by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { web.storage.refresh() }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    SettingsShell(
+        title = "Settings",
+        subtitle = category.subtitle,
+        categories = WebSettingsCategory.entries.map { it.label to it.subtitle },
+        selectedIndex = category.ordinal,
+        onSelect = { category = WebSettingsCategory.entries[it] },
     ) {
-        Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
-
-        AppearancePanel(workspaceState, onUpdateWorkspace)
-
-        AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
-
-        PanelCard {
-            Text("Connection", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                "Connect through Andy tracebox on this computer, or directly to one USB device. The browser never starts either tool for you.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(
-                    onClick = { scope.launch { operationStatus = web.connection.connectWebSocket().webMessage() } },
-                    enabled = !connection.connecting,
-                ) { Text("Use ADB + WebSocket") }
-                Button(
-                    onClick = { scope.launch { operationStatus = web.connection.requestWebUsb().webMessage() } },
-                    enabled = !connection.connecting,
-                ) { Text("Use WebUSB") }
-                Button(
-                    onClick = { scope.launch { operationStatus = web.connection.retry().webMessage() } },
-                    enabled = !connection.connecting,
-                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
-                ) { Text("Retry now") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                GlowingDot(connection.connected)
-                Text(connection.status, color = if (connection.connected) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont)
-            }
-            connection.error?.let { error ->
-                SelectionContainer {
-                    Text(
-                        error,
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                        modifier = Modifier.fillMaxWidth()
-                            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                            .padding(12.dp),
+        when (category) {
+            WebSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
+            WebSettingsCategory.Agents -> AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
+            WebSettingsCategory.Connection -> {
+                PanelCard {
+                    SettingsSectionHeader(
+                        title = "Connection",
+                        description = "Connect through Andy tracebox on this computer, or directly to one USB device. The browser never starts either tool for you.",
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            onClick = { scope.launch { operationStatus = web.connection.connectWebSocket().webMessage() } },
+                            enabled = !connection.connecting,
+                        ) { Text("Use ADB + WebSocket") }
+                        Button(
+                            onClick = { scope.launch { operationStatus = web.connection.requestWebUsb().webMessage() } },
+                            enabled = !connection.connecting,
+                        ) { Text("Use WebUSB") }
+                        Button(
+                            onClick = { scope.launch { operationStatus = web.connection.retry().webMessage() } },
+                            enabled = !connection.connecting,
+                            colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                        ) { Text("Retry now") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        GlowingDot(connection.connected)
+                        Text(connection.status, color = if (connection.connected) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont)
+                    }
+                    connection.error?.let { error ->
+                        SelectionContainer {
+                            Text(
+                                error,
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                                modifier = Modifier.fillMaxWidth()
+                                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
+                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                    .padding(12.dp),
+                            )
+                        }
+                    }
+                }
+                operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
+            }
+            WebSettingsCategory.Data -> {
+                PanelCard {
+                    SettingsSectionHeader(
+                        title = "Storage",
+                        description = "Settings and authorization keys use IndexedDB. Bug recordings and large captures use origin-private storage (OPFS).",
+                    )
+                    Text(
+                        "${webFormatBytes(storage.usageBytes)} used of ${webFormatBytes(storage.quotaBytes)} · ${if (storage.persisted) "persistent" else "best effort"}",
+                        color = TextPrimary,
+                        fontFamily = MonoFont,
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        "Loaded origins: ${storage.resourceOrigins.ifEmpty { listOf("http://localhost:10000") }.joinToString()}",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { scope.launch { operationStatus = if (web.storage.requestPersistence()) "Persistent storage granted" else "Persistent storage was not granted" } },
+                        ) { Text("Keep data") }
+                        Button(
+                            onClick = { confirmClear = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                        ) { Text("Clear site data") }
+                    }
+                    Text("Clearing site data permanently removes settings, captures, bug reports, and the saved WebUSB ADB key.", color = Rust, fontSize = 11.sp)
+                }
+                PanelCard {
+                    SettingsSectionHeader(
+                        title = "Authorization",
+                        description = "The WebUSB ADB private key is non-exportable and stored only for this browser origin.",
+                    )
+                    Button(
+                        onClick = { confirmForgetUsb = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                    ) { Text("Forget WebUSB authorization") }
+                }
+                operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
+            }
+            WebSettingsCategory.About -> {
+                PanelCard {
+                    SettingsSectionHeader(
+                        title = "About Andy for web",
+                        description = "Supported origins and runtime requirements.",
+                    )
+                    Text("Supported origins: http://localhost:10000 · https://andy.joetr.com", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
+                    Text("Desktop Chrome or Edge · Android 11 / API 30 or newer", color = TextSecondary, fontSize = 12.sp)
+                    Text("Device traffic stays on this computer. No telemetry or hosted device API.", color = TextSecondary, fontSize = 12.sp)
                 }
             }
         }
-
-        PanelCard {
-            Text("Storage", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                "Settings and authorization keys use IndexedDB. Bug recordings and large captures use origin-private storage (OPFS).",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-            )
-            Text(
-                "${webFormatBytes(storage.usageBytes)} used of ${webFormatBytes(storage.quotaBytes)} · ${if (storage.persisted) "persistent" else "best effort"}",
-                color = TextPrimary,
-                fontFamily = MonoFont,
-                fontSize = 12.sp,
-            )
-            Text(
-                "Loaded origins: ${storage.resourceOrigins.ifEmpty { listOf("http://localhost:10000") }.joinToString()}",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { scope.launch { operationStatus = if (web.storage.requestPersistence()) "Persistent storage granted" else "Persistent storage was not granted" } },
-                ) { Text("Keep data") }
-                Button(
-                    onClick = { confirmClear = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
-                ) { Text("Clear site data") }
-            }
-            Text("Clearing site data permanently removes settings, captures, bug reports, and the saved WebUSB ADB key.", color = Rust, fontSize = 11.sp)
-        }
-
-        PanelCard {
-            Text("Authorization", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text("The WebUSB ADB private key is non-exportable and stored only for this browser origin.", color = TextSecondary, fontSize = 12.sp)
-            Button(
-                onClick = { confirmForgetUsb = true },
-                colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
-            ) { Text("Forget WebUSB authorization") }
-        }
-
-        PanelCard {
-            Text("About Andy for web", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text("Supported origins: http://localhost:10000 · https://andy.joetr.com", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
-            Text("Desktop Chrome or Edge · Android 11 / API 30 or newer", color = TextSecondary, fontSize = 12.sp)
-            Text("Device traffic stays on this computer. No telemetry or hosted device API.", color = TextSecondary, fontSize = 12.sp)
-        }
-
-        operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
     }
 
     if (confirmClear) {
