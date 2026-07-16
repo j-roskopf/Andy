@@ -90,6 +90,7 @@ internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial
                 ControlSection(
                     title = "Radios & display",
                     description = "Apply device-wide connectivity and appearance changes.",
+                    accent = Rust,
                 ) {
                     CommandTile(
                         label = "Airplane mode",
@@ -139,6 +140,7 @@ internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial
                 ControlSection(
                     title = "Debug behavior",
                     description = "Expose visual diagnostics and control how testable the app lifecycle is.",
+                    accent = Rust,
                 ) {
                     CommandTile(
                         label = "Show taps",
