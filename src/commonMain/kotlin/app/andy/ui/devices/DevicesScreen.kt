@@ -334,63 +334,59 @@ internal fun DevicesScreen(
                 }
             }
         }
-        if (allowWifiPairing) PanelCard {
+        if (allowWifiPairing && pairedWifiDevices.isNotEmpty()) PanelCard {
             Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
             if (state.wifiStatus.isNotBlank()) {
                 Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             }
-            if (pairedWifiDevices.isEmpty()) {
-                Text("No remembered Wi‑Fi devices. Use Pair over Wi‑Fi to add one.", color = TextSecondary, fontSize = 12.sp)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    pairedWifiDevices.forEach { paired ->
-                        val live = findLiveWifiDevice(devices, paired)
-                        val online = live?.state == DeviceConnectionState.Online
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(paired.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                Text(
-                                    listOfNotNull(paired.mdnsInstanceName, paired.lastEndpoint, live?.serial)
-                                        .distinct()
-                                        .joinToString(" · "),
-                                    color = TextSecondary,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            StatusTag(if (online) "connected" else "disconnected", if (online) Green else TextSecondary)
-                            if (live != null && online) {
-                                OutlinedButton(onClick = { onLive(live.serial) }) { Text("Live") }
-                                OutlinedButton(onClick = {
-                                    state.wifiStatus = "Disconnecting ${live.serial}..."
-                                    onDisconnectWifi(live.serial)
-                                }) { Text("Disconnect") }
-                            } else {
-                                OutlinedButton(onClick = {
-                                    state.wifiStatus = "Reconnecting ${paired.displayName}..."
-                                    onReconnectPairedWifi(paired)
-                                }) { Text("Reconnect") }
-                            }
-                            OutlinedButton(onClick = {
-                                state.pendingConfirmation = PendingConfirmation(
-                                    "Forget ${paired.displayName}?",
-                                    "Removes this device from Andy's remembered Wi‑Fi list. It does not unpair on the phone.",
-                                ) {
-                                    onForgetPairedWifi(paired.id)
-                                    state.wifiStatus = "Forgot ${paired.displayName}"
-                                }
-                            }) { Text("Forget") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                pairedWifiDevices.forEach { paired ->
+                    val live = findLiveWifiDevice(devices, paired)
+                    val online = live?.state == DeviceConnectionState.Online
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
+                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(paired.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Text(
+                                listOfNotNull(paired.mdnsInstanceName, paired.lastEndpoint, live?.serial)
+                                    .distinct()
+                                    .joinToString(" · "),
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
+                        StatusTag(if (online) "connected" else "disconnected", if (online) Green else TextSecondary)
+                        if (live != null && online) {
+                            OutlinedButton(onClick = { onLive(live.serial) }) { Text("Live") }
+                            OutlinedButton(onClick = {
+                                state.wifiStatus = "Disconnecting ${live.serial}..."
+                                onDisconnectWifi(live.serial)
+                            }) { Text("Disconnect") }
+                        } else {
+                            OutlinedButton(onClick = {
+                                state.wifiStatus = "Reconnecting ${paired.displayName}..."
+                                onReconnectPairedWifi(paired)
+                            }) { Text("Reconnect") }
+                        }
+                        OutlinedButton(onClick = {
+                            state.pendingConfirmation = PendingConfirmation(
+                                "Forget ${paired.displayName}?",
+                                "Removes this device from Andy's remembered Wi‑Fi list. It does not unpair on the phone.",
+                            ) {
+                                onForgetPairedWifi(paired.id)
+                                state.wifiStatus = "Forgot ${paired.displayName}"
+                            }
+                        }) { Text("Forget") }
                     }
                 }
             }
