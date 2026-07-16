@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -189,6 +190,7 @@ private fun SettingsShell(
                         modifier = Modifier.width(200.dp).fillMaxHeight(),
                     )
                     SettingsCategoryBody(
+                        selectedIndex = selectedIndex,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         content = content,
                     )
@@ -204,6 +206,7 @@ private fun SettingsShell(
                         onSelect = onSelect,
                     )
                     SettingsCategoryBody(
+                        selectedIndex = selectedIndex,
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         content = content,
                     )
@@ -309,17 +312,20 @@ private fun SettingsCategoryPills(
 
 @Composable
 private fun SettingsCategoryBody(
+    selectedIndex: Int,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Column(
-        modifier
-            .verticalScroll(rememberScrollState())
-            .padding(end = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
-    ) {
-        content()
-        Spacer(Modifier.height(AndySpace.S4))
+    key(selectedIndex) {
+        Column(
+            modifier
+                .verticalScroll(rememberScrollState())
+                .padding(end = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+        ) {
+            content()
+            Spacer(Modifier.height(AndySpace.S4))
+        }
     }
 }
 
