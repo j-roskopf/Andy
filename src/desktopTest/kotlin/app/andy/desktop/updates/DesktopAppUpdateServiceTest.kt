@@ -64,6 +64,8 @@ class DesktopAppUpdateServiceTest {
 
     @Test
     fun macDmgInstallerIsValidShell() {
+        // The syntax check needs a POSIX shell, which Windows CI lacks.
+        if (!java.io.File("/bin/sh").exists()) return
         val script = macDmgInstallerHelperScript(
             dmgPath = "/tmp/Andy-1.2.3.dmg",
             targetAppBundle = "/Applications/Andy.app",

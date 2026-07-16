@@ -27,20 +27,24 @@ internal fun annotateComposerSlashTokens(
     return buildAnnotatedString {
         append(text)
         COMPOSER_SLASH_TOKEN.findAll(text).forEach { match ->
-            val token = match.groups[1] ?: return@forEach
+            val token = match.groupValues[1]
+            if (token.isEmpty()) return@forEach
             val name = match.groupValues[2]
             val color = when {
                 name in commandNames -> commandColor
                 name in skillNames -> skillColor
                 else -> return@forEach
             }
+            // MatchGroup.range is JVM-only; the token always ends the match, so
+            // derive its offsets from the full match range instead.
+            val end = match.range.last + 1
             addStyle(
                 SpanStyle(
                     color = color,
                     background = color.copy(alpha = 0.16f),
                 ),
-                start = token.range.first,
-                end = token.range.last + 1,
+                start = end - token.length,
+                end = end,
             )
         }
     }

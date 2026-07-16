@@ -554,9 +554,11 @@ private fun currentMacAppBundle(): String? {
 }
 
 internal fun macAppBundleForPath(path: String?): String? {
-    val marker = ".app/"
-    val markerIndex = path?.indexOf(marker) ?: return null
-    if (markerIndex < 0) return null
+    if (path == null) return null
+    // Accept both separators so the pure path logic stays testable on Windows CI.
+    val markerIndex = sequenceOf(".app/", ".app\\")
+        .mapNotNull { marker -> path.indexOf(marker).takeIf { it >= 0 } }
+        .minOrNull() ?: return null
     return path.substring(0, markerIndex + ".app".length)
         .takeIf { File(it).isDirectory }
 }
