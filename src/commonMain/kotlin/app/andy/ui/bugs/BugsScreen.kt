@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -127,7 +128,7 @@ internal fun BugsScreen(bugs: BugService) {
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        PanelCard(Modifier.width(270.dp).fillMaxHeight()) {
+        PanelCard(Modifier.width(250.dp).fillMaxHeight()) {
             Toolbar("Bugs", "${state.reports.size} reports", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
             if (state.reports.isEmpty()) {
                 EmptyState("No bug reports yet")
@@ -220,7 +221,31 @@ internal fun BugsScreen(bugs: BugService) {
                     ) { Text("Delete") }
                 }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
+                    val paneGuttersWidth = 38.dp // Two 12.dp gaps plus two 14.dp resize dividers.
+                    val minimumVideoWidth = 260.dp
+                    val minimumStepsWidth = 220.dp
+                    val minimumDetailsWidth = 220.dp
+                    val availableForSidePanes = maxWidth - paneGuttersWidth - minimumVideoWidth
+                    val maximumStepsWidth = (availableForSidePanes - minimumDetailsWidth).coerceAtLeast(minimumStepsWidth)
+                    val maximumDetailsWidth = (availableForSidePanes - minimumStepsWidth).coerceAtLeast(minimumDetailsWidth)
+
+                    LaunchedEffect(maxWidth) {
+                        val maxSteps = maximumStepsWidth.value.coerceIn(minimumStepsWidth.value, 1_400f)
+                        val maxDetails = maximumDetailsWidth.value.coerceIn(minimumDetailsWidth.value, 900f)
+                        state.stepsPaneWidth = state.stepsPaneWidth.coerceIn(minimumStepsWidth.value, maxSteps)
+                        state.bugDetailsPaneWidth = state.bugDetailsPaneWidth.coerceIn(minimumDetailsWidth.value, maxDetails)
+                        val overflow = state.stepsPaneWidth + state.bugDetailsPaneWidth - availableForSidePanes.value
+                        if (overflow > 0f) {
+                            val stepsShare = state.stepsPaneWidth / (state.stepsPaneWidth + state.bugDetailsPaneWidth)
+                            state.stepsPaneWidth = (state.stepsPaneWidth - overflow * stepsShare)
+                                .coerceAtLeast(minimumStepsWidth.value)
+                            state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - overflow * (1f - stepsShare))
+                                .coerceAtLeast(minimumDetailsWidth.value)
+                        }
+                    }
+
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PanelCard(Modifier.width(state.stepsPaneWidth.dp).fillMaxHeight()) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
@@ -274,9 +299,16 @@ internal fun BugsScreen(bugs: BugService) {
                         }
                     }
                     PaneDivider(
-                        onDrag = { dragX -> state.stepsPaneWidth = (state.stepsPaneWidth + dragX).coerceIn(260f, 1_400f) },
+                        onDrag = { dragX ->
+                            val maxSteps = (availableForSidePanes - state.bugDetailsPaneWidth.dp)
+                                .coerceAtLeast(minimumStepsWidth)
+                                .value
+                                .coerceAtMost(1_400f)
+                            state.stepsPaneWidth = (state.stepsPaneWidth + dragX)
+                                .coerceIn(minimumStepsWidth.value, maxSteps)
+                        },
                     )
-                    PanelCard(Modifier.weight(1f).widthIn(min = 96.dp).fillMaxHeight()) {
+                    PanelCard(Modifier.weight(1f).widthIn(min = minimumVideoWidth).fillMaxHeight()) {
                         Text("VIDEO", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(
@@ -331,7 +363,14 @@ internal fun BugsScreen(bugs: BugService) {
                         }
                     }
                     PaneDivider(
-                        onDrag = { dragX -> state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - dragX).coerceIn(220f, 900f) },
+                        onDrag = { dragX ->
+                            val maxDetails = (availableForSidePanes - state.stepsPaneWidth.dp)
+                                .coerceAtLeast(minimumDetailsWidth)
+                                .value
+                                .coerceAtMost(900f)
+                            state.bugDetailsPaneWidth = (state.bugDetailsPaneWidth - dragX)
+                                .coerceIn(minimumDetailsWidth.value, maxDetails)
+                        },
                     )
                     PanelCard(Modifier.width(state.bugDetailsPaneWidth.dp).fillMaxHeight()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -357,6 +396,7 @@ internal fun BugsScreen(bugs: BugService) {
                         } else {
                             BugLogcatView(state.logcat, Modifier.fillMaxSize())
                         }
+                    }
                     }
                 }
             }
