@@ -150,9 +150,13 @@ interface BugService {
     val status: Flow<BugCaptureStatus>
     suspend fun startCapture(serial: String, device: AndroidDevice?)
     suspend fun stopCapture()
+    /** Starts a durable screen recording from this instant, replacing the rolling bug window. */
+    suspend fun beginRecording()
     fun recordAction(kind: String, label: String, detail: String? = null)
     suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport
+    suspend fun saveRecording(device: AndroidDevice?): BugReport
     suspend fun listBugs(): List<BugReport>
+    suspend fun listRecordings(): List<BugReport>
     suspend fun loadBug(id: String): BugReport?
     suspend fun loadBugLog(id: String): String
     suspend fun deleteBug(id: String): Boolean
@@ -506,6 +510,7 @@ data class PlatformCapabilities(
                 AndyDestination.Design,
                 AndyDestination.Accessibility,
                 AndyDestination.Bugs,
+                AndyDestination.Recordings,
                 AndyDestination.Settings,
             ),
             avdManagement = false,

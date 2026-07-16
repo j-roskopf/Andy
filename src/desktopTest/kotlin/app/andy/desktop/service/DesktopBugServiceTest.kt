@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import kotlin.test.Test
@@ -116,6 +117,34 @@ class DesktopBugServiceTest {
         assertNotNull(screen)
         assertEquals("Screen MainActivity", screen.label)
         assertTrue(screen.detail?.contains("com.example.app/com.example.app.MainActivity") == true)
+    }
+
+    @Test
+    fun recordingKeepsTheFullCaptureAndListsSeparatelyFromBugs() = runBlocking {
+        val home = Files.createTempDirectory("andy-recordings-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val device = AndroidDevice(
+            serial = "emulator-5554",
+            displayName = "Pixel 8",
+            kind = DeviceKind.Emulator,
+            state = DeviceConnectionState.Online,
+            screenSize = "1080x2400",
+        )
+
+        service.startCapture(device.serial, device)
+        service.beginRecording()
+        service.recordAction("input", "Tap Continue")
+        val recording = service.saveRecording(device)
+
+        assertTrue(recording.id.startsWith("recording-"))
+        assertEquals("Screen recording", recording.title)
+        assertEquals(listOf(recording.id), service.listRecordings().map { it.id })
+        assertTrue(service.listBugs().isEmpty())
+        assertEquals("Tap Continue", service.loadBug(recording.id)?.actions?.single()?.label)
+
+        home.resolve(".andy/bugs/${recording.id}/capture.mp4").writeBytes(ByteArray(261))
+        assertTrue(service.playbackFrames(recording.id).toList().isEmpty())
     }
 }
 

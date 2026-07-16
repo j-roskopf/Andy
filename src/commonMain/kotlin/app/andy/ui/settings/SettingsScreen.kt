@@ -54,7 +54,6 @@ import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.service.AvailableUpdate
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.PanelCard
@@ -73,59 +72,6 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
-
-@Composable
-internal fun UpdateInstallConfirmationDialog(
-    update: AvailableUpdate,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                "Install Andy ${update.versionName}?",
-                color = AndyColors.Neutral100,
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "The update has been downloaded and verified.",
-                    color = AndyColors.Neutral200,
-                    fontSize = 14.sp
-                )
-                Text(
-                    "Andy will close and open the installer. After the installation is complete, you can relaunch the application.",
-                    color = TextSecondary,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onConfirm,
-                colors = ButtonDefaults.textButtonColors(contentColor = Rust)
-            ) {
-                Text("Close and install", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.textButtonColors(contentColor = TextSecondary)
-            ) {
-                Text("Later")
-            }
-        },
-        containerColor = PanelSoft,
-        titleContentColor = AndyColors.Neutral100,
-        textContentColor = AndyColors.Neutral300
-    )
-}
 
 @Composable
 internal fun SettingsScreen(
@@ -157,6 +103,8 @@ internal fun SettingsScreen(
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
 
         AppearancePanel(workspaceState, onUpdateWorkspace)
+
+        AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
 
         AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
 
@@ -549,6 +497,40 @@ private fun AppearancePanel(
 }
 
 @Composable
+private fun AgentTranscriptPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard {
+        Text("Agent transcript", color = TextPrimary, fontWeight = FontWeight.Bold)
+        Text(
+            "Control how tool activity appears in agent chats.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Checkbox(
+                checked = workspace.compactToolCalls,
+                onCheckedChange = { checked -> update { it.copy(compactToolCalls = checked) } },
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Compact tool calls", color = TextPrimary, fontSize = 13.sp)
+                Text(
+                    "Collapse consecutive tools into one expandable line. Uncheck to show each tool call on its own row.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AgentNotificationsPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
@@ -618,6 +600,8 @@ private fun WebSettingsScreen(
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
 
         AppearancePanel(workspaceState, onUpdateWorkspace)
+
+        AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
 
         PanelCard {
             Text("Connection", color = TextPrimary, fontWeight = FontWeight.Bold)

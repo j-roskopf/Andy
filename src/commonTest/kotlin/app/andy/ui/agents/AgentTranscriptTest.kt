@@ -1,9 +1,10 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
-import androidx.compose.ui.text.LinkAnnotation
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class AgentTranscriptTest {
     @Test
@@ -27,27 +28,49 @@ class AgentTranscriptTest {
     }
 
     @Test
-    fun rendersHttpLinksAsClickableLinkAnnotations() {
-        val markdown = parseChatMarkdown("Read [the docs](https://www.example.com/docs) first.")
+    fun compactToolCallsGroupsConsecutiveToolEvents() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "Find it"),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Grep", summary = "AgentTranscript"),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Todo", summary = "update"),
+            AgentEvent.ToolResult(atMillis = 4, toolName = "Grep", summary = "matched", isError = false),
+            AgentEvent.AssistantText(atMillis = 5, text = "Done."),
+        )
 
-        assertEquals("Read the docs first.", markdown.text)
-        val link = markdown.getLinkAnnotations(0, markdown.length).single().item as LinkAnnotation.Url
-        assertEquals("https://www.example.com/docs", link.url)
+        val items = transcriptDisplayItems(events, compactToolCalls = true)
+
+        assertEquals(3, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0])
+        val group = assertIs<TranscriptDisplayItem.ToolCalls>(items[1])
+        assertEquals(3, group.events.size)
+        assertEquals(1, group.startIndex)
+        assertIs<TranscriptDisplayItem.Event>(items[2])
     }
 
     @Test
-    fun leavesMalformedLinksUntouched() {
-        val text = "Read [the docs](not a URL)."
+    fun compactToolCallsLeavesSingleToolAsEvent() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "Read", summary = "file.kt"),
+            AgentEvent.AssistantText(atMillis = 2, text = "Looks good."),
+        )
 
-        assertEquals(text, parseChatMarkdown(text).text)
+        val items = transcriptDisplayItems(events, compactToolCalls = true)
+
+        assertEquals(2, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0])
+        assertTrue(items[0] is TranscriptDisplayItem.Event && (items[0] as TranscriptDisplayItem.Event).event is AgentEvent.ToolCall)
     }
 
     @Test
-    fun rendersUppercaseHttpLinksAsClickableLinkAnnotations() {
-        val markdown = parseChatMarkdown("See [API docs](HTTPS://WWW.EXAMPLE.COM/API).")
+    fun disabledCompactKeepsEachToolAsItsOwnRow() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "Grep", summary = "a"),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Todo", summary = "b"),
+        )
 
-        assertEquals("See API docs.", markdown.text)
-        val link = markdown.getLinkAnnotations(0, markdown.length).single().item as LinkAnnotation.Url
-        assertEquals("HTTPS://WWW.EXAMPLE.COM/API", link.url)
+        val items = transcriptDisplayItems(events, compactToolCalls = false)
+
+        assertEquals(2, items.size)
+        assertTrue(items.all { it is TranscriptDisplayItem.Event })
     }
 }

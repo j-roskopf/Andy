@@ -168,8 +168,10 @@ internal object NativeMirrorJni {
             return
         }
         // Destination switches briefly have zero hosts. Keep VideoToolbox/Metal warm so the next
-        // Live/Design/Accessibility surface can rebind; DesktopMirrorEngine.disconnect() still
-        // tears presentation down when the session is truly released.
+        // Live/Design/Accessibility surface can rebind, but never leave its heavyweight pixels
+        // above the destination that replaced Live. DesktopMirrorEngine.disconnect() still tears
+        // presentation down when the session is truly released.
+        setInlineOverlayVisible(false)
         lastGeometryKey = null
     }
 

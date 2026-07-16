@@ -569,6 +569,9 @@ private class MirrorPanel(
             g2.stroke = BasicStroke(2f)
             g2.drawRect(x, y, w, h)
         }
+        overlay.gesture?.let { gesture ->
+            paintGesture(g2, frameImage, rect, gesture)
+        }
         overlay.pickerColor?.let { color ->
             val radius = 48
             val point = pickerPoint?.takeIf { it.x in rect.x..(rect.x + rect.width) && it.y in rect.y..(rect.y + rect.height) }
@@ -588,6 +591,56 @@ private class MirrorPanel(
             g2.drawLine(cx, cy - 7, cx, cy + 7)
             drawPill(g2, cx - 24, cy + radius + 8, overlay.pickerHex ?: color.toHex())
         }
+    }
+
+    private fun paintGesture(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect, gesture: MirrorGestureOverlay) {
+        val sourceWidth = (overlay.sourceWidth ?: frameImage.width).coerceAtLeast(1)
+        val sourceHeight = (overlay.sourceHeight ?: frameImage.height).coerceAtLeast(1)
+        fun toScreen(x: Int, y: Int) = Point(
+            rect.x + (x.coerceIn(0, sourceWidth) * rect.width.toFloat() / sourceWidth).roundToInt(),
+            rect.y + (y.coerceIn(0, sourceHeight) * rect.height.toFloat() / sourceHeight).roundToInt(),
+        )
+        val alpha = (1f - gesture.fadeProgress).coerceIn(0f, 1f)
+        if (alpha <= 0f) return
+        val start = toScreen(gesture.startX, gesture.startY)
+        val target = gesture.endX?.let { endX -> toScreen(endX, gesture.endY ?: gesture.startY) }
+        val current = target?.let { end ->
+            Point(
+                (start.x + (end.x - start.x) * gesture.swipeProgress.coerceIn(0f, 1f)).roundToInt(),
+                (start.y + (end.y - start.y) * gesture.swipeProgress.coerceIn(0f, 1f)).roundToInt(),
+            )
+        } ?: start
+        val lineColor = java.awt.Color(216, 111, 74, (220 * alpha).roundToInt())
+        val haloColor = java.awt.Color(216, 111, 74, (64 * alpha).roundToInt())
+        g2.color = haloColor
+        g2.fillOval(current.x - 20, current.y - 20, 40, 40)
+        if (target != null) {
+            g2.color = lineColor
+            g2.stroke = BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            g2.drawLine(start.x, start.y, current.x, current.y)
+            g2.fillOval(start.x - 5, start.y - 5, 10, 10)
+            val dx = current.x - start.x
+            val dy = current.y - start.y
+            val length = kotlin.math.sqrt((dx * dx + dy * dy).toDouble())
+            if (length > 1.0) {
+                val unitX = dx / length
+                val unitY = dy / length
+                val baseX = current.x - unitX * 12
+                val baseY = current.y - unitY * 12
+                g2.stroke = BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                g2.drawLine(current.x, current.y, (baseX - unitY * 5).roundToInt(), (baseY + unitX * 5).roundToInt())
+                g2.drawLine(current.x, current.y, (baseX + unitY * 5).roundToInt(), (baseY - unitX * 5).roundToInt())
+            }
+        }
+        g2.color = lineColor
+        g2.stroke = BasicStroke(2f)
+        g2.drawOval(current.x - 14, current.y - 14, 28, 28)
+        g2.color = java.awt.Color(245, 245, 245, (230 * alpha).roundToInt())
+        g2.fillOval(current.x - 4, current.y - 4, 8, 8)
+        g2.color = lineColor
+        g2.stroke = BasicStroke(1f)
+        g2.drawLine(current.x - 18, current.y, current.x + 18, current.y)
+        g2.drawLine(current.x, current.y - 18, current.x, current.y + 18)
     }
 
     private fun drawMagnifier(g2: Graphics2D, frameImage: BufferedImage, cx: Int, cy: Int, radius: Int, point: DevicePoint) {

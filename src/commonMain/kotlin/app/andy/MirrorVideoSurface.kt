@@ -54,4 +54,17 @@ data class MirrorOverlay(
     val referenceImagePath: String? = null,
     val referenceImageKey: Long = 0L,
     val referenceImageOpacity: Float = 0.5f,
+    val gesture: MirrorGestureOverlay? = null,
+)
+
+/** A replay-only interaction annotation rendered by the platform video surface. */
+data class MirrorGestureOverlay(
+    val startX: Int,
+    val startY: Int,
+    val endX: Int? = null,
+    val endY: Int? = null,
+    /** 0 is fully visible; 1 is fully faded after the gesture completes. */
+    val fadeProgress: Float = 0f,
+    /** 0 is the start of a swipe; 1 is its recorded endpoint. */
+    val swipeProgress: Float = 1f,
 )

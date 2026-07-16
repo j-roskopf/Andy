@@ -315,6 +315,10 @@ class DesktopMirrorEngine(
     override suspend fun disconnect(immediate: Boolean) {
         pendingRelease?.cancel()
         pendingRelease = null
+        // Compose Desktop may retain a SwingPanel's native peer briefly after its screen leaves
+        // composition. The Metal presenter is an independent AppKit surface, so hide it at the
+        // session boundary rather than waiting for that peer's removeNotify callback.
+        NativeMirrorJni.setInlineOverlayVisible(false)
         if (immediate) {
             tearDownSession()
             return
@@ -333,6 +337,9 @@ class DesktopMirrorEngine(
         val host = awaitNativeHost() ?: return
         nativeHost = host
         if (NativeMirrorJni.isMetalInlineOverlayOpen()) {
+            // The departing Live host hides the retained presenter immediately so it cannot
+            // float above the next destination. Make it visible only after this new host exists.
+            NativeMirrorJni.setInlineOverlayVisible(true)
             NativeMirrorJni.updateMetalLayerGeometry(host)
         } else if (!NativeMirrorJni.openMetalInlineOverlay(host) && config.rendererMode == MirrorRendererMode.Accelerated) {
             status.value = "Accelerated mirror unavailable · VideoToolbox/Metal inline overlay initialization failed"

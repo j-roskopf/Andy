@@ -645,6 +645,8 @@ sealed interface AgentEvent {
         val text: String,
         /** Skills explicitly selected in this message, rendered as local links in the transcript. */
         val skills: List<AgentSkill> = emptyList(),
+        /** Local image paths attached with this message, shown as thumbnails in the bubble. */
+        val imagePaths: List<String> = emptyList(),
     ) : AgentEvent
     data class ToolCall(override val atMillis: Long, val toolName: String, val summary: String, val detail: String = summary) : AgentEvent
     data class ToolResult(

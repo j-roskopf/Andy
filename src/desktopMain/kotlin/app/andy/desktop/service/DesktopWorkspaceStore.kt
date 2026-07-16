@@ -61,6 +61,7 @@ class DesktopWorkspaceStore(
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
+            compactToolCalls = props.getProperty("compactToolCalls")?.toBooleanStrictOrNull() ?: true,
         )
     }.also { mutableState.value = it }
 
@@ -122,6 +123,7 @@ class DesktopWorkspaceStore(
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
+            setProperty("compactToolCalls", state.compactToolCalls.toString())
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         mutableState.value = state

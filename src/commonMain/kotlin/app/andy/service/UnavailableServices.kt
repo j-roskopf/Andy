@@ -110,9 +110,12 @@ object UnavailableBugService : BugService {
     override val status = flowOf(BugCaptureStatus(message = "Browser capture ready"))
     override suspend fun startCapture(serial: String, device: AndroidDevice?) = Unit
     override suspend fun stopCapture() = Unit
+    override suspend fun beginRecording() = Unit
     override fun recordAction(kind: String, label: String, detail: String?) = Unit
     override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = error(BrowserUnavailable)
+    override suspend fun saveRecording(device: AndroidDevice?): BugReport = error(BrowserUnavailable)
     override suspend fun listBugs() = emptyList<BugReport>()
+    override suspend fun listRecordings() = emptyList<BugReport>()
     override suspend fun loadBug(id: String): BugReport? = null
     override suspend fun loadBugLog(id: String) = ""
     override suspend fun deleteBug(id: String) = false

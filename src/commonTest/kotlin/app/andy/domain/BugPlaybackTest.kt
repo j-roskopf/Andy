@@ -5,6 +5,7 @@ import app.andy.model.BugReport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BugPlaybackTest {
     @Test
@@ -51,6 +52,26 @@ class BugPlaybackTest {
         assertEquals(60, event?.y)
         assertEquals(300f / BugPointerHighlightMillis, event?.progress)
         assertNull(activeBugPointerEvent(actions, playbackMillis = 3000L))
+    }
+
+    @Test
+    fun activeBugPointerEventAnimatesRecordedSwipeCoordinates() {
+        val action = BugAction(
+            id = "swipe",
+            timestampMillis = 1_000L,
+            kind = "input",
+            label = "Swipe up",
+            detail = "309px · 255ms · 40,409 -> 40,100",
+        )
+
+        val event = activeBugPointerEvent(listOf(action), playbackMillis = 872L)
+
+        assertEquals(40, event?.x)
+        assertEquals(409, event?.y)
+        assertEquals(40, event?.endX)
+        assertEquals(100, event?.endY)
+        assertTrue((event?.swipeProgress ?: 0f) in 0.49f..0.51f)
+        assertEquals(0f, event?.progress)
     }
 
     private fun bugReport(

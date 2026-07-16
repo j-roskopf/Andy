@@ -51,6 +51,7 @@ import app.andy.model.SdkDiscovery
 import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
 import app.andy.ui.components.StatusRow
+import app.andy.ui.agents.ProjectActivityIndicator
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
@@ -70,6 +71,7 @@ internal fun Sidebar(
     deviceCount: Int,
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
+    hasActiveProjectAgentTasks: Boolean,
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -157,8 +159,24 @@ internal fun Sidebar(
                     }
                     if (
                         (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
-                        (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
-                    ) UnreadDot()
+                        (item == AndyDestination.Actions && (
+                            hasUnreadProjectAgentTasks || hasActiveProjectAgentTasks
+                        ))
+                    ) {
+                        Spacer(Modifier.width(6.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (
+                                (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
+                                (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
+                            ) UnreadDot()
+                            if (item == AndyDestination.Actions && hasActiveProjectAgentTasks) {
+                                ProjectActivityIndicator(10.dp)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -315,5 +333,6 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.Design -> "%%"
     AndyDestination.Accessibility -> "13"
     AndyDestination.Bugs -> "!!"
+    AndyDestination.Recordings -> ">o"
     AndyDestination.Settings -> "*:"
 }

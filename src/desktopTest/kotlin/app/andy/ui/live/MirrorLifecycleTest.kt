@@ -55,6 +55,7 @@ class MirrorLifecycleTest {
                         onDevicePaneWidthChange = {},
                         onControlsPaneHeightChange = {},
                         onBugSaved = {},
+                        onRecordingSaved = {},
                         logcatState = LogcatState(),
                         onPopOutMirror = {},
                         selectedPackage = null,

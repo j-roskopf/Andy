@@ -770,6 +770,14 @@ private class BrowserBugService(
         )
     }
 
+    override suspend fun beginRecording() {
+        val serial = checkNotNull(selectedSerial) { "Connect to a device before recording." }
+        val device = selectedDevice
+        if (mutableStatus.value.active) stopCapture()
+        startCapture(serial, device)
+        mutableStatus.value = mutableStatus.value.copy(message = "Recording screen and inputs to OPFS")
+    }
+
     override fun recordAction(kind: String, label: String, detail: String?) {
         if (!mutableStatus.value.active) return
         actions += BugAction(
@@ -782,12 +790,31 @@ private class BrowserBugService(
         mutableStatus.value = mutableStatus.value.copy(actionCount = actions.size)
     }
 
-    override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport {
+    override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = saveCapture(
+        draft = draft,
+        device = device,
+        idPrefix = "andy-web-bug-",
+    )
+
+    override suspend fun saveRecording(device: AndroidDevice?): BugReport {
+        val report = saveCapture(
+            draft = BugCaptureDraft("Screen recording"),
+            device = device,
+            idPrefix = "andy-web-recording-",
+        )
+        return report
+    }
+
+    private suspend fun saveCapture(
+        draft: BugCaptureDraft,
+        device: AndroidDevice?,
+        idPrefix: String,
+    ): BugReport {
         if (mutableStatus.value.active) stopCapture()
         val video = capture ?: WebJson.decodeFromString<WebBugCaptureDto>(webBugStop().await<JsString>().toString()).also { capture = it }
         val serial = selectedSerial ?: device?.serial ?: error("No Android device is selected for this capture.")
         val now = currentTimeMillis()
-        val id = "andy-web-$now"
+        val id = "$idPrefix$now"
         val capturedActions = (actions + video.actions)
             .distinctBy(BugAction::id)
             .sortedBy(BugAction::timestampMillis)
@@ -841,6 +868,12 @@ private class BrowserBugService(
 
     override suspend fun listBugs(): List<BugReport> = runCatching {
         WebJson.decodeFromString<List<BugReport>>(webBugList().await<JsString>().toString())
+            .filterNot { it.id.startsWith("andy-web-recording-") }
+    }.getOrDefault(emptyList())
+
+    override suspend fun listRecordings(): List<BugReport> = runCatching {
+        WebJson.decodeFromString<List<BugReport>>(webBugList().await<JsString>().toString())
+            .filter { it.id.startsWith("andy-web-recording-") }
     }.getOrDefault(emptyList())
 
     override suspend fun loadBug(id: String): BugReport? = runCatching {

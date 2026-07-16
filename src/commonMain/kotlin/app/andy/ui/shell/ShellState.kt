@@ -63,6 +63,8 @@ internal class ShellState(
         private set
     var terminalRunId by mutableStateOf<String?>(null)
         private set
+    var chromeMenuExpanded by mutableStateOf(false)
+        private set
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
@@ -95,6 +97,10 @@ internal class ShellState(
 
     fun updateActiveRunId(value: String?) {
         activeRunId = value
+    }
+
+    fun updateChromeMenuExpanded(value: Boolean) {
+        chromeMenuExpanded = value
     }
 
     suspend fun refreshDevicesNow(): List<AndroidDevice> {

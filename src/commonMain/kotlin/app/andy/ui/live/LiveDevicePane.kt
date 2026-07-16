@@ -61,6 +61,7 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.PanelSoft
+import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -109,6 +110,13 @@ internal fun LiveDevicePane(
     onRotate: () -> Unit = {},
     onCaptureScreenshot: () -> Unit = {},
     onBugReport: () -> Unit = {},
+    onRecord: () -> Unit = {},
+    recordLabel: String = "Record",
+    recordEnabled: Boolean = true,
+    recordingCountdown: Int? = null,
+    recordingActive: Boolean = false,
+    recordingDuration: String? = null,
+    showRecord: Boolean = false,
     onClipText: () -> Unit = {},
     onPopOut: () -> Unit = {},
     showPopOut: Boolean = true,
@@ -135,6 +143,11 @@ internal fun LiveDevicePane(
                 onRotate = onRotate,
                 onCaptureScreenshot = onCaptureScreenshot,
                 onBugReport = onBugReport,
+                onRecord = onRecord,
+                recordLabel = recordLabel,
+                recordEnabled = recordEnabled,
+                recordingDuration = recordingDuration,
+                showRecord = showRecord,
                 onClipText = onClipText,
                 onPopOut = onPopOut,
                 showPopOut = showPopOut,
@@ -256,6 +269,26 @@ internal fun LiveDevicePane(
                                         occluded = surfaceOccluded,
                                     )
                                 }
+                                if (recordingCountdown != null) {
+                                    Box(
+                                        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.56f)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Text("Recording starts in", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(recordingCountdown.toString(), color = Rust, fontSize = 56.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                } else if (recordingActive) {
+                                    Text(
+                                        "● REC",
+                                        color = Rust,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                                    )
+                                }
                             }
                         }
 
@@ -322,6 +355,11 @@ internal fun LiveHardwareToolbar(
     onRotate: () -> Unit,
     onCaptureScreenshot: () -> Unit,
     onBugReport: () -> Unit,
+    onRecord: () -> Unit,
+    recordLabel: String,
+    recordEnabled: Boolean,
+    recordingDuration: String?,
+    showRecord: Boolean,
     onClipText: () -> Unit,
     onPopOut: () -> Unit,
     showPopOut: Boolean,
@@ -348,7 +386,12 @@ internal fun LiveHardwareToolbar(
             ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
             ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
             if (showPopOut) ToolbarButton(HardwareIcon.PopOut, "Pop Out", enabled, onPopOut)
-            ToolbarButton(HardwareIcon.Record, "Record", false) {}
+            if (showRecord) {
+                ToolbarButton(HardwareIcon.Record, recordLabel, enabled && recordEnabled, onRecord)
+                recordingDuration?.let { duration ->
+                    Text(duration, color = Red, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                }
+            }
         }
     }
 }

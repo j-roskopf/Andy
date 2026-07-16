@@ -66,4 +66,6 @@ data class WorkspaceState(
     val agentIconBadgeEnabled: Boolean = true,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
+    /** Collapse consecutive tool calls into one expandable line in agent transcripts. */
+    val compactToolCalls: Boolean = true,
 )

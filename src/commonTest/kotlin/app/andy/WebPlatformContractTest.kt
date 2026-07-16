@@ -24,6 +24,7 @@ class WebPlatformContractTest {
                 AndyDestination.Design,
                 AndyDestination.Accessibility,
                 AndyDestination.Bugs,
+                AndyDestination.Recordings,
                 AndyDestination.Settings,
             ),
             PlatformCapabilities.Web.destinations,

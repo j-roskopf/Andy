@@ -38,6 +38,7 @@ import app.andy.model.AndroidDevice
 import app.andy.model.BugCaptureDraft
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
@@ -67,6 +68,7 @@ import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -113,6 +115,13 @@ internal fun MirrorSession.liveTelemetry(): String = buildString {
     backend.fallbackReason?.let { append(" · $it") }
 }
 
+private sealed interface LiveRecordingState {
+    data object Idle : LiveRecordingState
+    data class Countdown(val seconds: Int) : LiveRecordingState
+    data object Recording : LiveRecordingState
+    data object Saving : LiveRecordingState
+}
+
 @Composable
 internal fun LiveScreen(
     services: AndyServices,
@@ -126,6 +135,7 @@ internal fun LiveScreen(
     onDevicePaneWidthChange: (Float) -> Unit,
     onControlsPaneHeightChange: (Float) -> Unit,
     onBugSaved: () -> Unit,
+    onRecordingSaved: () -> Unit,
     logcatState: LogcatState,
     onPopOutMirror: () -> Unit,
     selectedPackage: String?,
@@ -149,6 +159,10 @@ internal fun LiveScreen(
     var bugSaveStatus by remember { mutableStateOf("") }
     var liveActionStatus by remember { mutableStateOf("") }
     var clipDialogVisible by remember { mutableStateOf(false) }
+    var recordingState by remember { mutableStateOf<LiveRecordingState>(LiveRecordingState.Idle) }
+    var recordingRequestId by remember { mutableStateOf(0) }
+    var recordingStartedAtMillis by remember { mutableStateOf<Long?>(null) }
+    var recordingElapsedMillis by remember { mutableStateOf(0L) }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
     var localControlsPaneHeight by remember(controlsPaneHeight, controlsPaneMinHeight) {
         mutableStateOf(controlsPaneHeight.coerceIn(controlsPaneMinHeight, 520f))
@@ -193,6 +207,31 @@ internal fun LiveScreen(
     LaunchedEffect(transfer.status) {
         if (transfer.status.isNotBlank()) liveActionStatus = transfer.status
     }
+    LaunchedEffect(recordingRequestId) {
+        if (recordingRequestId == 0) return@LaunchedEffect
+        for (seconds in 3 downTo 1) {
+            recordingState = LiveRecordingState.Countdown(seconds)
+            delay(1_000)
+        }
+        runCatching { services.bugs.beginRecording() }
+            .onSuccess {
+                recordingStartedAtMillis = currentTimeMillis()
+                recordingElapsedMillis = 0L
+                recordingState = LiveRecordingState.Recording
+                liveActionStatus = "Recording screen and inputs"
+            }
+            .onFailure { error ->
+                recordingState = LiveRecordingState.Idle
+                liveActionStatus = error.message ?: "Could not start recording"
+            }
+    }
+    LaunchedEffect(recordingStartedAtMillis, recordingState) {
+        val startedAt = recordingStartedAtMillis ?: return@LaunchedEffect
+        while (recordingState == LiveRecordingState.Recording) {
+            recordingElapsedMillis = (currentTimeMillis() - startedAt).coerceAtLeast(0L)
+            delay(1_000)
+        }
+    }
     fun reconnectMirror(config: MirrorVideoConfig) {
         if (serial == null) return
         scope.launch {
@@ -214,6 +253,9 @@ internal fun LiveScreen(
         services.mirror.session.collectLatest { mirrorSession = it }
     }
     LaunchedEffect(serial, device?.state) {
+        recordingState = LiveRecordingState.Idle
+        recordingStartedAtMillis = null
+        recordingElapsedMillis = 0L
         if (serial != null && device?.state == DeviceConnectionState.Online) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
@@ -258,6 +300,43 @@ internal fun LiveScreen(
                 onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
                 onCaptureScreenshot = { runLiveAction("Screenshot") { services.artifacts.saveScreenshot(serial!!, "andy-${serial}.png") } },
                 onBugReport = { bugDialogVisible = true },
+                onRecord = {
+                    when (recordingState) {
+                        LiveRecordingState.Idle -> {
+                            recordingState = LiveRecordingState.Countdown(3)
+                            recordingRequestId++
+                        }
+                        LiveRecordingState.Recording -> {
+                            recordingState = LiveRecordingState.Saving
+                            scope.launch {
+                                runCatching { services.bugs.saveRecording(device) }
+                                    .onSuccess { recording ->
+                                        recordingState = LiveRecordingState.Idle
+                                        recordingStartedAtMillis = null
+                                        recordingElapsedMillis = 0L
+                                        liveActionStatus = "Saved ${recording.title}"
+                                        onRecordingSaved()
+                                    }
+                                    .onFailure { error ->
+                                        recordingState = LiveRecordingState.Recording
+                                        liveActionStatus = error.message ?: "Could not save recording"
+                                    }
+                            }
+                        }
+                        is LiveRecordingState.Countdown, LiveRecordingState.Saving -> Unit
+                    }
+                },
+                recordLabel = when (val state = recordingState) {
+                    LiveRecordingState.Idle -> "Record"
+                    is LiveRecordingState.Countdown -> state.seconds.toString()
+                    LiveRecordingState.Recording -> "Stop"
+                    LiveRecordingState.Saving -> "Saving"
+                },
+                recordEnabled = recordingState !is LiveRecordingState.Countdown && recordingState != LiveRecordingState.Saving,
+                recordingCountdown = (recordingState as? LiveRecordingState.Countdown)?.seconds,
+                recordingActive = recordingState == LiveRecordingState.Recording || recordingState == LiveRecordingState.Saving,
+                recordingDuration = recordingElapsedMillis.takeIf { recordingState == LiveRecordingState.Recording }?.let(::formatRecordingDuration),
+                showRecord = true,
                 onClipText = { clipDialogVisible = true },
                 onPopOut = onPopOutMirror,
                 showPopOut = !isWeb,
@@ -408,6 +487,13 @@ internal fun LiveScreen(
             },
         )
     }
+}
+
+private fun formatRecordingDuration(elapsedMillis: Long): String {
+    val totalSeconds = (elapsedMillis / 1_000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
 }
 
 @Composable

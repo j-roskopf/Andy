@@ -342,7 +342,7 @@ class DesktopAgentRunService(
             else -> existingBuild?.reviewGeneration ?: 0
         }
         val reopeningCompleted = invalidatingReview && existingBuild?.state == ProjectTaskState.Completed
-        val reopeningForVerification = invalidatingVerification && existingBuild?.state == ProjectTaskState.Completed
+        val reopeningForVerification = invalidatingVerification && existingBuild.state == ProjectTaskState.Completed
         val restoringCompleted = !draft.reviewEnabled && reviewWasEnabled && existingBuild.reviewReopenedCompleted == true
         val pauseForReviewChange = (draft.reviewEnabled != reviewWasEnabled || reviewGateChanged) &&
             existingBuild?.attempts?.isNotEmpty() == true
@@ -785,8 +785,8 @@ class DesktopAgentRunService(
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
         val followUpForCli = promptWithGoalHint(promptWithSkillHints(followUp, selectedSkills), task.goal)
-        appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills)))
-        writeAndyTranscriptLine(taskId, followUp, selectedSkills, now)
+        appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths)))
+        writeAndyTranscriptLine(taskId, followUp, selectedSkills, now, imagePaths)
         val queued = task.copy(
             status = AgentTaskStatus.Queued,
             exitCode = null,
@@ -2588,7 +2588,13 @@ class DesktopAgentRunService(
         if (merged == null) transcript + event else transcript.dropLast(1) + merged
     }
 
-    private fun writeAndyTranscriptLine(taskId: String, userText: String, skills: List<AgentSkill>, atMillis: Long) {
+    private fun writeAndyTranscriptLine(
+        taskId: String,
+        userText: String,
+        skills: List<AgentSkill>,
+        atMillis: Long,
+        imagePaths: List<String> = emptyList(),
+    ) {
         runCatching {
             val file = store.transcriptFile(taskId)
             file.parentFile?.mkdirs()
@@ -2596,6 +2602,7 @@ class DesktopAgentRunService(
                 put("andyUserMessage", userText)
                 put("andySkillNames", skills.joinToString(SKILL_SEPARATOR) { it.name })
                 put("andySkillPaths", skills.joinToString(SKILL_SEPARATOR) { it.path })
+                put("andyImagePaths", imagePaths.joinToString(SKILL_SEPARATOR))
                 put("atMillis", atMillis)
             }.toString()
             file.appendText(line + "\n")
@@ -2611,7 +2618,11 @@ class DesktopAgentRunService(
         val skills = names.zip(paths).filter { (_, path) -> path.isNotBlank() }.map { (name, path) ->
             AgentSkill(name = name, description = "", path = path)
         }
-        return AgentEvent.UserMessage(objectValue.longOrNull("atMillis") ?: 0L, text, skills)
+        val imagePaths = objectValue.stringOrNull("andyImagePaths")
+            ?.split(SKILL_SEPARATOR)
+            .orEmpty()
+            .filter { it.isNotBlank() }
+        return AgentEvent.UserMessage(objectValue.longOrNull("atMillis") ?: 0L, text, skills, imagePaths)
     }
 
     override fun markRead(taskId: String) {

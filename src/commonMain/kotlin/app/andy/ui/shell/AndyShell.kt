@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -170,6 +171,7 @@ internal fun AndyShell(
         tintId = state.workspaceState.tintId,
         surfaceModeId = state.workspaceState.surfaceModeId,
     ) {
+    CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides state.chromeMenuExpanded) {
     Box(
         Modifier.fillMaxSize()
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
@@ -184,6 +186,7 @@ internal fun AndyShell(
                 // the standalone Agent destination.
                 hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
                 hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
+                hasActiveProjectAgentTasks = agentTasks.any { it.isActive && it.projectId != null },
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
@@ -204,6 +207,7 @@ internal fun AndyShell(
                     actionConfig = state.actionsConfig,
                     onRunAction = { project, action -> state.runAction(project, action) },
                     proxyRunning = proxyRunning,
+                    onMenuExpandedChange = state::updateChromeMenuExpanded,
                     actions = {
                         if (state.destination == AndyDestination.Network) {
                             FilterPill("Rules", state.networkRulesVisible, Rust, toolbar = true) { state.toggleNetworkRulesVisible() }
@@ -243,6 +247,7 @@ internal fun AndyShell(
                             requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
                             requestedProjectId = requestedOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
+                            compactToolCalls = state.workspaceState.compactToolCalls,
                         )
                     }
                     RetainedDestination(active = agentsActive) {
@@ -250,6 +255,7 @@ internal fun AndyShell(
                             services = services, active = agentsActive,
                             requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = onOpenAgentTaskConsumed,
+                            compactToolCalls = state.workspaceState.compactToolCalls,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {
@@ -295,6 +301,7 @@ internal fun AndyShell(
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(liveDevicePaneWidth = width) } },
                             onControlsPaneHeightChange = { height -> state.updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
                             onBugSaved = { state.navigateTo(AndyDestination.Bugs) },
+                            onRecordingSaved = { state.navigateTo(AndyDestination.Recordings) },
                             logcatState = state.liveLogcatState,
                             onPopOutMirror = {
                                 val selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial }
@@ -380,6 +387,7 @@ internal fun AndyShell(
                             state = state.accessibilityState
                         )
                         AndyDestination.Bugs -> BugsScreen(services.bugs)
+                        AndyDestination.Recordings -> BugsScreen(services.bugs, recordings = true)
                         AndyDestination.Settings -> SettingsScreen(
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
@@ -390,24 +398,25 @@ internal fun AndyShell(
             }
         }
     }
-        pendingUpdateInstallConfirmation?.let { update ->
-            UpdateInstallConfirmationDialog(
-                update = update,
-                onDismiss = { services.updates.respondToInstallConfirmation(false) },
-                onConfirm = { services.updates.respondToInstallConfirmation(true) }
-            )
-        }
-        state.transfer.confirmationTitle?.let { title ->
-            ConfirmationDialog(
-                confirmation = PendingConfirmation(
-                    title = title,
-                    message = state.transfer.confirmationMessage,
-                    confirmLabel = "Replace",
-                    onConfirm = { state.transfer.acceptConfirmation() },
-                ),
-                onDismiss = { state.transfer.dismissConfirmation() },
+    pendingUpdateInstallConfirmation?.let { update ->
+        UpdateInstallConfirmationDialog(
+            update = update,
+            onDismiss = { services.updates.respondToInstallConfirmation(false) },
+            onConfirm = { services.updates.respondToInstallConfirmation(true) }
+        )
+    }
+    state.transfer.confirmationTitle?.let { title ->
+        ConfirmationDialog(
+            confirmation = PendingConfirmation(
+                title = title,
+                message = state.transfer.confirmationMessage,
+                confirmLabel = "Replace",
                 onConfirm = { state.transfer.acceptConfirmation() },
-            )
-        }
+            ),
+            onDismiss = { state.transfer.dismissConfirmation() },
+            onConfirm = { state.transfer.acceptConfirmation() },
+        )
+    }
+    }
     }
 }
