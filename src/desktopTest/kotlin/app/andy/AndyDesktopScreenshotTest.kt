@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
@@ -104,6 +105,10 @@ class AndyDesktopScreenshotTest {
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     @Test
+    fun desktopProjectSessions() = capture(listOf(AndyScreenshotScenario.ProjectsSessions))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
     fun desktopProjectScratchpad() = capture(listOf(AndyScreenshotScenario.ProjectsScratchpad))
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
@@ -129,9 +134,31 @@ class AndyDesktopScreenshotTest {
                         }
                     }
                     waitForIdle()
-                    scenario.projectInteraction?.let { label ->
-                        onNodeWithText(label).performClick()
-                        waitForIdle()
+                    when (scenario) {
+                        AndyScreenshotScenario.ProjectsProfiles -> {
+                            onNodeWithText("Profiles").performClick()
+                            waitForIdle()
+                        }
+                        AndyScreenshotScenario.ProjectsNewBuild -> {
+                            onNodeWithText("New build").performClick()
+                            waitForIdle()
+                        }
+                        AndyScreenshotScenario.ProjectsNewSpec -> {
+                            onNodeWithText("New spec").performClick()
+                            waitForIdle()
+                            onNodeWithTag("spec-title-field").performTextInput("Postal code edge cases")
+                            onNodeWithTag("spec-brief-field").performTextInput(
+                                "Plan validation for blank, international, and partial postal codes before the next build pair.",
+                            )
+                            waitForIdle()
+                            onNodeWithText("include scratchpad").performClick()
+                            waitForIdle()
+                        }
+                        AndyScreenshotScenario.ProjectsScratchpadEditor -> {
+                            onNodeWithText("edit").performClick()
+                            waitForIdle()
+                        }
+                        else -> Unit
                     }
                     runOnUiThread { redrawTick++ }
                     waitForIdle()
@@ -143,7 +170,6 @@ class AndyDesktopScreenshotTest {
                         AndyScreenshotScenario.ProjectsReviewBlocking,
                         AndyScreenshotScenario.ProjectsReviewDisabled,
                         -> onNodeWithTag("project-task-dock")
-                        AndyScreenshotScenario.ProjectsRunbook -> onNodeWithTag("project-canvas")
                         else -> onNode(isRoot() and hasAnyDescendant(hasText("devices")))
                     }
                     captureTarget.captureRoboImage(
@@ -163,13 +189,4 @@ class AndyDesktopScreenshotTest {
         System.getProperty("os.name").contains("windows", ignoreCase = true) -> "windows"
         else -> "linux"
     }
-
-    private val AndyScreenshotScenario.projectInteraction: String?
-        get() = when (this) {
-            AndyScreenshotScenario.ProjectsProfiles -> "Profiles"
-            AndyScreenshotScenario.ProjectsNewSpec -> "New spec"
-            AndyScreenshotScenario.ProjectsNewBuild -> "New build"
-            AndyScreenshotScenario.ProjectsScratchpadEditor -> "edit"
-            else -> null
-        }
 }

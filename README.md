@@ -133,12 +133,21 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Files | Computer Files |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="480"> |
-| Network | Projects |
+| Network | Project tasks |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-populated.png" alt="Andy projects" width="480"> |
-| Project actions | Project notes |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-workflows.png" alt="Andy project tasks" width="480"> |
+| Project runbook | Project sessions |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-actions.png" alt="Andy project actions" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-notes.png" alt="Andy project notes" width="480"> |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-runbook.png" alt="Andy project runbook" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-sessions.png" alt="Andy project sessions" width="480"> |
+| Project scratchpad | Project scratchpad editor |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-scratchpad.png" alt="Andy project scratchpad" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-scratchpad-editor.png" alt="Andy project scratchpad editor" width="480"> |
+| Project new spec | Project new build |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-new-spec.png" alt="Andy project new spec" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-new-build.png" alt="Andy project new build" width="480"> |
+| Project profiles | |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-profiles.png" alt="Andy project profiles" width="480"> | |
 | Agents | Snapshots |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="480"> |
@@ -164,3 +173,6 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 
 ### Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>
+
+### Inspiration
+A lot of visual and functional inspiration was borrowed, with love, from [Emu](https://emu.marathonlabs.io/)

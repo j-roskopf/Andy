@@ -796,8 +796,8 @@ internal fun SpecTaskDialog(
         title = { Text(if (existing == null) "New spec" else "Edit spec", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.width(760.dp).heightIn(max = 690.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
-                LabeledField("Brief", brief, { brief = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 170.dp)
+                LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth(), testTag = "spec-title-field")
+                LabeledField("Brief", brief, { brief = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 170.dp, testTag = "spec-brief-field")
                 ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, ProjectTaskKind.Spec)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -888,7 +888,7 @@ internal fun BuildPairDialog(
         title = { Text(if (existing == null) "New build" else "Edit build", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(Modifier.width(820.dp).heightIn(max = 720.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                if (!reuseSpecTitle) LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth())
+                if (!reuseSpecTitle) LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth(), testTag = "build-title-field")
                 if (existing == null) {
                     if (reuseSpecTitle) {
                         CollapsibleDetailBlock(
@@ -935,7 +935,7 @@ internal fun BuildPairDialog(
                         onToggle = { planExpanded = !planExpanded },
                     )
                 }
-                LabeledField("Build notes (optional)", buildNotes, { buildNotes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 90.dp)
+                LabeledField("Build notes (optional)", buildNotes, { buildNotes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 90.dp, testTag = "build-notes-field")
                 LabeledField("Reported-cost guardrail in USD (optional)", budgetText, { budgetText = it.filter { char -> char.isDigit() || char == '.' } }, Modifier.fillMaxWidth())
                 ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, ProjectTaskKind.Build)
                 FilterPill("Build gets scratchpad snapshot", includeBuildScratchpad, Cyan) { includeBuildScratchpad = !includeBuildScratchpad }

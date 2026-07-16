@@ -19,9 +19,14 @@ one operating system into another directory. Capture it on that platform instead
 | Device files | Files & data | `/sdcard` folders and APK candidates | `desktop-device-files.png` | yes |
 | Computer files | Computer Files | indexed source root and manifest editor document | `desktop-computer-files.png` | yes |
 | Network capture | Network | listening proxy, exchange, CA warning, rules | `desktop-network-capture.png` | yes |
-| Projects populated | Projects | Garden project, action, note, completed chat | `desktop-projects-populated.png` | yes |
-| Project actions | Projects | Garden runbook with two seeded actions | `desktop-projects-actions.png` | yes |
-| Project notes | Projects | Garden working notes with one open note | `desktop-projects-notes.png` | yes |
+| Project tasks | Projects | Garden workflow list with nested spec/build/review/verify | `desktop-projects-workflows.png` | yes |
+| Project runbook | Projects | Garden runbook with two seeded actions | `desktop-projects-runbook.png` | yes |
+| Project sessions | Projects | Garden agent session list with completed Codex chat | `desktop-projects-sessions.png` | yes |
+| Project scratchpad | Projects | Garden scratchpad preview with release constraints | `desktop-projects-scratchpad.png` | yes |
+| Project scratchpad editor | Projects | Garden scratchpad in edit mode | `desktop-projects-scratchpad-editor.png` | yes |
+| Project profiles | Projects | Project role profiles dialog on spec defaults | `desktop-projects-profiles.png` | yes |
+| Project new build | Projects | New build dialog with linked plan and build profile | `desktop-projects-new-build.png` | yes |
+| Project new spec | Projects | New spec dialog filled with title, brief, and scratchpad | `desktop-projects-new-spec.png` | yes |
 | Agents completed diff | Agents | completed Codex transcript and deterministic diff | `desktop-agents-completed-diff.png` | yes |
 | Snapshots populated | Snapshots | boot and manual AVD snapshots | `desktop-snapshots-populated.png` | yes |
 | Controls hardware | Controls | selected Pixel 8 control surface | `desktop-controls-hardware.png` | yes |

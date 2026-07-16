@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
@@ -165,6 +166,7 @@ internal fun LabeledField(
     singleLine: Boolean = true,
     minHeight: androidx.compose.ui.unit.Dp = 54.dp,
     placeholder: String? = null,
+    testTag: String? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
@@ -172,7 +174,10 @@ internal fun LabeledField(
             value = value,
             onValueChange = onValueChange,
             singleLine = singleLine,
-            modifier = Modifier.fillMaxWidth().heightIn(min = minHeight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = minHeight)
+                .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
             textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
             colors = fieldColors(),
             placeholder = placeholder?.let { hint ->
