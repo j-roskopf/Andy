@@ -58,6 +58,7 @@ import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.service.McpServerService
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.PanelCard
@@ -114,12 +115,7 @@ internal fun SettingsScreen(
     }
     var category by remember { mutableStateOf(DesktopSettingsCategory.Appearance) }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
-    val clientOptions = remember { services.mcp.getClients() }
     val toolNames = remember { services.mcp.getToolNames() }
-    var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
-    var dropdownExpanded by remember { mutableStateOf(false) }
-    var operationStatus by remember { mutableStateOf<String?>(null) }
-    val copyText = rememberCopyText()
 
     val mcpStatus by services.mcp.status.collectAsState("stopped")
     val mcpRunning by services.mcp.running.collectAsState(false)
@@ -156,27 +152,8 @@ internal fun SettingsScreen(
                 )
                 McpToolsPanel(toolNames)
                 McpClientsPanel(
-                    clientOptions = clientOptions,
-                    selectedClientLabel = selectedClientLabel,
-                    onSelectClient = { selectedClientLabel = it },
-                    dropdownExpanded = dropdownExpanded,
-                    onDropdownExpandedChange = { dropdownExpanded = it },
-                    isAutoWriteSupported = services.mcp.isAutoWriteSupported(selectedClientLabel),
-                    onWriteConfig = {
-                        val success = services.mcp.writeConfig(selectedClientLabel, workspaceState.mcpServerPort)
-                        operationStatus = if (success) {
-                            "Successfully updated configuration for $selectedClientLabel (backed up original)."
-                        } else {
-                            "Failed to write configuration file."
-                        }
-                    },
-                    onCopySnippet = {
-                        val snippet = services.mcp.getSnippet(selectedClientLabel, workspaceState.mcpServerPort)
-                        copyText(snippet)
-                        operationStatus = "Snippet copied to clipboard"
-                    },
-                    getSnippet = { services.mcp.getSnippet(selectedClientLabel, workspaceState.mcpServerPort) },
-                    operationStatus = operationStatus,
+                    mcpService = services.mcp,
+                    mcpServerPort = workspaceState.mcpServerPort,
                 )
             }
             DesktopSettingsCategory.Onboarding -> OnboardingPanel(workspaceState, onUpdateWorkspace)
@@ -761,17 +738,14 @@ private fun McpToolsPanel(toolNames: List<String>) {
 
 @Composable
 private fun McpClientsPanel(
-    clientOptions: List<String>,
-    selectedClientLabel: String,
-    onSelectClient: (String) -> Unit,
-    dropdownExpanded: Boolean,
-    onDropdownExpandedChange: (Boolean) -> Unit,
-    isAutoWriteSupported: Boolean,
-    onWriteConfig: () -> Unit,
-    onCopySnippet: () -> Unit,
-    getSnippet: () -> String,
-    operationStatus: String?,
+    mcpService: McpServerService,
+    mcpServerPort: Int,
 ) {
+    val clientOptions = remember { mcpService.getClients() }
+    var selectedClientLabel by remember { mutableStateOf(clientOptions.firstOrNull() ?: "Claude Code") }
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    var operationStatus by remember { mutableStateOf<String?>(null) }
+    val copyText = rememberCopyText()
     PanelCard {
         SettingsSectionHeader(
             title = "Client configurations",
@@ -785,22 +759,22 @@ private fun McpClientsPanel(
             Text("Client:", color = TextSecondary, fontSize = 13.sp)
             Box {
                 Button(
-                    onClick = { onDropdownExpandedChange(true) },
+                    onClick = { dropdownExpanded = true },
                     colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
                 ) {
                     Text(selectedClientLabel, color = TextPrimary)
                 }
                 DropdownMenu(
                     expanded = dropdownExpanded,
-                    onDismissRequest = { onDropdownExpandedChange(false) },
+                    onDismissRequest = { dropdownExpanded = false },
                     containerColor = AndyColors.Neutral750,
                 ) {
                     clientOptions.forEach { client ->
                         DropdownMenuItem(
                             text = { Text(client, color = TextPrimary) },
                             onClick = {
-                                onSelectClient(client)
-                                onDropdownExpandedChange(false)
+                                selectedClientLabel = client
+                                dropdownExpanded = false
                             },
                         )
                     }
@@ -812,12 +786,24 @@ private fun McpClientsPanel(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Button(
-                onClick = onWriteConfig,
-                enabled = isAutoWriteSupported,
+                onClick = {
+                    val success = mcpService.writeConfig(selectedClientLabel, mcpServerPort)
+                    operationStatus = if (success) {
+                        "Successfully updated configuration for $selectedClientLabel (backed up original)."
+                    } else {
+                        "Failed to write configuration file."
+                    }
+                },
+                enabled = mcpService.isAutoWriteSupported(selectedClientLabel),
             ) {
                 Text("Add to config")
             }
-            Button(onClick = onCopySnippet) {
+            Button(
+                onClick = {
+                    copyText(mcpService.getSnippet(selectedClientLabel, mcpServerPort))
+                    operationStatus = "Snippet copied to clipboard"
+                },
+            ) {
                 Text("Copy snippet")
             }
         }
@@ -833,7 +819,7 @@ private fun McpClientsPanel(
         ) {
             Text("Configuration snippet ($selectedClientLabel)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             Spacer(Modifier.height(6.dp))
-            val snippet = getSnippet()
+            val snippet = mcpService.getSnippet(selectedClientLabel, mcpServerPort)
             SelectionContainer {
                 Text(
                     snippet,
