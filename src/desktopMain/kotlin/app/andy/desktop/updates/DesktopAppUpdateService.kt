@@ -468,14 +468,24 @@ internal fun macDmgInstallerHelperScript(
         mount_point="${'$'}work_dir/mount"
         staging_app="${'$'}{target_app}.update"
         backup_app="${'$'}{target_app}.previous"
+        # Andy has already quit by the time install work starts; reopen it unless we
+        # successfully hand off to the replacement bundle.
+        should_reopen=1
 
         shell_quote() {
           printf "'%s'" "${'$'}(printf '%s' "${'$'}1" | /usr/bin/sed "s/'/'\\\"'\\\"'/g")"
         }
 
+        reopen_current_app() {
+          [ ! -d "${'$'}target_app" ] || /usr/bin/open "${'$'}target_app"
+        }
+
         cleanup() {
           /usr/bin/hdiutil detach "${'$'}mount_point" -quiet >/dev/null 2>&1 || true
           /bin/rm -rf "${'$'}work_dir"
+          if [ "${'$'}should_reopen" -eq 1 ]; then
+            reopen_current_app
+          fi
         }
         trap cleanup EXIT HUP INT TERM
 
@@ -484,7 +494,8 @@ internal fun macDmgInstallerHelperScript(
           /bin/sleep 0.1
         done
 
-        /usr/bin/mkdir -p "${'$'}mount_point"
+        # mkdir lives in /bin on macOS (not under /usr/bin).
+        /bin/mkdir -p "${'$'}mount_point"
         /usr/bin/hdiutil attach "${'$'}dmg_path" -nobrowse -readonly -mountpoint "${'$'}mount_point" >/dev/null
         source_app=""
         for candidate in "${'$'}mount_point"/*.app; do
@@ -513,13 +524,8 @@ internal fun macDmgInstallerHelperScript(
           fi
         }
 
-        reopen_current_app() {
-          [ ! -d "${'$'}target_app" ] || /usr/bin/open "${'$'}target_app"
-        }
-
         if [ -w "${'$'}(/usr/bin/dirname "${'$'}target_app")" ]; then
           if ! install_app; then
-            reopen_current_app
             exit 1
           fi
         else
@@ -527,11 +533,11 @@ internal fun macDmgInstallerHelperScript(
           admin_command="/bin/rm -rf ${'$'}(shell_quote "${'$'}staging_app") ${'$'}(shell_quote "${'$'}backup_app"); /usr/bin/ditto ${'$'}(shell_quote "${'$'}source_app") ${'$'}(shell_quote "${'$'}staging_app"); if [ -e ${'$'}(shell_quote "${'$'}target_app") ]; then /bin/mv ${'$'}(shell_quote "${'$'}target_app") ${'$'}(shell_quote "${'$'}backup_app"); fi; if /bin/mv ${'$'}(shell_quote "${'$'}staging_app") ${'$'}(shell_quote "${'$'}target_app"); then /bin/rm -rf ${'$'}(shell_quote "${'$'}backup_app"); else if [ -e ${'$'}(shell_quote "${'$'}backup_app") ]; then /bin/mv ${'$'}(shell_quote "${'$'}backup_app") ${'$'}(shell_quote "${'$'}target_app"); fi; exit 1; fi"
           escaped_command="${'$'}(printf '%s' "${'$'}admin_command" | /usr/bin/sed 's/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g')"
           if ! /usr/bin/osascript -e "do shell script \"${'$'}escaped_command\" with administrator privileges"; then
-            reopen_current_app
             exit 1
           fi
         fi
 
+        should_reopen=0
         /usr/bin/open "${'$'}target_app"
     """.trimIndent() + "\n"
 }
