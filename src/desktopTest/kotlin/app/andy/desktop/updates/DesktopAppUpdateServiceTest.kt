@@ -43,11 +43,17 @@ class DesktopAppUpdateServiceTest {
             parentProcessId = 1234,
         )
 
+        // macOS ships mkdir under /bin, not /usr/bin.
+        assertTrue(script.contains("/bin/mkdir -p \"${'$'}mount_point\""))
+        assertTrue(script.lineSequence().none { it.trimStart().startsWith("/usr/bin/mkdir") })
         assertTrue(script.contains("/usr/bin/hdiutil attach \"${'$'}dmg_path\""))
         assertTrue(script.contains("/usr/bin/codesign --verify --deep --strict \"${'$'}source_app\""))
         assertTrue(script.contains("/usr/bin/ditto \"${'$'}source_app\" \"${'$'}staging_app\""))
         assertTrue(script.contains("with administrator privileges"))
+        assertTrue(script.contains("should_reopen=1"))
         assertTrue(script.contains("reopen_current_app"))
+        assertTrue(script.contains("trap 'exit 1' HUP INT TERM"))
+        assertTrue(script.contains("trap cleanup EXIT"))
         assertTrue(script.contains("/usr/bin/open \"${'$'}target_app\""))
     }
 
