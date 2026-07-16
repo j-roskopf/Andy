@@ -83,10 +83,9 @@ internal fun ensureJavaHome(
         else -> locateJavaHome()?.takeIf(JavaHomeLocator::isUsableJavaHome)
     } ?: return
 
-    if (existing != candidate) {
-        env.keys.filter { it.equals("JAVA_HOME", ignoreCase = true) }.forEach(env::remove)
-        env["JAVA_HOME"] = candidate
-    }
+    // Always normalize to uppercase JAVA_HOME; sdkmanager/avdmanager expect that key.
+    env.keys.filter { it.equals("JAVA_HOME", ignoreCase = true) }.forEach(env::remove)
+    env["JAVA_HOME"] = candidate
     val bin = File(candidate, "bin").absolutePath
     val pathKey = env.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
     val pathParts = env[pathKey].orEmpty().split(File.pathSeparator).filter { it.isNotBlank() }

@@ -3,14 +3,20 @@ package app.andy.desktop.service
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * Simulates packaged Andy: jlink `java.home` with no `bin/java`, and no inherited JAVA_HOME.
- * Requires a host JDK (SDKMAN / Studio / Homebrew) and Android cmdline-tools.
+ * Opt-in local smoke: simulates packaged Andy (jlink `java.home` without `bin/java`)
+ * and verifies Catalog can list system images via real cmdline-tools.
+ *
+ * Ignored in CI — requires a host JDK plus Android SDK cmdline-tools on the machine.
+ * Run locally with: `./gradlew desktopTest --tests '*PackagedJavaHomeCatalogSmokeTest*'`
+ * after removing `@Ignore`, or rely on the unit coverage in `CommandRunnerJavaHomeTest`.
  */
+@Ignore("Opt-in local smoke; needs host JDK + Android cmdline-tools")
 class PackagedJavaHomeCatalogSmokeTest {
     @Test
     fun catalogListSystemImagesWorksWithoutInheritedJavaHome() = runBlocking {
