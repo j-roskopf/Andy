@@ -2,6 +2,7 @@ package app.andy.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +39,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,6 +61,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -123,7 +131,7 @@ internal fun SettingsScreen(
     services: AndyServices
 ) {
     services.web?.let { web ->
-        WebSettingsScreen(web)
+        WebSettingsScreen(web, workspaceState, onUpdateWorkspace)
         return
     }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
@@ -144,6 +152,8 @@ internal fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        AppearancePanel(workspaceState, onUpdateWorkspace)
 
         AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
 
@@ -414,6 +424,52 @@ internal fun SettingsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AppearancePanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val selectedTint = AndyTint.fromId(workspace.tintId)
+    PanelCard {
+        Text("Appearance", color = TextPrimary, fontWeight = FontWeight.Bold)
+        Text(
+            "Choose the accent tint used for selection, controls, and emphasis. Andy blue is the default.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AndyTint.entries.forEach { tint ->
+                val selected = tint == selectedTint
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(tint.color, CircleShape)
+                        .border(if (selected) 3.dp else 1.dp, if (selected) AndyColors.Neutral100 else Border, CircleShape)
+                        .selectable(
+                            selected = selected,
+                            onClick = { update { it.copy(tintId = tint.id) } },
+                            role = Role.RadioButton,
+                        )
+                        .semantics { contentDescription = "${tint.label} tint" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) {
+                        Box(Modifier.size(8.dp).background(AndyColors.Neutral900, CircleShape))
+                    }
+                }
+            }
+        }
+        Text("Selected: ${selectedTint.label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+    }
+}
+
 @Composable
 private fun AgentNotificationsPanel(
     workspace: WorkspaceState,
@@ -463,7 +519,11 @@ private fun AgentNotificationsPanel(
 }
 
 @Composable
-private fun WebSettingsScreen(web: WebServices) {
+private fun WebSettingsScreen(
+    web: WebServices,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val connection by web.connection.state.collectAsState()
     val storage by web.storage.state.collectAsState()
@@ -478,6 +538,8 @@ private fun WebSettingsScreen(web: WebServices) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("settings", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp, fontFamily = MonoFont)
+
+        AppearancePanel(workspaceState, onUpdateWorkspace)
 
         PanelCard {
             Text("Connection", color = TextPrimary, fontWeight = FontWeight.Bold)

@@ -21,6 +21,7 @@ import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.shell.AndyShell
+import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.AndyTheme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -60,21 +61,19 @@ fun AndyApp(
     initialProjectTaskId: String? = null,
     initialProjectTab: String? = null,
 ) {
-    AndyTheme {
-        AndyShell(
-            services = services,
-            requestedDestination = requestedDestination,
-            onDestinationConsumed = onDestinationConsumed,
-            requestedOpenAgentTask = requestedOpenAgentTask,
-            onOpenAgentTaskConsumed = onOpenAgentTaskConsumed,
-            requestPopOutMirror = requestPopOutMirror,
-            onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
-            onPopOutMirror = onPopOutMirror,
-            contentTopPadding = contentTopPadding,
-            initialProjectTaskId = initialProjectTaskId,
-            initialProjectTab = initialProjectTab,
-        )
-    }
+    AndyShell(
+        services = services,
+        requestedDestination = requestedDestination,
+        onDestinationConsumed = onDestinationConsumed,
+        requestedOpenAgentTask = requestedOpenAgentTask,
+        onOpenAgentTaskConsumed = onOpenAgentTaskConsumed,
+        requestPopOutMirror = requestPopOutMirror,
+        onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
+        onPopOutMirror = onPopOutMirror,
+        contentTopPadding = contentTopPadding,
+        initialProjectTaskId = initialProjectTaskId,
+        initialProjectTab = initialProjectTab,
+    )
 }
 
 @Composable
@@ -83,8 +82,9 @@ fun AndyMirrorPopOut(
     serial: String?,
     deviceName: String? = null,
     controlsVisible: Boolean = false,
+    tintId: String = AndyTint.Default.id,
 ) {
-    AndyTheme {
+    AndyTheme(tintId) {
         val scope = rememberCoroutineScope()
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }

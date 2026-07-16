@@ -127,8 +127,14 @@ internal fun PlaceholderScreen(name: String) {
 }
 
 @Composable
-internal fun Toolbar(title: String, subtitle: String, onPrimary: (() -> Unit)? = null, primaryLabel: String = "Run") {
-    Row(Modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+internal fun Toolbar(
+    title: String,
+    subtitle: String,
+    onPrimary: (() -> Unit)? = null,
+    primaryLabel: String = "Run",
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier

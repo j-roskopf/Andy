@@ -25,6 +25,7 @@ data class WorkspaceState(
     val proxyUpstreamTrustedCaPath: String? = null,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
+    val tintId: String = "andy-blue",
     val workspaceSidebarExpanded: Boolean = true,
     val projectsIntroductionCompleted: Boolean = false,
     val liveDevicePaneWidth: Float = 720f,

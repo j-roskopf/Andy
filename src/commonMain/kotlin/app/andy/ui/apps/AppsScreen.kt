@@ -136,7 +136,13 @@ internal fun AppsScreen(
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.width(localListPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Toolbar("Apps", status, onPrimary = { refresh() }, primaryLabel = "Refresh")
+            Toolbar(
+                "Apps",
+                status,
+                onPrimary = { refresh() },
+                primaryLabel = "Refresh",
+                modifier = Modifier.padding(end = 8.dp),
+            )
             TextField(query, { query = it }, placeholder = { Text("Filter packages", color = TextSecondary) }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             TableHeader(listOf("" to 56.dp, "TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
             LazyColumn {

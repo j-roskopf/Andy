@@ -348,7 +348,20 @@ class AgentQueuedFollowUpTest {
             )
 
             withTimeout(10_000) {
-                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    val userMessages = service.events(task.id).value
+                        .filterIsInstance<AgentEvent.UserMessage>()
+                        .map { it.text }
+                    if (
+                        current.status == AgentTaskStatus.Completed &&
+                        current.queuedFollowUps.isEmpty() &&
+                        userMessages == listOf("second message", "third message")
+                    ) {
+                        break
+                    }
+                    delay(25)
+                }
             }
             val finished = service.tasks.value.first { it.id == task.id }
             assertEquals(AgentTaskStatus.Completed, finished.status)
@@ -484,7 +497,17 @@ class CursorPlanBackfillTest {
             )
 
             withTimeout(10_000) {
-                while (service.tasks.value.singleOrNull()?.completedPlanText != recoveredPlan) delay(25)
+                while (true) {
+                    val saved = store.load()
+                    val memoryHasRecoveredPlan =
+                        service.tasks.value.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            service.projects.value[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    val storeHasRecoveredPlan =
+                        saved.tasks.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            saved.projectWorkflows[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    if (memoryHasRecoveredPlan && storeHasRecoveredPlan) break
+                    delay(25)
+                }
             }
             assertEquals(recoveredPlan, service.projects.value[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
 

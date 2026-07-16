@@ -5,6 +5,7 @@ import app.andy.model.ProxyRule
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
+import app.andy.ui.theme.AndyTint
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,6 +33,7 @@ class DesktopWorkspaceStore(
             proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
+            tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             proxyRules = loadProxyRules(props),
@@ -70,6 +72,7 @@ class DesktopWorkspaceStore(
             setProperty("proxyUpstreamTrustedCaPath", state.proxyUpstreamTrustedCaPath.orEmpty())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
+            setProperty("tintId", state.tintId)
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
             setProperty("projectsIntroductionCompleted", state.projectsIntroductionCompleted.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
