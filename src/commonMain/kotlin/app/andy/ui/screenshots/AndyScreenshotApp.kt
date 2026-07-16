@@ -36,6 +36,7 @@ internal enum class AndyScreenshotScenario(
     ProjectsNewSpec("desktop-projects-new-spec.png", AndyDestination.Actions),
     ProjectsNewBuild("desktop-projects-new-build.png", AndyDestination.Actions),
     ProjectsRunbook("desktop-projects-runbook.png", AndyDestination.Actions),
+    ProjectsSessions("desktop-projects-sessions.png", AndyDestination.Actions),
     ProjectsScratchpad("desktop-projects-scratchpad.png", AndyDestination.Actions),
     ProjectsScratchpadEditor("desktop-projects-scratchpad-editor.png", AndyDestination.Actions),
     AgentsCompletedDiff("desktop-agents-completed-diff.png", AndyDestination.Agents),
@@ -80,6 +81,7 @@ internal fun AndyScreenshotApp(
             },
             initialProjectTab = when (scenario) {
                 AndyScreenshotScenario.ProjectsRunbook -> "runbook"
+                AndyScreenshotScenario.ProjectsSessions -> "sessions"
                 AndyScreenshotScenario.ProjectsScratchpad,
                 AndyScreenshotScenario.ProjectsScratchpadEditor,
                 -> "scratchpad"
