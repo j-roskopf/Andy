@@ -33,12 +33,6 @@ class DesktopAppDatabaseService(
     /** Non-null paths only — ConcurrentHashMap rejects null values. */
     private val deviceSqlitePaths = ConcurrentHashMap<String, String>()
     private val deviceSqliteMissing = ConcurrentHashMap.newKeySet<String>()
-    private val workingCopyCache = ConcurrentHashMap<String, CachedWorkingCopy>()
-
-    private data class CachedWorkingCopy(
-        val workDir: File,
-        val dbFile: File,
-    )
 
     override suspend fun listDatabases(serial: String, packageName: String): Result<List<AppDatabaseInfo>> =
         withContext(Dispatchers.IO) {
@@ -210,11 +204,15 @@ class DesktopAppDatabaseService(
         localPath: String,
     ): CommandResult = withContext(Dispatchers.IO) {
         runCatching {
-            val working = acquireWorkingCopy(serial, packageName, dbName)
-            val target = File(localPath)
-            target.parentFile?.mkdirs()
-            working.copyTo(target, overwrite = true)
-            CommandResult.success("Saved ${target.absolutePath}")
+            val working = pullWorkingCopyFresh(serial, packageName, dbName)
+            try {
+                val target = File(localPath)
+                target.parentFile?.mkdirs()
+                working.copyTo(target, overwrite = true)
+                CommandResult.success("Saved ${target.absolutePath}")
+            } finally {
+                working.parentFile?.deleteRecursively()
+            }
         }.getOrElse { CommandResult.failure(it.message ?: "Pull failed") }
     }
 
@@ -252,16 +250,20 @@ class DesktopAppDatabaseService(
         sql: String,
     ): DbQueryResult {
         runSqliteOnDevice(serial, packageName, dbName, sql)?.let { return it }
-        val local = acquireWorkingCopy(serial, packageName, dbName)
-        val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
-        val result = runner.run(
-            listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
-            HOST_SQLITE_TIMEOUT_SECONDS,
-        )
-        if (!result.isSuccess) {
-            error(result.stderr.ifBlank { result.stdout }.ifBlank { "sqlite3 query failed" })
+        val local = pullWorkingCopyFresh(serial, packageName, dbName)
+        try {
+            val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
+            val result = runner.run(
+                listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
+                HOST_SQLITE_TIMEOUT_SECONDS,
+            )
+            if (!result.isSuccess) {
+                error(result.stderr.ifBlank { result.stdout }.ifBlank { "sqlite3 query failed" })
+            }
+            return parseCsv(result.stdout)
+        } finally {
+            local.parentFile?.deleteRecursively()
         }
-        return parseCsv(result.stdout)
     }
 
     private suspend fun runSqliteOnDevice(
@@ -306,32 +308,12 @@ class DesktopAppDatabaseService(
         return discovered
     }
 
-    private fun workingCopyCacheKey(serial: String, packageName: String, dbName: String): String =
-        "$serial|$packageName|${requireDbPath(dbName)}"
-
-    private suspend fun acquireWorkingCopy(serial: String, packageName: String, dbName: String): File {
-        val key = workingCopyCacheKey(serial, packageName, dbName)
-        workingCopyCache[key]?.let { cached ->
-            if (cached.dbFile.isFile) return cached.dbFile
-            workingCopyCache.remove(key)
-        }
-        val pulled = pullWorkingCopyFresh(serial, packageName, dbName)
-        workingCopyCache[key] = CachedWorkingCopy(pulled.parentFile!!, pulled)
-        return pulled
-    }
-
-    private fun invalidateWorkingCopy(serial: String, packageName: String, dbName: String) {
-        val key = workingCopyCacheKey(serial, packageName, dbName)
-        workingCopyCache.remove(key)?.workDir?.deleteRecursively()
-    }
-
     private suspend fun runSqliteWrite(
         serial: String,
         packageName: String,
         dbName: String,
         sql: String,
     ): Int {
-        invalidateWorkingCopy(serial, packageName, dbName)
         val local = pullWorkingCopyFresh(serial, packageName, dbName)
         try {
             val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")

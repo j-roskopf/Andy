@@ -8,7 +8,7 @@ import kotlin.test.assertNull
 
 class AgentLaunchEnvironmentTest {
     @Test
-    fun scrubsIdeAndProxyOverridesButLeavesUnrelatedEnv() {
+    fun scrubsIdeAndProxyOverridesButPreservesAuthCredentials() {
         val env = mutableMapOf(
             "PATH" to "/usr/bin",
             "ANTHROPIC_BASE_URL" to "http://127.0.0.1:11434",
@@ -25,8 +25,8 @@ class AgentLaunchEnvironmentTest {
         assertEquals("/usr/bin", env["PATH"])
         assertEquals("/Users/test", env["HOME"])
         assertNull(env["ANTHROPIC_BASE_URL"])
-        assertNull(env["ANTHROPIC_API_KEY"])
-        assertNull(env["ANTHROPIC_AUTH_TOKEN"])
+        assertEquals("sk-test", env["ANTHROPIC_API_KEY"])
+        assertEquals("token", env["ANTHROPIC_AUTH_TOKEN"])
         assertNull(env["NODE_OPTIONS"])
         assertNull(env["VSCODE_INSPECTOR_OPTIONS"])
         assertNull(env["ELECTRON_RUN_AS_NODE"])

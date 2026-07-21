@@ -77,16 +77,15 @@ object SharedPrefsXml {
         }
 
     fun coerceValue(type: PrefType, rawValue: String): String? {
-        val value = rawValue.trim()
         return when (type) {
-            PrefType.Boolean -> when (value.lowercase()) {
-                "true", "false" -> value.lowercase()
+            PrefType.Boolean -> when (rawValue.trim().lowercase()) {
+                "true", "false" -> rawValue.trim().lowercase()
                 else -> null
             }
-            PrefType.Int -> value.toIntOrNull()?.let { value }
-            PrefType.Long -> value.toLongOrNull()?.let { value }
-            PrefType.Float -> value.toFloatOrNull()?.let { value }
-            PrefType.String, PrefType.StringSet -> value
+            PrefType.Int -> rawValue.trim().toIntOrNull()?.let { rawValue.trim() }
+            PrefType.Long -> rawValue.trim().toLongOrNull()?.let { rawValue.trim() }
+            PrefType.Float -> rawValue.trim().toFloatOrNull()?.let { rawValue.trim() }
+            PrefType.String, PrefType.StringSet -> rawValue
         }
     }
 

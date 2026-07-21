@@ -37,8 +37,9 @@ class SharedPrefsXmlTest {
         assertEquals("42", SharedPrefsXml.coerceValue(PrefType.Int, " 42 "))
         assertEquals("99", SharedPrefsXml.coerceValue(PrefType.Long, "99"))
         assertEquals("1.5", SharedPrefsXml.coerceValue(PrefType.Float, "1.5"))
-        assertEquals("hello", SharedPrefsXml.coerceValue(PrefType.String, " hello "))
+        assertEquals(" hello ", SharedPrefsXml.coerceValue(PrefType.String, " hello "))
         assertEquals("a\nb", SharedPrefsXml.coerceValue(PrefType.StringSet, "a\nb"))
+        assertEquals("\na\n", SharedPrefsXml.coerceValue(PrefType.StringSet, "\na\n"))
     }
 
     @Test

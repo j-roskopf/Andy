@@ -2852,8 +2852,6 @@ private const val SKILL_SEPARATOR = "\u001F"
 internal fun scrubInheritedAgentEnvironment(env: MutableMap<String, String>) {
     listOf(
         "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
         "NODE_OPTIONS",
         "VSCODE_INSPECTOR_OPTIONS",
         "ELECTRON_RUN_AS_NODE",
