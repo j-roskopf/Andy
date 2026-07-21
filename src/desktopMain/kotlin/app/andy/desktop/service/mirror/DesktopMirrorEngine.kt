@@ -2,6 +2,7 @@ package app.andy.desktop.service.mirror
 
 import app.andy.desktop.service.CommandRunner
 import app.andy.desktop.service.DesktopDeviceService
+import app.andy.desktop.parser.AndroidParsers
 import app.andy.desktop.service.emulator.EMULATOR_IMAGE_BYTES_PER_PIXEL
 import app.andy.desktop.service.emulator.EmulatorGrpcClient
 import app.andy.desktop.service.emulator.EmulatorMappedFramebuffer
@@ -57,13 +58,16 @@ import kotlin.random.Random
 
 private const val EMULATOR_DISPLAY_SIZE_SETTLE_NANOS = 60_000_000_000L
 private const val EMULATOR_DISPLAY_SIZE_REFRESH_MIN_NANOS = 1_000_000_000L
+private const val EMULATOR_BOOT_WAIT_NANOS = 120_000_000_000L
+private const val EMULATOR_BOOT_POLL_MILLIS = 500L
+private const val EMULATOR_MIRROR_MAX_ATTEMPTS = 4
+private const val EMULATOR_MIRROR_RETRY_DELAY_MILLIS = 2_000L
 private const val NATIVE_HOST_WAIT_NANOS = 750_000_000L
 private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
 private const val SCRCPY_FRAME_HEADER_BYTES = 12
 private const val MAX_SCRCPY_FRAME_BYTES = 16 * 1024 * 1024
 /** Keep scrcpy warm across AndyShell destination switches (Live ↔ Design ↔ Accessibility). */
 private const val MIRROR_RELEASE_GRACE_MILLIS = 500L
-private val EMULATOR_WM_SIZE_REGEX = Regex("""(?:Physical|Override) size:\s*(\d+)x(\d+)""")
 
 internal data class EmulatorDisplaySize(val width: Int, val height: Int)
 internal data class EmulatorTouchPoint(val x: Int, val y: Int)
@@ -204,8 +208,8 @@ class DesktopMirrorEngine(
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
     override val status = MutableStateFlow("Ready for embedded mirror")
     private val encodedVideoFlow = MutableSharedFlow<EncodedVideoAccessUnit>(
-        // ~30s at 60fps so bug capture can keep the rolling window without DROP_OLDEST gaps.
-        extraBufferCapacity = 1_800,
+        // Small lag buffer only — DesktopBugService owns the 30s rolling window.
+        extraBufferCapacity = 8,
         onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
     )
     override val encodedVideo: SharedFlow<EncodedVideoAccessUnit> = encodedVideoFlow
@@ -307,7 +311,27 @@ class DesktopMirrorEngine(
             }
         status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
         videoJob = engineScope.launch {
-            runNativeVideoLoop(adb, serial, scrcpyServer, config)
+            val emulator = serial.isEmulatorSerial()
+            if (emulator) {
+                awaitEmulatorReady(adb, serial)
+            }
+            var attempt = 0
+            while (isActive && connectedSerial == serial) {
+                attempt++
+                val framesPresentedBefore = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
+                runNativeVideoLoop(adb, serial, scrcpyServer, config)
+                if (!isActive || connectedSerial != serial) break
+                val framesPresentedAfter = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
+                val presentedDuringLoop = framesPresentedAfter - framesPresentedBefore
+                // Black Live pane: scrcpy often exits before the first decoded frame on cold boot.
+                val shouldRetry = emulator && attempt < EMULATOR_MIRROR_MAX_ATTEMPTS && presentedDuringLoop <= 0L
+                if (!shouldRetry) break
+                status.value = "Emulator mirror not ready yet; retrying ($attempt/$EMULATOR_MIRROR_MAX_ATTEMPTS)…"
+                delay(EMULATOR_MIRROR_RETRY_DELAY_MILLIS)
+                if (useNativeRenderer) {
+                    rebindPresentationHost(config)
+                }
+            }
         }
         return CommandResult.success("Embedded mirror starting for $serial")
     }
@@ -495,10 +519,19 @@ class DesktopMirrorEngine(
     private fun publishCpuFrame(frame: MirrorFrame) {
         frames.value = frame
         val active = session.value ?: return
+        // LiveScreen collects session into Compose state. Emitting a new session on every
+        // decoded frame recomposes the Swing host and flickers the CPU painter. Only push
+        // telemetry when size or fps actually changes (fps is sampled ~1 Hz above).
+        val displayedFps = frame.displayedFps ?: frame.decodedFps ?: active.stats.displayedFps
+        val decodedFps = frame.decodedFps ?: active.stats.decodedFps
+        val sizeChanged = active.width != frame.width || active.height != frame.height
+        val fpsChanged =
+            displayedFps != active.stats.displayedFps || decodedFps != active.stats.decodedFps
+        if (!sizeChanged && !fpsChanged) return
         session.value = active.copy(
             stats = active.stats.copy(
-                displayedFps = frame.displayedFps ?: frame.decodedFps ?: active.stats.displayedFps,
-                decodedFps = frame.decodedFps ?: active.stats.decodedFps,
+                displayedFps = displayedFps,
+                decodedFps = decodedFps,
                 framesPresented = frame.frameNumber.coerceAtLeast(active.stats.framesPresented),
             ),
             width = frame.width,
@@ -528,6 +561,25 @@ class DesktopMirrorEngine(
         return null
     }
 
+    /**
+     * adb reports emulators Online before SurfaceFlinger / MediaCodec are ready. Connecting
+     * scrcpy in that window yields a black Live pane and a wrong capture aspect. Wait for
+     * boot_completed and a readable display size first.
+     */
+    private suspend fun awaitEmulatorReady(adb: String, serial: String) {
+        status.value = "Waiting for emulator boot…"
+        val deadline = System.nanoTime() + EMULATOR_BOOT_WAIT_NANOS
+        while (System.nanoTime() < deadline && connectedSerial == serial) {
+            val boot = runner.run(listOf(adb, "-s", serial, "shell", "getprop", "sys.boot_completed"), 3)
+            if (boot.stdout.trim() == "1" && readEmulatorDisplaySize(adb, serial) != null) {
+                status.value = "Emulator ready — starting mirror"
+                return
+            }
+            delay(EMULATOR_BOOT_POLL_MILLIS)
+        }
+        status.value = "Emulator boot wait timed out — starting mirror anyway"
+    }
+
     override suspend fun screenshot(serial: String): ByteArray? {
         val adb = devices.adbPath() ?: return null
         val result = runner.run(listOf(adb, "-s", serial, "exec-out", "screencap", "-p"), 8)
@@ -537,19 +589,11 @@ class DesktopMirrorEngine(
     private suspend fun readEmulatorDisplaySize(adb: String, serial: String): EmulatorDisplaySize? {
         val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 4)
         if (!result.isSuccess) return null
-        return result.stdout
-            .lineSequence()
-            .mapNotNull { line -> EMULATOR_WM_SIZE_REGEX.find(line)?.destructured }
-            .mapNotNull { (width, height) ->
-                val parsedWidth = width.toIntOrNull()
-                val parsedHeight = height.toIntOrNull()
-                if (parsedWidth != null && parsedHeight != null && parsedWidth > 0 && parsedHeight > 0) {
-                    EmulatorDisplaySize(parsedWidth, parsedHeight)
-                } else {
-                    null
-                }
-            }
-            .firstOrNull()
+        val parsed = AndroidParsers.parseWmSize(result.stdout) ?: return null
+        val width = parsed.substringBefore('x').toIntOrNull() ?: return null
+        val height = parsed.substringAfter('x').toIntOrNull() ?: return null
+        if (width <= 0 || height <= 0) return null
+        return EmulatorDisplaySize(width, height)
     }
 
     private suspend fun runEmulatorGrpcVideoLoop(adb: String, serial: String, client: EmulatorGrpcClient, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
@@ -758,7 +802,8 @@ class DesktopMirrorEngine(
                 publishEncodedVideo(
                     EncodedVideoAccessUnit(
                         timestampMillis = System.currentTimeMillis(),
-                        bytes = payload.copyOf(),
+                        // Fresh per-AU buffer; collectors that retain must copy.
+                        bytes = payload,
                         width = streamWidth,
                         height = streamHeight,
                     ),
@@ -974,10 +1019,18 @@ class DesktopMirrorEngine(
     }
 
     private suspend fun captureSize(adb: String, serial: String, maxSize: Int): CaptureSize {
-        val output = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 3).stdout
-        val match = Regex("""Physical size:\s*(\d+)x(\d+)""").find(output)
-        val sourceWidth = match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 720
-        val sourceHeight = match?.groupValues?.getOrNull(2)?.toIntOrNull() ?: 1280
+        // Retry briefly: on first emulator boot wm size often fails or returns before the
+        // display mode is final, which previously fell back to 720x1280 and made Live too wide.
+        var display = readEmulatorDisplaySize(adb, serial)
+        if (display == null && serial.isEmulatorSerial()) {
+            repeat(10) {
+                delay(400)
+                display = readEmulatorDisplaySize(adb, serial)
+                if (display != null) return@repeat
+            }
+        }
+        val sourceWidth = display?.width ?: 1080
+        val sourceHeight = display?.height ?: 2400
         val (width, height) = scaledCaptureSize(sourceWidth, sourceHeight, maxSize)
         return CaptureSize(width = width, height = height)
     }

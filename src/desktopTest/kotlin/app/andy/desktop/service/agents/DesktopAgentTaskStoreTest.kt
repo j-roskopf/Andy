@@ -248,7 +248,8 @@ class DesktopAgentTaskStoreTest {
         val spec = ProjectTask(
             id = "spec-1", projectId = "project-1", kind = ProjectTaskKind.Spec,
             title = "Plan workflows", instructions = "Design the workflow", profile = specProfile,
-            includeScratchpad = true, state = ProjectTaskState.Completed, planVersions = listOf(plan),
+            includeScratchpad = true, imagePaths = listOf("/tmp/mockup.png", "/tmp/wireframe.jpg"),
+            state = ProjectTaskState.Completed, planVersions = listOf(plan),
             grillMeEnabled = true, attempts = listOf(ProjectTaskAttempt("run-spec-1", ProjectWorkflowStage.Spec, 1, "spec prompt", specProfile, "scratch", 90)),
             createdAtMillis = 80, updatedAtMillis = 100,
         )

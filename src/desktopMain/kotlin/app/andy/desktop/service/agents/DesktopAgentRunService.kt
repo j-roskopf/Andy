@@ -229,6 +229,7 @@ class DesktopAgentRunService(
             instructions = draft.brief.trim(),
             profile = draft.profile,
             includeScratchpad = draft.includeScratchpad,
+            imagePaths = draft.imagePaths,
             grillMeEnabled = draft.grillMeEnabled,
             createdAtMillis = now,
             updatedAtMillis = now,
@@ -237,6 +238,7 @@ class DesktopAgentRunService(
             instructions = draft.brief.trim(),
             profile = draft.profile.normalizedFor(ProjectTaskKind.Spec),
             includeScratchpad = draft.includeScratchpad,
+            imagePaths = draft.imagePaths,
             grillMeEnabled = draft.grillMeEnabled,
             updatedAtMillis = now,
         )
@@ -276,6 +278,7 @@ class DesktopAgentRunService(
                 directory = directory,
                 planMode = true,
                 skills = listOfNotNull(grillMe.takeIf { spec.grillMeEnabled }),
+                imagePaths = spec.imagePaths,
                 workflowTaskId = spec.id,
                 stage = ProjectWorkflowStage.Spec,
                 attempt = attempt,
@@ -936,7 +939,7 @@ class DesktopAgentRunService(
     override suspend fun retry(taskId: String) {
         ready.await()
         val task = currentTask(taskId) ?: return
-        if (task.status != AgentTaskStatus.Failed) return
+        if (task.status != AgentTaskStatus.Failed && task.status != AgentTaskStatus.Unknown) return
 
         _lastUsedAgent.value = task.agent
 
@@ -1574,6 +1577,7 @@ class DesktopAgentRunService(
         workflowTaskId: String,
         stage: ProjectWorkflowStage,
         attempt: Int,
+        imagePaths: List<String> = emptyList(),
         existingWorktreePath: String? = null,
         existingBranchName: String? = null,
     ): AgentTaskDraft = AgentTaskDraft(
@@ -1590,6 +1594,7 @@ class DesktopAgentRunService(
         model = model,
         reasoningEffort = reasoningEffort,
         fastMode = fastMode,
+        imagePaths = imagePaths,
         skills = skills,
         maxBudgetUsd = maxBudgetUsd,
         existingWorktreePath = existingWorktreePath,

@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.HeaderCell
-import app.andy.model.AndroidApp
 import app.andy.model.LogLevel
 import app.andy.model.LogcatEntry
 import app.andy.service.AppService
@@ -53,6 +52,7 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PackageSelector
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
@@ -61,7 +61,6 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
-import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
@@ -320,142 +319,18 @@ internal fun LogcatPanel(
 }
 
 @Composable
-internal fun PackageSelector(
-    appsService: AppService,
-    serial: String?,
-    selectedPackage: String?,
-    onSelectedPackageChange: (String?) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var installedApps by remember(serial) { mutableStateOf<List<AndroidApp>>(emptyList()) }
-    var searchAppQuery by remember { mutableStateOf("") }
-
-    LaunchedEffect(serial, expanded) {
-        if (expanded && serial != null) {
-            runCatching { appsService.listApps(serial) }
-                .onSuccess { apps ->
-                    installedApps = apps.sortedWith(compareBy({ it.label?.lowercase() ?: "" }, { it.packageName }))
-                }
-        }
-    }
-
-    Box(modifier = modifier) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = TextPrimary
-            ),
-            shape = RoundedCornerShape(AndyRadius.R2),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            val selectedApp = installedApps.firstOrNull { it.packageName == selectedPackage }
-            val label = selectedApp?.label ?: selectedPackage ?: "All"
-            Text("Pkg: $label", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Spacer(Modifier.width(4.dp))
-            Text("▼", color = TextSecondary, fontSize = 10.sp)
-        }
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            containerColor = AndyColors.Neutral750,
-            modifier = Modifier.width(320.dp)
-        ) {
-            TextField(
-                value = searchAppQuery,
-                onValueChange = { searchAppQuery = it },
-                placeholder = { Text("Search packages...", color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .height(48.dp),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
-                colors = fieldColors()
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            val filteredApps = installedApps.filter {
-                searchAppQuery.isBlank() ||
-                it.packageName.contains(searchAppQuery, true) ||
-                it.label?.contains(searchAppQuery, true) == true
-            }
-
-            Box(
-                modifier = Modifier
-                    .heightIn(max = 300.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Column {
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                "All Packages",
-                                color = if (selectedPackage == null) Green else TextPrimary,
-                                fontWeight = if (selectedPackage == null) FontWeight.Bold else FontWeight.Normal
-                            )
-                        },
-                        onClick = {
-                            onSelectedPackageChange(null)
-                            expanded = false
-                            searchAppQuery = ""
-                        }
-                    )
-
-                    filteredApps.forEach { app ->
-                        val isSelected = app.packageName == selectedPackage
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        app.label ?: app.packageName,
-                                        color = if (isSelected) Green else TextPrimary,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = 13.sp
-                                    )
-                                    if (app.label != null) {
-                                        Text(
-                                            app.packageName,
-                                            color = TextSecondary,
-                                            fontSize = 10.sp,
-                                            fontFamily = MonoFont
-                                        )
-                                    }
-                                }
-                            },
-                            onClick = {
-                                onSelectedPackageChange(app.packageName)
-                                expanded = false
-                                searchAppQuery = ""
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modifier: Modifier = Modifier) {
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    val scope = rememberCoroutineScope()
     var stickToBottom by remember { mutableStateOf(true) }
     var timeWidth by remember { mutableStateOf(152f) }
     var levelWidth by remember { mutableStateOf(32f) }
     var tagWidth by remember { mutableStateOf(180f) }
     val isAtBottom by remember {
         derivedStateOf {
-            val total = listState.layoutInfo.totalItemsCount
-            if (total == 0) {
-                true
-            } else {
-                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-                lastVisible >= total - 1
-            }
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            total == 0 || (lastVisible?.index == total - 1 && lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset)
         }
     }
     LaunchedEffect(entries.size, stickToBottom) {
@@ -498,14 +373,8 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
                 }
             }
             DraggableScrollbar(
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                visibleItems = listState.layoutInfo.visibleItemsInfo.size,
-                totalItems = listState.layoutInfo.totalItemsCount,
+                listState = listState,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                onDragToIndex = { index ->
-                    stickToBottom = index >= (listState.layoutInfo.totalItemsCount - listState.layoutInfo.visibleItemsInfo.size - 1)
-                    scope.launch { listState.scrollToItem(index.coerceAtLeast(0)) }
-                },
             )
         }
     }

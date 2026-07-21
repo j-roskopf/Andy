@@ -830,6 +830,31 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun specBriefImagesPersistAndAttachToPlanningRun() = runBlocking {
+        val adapter = WorkflowAdapter()
+        withHarness(adapter) { harness ->
+            val imagePaths = listOf("/tmp/spec-mockup.png", "/tmp/spec-wireframe.jpg")
+            val specId = harness.service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan with references",
+                    brief = "Match the attached mockups",
+                    profile = specProfile(),
+                    imagePaths = imagePaths,
+                ),
+            )
+            val saved = harness.service.projects.value.getValue("project-1").tasks.first { it.id == specId }
+            assertEquals(imagePaths, saved.imagePaths)
+
+            harness.service.runSpec(specId)
+            await { adapter.launched.any { it.workflowTaskId == specId } }
+            val run = adapter.launched.first { it.workflowTaskId == specId }
+            assertEquals(imagePaths, run.imagePaths)
+            assertTrue(run.prompt.contains("Match the attached mockups"))
+        }
+    }
+
+    @Test
     fun workflowDeletionPreservesRequiredPairingAndRequiresSpecCascade() = runBlocking {
         withHarness(WorkflowAdapter()) { harness ->
             val specId = harness.service.saveSpec(

@@ -384,6 +384,12 @@ compose.desktop {
         // On macOS, the JDK's posix_spawn helper can fail with a JDK version
         // mismatch. Use the direct fork path so Andy can still launch agent CLIs.
         jvmArgs += "-Djdk.lang.Process.launchMechanism=FORK"
+        jvmArgs += "--add-opens=java.desktop/sun.awt=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/java.awt.peer=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/sun.lwawt=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED"
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

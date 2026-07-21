@@ -166,7 +166,14 @@ internal fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @
             }
             val previous = frame
             if (shouldUpdateMirrorMetadata(previous, next)) {
-                frame = next
+                // Keep pixels out of Compose state — CPU frames are megabytes and thrash the
+                // UI thread when held as snapshot state. The Swing surface reads pixels from
+                // the frame Flow directly.
+                frame = if (next.argb.isEmpty()) {
+                    next
+                } else {
+                    next.copy(argb = EmptyMirrorArgb)
+                }
             }
         }
     }
@@ -181,3 +188,4 @@ internal fun shouldUpdateMirrorMetadata(previous: MirrorFrame?, next: MirrorFram
         next.frameNumber % MirrorMetadataFrameInterval == 0L
 
 private const val MirrorMetadataFrameInterval = 30L
+private val EmptyMirrorArgb = IntArray(0)

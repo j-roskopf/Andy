@@ -109,7 +109,7 @@ internal fun MirrorSession.liveTelemetry(): String = buildString {
     append(" / ")
     append(backend.renderer)
     if (backend.isHardwareBacked) append(" · GPU accelerated") else append(" · inline CPU")
-    if (stats.displayedFps > 0f) append(" · ${app.andy.formatDecimal(stats.displayedFps, 1)} fps")
+    if (stats.displayedFps > 0f) append(" · ${stats.displayedFps.toInt()} fps")
     if (stats.droppedFrames > 0) append(" · ${stats.droppedFrames} dropped")
     stats.p95InputToPresentMillis?.let { append(" · ${app.andy.formatDecimal(it, 1)} ms P95") }
     backend.fallbackReason?.let { append(" · $it") }

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.andy.downloadsDirectory
 import app.andy.model.DeviceFile
+import app.andy.model.FilesTab
 import app.andy.onExternalFileDrop
 import app.andy.pickFiles
 import app.andy.service.AppService
@@ -65,6 +66,56 @@ import kotlinx.coroutines.launch
 
 @Composable
 internal fun FilesScreen(
+    files: FileService,
+    apps: AppService,
+    sharedPrefs: app.andy.service.SharedPrefsService,
+    appDatabase: app.andy.service.AppDatabaseService,
+    serial: String?,
+    transfer: DeviceTransferCoordinator,
+    selectedPackage: String?,
+    onSelectedPackageChange: (String?) -> Unit,
+    selectedTab: FilesTab,
+    onSelectedTabChange: (FilesTab) -> Unit,
+) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterPill("Files", selectedTab == FilesTab.Files, Rust) {
+                onSelectedTabChange(FilesTab.Files)
+            }
+            FilterPill("Shared Preferences", selectedTab == FilesTab.SharedPreferences, Rust) {
+                onSelectedTabChange(FilesTab.SharedPreferences)
+            }
+            FilterPill("Database", selectedTab == FilesTab.Database, Rust) {
+                onSelectedTabChange(FilesTab.Database)
+            }
+        }
+        when (selectedTab) {
+            FilesTab.Files -> DeviceFilesBrowser(
+                files = files,
+                apps = apps,
+                serial = serial,
+                transfer = transfer,
+            )
+            FilesTab.SharedPreferences -> SharedPreferencesPane(
+                service = sharedPrefs,
+                apps = apps,
+                serial = serial,
+                selectedPackage = selectedPackage,
+                onSelectedPackageChange = onSelectedPackageChange,
+            )
+            FilesTab.Database -> DatabasePane(
+                service = appDatabase,
+                apps = apps,
+                serial = serial,
+                selectedPackage = selectedPackage,
+                onSelectedPackageChange = onSelectedPackageChange,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeviceFilesBrowser(
     files: FileService,
     apps: AppService,
     serial: String?,

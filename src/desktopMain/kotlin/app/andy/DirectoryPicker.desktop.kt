@@ -29,6 +29,25 @@ actual suspend fun pickFiles(initialDir: String?, allowMultiple: Boolean): List<
     }
 }
 
+actual suspend fun pickSavePath(suggestedName: String, initialDir: String?): String? = withContext(Dispatchers.IO) {
+    var selected: String? = null
+    val task = Runnable {
+        val chooser = JFileChooser(initialDir?.let(::File)).apply {
+            selectedFile = File(initialDir?.let(::File) ?: File("."), suggestedName)
+            dialogTitle = "Save $suggestedName"
+        }
+        if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+            selected = chooser.selectedFile.absolutePath
+        }
+    }
+    if (SwingUtilities.isEventDispatchThread()) {
+        task.run()
+    } else {
+        SwingUtilities.invokeAndWait(task)
+    }
+    selected
+}
+
 actual fun downloadsDirectory(): String {
     val home = System.getProperty("user.home") ?: "."
     val os = System.getProperty("os.name").orEmpty().lowercase()

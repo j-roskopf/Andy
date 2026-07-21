@@ -12,6 +12,7 @@ import app.andy.model.LogLevel
 import app.andy.model.SdkDiscovery
 import app.andy.service.CommandResult
 import app.andy.service.DeviceService
+import app.andy.service.EncodedVideoAccessUnit
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MirrorEngine
@@ -53,7 +54,7 @@ class DesktopBugServiceTest {
         mirror.frames.value = MirrorFrame(16, 16, IntArray(16 * 16) { -1 }, frameNumber = 1)
         logcat.batches.emit(listOf(LogcatEntry("07-07 09:36:39.683", "1234", "1234", LogLevel.Error, "Example", "boom")))
         service.recordAction("input", "Tap 44,55")
-        delay(120)
+        delay(700)
 
         val report = service.saveBug(BugCaptureDraft("Broken thing", "Tap then boom"), device)
         val reportDir = home.resolve(".andy/bugs/${report.id}")
@@ -120,6 +121,34 @@ class DesktopBugServiceTest {
     }
 
     @Test
+    fun healthyH264BitstreamSkipsArgbFrameRing() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-h264-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        service.startCapture("emulator-5554", null)
+        mirror.frames.value = MirrorFrame(64, 128, IntArray(64 * 128) { -1 }, frameNumber = 1)
+        // Annex-B IDR (NAL type 5) — enough for the picture-AU detector.
+        val idr = byteArrayOf(0, 0, 0, 1, 0x65, 0)
+        repeat(5) {
+            mirror.encodedUnits.emit(
+                EncodedVideoAccessUnit(
+                    timestampMillis = System.currentTimeMillis(),
+                    bytes = idr,
+                    width = 64,
+                    height = 128,
+                ),
+            )
+            delay(50)
+        }
+        delay(400)
+
+        assertEquals(0, service.status.value.videoFrameCount)
+        service.stopCapture()
+        assertEquals(0, service.status.value.videoFrameCount)
+    }
+
+    @Test
     fun recordingKeepsTheFullCaptureAndListsSeparatelyFromBugs() = runBlocking {
         val home = Files.createTempDirectory("andy-recordings-test").toFile()
         val mirror = FakeMirrorEngine()
@@ -152,6 +181,8 @@ private class FakeMirrorEngine : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
+    val encodedUnits = MutableSharedFlow<EncodedVideoAccessUnit>(extraBufferCapacity = 16)
+    override val encodedVideo: Flow<EncodedVideoAccessUnit> = encodedUnits
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = CommandResult.success()
     override suspend fun disconnect(immediate: Boolean) = Unit
     override suspend fun sendInput(input: MirrorInput): CommandResult = CommandResult.success()

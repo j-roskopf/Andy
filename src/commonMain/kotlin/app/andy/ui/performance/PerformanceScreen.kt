@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,13 +39,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
 import app.andy.model.PerformanceSample
+import app.andy.model.PerformanceTab
 import app.andy.service.AndyServices
+import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
-import app.andy.ui.components.Toolbar
 import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -53,6 +56,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
+import app.andy.ui.tracing.TracingScreen
 import kotlinx.coroutines.flow.collectLatest
 
 @Composable
@@ -60,6 +64,75 @@ internal fun PerformanceScreen(
     services: AndyServices,
     serial: String?,
     device: AndroidDevice?,
+    active: Boolean,
+    selectedTab: PerformanceTab,
+    onSelectedTabChange: (PerformanceTab) -> Unit,
+    processesPaneWidth: Float,
+    onProcessesPaneWidthChange: (Float) -> Unit,
+    liveVisible: Boolean,
+    livePaneWidth: Float,
+    onLivePaneWidthChange: (Float) -> Unit,
+    tracingPresetId: String,
+    tracingDurationSeconds: Int,
+    tracingBufferSizeMb: Int,
+    tracingPresetsPaneWidth: Float,
+    tracingLibraryPaneHeight: Float,
+    onTracingPresetIdChange: (String) -> Unit,
+    onTracingDurationSecondsChange: (Int) -> Unit,
+    onTracingBufferSizeMbChange: (Int) -> Unit,
+    onTracingPresetsPaneWidthChange: (Float) -> Unit,
+    onTracingLibraryPaneHeightChange: (Float) -> Unit,
+) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterPill("Metrics", selectedTab == PerformanceTab.Metrics, Rust) {
+                onSelectedTabChange(PerformanceTab.Metrics)
+            }
+            FilterPill("Tracing", selectedTab == PerformanceTab.Tracing, Rust) {
+                onSelectedTabChange(PerformanceTab.Tracing)
+            }
+        }
+        Box(Modifier.fillMaxSize().weight(1f)) {
+            Box(if (selectedTab == PerformanceTab.Metrics) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
+                MetricsTabContent(
+                    services = services,
+                    serial = serial,
+                    device = device,
+                    active = active && selectedTab == PerformanceTab.Metrics,
+                    processesPaneWidth = processesPaneWidth,
+                    onProcessesPaneWidthChange = onProcessesPaneWidthChange,
+                    liveVisible = liveVisible,
+                    livePaneWidth = livePaneWidth,
+                    onLivePaneWidthChange = onLivePaneWidthChange,
+                )
+            }
+            Box(if (selectedTab == PerformanceTab.Tracing) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
+                TracingScreen(
+                    services = services,
+                    serial = serial,
+                    device = device,
+                    presetId = tracingPresetId,
+                    durationSeconds = tracingDurationSeconds,
+                    bufferSizeMb = tracingBufferSizeMb,
+                    presetsPaneWidth = tracingPresetsPaneWidth,
+                    libraryPaneHeight = tracingLibraryPaneHeight,
+                    onPresetIdChange = onTracingPresetIdChange,
+                    onDurationSecondsChange = onTracingDurationSecondsChange,
+                    onBufferSizeMbChange = onTracingBufferSizeMbChange,
+                    onPresetsPaneWidthChange = onTracingPresetsPaneWidthChange,
+                    onLibraryPaneHeightChange = onTracingLibraryPaneHeightChange,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricsTabContent(
+    services: AndyServices,
+    serial: String?,
+    device: AndroidDevice?,
+    active: Boolean,
     processesPaneWidth: Float,
     onProcessesPaneWidthChange: (Float) -> Unit,
     liveVisible: Boolean,
@@ -69,7 +142,8 @@ internal fun PerformanceScreen(
     var samples by remember { mutableStateOf<List<PerformanceSample>>(emptyList()) }
     var localProcessesPaneWidth by remember(processesPaneWidth) { mutableStateOf(processesPaneWidth) }
     var localLivePaneWidth by remember(livePaneWidth) { mutableStateOf(livePaneWidth) }
-    LaunchedEffect(serial) {
+    LaunchedEffect(serial, active) {
+        if (!active) return@LaunchedEffect
         samples = emptyList()
         if (serial != null) services.metrics.stream(serial, null).collectLatest { samples = (samples + it).takeLast(60) }
     }
@@ -81,7 +155,6 @@ internal fun PerformanceScreen(
     val fpsSeries = samples.map { it.fps ?: 0f }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Toolbar("Performance", "process CPU/memory · network · frame render time")
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 PerformanceChartCard(
                     title = "CPU",

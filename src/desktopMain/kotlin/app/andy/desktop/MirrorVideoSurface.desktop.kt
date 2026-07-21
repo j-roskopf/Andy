@@ -154,6 +154,7 @@ private class MirrorPanel(
     private enum class DragMode { Device, RulerX, RulerY, Inspect, None }
 
     private var image: BufferedImage? = null
+    private var presentBuffer: BufferedImage? = null
     private var frameNumber: Long = -1
     // Native VideoToolbox frames carry dimensions only: Metal owns their pixels. Keeping this
     // separate from a CPU image prevents the Swing fallback painter from clearing under the
@@ -181,7 +182,9 @@ private class MirrorPanel(
     init {
         background = java.awt.Color.BLACK
         preferredSize = Dimension(240, 520)
-        ignoreRepaint = false
+        // System-driven repaints clear heavyweight Canvas peers. CPU frames present
+        // explicitly after each decode instead.
+        ignoreRepaint = true
         // Let the panel own keyboard focus so physical keystrokes reach the device,
         // and keep Tab/Enter for ourselves instead of moving focus within Swing.
         isFocusable = true
@@ -266,7 +269,7 @@ private class MirrorPanel(
             override fun mouseExited(event: MouseEvent) {
                 pickerPoint = null
                 if (overlay.pickerColor != null) NativeMirrorJni.updatePickerPoint(null, null)
-                if (!nativeMetadataFrame) repaint()
+                if (!nativeMetadataFrame) presentCpuFrame()
             }
         }
         addMouseListener(listener)
@@ -274,6 +277,7 @@ private class MirrorPanel(
         addComponentListener(object : ComponentAdapter() {
             override fun componentResized(event: ComponentEvent) {
                 if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!nativeMetadataFrame) presentCpuFrame()
             }
 
             override fun componentMoved(event: ComponentEvent) {
@@ -282,6 +286,7 @@ private class MirrorPanel(
 
             override fun componentShown(event: ComponentEvent) {
                 if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!nativeMetadataFrame) presentCpuFrame()
             }
         })
     }
@@ -330,6 +335,7 @@ private class MirrorPanel(
         if (hostsNativePresentation) {
             NativeMirrorJni.setInlineOverlayVisible(!next)
         }
+        if (!next && !nativeMetadataFrame) presentCpuFrame()
     }
 
     // Maps AWT key codes for non-text keys to Android key codes (KeyEvent.KEYCODE_*).
@@ -370,7 +376,7 @@ private class MirrorPanel(
         if (hasCpuPixels) {
             val pixels = (buffered.raster.dataBuffer as DataBufferInt).data
             frame.argb.copyInto(pixels, endIndex = frame.width * frame.height)
-            repaint()
+            presentCpuFrame()
         } else {
             NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)
             if (sizeChanged) NativeMirrorJni.updateMetalLayerGeometry(this)
@@ -393,8 +399,8 @@ private class MirrorPanel(
     }
 
     fun setOverlay(next: MirrorOverlay) {
-        updateNativeOverlay(next)
         if (overlay == next) return
+        updateNativeOverlay(next)
         if (referenceImagePath != next.referenceImagePath || overlay.referenceImageKey != next.referenceImageKey) {
             referenceImagePath = next.referenceImagePath
             val requestId = ++referenceImageRequestId
@@ -407,7 +413,7 @@ private class MirrorPanel(
                     SwingUtilities.invokeLater {
                         if (referenceImageRequestId == requestId && referenceImagePath == path) {
                             referenceImage = loadedImage
-                            if (!nativeMetadataFrame) repaint()
+                            if (!nativeMetadataFrame) presentCpuFrame()
                         }
                     }
                 }
@@ -417,7 +423,7 @@ private class MirrorPanel(
         // The Metal layer draws its overlay itself. Asking this heavyweight Canvas to repaint
         // while it is overlaid can make AWT clear the host surface to its black background
         // after Metal has presented a drawable.
-        if (!nativeMetadataFrame) repaint()
+        if (!nativeMetadataFrame) presentCpuFrame()
     }
 
     /** Mirrors geometry controls into Metal; the Java paint path still owns CPU fallback/tests. */
@@ -457,22 +463,51 @@ private class MirrorPanel(
     }
 
     override fun update(graphics: Graphics) {
-        // Component.update may clear a heavyweight Canvas before delegating to paint(). A native
-        // frame has no JVM pixels, so neither operation is allowed to touch the Metal host.
-        if (!nativeMetadataFrame) super.update(graphics)
+        // ignoreRepaint=true; keep this as a no-clear guard if anything still routes here.
+        if (nativeMetadataFrame) return
+        paint(graphics)
     }
 
     override fun paint(graphics: Graphics) {
-        // In the accelerated route, Metal owns pixels. Calling Canvas.paint here would clear the
-        // host under the letterboxed presenter with the CPU placeholder used only for input mapping.
         if (nativeMetadataFrame) return
-        super.paint(graphics)
-        val frameImage = image ?: return
-        val g2 = graphics as Graphics2D
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        val rect = fittedRect(frameImage)
-        g2.drawImage(frameImage, rect.x, rect.y, rect.width, rect.height, null)
-        paintOverlay(g2, frameImage, rect)
+        renderCpuFrame(graphics)
+    }
+
+    /**
+     * Presents the latest CPU frame through an offscreen buffer so the black letterbox fill and
+     * scaled image hit the screen in one blit. Painting those steps directly to a heavyweight
+     * Canvas flashes between frames on macOS.
+     */
+    private fun presentCpuFrame() {
+        if (nativeMetadataFrame || occluded || !isDisplayable || width <= 0 || height <= 0) return
+        val g = graphics ?: return
+        try {
+            renderCpuFrame(g)
+        } finally {
+            g.dispose()
+        }
+    }
+
+    private fun renderCpuFrame(graphics: Graphics) {
+        val w = width.coerceAtLeast(1)
+        val h = height.coerceAtLeast(1)
+        val buffer = presentBuffer?.takeIf { it.width == w && it.height == h }
+            ?: BufferedImage(w, h, BufferedImage.TYPE_INT_RGB).also { presentBuffer = it }
+        val g2 = buffer.createGraphics()
+        try {
+            g2.color = java.awt.Color.BLACK
+            g2.fillRect(0, 0, w, h)
+            val frameImage = image
+            if (frameImage != null) {
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                val rect = fittedRect(frameImage)
+                g2.drawImage(frameImage, rect.x, rect.y, rect.width, rect.height, null)
+                paintOverlay(g2, frameImage, rect)
+            }
+        } finally {
+            g2.dispose()
+        }
+        graphics.drawImage(buffer, 0, 0, null)
     }
 
     // When clamp is false, points outside the fitted image return null (used for
@@ -701,7 +736,7 @@ private class MirrorPanel(
         val frameImage = image ?: return null
         val mapped = mapPoint(point) ?: run {
             pickerPoint = null
-            if (!nativeMetadataFrame) repaint()
+            if (!nativeMetadataFrame) presentCpuFrame()
             return null
         }
         pickerPoint = point
@@ -721,7 +756,7 @@ private class MirrorPanel(
             "#%02X%02X%02X".format(color.red, color.green, color.blue)
         }
         onHoverColor(hex)
-        if (!nativeMetadataFrame) repaint()
+        if (!nativeMetadataFrame) presentCpuFrame()
         return hex
     }
 

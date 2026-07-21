@@ -82,7 +82,12 @@ object AndroidParsers {
         return if (found) rxBytes to txBytes else null
     }
 
+    /**
+     * Current display size for mirroring. Prefer Override when present — that is what
+     * SurfaceFlinger / scrcpy capture — and fall back to Physical.
+     */
     fun parseWmSize(output: String): String? {
+        Regex("""Override size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)?.let { return it }
         return Regex("""Physical size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)
     }
 

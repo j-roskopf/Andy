@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,7 +63,9 @@ import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun AppsScreen(
@@ -132,7 +135,13 @@ internal fun AppsScreen(
                 status = "Unable to load packages"
             }
     }
-    val filtered = rows.filter { app -> query.isBlank() || app.packageName.contains(query, true) || app.label?.contains(query, true) == true }
+    val filtered = remember(rows, query) {
+        rows.filter { app ->
+            query.isBlank() ||
+                app.packageName.contains(query, true) ||
+                app.label?.contains(query, true) == true
+        }
+    }
 
     Row(Modifier.fillMaxSize()) {
         Column(Modifier.width(localListPaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -146,7 +155,7 @@ internal fun AppsScreen(
             TextField(query, { query = it }, placeholder = { Text("Filter packages", color = TextSecondary) }, singleLine = true, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             TableHeader(listOf("" to 56.dp, "TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
             LazyColumn {
-                items(filtered) { app ->
+                items(filtered, key = { it.packageName }) { app ->
                     TableRow(Modifier.clickable {
                         selected = app
                         appDetails = null
@@ -286,20 +295,21 @@ private fun BuildInstallRow(label: String, value: String) {
 
 @Composable
 private fun AppIconCell(serial: String, packageName: String, apps: AppService, cache: MutableMap<String, ByteArray?>) {
-    val icon = cache[packageName]
+    var bitmap by remember(packageName) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(serial, packageName) {
         if (!cache.containsKey(packageName)) {
-            val bytes = runCatching { apps.getIcon(serial, packageName) }.getOrNull()
-            cache[packageName] = bytes
+            cache[packageName] = runCatching { apps.getIcon(serial, packageName) }.getOrNull()
         }
+        val bytes = cache[packageName]
+        bitmap = bytes?.let { withContext(Dispatchers.Default) { loadImageBitmap(it) } }
     }
-    val bitmap = remember(icon) { icon?.let { loadImageBitmap(it) } }
     Box(
         Modifier.padding(vertical = 4.dp).size(48.dp).clip(RoundedCornerShape(AndyRadius.R4)).background(AndyColors.Neutral750),
         contentAlignment = Alignment.Center,
     ) {
-        if (bitmap != null) {
-            Image(bitmap = bitmap, contentDescription = null, modifier = Modifier.fillMaxSize())
+        val image = bitmap
+        if (image != null) {
+            Image(bitmap = image, contentDescription = null, modifier = Modifier.fillMaxSize())
         }
     }
 }

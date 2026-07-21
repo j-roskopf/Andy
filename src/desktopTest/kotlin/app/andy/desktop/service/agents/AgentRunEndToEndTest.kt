@@ -132,8 +132,21 @@ class AgentRunEndToEndTest {
 class AgentRetryTest {
     @Test
     fun retriesFailedTaskWithAFreshTranscriptAndSession() = runBlocking {
+        assertRetryRestartsTask(AgentTaskStatus.Failed, errorMessage = "failed before retry", exitCode = 1)
+    }
+
+    @Test
+    fun retriesInterruptedTaskWithAFreshTranscriptAndSession() = runBlocking {
+        assertRetryRestartsTask(AgentTaskStatus.Unknown, errorMessage = null, exitCode = null)
+    }
+
+    private suspend fun assertRetryRestartsTask(
+        status: AgentTaskStatus,
+        errorMessage: String?,
+        exitCode: Int?,
+    ) {
         val trueBinary = File("/usr/bin/true")
-        if (!trueBinary.canExecute()) return@runBlocking
+        if (!trueBinary.canExecute()) return
 
         val dir = File.createTempFile("andy-agent-retry", null).also {
             it.delete()
@@ -142,33 +155,33 @@ class AgentRetryTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
-            val failed = AgentTask(
+            val task = AgentTask(
                 id = "task-retry",
                 title = "retry me",
                 prompt = "do the thing",
                 agent = AgentKind.Codex,
                 cwd = dir.absolutePath,
                 originDir = dir.absolutePath,
-                status = AgentTaskStatus.Failed,
+                status = status,
                 vendorSessionId = "old-session",
                 createdAtMillis = 1,
                 startedAtMillis = 2,
                 finishedAtMillis = 3,
-                exitCode = 1,
-                errorMessage = "failed before retry",
+                exitCode = exitCode,
+                errorMessage = errorMessage,
                 totalCostUsd = 0.42,
                 inputTokens = 10,
                 outputTokens = 20,
             )
             store.save(
                 AgentStoreState(
-                    tasks = listOf(failed),
+                    tasks = listOf(task),
                     binaryOverrides = mapOf(AgentKind.Codex.cliName to trueBinary.absolutePath),
                 ),
             )
-            store.transcriptFile(failed.id).apply {
+            store.transcriptFile(task.id).apply {
                 parentFile.mkdirs()
-                writeText("old failed output\n")
+                writeText("old output\n")
             }
 
             val service = DesktopAgentRunService(
@@ -190,7 +203,7 @@ class AgentRetryTest {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
             }
 
-            service.retry(failed.id)
+            service.retry(task.id)
             withTimeout(10_000) {
                 while (service.tasks.value.single().isActive) delay(25)
             }
@@ -200,7 +213,7 @@ class AgentRetryTest {
             assertNull(retried.vendorSessionId)
             assertNull(retried.errorMessage)
             assertNull(retried.totalCostUsd)
-            assertTrue(store.transcriptFile(failed.id).readText().isBlank())
+            assertTrue(store.transcriptFile(task.id).readText().isBlank())
         } finally {
             scope.cancel()
             dir.deleteRecursively()

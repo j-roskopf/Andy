@@ -59,6 +59,16 @@ internal class MockAndroidDeviceEnvironment {
     var hostIfconfigOutput: String = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n"
     var hostOsName: String = "Mac OS X"
     var getpropOverrides: Map<String, String> = emptyMap()
+    /** Single-key `getprop <key>` overrides used by tracing and similar callers. */
+    var propValues: MutableMap<String, String> = mutableMapOf(
+        "ro.build.version.sdk" to "35",
+        "init.svc.traced" to "running",
+        "persist.traced.enable" to "1",
+    )
+    var perfettoBackgroundResult: CommandResult = CommandResult.success("12345")
+    var perfettoAliveChecksRemaining: Int = 2
+    val perfettoConfigs: MutableList<String> = mutableListOf()
+    var pullWritesNonEmptyFile: Boolean = true
     val installedPackages: MutableSet<String> = mutableSetOf()
 
     init {
@@ -147,6 +157,19 @@ internal class MockAndroidDeviceEnvironment {
         return file
     }
 
+    var prefsXmlByFile = mutableMapOf(
+        "demo.xml" to """
+            <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+            <map>
+                <string name="greeting">hello</string>
+                <int name="count" value="1" />
+            </map>
+        """.trimIndent(),
+    )
+    var databaseListing = "app.db\napp.db-wal\n"
+    var noBackupListing: String? = null
+    private val pushedTmpFiles = mutableMapOf<String, String>()
+
     private fun run(command: List<String>): CommandResult {
         commands += command
         return when (command.firstOrNull()) {
@@ -209,8 +232,30 @@ internal class MockAndroidDeviceEnvironment {
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "reboot" -> CommandResult.success()
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "uninstall" -> CommandResult.success("Success")
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "install" -> runInstall(command.drop(4))
-            command.getOrNull(1) == "-s" && command.getOrNull(3) == "pull" -> CommandResult.success("1 file pulled")
-            command.getOrNull(1) == "-s" && command.getOrNull(3) == "push" -> CommandResult.success("1 file pushed")
+            command.getOrNull(1) == "-s" && command.getOrNull(3) == "pull" -> {
+                val remote = command.getOrNull(4)
+                val local = command.getOrNull(5)
+                if (local != null && pullWritesNonEmptyFile) {
+                    File(local).apply {
+                        parentFile?.mkdirs()
+                        writeBytes(byteArrayOf(1, 2, 3, 4, 5))
+                    }
+                } else if (local != null) {
+                    File(local).apply {
+                        parentFile?.mkdirs()
+                        writeBytes(byteArrayOf())
+                    }
+                }
+                CommandResult.success("1 file pulled, remote=$remote")
+            }
+            command.getOrNull(1) == "-s" && command.getOrNull(3) == "push" -> {
+                val local = command.getOrNull(4)
+                val remote = command.getOrNull(5)
+                if (local != null && remote != null) {
+                    pushedTmpFiles[remote] = File(local).readText()
+                }
+                CommandResult.success("1 file pushed")
+            }
             command.getOrNull(1) == "-s" && command.getOrNull(3) == "forward" -> CommandResult.success()
             else -> CommandResult.failure("Unexpected adb command: ${command.joinToString(" ")}")
         }
@@ -250,6 +295,9 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun runShell(serial: String, shell: List<String>): CommandResult {
+        if (shell.firstOrNull() == "run-as") {
+            return runAs(shell.drop(1))
+        }
         if (shell.size == 5 && shell.take(4) == listOf("settings", "put", "global", "http_proxy")) {
             httpProxyValue = shell[4]
             return CommandResult.success()
@@ -291,6 +339,44 @@ internal class MockAndroidDeviceEnvironment {
             return CommandResult.success()
         }
         if (shell == listOf("svc", "data", "disable") || shell == listOf("svc", "data", "enable")) {
+            return CommandResult.success()
+        }
+        if (shell.size == 2 && shell[0] == "getprop") {
+            val key = shell[1]
+            return CommandResult.success(propValues[key].orEmpty())
+        }
+        if (shell.size == 3 && shell[0] == "setprop") {
+            propValues[shell[1]] = shell[2]
+            return CommandResult.success()
+        }
+        if (shell.size == 3 && shell[0] == "test" && shell[1] == "-d" && shell[2].startsWith("/proc/")) {
+            return if (perfettoAliveChecksRemaining > 0) {
+                perfettoAliveChecksRemaining--
+                CommandResult.success()
+            } else {
+                CommandResult.failure("No such process")
+            }
+        }
+        if (shell.size == 3 && shell[0] == "kill") {
+            val signal = shell[1]
+            val pid = shell[2]
+            return when (signal) {
+                "-0" -> {
+                    if (perfettoAliveChecksRemaining > 0) {
+                        perfettoAliveChecksRemaining--
+                        CommandResult.success()
+                    } else {
+                        CommandResult.failure("No such process")
+                    }
+                }
+                "-TERM", "-KILL" -> {
+                    perfettoAliveChecksRemaining = 0
+                    CommandResult.success("killed $pid")
+                }
+                else -> CommandResult.failure("Unexpected kill signal $signal")
+            }
+        }
+        if (shell.size == 2 && shell[0] == "rm") {
             return CommandResult.success()
         }
         return when (shell) {
@@ -364,6 +450,69 @@ internal class MockAndroidDeviceEnvironment {
                     CommandResult.failure("Unexpected shell command for $serial: ${shell.joinToString(" ")}")
                 }
             }
+        }
+    }
+
+    private fun runAs(args: List<String>): CommandResult {
+        val packageName = args.firstOrNull() ?: return CommandResult.failure("missing package")
+        if (packageName == "com.undebuggable.app") {
+            return CommandResult.failure("run-as: Package '$packageName' is not debuggable")
+        }
+        val rest = args.drop(1)
+        return when {
+            rest == listOf("id") -> CommandResult.success("uid=10123(u0_a123) gid=10123(u0_a123)")
+            rest == listOf("ls", "shared_prefs") ->
+                CommandResult.success(prefsXmlByFile.keys.sorted().joinToString("\n", postfix = "\n"))
+            rest.size == 2 && rest[0] == "cat" && rest[1].startsWith("shared_prefs/") -> {
+                val name = rest[1].removePrefix("shared_prefs/")
+                prefsXmlByFile[name]?.let { CommandResult.success(it) }
+                    ?: CommandResult.failure("No such file")
+            }
+            rest == listOf("ls", "databases") -> CommandResult.success(databaseListing)
+            rest == listOf("ls", "no_backup") -> {
+                if (noBackupListing == null) {
+                    CommandResult.failure("ls: no_backup: No such file or directory")
+                } else {
+                    CommandResult.success(noBackupListing.orEmpty())
+                }
+            }
+            rest.size == 3 && rest[0] == "cp" -> {
+                val remote = rest[1]
+                val dest = rest[2]
+                when {
+                    dest.startsWith("shared_prefs/") -> {
+                        val name = dest.removePrefix("shared_prefs/")
+                        val content = pushedTmpFiles[remote] ?: return CommandResult.failure("missing tmp")
+                        prefsXmlByFile[name] = content
+                        CommandResult.success()
+                    }
+                    dest.contains("databases/") || dest.startsWith("no_backup/") -> CommandResult.success()
+                    else -> CommandResult.failure("Unexpected run-as cp: ${rest.joinToString(" ")}")
+                }
+            }
+            rest.size >= 2 && rest[0] == "rm" -> CommandResult.success()
+            rest.size == 3 && rest[0] == "sh" && rest[1] == "-c" -> {
+                val script = rest[2]
+                val cpMatch = Regex("""cp '([^']+)' 'shared_prefs/([^']+)'""").find(script)
+                if (cpMatch != null) {
+                    val remote = cpMatch.groupValues[1]
+                    val name = cpMatch.groupValues[2]
+                    val content = pushedTmpFiles[remote] ?: return CommandResult.failure("missing tmp")
+                    prefsXmlByFile[name] = content
+                    return CommandResult.success()
+                }
+                if (script.startsWith("test -f ")) {
+                    return CommandResult.success("no")
+                }
+                if (script.startsWith("rm -f ")) {
+                    return CommandResult.success()
+                }
+                if (script.startsWith("cp '") && script.contains("'databases/")) {
+                    return CommandResult.success()
+                }
+                CommandResult.failure("Unexpected run-as sh: $script")
+            }
+            else -> CommandResult.failure("Unexpected run-as command: ${args.joinToString(" ")}")
         }
     }
 

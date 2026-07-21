@@ -401,4 +401,20 @@ class AndroidParsersTest {
 
         assertEquals(null, totals)
     }
+
+    @Test
+    fun parseWmSizePrefersOverrideOverPhysical() {
+        val output = """
+            Physical size: 1080x2400
+            Override size: 1080x1920
+        """.trimIndent()
+
+        assertEquals("1080x1920", AndroidParsers.parseWmSize(output))
+    }
+
+    @Test
+    fun parseWmSizeFallsBackToPhysicalWhenNoOverride() {
+        assertEquals("1080x2400", AndroidParsers.parseWmSize("Physical size: 1080x2400\n"))
+        assertNull(AndroidParsers.parseWmSize("not a size"))
+    }
 }
