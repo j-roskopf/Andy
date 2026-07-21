@@ -274,6 +274,8 @@ data class AgentTask(
     val contextWindowTokens: Long? = null,
     /** True after an agent finishes until the chat is opened (or marked read). */
     val unread: Boolean = false,
+    /** Hidden from the default chat list until unarchived. */
+    val archived: Boolean = false,
     /** True only for the run that created and may remove [worktreePath]. */
     val ownsWorktree: Boolean = false,
     /** Optional typed project task that launched this raw agent session. */
@@ -679,6 +681,30 @@ sealed interface AgentEvent {
 
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */
     data class Raw(override val atMillis: Long, val line: String) : AgentEvent
+}
+
+/**
+ * Merge consecutive stream deltas into one live message.
+ * Keep the original [AgentEvent.atMillis] so transcript LazyColumn keys stay stable
+ * while text grows — rewriting the timestamp every token remounts the bubble.
+ */
+fun coalesceAgentStreamDeltas(
+    existing: List<AgentEvent>,
+    incoming: List<AgentEvent>,
+): List<AgentEvent> = incoming.fold(existing) { transcript, event ->
+    val previous = transcript.lastOrNull()
+    val merged = when {
+        event is AgentEvent.AssistantText && event.isStreamDelta &&
+            previous is AgentEvent.AssistantText && previous.isStreamDelta -> {
+            previous.copy(text = previous.text + event.text)
+        }
+        event is AgentEvent.Thinking && event.isStreamDelta &&
+            previous is AgentEvent.Thinking && previous.isStreamDelta -> {
+            previous.copy(text = previous.text + event.text)
+        }
+        else -> null
+    }
+    if (merged == null) transcript + event else transcript.dropLast(1) + merged
 }
 
 data class AgentCliStatus(

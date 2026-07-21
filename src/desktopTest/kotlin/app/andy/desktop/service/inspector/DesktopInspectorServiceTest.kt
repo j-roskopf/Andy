@@ -85,6 +85,20 @@ class DesktopAppDatabaseServiceTest {
     }
 
     @Test
+    fun listTablesDoesNotCrashWhenDeviceSqliteIsMissing() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val service = DesktopAppDatabaseService(env.runner, env.devices)
+
+        // Devices without /system/bin/sqlite3 used to NPE when caching a null path in
+        // ConcurrentHashMap, which surfaced in the UI as a blank "Failed to list tables".
+        val result = service.listTables("emulator-5554", "com.example.app", "app.db")
+        assertTrue(
+            result.exceptionOrNull() !is NullPointerException,
+            result.exceptionOrNull()?.stackTraceToString().orEmpty(),
+        )
+    }
+
+    @Test
     fun walCheckpointIsSafeOnPopulatedDatabase() {
         // Host sqlite3 CLIs differ on whether a one-shot process leaves a -wal sibling
         // behind after exit. Production pullWorkingCopy only checkpoints when a WAL file

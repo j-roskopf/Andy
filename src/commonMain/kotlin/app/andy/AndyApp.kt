@@ -18,6 +18,7 @@ import app.andy.service.AndyServices
 import app.andy.service.MirrorInput
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.live.LiveDevicePane
+import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.shell.AndyShell
@@ -97,7 +98,7 @@ fun AndyMirrorPopOut(
         LaunchedEffect(Unit) {
             services.mirror.status.collectLatest { mirrorStatus = it }
         }
-        // Share the already-running Live mirror session. Reconnecting here with default
+        // Share the already-running Live mirror session. Reconnecting here with a mismatched
         // MirrorVideoConfig would tear down GPU mode and leave the main pane blank on close.
         LaunchedEffect(serial) {
             if (serial == null) return@LaunchedEffect
@@ -105,7 +106,7 @@ fun AndyMirrorPopOut(
                 connectResult = "Using the Live mirror session"
                 return@LaunchedEffect
             }
-            val result = services.mirror.connect(serial)
+            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
         Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
@@ -141,7 +142,7 @@ fun AndyMirrorPopOut(
                     onInput = sendInput,
                     onConnect = {
                         if (serial != null) scope.launch {
-                            val result = services.mirror.connect(serial)
+                            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
                             connectResult = if (result.isSuccess) result.stdout else result.stderr
                         }
                     },

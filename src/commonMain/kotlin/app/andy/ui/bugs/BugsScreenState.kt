@@ -20,6 +20,7 @@ internal class BugsScreenState(
     var playbackRunId by mutableStateOf(0)
     var isReplaying by mutableStateOf(false)
     var playbackFrameCount by mutableStateOf(0)
+    var isVideoLoading by mutableStateOf(false)
     var playbackFrameIndex by mutableStateOf(0)
     var playbackStartFrameIndex by mutableStateOf(0)
     var isInspectingPlayback by mutableStateOf(false)
@@ -45,6 +46,8 @@ internal class BugsScreenState(
         playbackStartFrameIndex = 0
         isInspectingPlayback = false
         isReplaying = false
+        playbackFrameCount = 0
+        isVideoLoading = true
         expandedStepIds.clear()
     }
 

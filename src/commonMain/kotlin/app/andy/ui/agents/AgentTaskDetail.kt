@@ -41,6 +41,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -94,7 +96,9 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class DiffViewMode { Unified, Split }
 
@@ -106,6 +110,7 @@ internal fun AgentTaskDetail(
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
     compactToolCalls: Boolean = true,
+    transcriptScrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -129,6 +134,35 @@ internal fun AgentTaskDetail(
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
+    // Completed chats: empty events first, then history + change summary load async.
+    // Don't pin the transcript until both have settled or we know they're empty.
+    var eventsReady by remember(task.id) { mutableStateOf(false) }
+    LaunchedEffect(task.id, task.isActive, task.status) {
+        // Do not bounce ready→false on revisit; that let a prompt-only stub overwrite scroll memory.
+        if (!task.isActive) {
+            if (events.isEmpty()) {
+                withTimeoutOrNull(3_000) {
+                    snapshotFlow { events }.first { it.isNotEmpty() }
+                }
+            }
+            changeSummary = task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
+            loadedFileDiffs = task.completedChanges?.diffs.orEmpty()
+            // Let the change-summary card compose before the transcript pins/reveals.
+            withFrameMillis { }
+            withFrameMillis { }
+        } else {
+            changeSummary = null
+            loadedFileDiffs = emptyMap()
+        }
+        eventsReady = true
+    }
+    LaunchedEffect(task.id, task.status) {
+        if (task.worktreePath != null) {
+            diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
+        }
+        expandedDiffPath = null
+        loadingDiffPath = null
+    }
 
     val supportsResume = task.vendorSessionId != null && task.agent != AgentKind.Antigravity
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
@@ -191,15 +225,6 @@ internal fun AgentTaskDetail(
         followUpImagePaths = emptyList()
     }
 
-    LaunchedEffect(task.id, task.status) {
-        if (task.worktreePath != null) {
-            diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
-        }
-        changeSummary = if (task.isActive) null else task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
-        expandedDiffPath = null
-        loadedFileDiffs = task.completedChanges?.diffs.orEmpty()
-        loadingDiffPath = null
-    }
     LaunchedEffect(task.goal) {
         goalEditorText = task.goal.orEmpty()
         if (task.goal == null) goalEditorOpen = false
@@ -278,7 +303,11 @@ internal fun AgentTaskDetail(
                     )
                 }
             },
+            completedContentKey = changeSummary?.files?.size,
+            eventsReady = eventsReady,
             onSkillOpen = { skill -> scope.launch { services.agentRuns.openSkill(skill.path) } },
+            restoreScrollKey = task.id,
+            scrollMemory = transcriptScrollMemory,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         )
 

@@ -99,6 +99,13 @@ class ClaudeCodeAdapterTest {
     }
 
     @Test
+    fun parsesPlainTextStartupErrors() {
+        val events = adapter.parseLine("Error: Session ID abc is already in use.", 10)
+        val error = events.single() as AgentEvent.TaskError
+        assertEquals("Session ID abc is already in use.", error.message)
+    }
+
+    @Test
     fun parsesInitAssistantAndResult() {
         val init = adapter.parseLine("""{"type":"system","subtype":"init","session_id":"s-9","model":"claude-fable-5"}""", 1)
         assertEquals("s-9", (init.single() as AgentEvent.SessionStarted).sessionId)

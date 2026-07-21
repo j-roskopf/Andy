@@ -35,9 +35,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
+import app.andy.model.ActionProject
 import app.andy.model.BugCaptureDraft
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.RunningAction
 import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
 import app.andy.service.AndyServices
@@ -49,6 +51,9 @@ import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.transfer.LocalDropKind
 import app.andy.transfer.classifyLocalPaths
+import app.andy.ui.actions.DockPlacement
+import app.andy.ui.actions.TerminalDockDrawer
+import app.andy.ui.actions.TerminalDockToggleRow
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.HorizontalPaneDivider
@@ -141,6 +146,11 @@ internal fun LiveScreen(
     selectedPackage: String?,
     onSelectedPackageChange: (String?) -> Unit,
     transfer: DeviceTransferCoordinator,
+    projects: List<ActionProject> = emptyList(),
+    running: List<RunningAction> = emptyList(),
+    activeRunId: String? = null,
+    terminalRunId: String? = null,
+    onActiveRunIdChange: (String?) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -148,11 +158,21 @@ internal fun LiveScreen(
     val isWeb = services.capabilities.platform == app.andy.service.AndyPlatform.Web
     val acceleratedMirror = services.capabilities.acceleratedMirror
     val controlsPaneMinHeight = if (acceleratedMirror) 320f else 280f
-    var maxSize by remember { mutableStateOf("1080") }
-    var bitRateMbps by remember { mutableStateOf(if (isWeb) "12" else "8") }
-    var maxFps by remember { mutableStateOf("60") }
+    val preferred = LiveMirrorSettings.config.value
+    var maxSize by remember {
+        mutableStateOf(if (preferred.maxSize == 0) "0" else preferred.maxSize.toString())
+    }
+    var bitRateMbps by remember {
+        mutableStateOf(
+            preferred.bitRate.takeIf { it > 0 }?.let { mbps ->
+                val value = mbps / 1_000_000f
+                if (value == value.toInt().toFloat()) value.toInt().toString() else value.toString()
+            } ?: if (isWeb) "12" else "8",
+        )
+    }
+    var maxFps by remember { mutableStateOf(preferred.maxFps.toString()) }
     var rendererMode by remember(acceleratedMirror) {
-        mutableStateOf(if (acceleratedMirror) MirrorRendererMode.Auto else MirrorRendererMode.Legacy)
+        mutableStateOf(if (acceleratedMirror) preferred.rendererMode else MirrorRendererMode.Legacy)
     }
     var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var bugDialogVisible by remember { mutableStateOf(false) }
@@ -166,6 +186,57 @@ internal fun LiveScreen(
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
     var localControlsPaneHeight by remember(controlsPaneHeight, controlsPaneMinHeight) {
         mutableStateOf(controlsPaneHeight.coerceIn(controlsPaneMinHeight, 520f))
+    }
+    var terminalPlacement by remember { mutableStateOf<DockPlacement?>(null) }
+    var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
+    var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
+
+    fun selectTerminalTab(runId: String) {
+        if (runId !in terminalTabIds) terminalTabIds = terminalTabIds + runId
+        onActiveRunIdChange(runId)
+    }
+
+    fun closeTerminalTab(runId: String) {
+        val remaining = terminalTabIds.filter { it != runId }
+        terminalTabIds = remaining
+        if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())
+        if (remaining.isEmpty()) terminalPlacement = null
+    }
+
+    fun openOrFocusTerminal(placement: DockPlacement) {
+        val project = projects.firstOrNull { project ->
+            activeRunId != null && running.any { it.runId == activeRunId && it.projectId == project.id }
+        } ?: projects.firstOrNull()
+        if (project == null) {
+            liveActionStatus = "Create a project to open a terminal"
+            return
+        }
+        val runId = activeRunId?.takeIf { activeId -> running.any { it.runId == activeId } }
+            ?: services.actionRuns.openShell(project)
+        selectTerminalTab(runId)
+        lastTerminalPlacement = placement
+        terminalPlacement = placement
+    }
+
+    fun toggleTerminal(placement: DockPlacement) {
+        if (terminalPlacement == placement) {
+            terminalPlacement = null
+            return
+        }
+        openOrFocusTerminal(placement)
+    }
+
+    LaunchedEffect(terminalRunId, running) {
+        val runId = terminalRunId ?: return@LaunchedEffect
+        if (runId == handledTerminalRunId) return@LaunchedEffect
+        if (running.none { it.runId == runId }) return@LaunchedEffect
+        selectTerminalTab(runId)
+        terminalPlacement = lastTerminalPlacement
+        handledTerminalRunId = runId
+    }
+    LaunchedEffect(running) {
+        terminalTabIds = terminalTabIds.filter { tabId -> running.any { it.runId == tabId } }
     }
     LaunchedEffect(controlsPaneMinHeight) {
         if (localControlsPaneHeight < controlsPaneMinHeight) {
@@ -237,6 +308,7 @@ internal fun LiveScreen(
         }
     }
     fun reconnectMirror(config: MirrorVideoConfig) {
+        LiveMirrorSettings.update(config)
         if (serial == null) return
         scope.launch {
             val result = services.mirror.connect(serial, config)
@@ -249,7 +321,9 @@ internal fun LiveScreen(
         maxFps = fps
         reconnectMirror(mirrorVideoConfig(size, mbps, fps, rendererMode))
     }
-    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode)
+    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode).also {
+        LiveMirrorSettings.update(it)
+    }
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
@@ -282,7 +356,10 @@ internal fun LiveScreen(
             }
         }
     }
-    Row(Modifier.fillMaxSize()) {
+    val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
+    val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.weight(1f).fillMaxWidth()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             val dialogsOpen = bugDialogVisible || clipDialogVisible
             LiveDevicePane(
@@ -355,7 +432,7 @@ internal fun LiveScreen(
             onDrag = { dragX -> localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(560f, 1800f) },
             onDragEnd = { onDevicePaneWidthChange(localDevicePaneWidth) },
         )
-        Column(Modifier.fillMaxSize().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f).fillMaxHeight().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             PanelCard(Modifier.fillMaxWidth().height(localControlsPaneHeight.dp)) {
                 Column(
                     modifier = Modifier
@@ -364,7 +441,17 @@ internal fun LiveScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TerminalDockToggleRow(
+                        terminalPlacement = terminalPlacement,
+                        onToggle = ::toggleTerminal,
+                    )
+                }
                 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
@@ -462,6 +549,31 @@ internal fun LiveScreen(
                 state = logcatState
             )
         }
+        if (terminalPlacement == DockPlacement.Right) {
+            TerminalDockDrawer(
+                services = services,
+                terminalTabs = terminalTabs,
+                activeRunId = activeTerminalRunId,
+                placement = DockPlacement.Right,
+                onSelectTab = ::selectTerminalTab,
+                onCloseTab = ::closeTerminalTab,
+                onClose = { terminalPlacement = null },
+                modifier = Modifier.width(420.dp).fillMaxHeight().padding(start = 6.dp),
+            )
+        }
+    }
+    if (terminalPlacement == DockPlacement.Bottom) {
+        TerminalDockDrawer(
+            services = services,
+            terminalTabs = terminalTabs,
+            activeRunId = activeTerminalRunId,
+            placement = DockPlacement.Bottom,
+            onSelectTab = ::selectTerminalTab,
+            onCloseTab = ::closeTerminalTab,
+            onClose = { terminalPlacement = null },
+            modifier = Modifier.fillMaxWidth().height(280.dp),
+        )
+    }
     }
     if (clipDialogVisible) {
         ClipTextDialog(

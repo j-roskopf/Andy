@@ -4,6 +4,9 @@
 
 # Andy
 
+[![Featured in Android Weekly Issue #736](https://img.shields.io/badge/Featured%20in-Android%20Weekly%20Issue%20%23736-blue?logo=android&logoColor=white)](https://androidweekly.net/issues/issue-736)
+[![As Seen In - jetc.dev Newsletter Issue #323](https://img.shields.io/badge/As_Seen_In-jetc.dev_Newsletter_Issue_%23323-blue?logo=Jetpack+Compose&logoColor=white)](https://jetc.dev/issues/323.html)
+
 Andy is a desktop companion for Android developers. The desktop app is the
 recommended experience and includes the full feature set. A smaller subset of
 Andy is also available on the web at [andy.joetr.com](https://www.andy.joetr.com).

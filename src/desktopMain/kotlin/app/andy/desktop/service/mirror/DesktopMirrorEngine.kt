@@ -10,6 +10,7 @@ import app.andy.desktop.service.emulator.emulatorConsolePort
 import app.andy.desktop.service.emulator.isEmulatorSerial
 import app.andy.desktop.service.emulator.readEmulatorGrpcToken
 import app.andy.model.DeviceConnectionState
+import app.andy.model.isWirelessAdbSerial
 import app.andy.service.CommandResult
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorBackend
@@ -60,8 +61,10 @@ private const val EMULATOR_DISPLAY_SIZE_SETTLE_NANOS = 60_000_000_000L
 private const val EMULATOR_DISPLAY_SIZE_REFRESH_MIN_NANOS = 1_000_000_000L
 private const val EMULATOR_BOOT_WAIT_NANOS = 120_000_000_000L
 private const val EMULATOR_BOOT_POLL_MILLIS = 500L
-private const val EMULATOR_MIRROR_MAX_ATTEMPTS = 4
-private const val EMULATOR_MIRROR_RETRY_DELAY_MILLIS = 2_000L
+private const val MIRROR_START_MAX_ATTEMPTS = 4
+private const val MIRROR_START_RETRY_DELAY_MILLIS = 2_000L
+private const val MIRROR_SOCKET_SETTLE_MILLIS = 1_500L
+private const val MIRROR_WIRELESS_SOCKET_SETTLE_MILLIS = 2_500L
 private const val NATIVE_HOST_WAIT_NANOS = 750_000_000L
 private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
 private const val SCRCPY_FRAME_HEADER_BYTES = 12
@@ -208,8 +211,9 @@ class DesktopMirrorEngine(
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
     override val status = MutableStateFlow("Ready for embedded mirror")
     private val encodedVideoFlow = MutableSharedFlow<EncodedVideoAccessUnit>(
-        // Small lag buffer only — DesktopBugService owns the 30s rolling window.
-        extraBufferCapacity = 8,
+        // Absorb brief collector stalls / wireless jitter. DesktopBugService owns the
+        // rolling window; capacity 8 (~130ms at 60fps) dropped AUs and truncated recordings.
+        extraBufferCapacity = 512,
         onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
     )
     override val encodedVideo: SharedFlow<EncodedVideoAccessUnit> = encodedVideoFlow
@@ -312,22 +316,34 @@ class DesktopMirrorEngine(
         status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
         videoJob = engineScope.launch {
             val emulator = serial.isEmulatorSerial()
+            val wireless = isWirelessAdbSerial(serial)
             if (emulator) {
                 awaitEmulatorReady(adb, serial)
             }
-            var attempt = 0
+            var coldStartAttempt = 0
             while (isActive && connectedSerial == serial) {
-                attempt++
                 val framesPresentedBefore = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
                 runNativeVideoLoop(adb, serial, scrcpyServer, config)
                 if (!isActive || connectedSerial != serial) break
                 val framesPresentedAfter = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
                 val presentedDuringLoop = framesPresentedAfter - framesPresentedBefore
-                // Black Live pane: scrcpy often exits before the first decoded frame on cold boot.
-                val shouldRetry = emulator && attempt < EMULATOR_MIRROR_MAX_ATTEMPTS && presentedDuringLoop <= 0L
-                if (!shouldRetry) break
-                status.value = "Emulator mirror not ready yet; retrying ($attempt/$EMULATOR_MIRROR_MAX_ATTEMPTS)…"
-                delay(EMULATOR_MIRROR_RETRY_DELAY_MILLIS)
+                if (presentedDuringLoop <= 0L) {
+                    coldStartAttempt++
+                    // Black Live pane: scrcpy often exits before the first decoded frame on cold
+                    // boot or flaky wireless ADB tunnels. Cap retries before giving up.
+                    if (coldStartAttempt >= MIRROR_START_MAX_ATTEMPTS) break
+                    val kind = when {
+                        emulator -> "Emulator"
+                        wireless -> "Wireless"
+                        else -> "Device"
+                    }
+                    status.value = "$kind mirror not ready yet; retrying ($coldStartAttempt/$MIRROR_START_MAX_ATTEMPTS)…"
+                } else {
+                    // Healthy stream that later ended or stalled — keep Live alive.
+                    coldStartAttempt = 0
+                    status.value = "Video stream interrupted; reconnecting…"
+                }
+                delay(MIRROR_START_RETRY_DELAY_MILLIS)
                 if (useNativeRenderer) {
                     rebindPresentationHost(config)
                 }
@@ -735,8 +751,11 @@ class DesktopMirrorEngine(
         // On physical devices the server may take longer than an emulator to initialize its
         // localabstract socket. ADB accepts the local TCP connection before that socket exists,
         // then immediately closes it; waiting here avoids treating that empty stream as a
-        // decoder failure.
-        delay(1_500)
+        // decoder failure. Wireless tunnels need a bit more slack.
+        delay(
+            if (isWirelessAdbSerial(serial)) MIRROR_WIRELESS_SOCKET_SETTLE_MILLIS
+            else MIRROR_SOCKET_SETTLE_MILLIS,
+        )
         var socket: Socket? = null
         var codecContext: AVCodecContext? = null
         var packet: AVPacket? = null

@@ -305,6 +305,12 @@ internal fun LiveDevicePane(
                                         modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
                                     )
                                 }
+                            } else {
+                                Text(
+                                    "Connect a device to display",
+                                    color = TextSecondary,
+                                    fontSize = 14.sp,
+                                )
                             }
                         }
 

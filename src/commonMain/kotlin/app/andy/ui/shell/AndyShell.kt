@@ -264,6 +264,8 @@ internal fun AndyShell(
                             requestedProjectId = requestedOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
                             compactToolCalls = state.workspaceState.compactToolCalls,
+                            serial = state.selectedSerial,
+                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                         )
                     }
                     RetainedDestination(active = agentsActive) {
@@ -353,6 +355,11 @@ internal fun AndyShell(
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
                             transfer = state.transfer,
+                            projects = state.actionsConfig.projects,
+                            running = runningActions,
+                            activeRunId = state.activeRunId,
+                            terminalRunId = state.terminalRunId,
+                            onActiveRunIdChange = { state.updateActiveRunId(it) },
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,

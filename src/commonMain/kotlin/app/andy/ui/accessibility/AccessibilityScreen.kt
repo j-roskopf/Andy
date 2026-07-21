@@ -48,6 +48,7 @@ import app.andy.model.AccessibilityNode
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
 import app.andy.ui.live.LiveDevicePane
+import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.components.DetailRow
@@ -140,7 +141,7 @@ internal fun AccessibilityScreen(
 
     LaunchedEffect(serial) {
         if (serial != null) {
-            val result = services.mirror.connect(serial)
+            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
     }
@@ -226,7 +227,7 @@ internal fun AccessibilityScreen(
                     onInput = sendMirrorInput,
                     onConnect = {
                         if (serial != null) scope.launch {
-                            val result = services.mirror.connect(serial)
+                            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
                             connectResult = if (result.isSuccess) result.stdout else result.stderr
                         }
                     },

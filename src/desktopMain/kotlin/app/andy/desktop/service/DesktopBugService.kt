@@ -100,8 +100,9 @@ class DesktopBugService(
                     }
                     if (isH264PictureAccessUnit(unit.bytes)) {
                         lastH264PictureAtMillis = now
-                        // Free any prior ARGB backup once the bitstream is healthy.
-                        if (frames.isNotEmpty()) frames.clear()
+                        // Keep ARGB samples while explicitly recording — wireless AU drops can
+                        // leave a playable but truncated H.264 remux; ARGB is the safety net.
+                        if (!recordingActive && frames.isNotEmpty()) frames.clear()
                     }
                     h264Units += TimestampedH264(now, unit.bytes.copyOf(), unit.width, unit.height)
                     trimLocked(now)
@@ -122,24 +123,18 @@ class DesktopBugService(
                 while (currentCoroutineContext().isActive) {
                     delay(ARGB_POLL_MILLIS)
                     val now = System.currentTimeMillis()
+                    if (recordingActive) {
+                        // Native VideoToolbox mirroring keeps H.264 healthy for live display while MP4
+                        // remux can still fail; sample decoded frames during explicit recordings.
+                        if (now - lastFrameSampledAtMillis >= RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS) {
+                            sampleArgbBackup(now, lastCpuFrame)
+                        }
+                        continue
+                    }
                     if (hasFreshH264(now)) continue
                     if (now - lastFrameSampledAtMillis < ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS) continue
                     // Remux can fail without a bitstream tap; keep a sparse, byte-capped ARGB backup.
-                    val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
-                        ?: NativeMirrorJni.copyLatestFrameArgb()
-                    if (sampled == null) continue
-                    synchronized(lock) {
-                        if (captureSerial == null) return@synchronized
-                        if (hasFreshH264Locked(now)) {
-                            if (frames.isNotEmpty()) frames.clear()
-                            return@synchronized
-                        }
-                        if (now - lastFrameSampledAtMillis < ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS) return@synchronized
-                        lastFrameSampledAtMillis = now
-                        frames += TimestampedFrame(now, sampled)
-                        trimLocked(now)
-                        publishStatusLocked("Recording last 30s for $serial")
-                    }
+                    sampleArgbBackup(now, lastCpuFrame)
                 }
             } finally {
                 cpuJob.cancel()
@@ -201,6 +196,32 @@ class DesktopBugService(
 
     override fun recordAction(kind: String, label: String, detail: String?) {
         appendAction(kind, label, detail)
+    }
+
+    private fun sampleArgbBackup(now: Long, lastCpuFrame: MirrorFrame?) {
+        val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
+            ?: NativeMirrorJni.copyLatestFrameArgb()
+            ?: return
+        synchronized(lock) {
+            if (captureSerial == null) return
+            if (!recordingActive && hasFreshH264Locked(now)) {
+                if (frames.isNotEmpty()) frames.clear()
+                return
+            }
+            val minInterval = if (recordingActive) {
+                RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS
+            } else {
+                ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS
+            }
+            if (now - lastFrameSampledAtMillis < minInterval) return
+            lastFrameSampledAtMillis = now
+            frames += TimestampedFrame(now, sampled)
+            trimLocked(now)
+            val serial = captureSerial ?: return
+            publishStatusLocked(
+                if (recordingActive) "Recording screen and inputs for $serial" else "Recording last 30s for $serial",
+            )
+        }
     }
 
     private fun appendAction(kind: String, label: String, detail: String? = null, timestampMillis: Long = System.currentTimeMillis()) {
@@ -459,16 +480,37 @@ class DesktopBugService(
     private fun encodeCaptureVideo(snapshot: BugSnapshot, captureFile: File): VideoEncodeMeta {
         if (snapshot.h264Units.isNotEmpty()) {
             val meta = remuxH264Mp4(snapshot.h264Units, snapshot.h264Config, captureFile)
-            if (isPlayableCapture(captureFile)) return meta
+            if (isPlayableCapture(captureFile) && !shouldPreferArgbBackup(snapshot, meta)) {
+                return meta
+            }
         }
         captureFile.delete()
         encodeArgbMp4(snapshot.frames, captureFile)
+        val spanMillis = snapshot.frames.let { frames ->
+            if (frames.size < 2) return@let null
+            frames.last().timestampMillis - frames.first().timestampMillis
+        }
+        val frameRate = if (spanMillis != null && spanMillis > 0L) {
+            (snapshot.frames.size * 1000.0 / spanMillis).coerceIn(2.0, 60.0)
+        } else {
+            ARGB_FALLBACK_FRAME_RATE
+        }
         return VideoEncodeMeta(
-            frameRate = ARGB_FALLBACK_FRAME_RATE,
+            frameRate = frameRate,
             startedAtMillis = snapshot.frames.firstOrNull()?.timestampMillis,
             endedAtMillis = snapshot.frames.lastOrNull()?.timestampMillis,
             timestampsMillis = snapshot.frames.map { it.timestampMillis },
         )
+    }
+
+    /** Prefer ARGB when the bitstream remux is playable but shorter than the sampled backup. */
+    private fun shouldPreferArgbBackup(snapshot: BugSnapshot, h264Meta: VideoEncodeMeta): Boolean {
+        if (snapshot.frames.size < 2) return false
+        val h264Span = ((h264Meta.endedAtMillis ?: 0L) - (h264Meta.startedAtMillis ?: 0L)).coerceAtLeast(0L)
+        val argbSpan = (
+            snapshot.frames.last().timestampMillis - snapshot.frames.first().timestampMillis
+            ).coerceAtLeast(0L)
+        return argbSpan > h264Span + 1_000L
     }
 
     private fun encodeArgbMp4(sourceFrames: List<TimestampedFrame>, file: File) {
@@ -484,10 +526,16 @@ class DesktopBugService(
         }
         val width = usable.first().frame.width
         val height = usable.first().frame.height
+        val spanMillis = (usable.last().timestampMillis - usable.first().timestampMillis).coerceAtLeast(1L)
+        val frameRate = if (usable.size >= 2) {
+            (usable.size * 1000.0 / spanMillis).coerceIn(2.0, 60.0)
+        } else {
+            ARGB_FALLBACK_FRAME_RATE
+        }
         val recorder = FFmpegFrameRecorder(file, width, height)
         val converter = Java2DFrameConverter()
         try {
-            configureSoftwareH264(recorder, ARGB_FALLBACK_FRAME_RATE, 4_000_000)
+            configureSoftwareH264(recorder, frameRate, 4_000_000)
             recorder.start()
             usable.forEach { sample ->
                 if (sample.frame.width != width || sample.frame.height != height) return@forEach
@@ -801,6 +849,8 @@ class DesktopBugService(
         private const val ARGB_POLL_MILLIS = 100L
         /** Sparse ARGB backup when the bitstream tap is missing (~2 fps). */
         private const val ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS = 500L
+        /** Full-rate ARGB backup while an explicit screen recording is active. */
+        private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 66L
         /** Hard cap so even ARGB-only soft decode cannot retain multi‑GB of pixels. */
         private const val ARGB_MAX_BYTES = 96L * 1024L * 1024L
         /** Treat picture AUs newer than this as a healthy bitstream (skip ARGB). */

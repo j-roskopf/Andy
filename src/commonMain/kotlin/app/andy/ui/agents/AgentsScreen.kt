@@ -88,22 +88,36 @@ private fun AgentCommandCenter(
     var composing by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
     var activeOnly by remember { mutableStateOf(false) }
+    var showArchived by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
+    val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     LaunchedEffect(active) { if (!active) { composing = true; pendingConfirmation = null } }
     LaunchedEffect(requestedTaskId, tasks) {
         requestedTaskId?.let { id -> tasks.firstOrNull { it.id == id && it.projectId == null }?.let { task -> selectedTaskId = task.id; composing = false; services.agentRuns.markRead(task.id) }; onRequestedTaskConsumed() }
     }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
-    val inbox = remember(tasks, query, activeOnly) {
+    val inbox = remember(tasks, query, activeOnly, showArchived) {
         tasks.filter { it.projectId == null }
+            .filter { task -> task.archived == showArchived }
             .filter { task -> !activeOnly || task.isActive }
             .filter { task -> query.isBlank() || task.title.contains(query, true) || task.prompt.contains(query, true) || task.agent.label.contains(query, true) }
             .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
     }
-    val selected = tasks.firstOrNull { it.id == selectedTaskId && it.projectId == null } ?: inbox.firstOrNull()
+    val selected = tasks.firstOrNull { it.id == selectedTaskId && it.projectId == null && it.archived == showArchived }
+        ?: inbox.firstOrNull()
     val activeTasks = inbox.filter { it.isActive }
+    // Open chats stay read — including when a live run finishes while you're watching.
+    // Gate on [active] so a retained Agents pane off-destination cannot clear unread.
+    LaunchedEffect(active, selected?.id, selected?.status, composing) {
+        if (!active) return@LaunchedEffect
+        val task = selected ?: return@LaunchedEffect
+        if (composing) return@LaunchedEffect
+        if (task.unread && !task.isActive) {
+            services.agentRuns.markRead(task.id)
+        }
+    }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
@@ -125,8 +139,9 @@ private fun AgentCommandCenter(
                 Text("Inbox", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
                 TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search tasks", color = TextSecondary, fontFamily = MonoFont) })
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterPill("All", !activeOnly, Cyan) { activeOnly = false }
-                    FilterPill("Live", activeOnly, Green) { activeOnly = true }
+                    FilterPill("All", !activeOnly && !showArchived, Cyan) { activeOnly = false; showArchived = false }
+                    FilterPill("Live", activeOnly, Green) { activeOnly = true; showArchived = false }
+                    FilterPill("Archived", showArchived, TextSecondary) { showArchived = true; activeOnly = false }
                 }
                 if (statuses.isNotEmpty()) {
                     AgentReadinessStrip(
@@ -134,8 +149,23 @@ private fun AgentCommandCenter(
                         totalCount = statuses.size,
                     )
                 }
-                if (inbox.isEmpty()) EmptyState(if (query.isBlank()) "No tasks yet" else "No matching tasks") else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
-                    items(inbox, key = { it.id }) { task -> AgentTaskCard(task, null, !composing && task.id == selected?.id, nowMillis, onClick = { selectedTaskId = task.id; composing = false; if (task.unread) services.agentRuns.markRead(task.id) }, onMarkUnread = { services.agentRuns.markUnread(task.id) }) }
+                if (inbox.isEmpty()) EmptyState(if (query.isBlank()) if (showArchived) "No archived tasks" else "No tasks yet" else "No matching tasks") else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
+                    items(inbox, key = { it.id }) { task ->
+                        AgentTaskCard(
+                            task,
+                            null,
+                            !composing && task.id == selected?.id,
+                            nowMillis,
+                            onClick = { selectedTaskId = task.id; composing = false; if (task.unread) services.agentRuns.markRead(task.id) },
+                            onMarkUnread = { services.agentRuns.markUnread(task.id) },
+                            onArchive = if (showArchived) {
+                                { services.agentRuns.unarchive(task.id) }
+                            } else {
+                                { services.agentRuns.archive(task.id); if (selectedTaskId == task.id) selectedTaskId = null }
+                            },
+                            archiveLabel = if (showArchived) "Unarchive" else "Archive",
+                        )
+                    }
                 }
             }
             PaneDivider(onDrag = {})
@@ -168,12 +198,14 @@ private fun AgentCommandCenter(
                                 onDelete = { task ->
                                     pendingConfirmation = PendingConfirmation("Delete task?", task.title) {
                                         scope.launch {
+                                            transcriptScrollMemory.remove(task.id)
                                             services.agentRuns.delete(task.id, task.worktreePath != null)
                                             selectedTaskId = null
                                         }
                                     }
                                 },
                                 compactToolCalls = compactToolCalls,
+                                transcriptScrollMemory = transcriptScrollMemory,
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -204,6 +236,8 @@ private fun AgentTaskCard(
     nowMillis: Long,
     onClick: () -> Unit,
     onMarkUnread: () -> Unit,
+    onArchive: () -> Unit,
+    archiveLabel: String = "Archive",
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val surfaceColor by animateColorAsState(
@@ -315,6 +349,14 @@ private fun AgentTaskCard(
                     onMarkUnread()
                 },
                 enabled = !task.unread,
+            )
+            DropdownMenuItem(
+                text = { Text(archiveLabel, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp) },
+                onClick = {
+                    menuExpanded = false
+                    onArchive()
+                },
+                enabled = archiveLabel == "Unarchive" || !task.isActive,
             )
         }
     }

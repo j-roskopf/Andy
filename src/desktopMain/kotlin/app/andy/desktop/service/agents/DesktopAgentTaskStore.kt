@@ -166,6 +166,7 @@ private data class AgentTaskDto(
     val contextTokens: Long = 0,
     val contextWindowTokens: Long = 0,
     val unread: Boolean = false,
+    val archived: Boolean = false,
     val ownsWorktree: Boolean = false,
     val workflowTaskId: String = "",
     val workflowStage: String = "",
@@ -471,6 +472,7 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         contextTokens = contextTokens.takeIf { it > 0 },
         contextWindowTokens = contextWindowTokens.takeIf { it > 0 },
         unread = unread,
+        archived = archived,
     )
 }
 
@@ -555,6 +557,7 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             contextTokens = task.contextTokens ?: 0,
             contextWindowTokens = task.contextWindowTokens ?: 0,
             unread = task.unread,
+            archived = task.archived,
         )
     },
     projectWorkflows = projectWorkflows.values.map { it.toDto() },

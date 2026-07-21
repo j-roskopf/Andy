@@ -5,6 +5,7 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
+import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentProviderQuota
@@ -1030,6 +1031,10 @@ class DesktopAgentRunService(
                 .redirectInput(nullInputFile())
                 .apply {
                     task.cwd?.let { directory(File(it)) }
+                    // IDE terminals and local LLM proxies inject env that breaks vendor CLIs
+                    // (Cursor NODE_OPTIONS bootloaders, ANTHROPIC_BASE_URL → Ollama, etc.).
+                    // Scrub those first; project env can intentionally put them back.
+                    scrubInheritedAgentEnvironment(environment())
                     environment().putAll(projectEnv)
                 }
                 .start()
@@ -1037,6 +1042,7 @@ class DesktopAgentRunService(
             finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to start: ${error.message}")
             return
         }
+        writeLaunchDiagnostics(taskId, binary, argv, projectEnv)
         handle.process = process
         if (handle.stopRequested) {
             killTree(process)
@@ -1189,15 +1195,36 @@ class DesktopAgentRunService(
             waitForUserInput(taskId, waitingForInput, exitCode)
             return
         }
+        val failureError = if (status == AgentTaskStatus.Failed) {
+            agentFailureMessage(
+                lastError = lastError,
+                authHint = authFailureHint(fallbackText, taskId),
+                result = result,
+                fallbackText = fallbackText,
+                exitCode = exitCode,
+            )
+        } else {
+            null
+        }
+        if (status == AgentTaskStatus.Failed) {
+            appendLaunchDiagnostics(
+                taskId,
+                buildString {
+                    appendLine("exitCode=$exitCode")
+                    appendLine("error=$failureError")
+                    appendLine("resultSuccess=${result?.success}")
+                    appendLine("resultText=${result?.finalText.orEmpty().take(2000)}")
+                    appendLine("fallbackText=${fallbackText.orEmpty().take(2000)}")
+                    appendLine("rawTail:")
+                    rawTail.forEach { appendLine(it.take(500)) }
+                },
+            )
+        }
         finishTask(
             taskId = taskId,
             status = status,
             exitCode = exitCode,
-            error = if (status == AgentTaskStatus.Failed) {
-                lastError ?: authFailureHint(fallbackText, taskId) ?: "exited with code $exitCode"
-            } else {
-                null
-            },
+            error = failureError,
         )
     }
 
@@ -2577,21 +2604,7 @@ class DesktopAgentRunService(
     private fun coalesceStreamDeltas(
         existing: List<AgentEvent>,
         incoming: List<AgentEvent>,
-    ): List<AgentEvent> = incoming.fold(existing) { transcript, event ->
-        val previous = transcript.lastOrNull()
-        val merged = when {
-            event is AgentEvent.AssistantText && event.isStreamDelta &&
-                previous is AgentEvent.AssistantText && previous.isStreamDelta -> {
-                previous.copy(atMillis = event.atMillis, text = previous.text + event.text)
-            }
-            event is AgentEvent.Thinking && event.isStreamDelta &&
-                previous is AgentEvent.Thinking && previous.isStreamDelta -> {
-                previous.copy(atMillis = event.atMillis, text = previous.text + event.text)
-            }
-            else -> null
-        }
-        if (merged == null) transcript + event else transcript.dropLast(1) + merged
-    }
+    ): List<AgentEvent> = coalesceAgentStreamDeltas(existing, incoming)
 
     private fun writeAndyTranscriptLine(
         taskId: String,
@@ -2641,6 +2654,20 @@ class DesktopAgentRunService(
         val task = currentTask(taskId) ?: return
         if (task.unread) return
         updateTask(taskId) { it.copy(unread = true) }
+        scope.launch { persist() }
+    }
+
+    override fun archive(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.archived || task.isActive) return
+        updateTask(taskId) { it.copy(archived = true, unread = false) }
+        scope.launch { persist() }
+    }
+
+    override fun unarchive(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.archived) return
+        updateTask(taskId) { it.copy(archived = false) }
         scope.launch { persist() }
     }
 
@@ -2699,6 +2726,36 @@ class DesktopAgentRunService(
     private fun nullInputFile(): File {
         val osName = System.getProperty("os.name")?.lowercase().orEmpty()
         return File(if (osName.contains("win")) "NUL" else "/dev/null")
+    }
+
+    private fun writeLaunchDiagnostics(
+        taskId: String,
+        binary: String,
+        argv: List<String>,
+        projectEnv: Map<String, String>,
+    ) {
+        runCatching {
+            val file = File(store.transcriptFile(taskId).parentFile, "launch.log")
+            file.parentFile?.mkdirs()
+            file.writeText(
+                buildString {
+                    appendLine("ts=${System.currentTimeMillis()}")
+                    appendLine("binary=$binary")
+                    appendLine("argv=${argv.joinToString(" ")}")
+                    appendLine("projectEnv=${projectEnv.keys.sorted()}")
+                    appendLine("inheritedAnthropicBaseUrl=${System.getenv("ANTHROPIC_BASE_URL").orEmpty()}")
+                    appendLine("inheritedNodeOptionsSet=${!System.getenv("NODE_OPTIONS").isNullOrBlank()}")
+                },
+            )
+        }
+    }
+
+    private fun appendLaunchDiagnostics(taskId: String, text: String) {
+        runCatching {
+            val file = File(store.transcriptFile(taskId).parentFile, "launch.log")
+            file.parentFile?.mkdirs()
+            file.appendText("\n$text")
+        }
     }
 
     /** Discovers each CLI's native roots plus explicitly supported compatibility roots. */
@@ -2786,3 +2843,36 @@ internal fun skillRootsFor(
 }
 
 private const val SKILL_SEPARATOR = "\u001F"
+
+/**
+ * Host shells (Cursor terminals, local LLM proxy setups) often export variables that
+ * vendor agent CLIs interpret as authoritative API config. Clear the known offenders
+ * before applying intentional per-project env.
+ */
+internal fun scrubInheritedAgentEnvironment(env: MutableMap<String, String>) {
+    listOf(
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "NODE_OPTIONS",
+        "VSCODE_INSPECTOR_OPTIONS",
+        "ELECTRON_RUN_AS_NODE",
+    ).forEach(env::remove)
+}
+
+internal fun agentFailureMessage(
+    lastError: String?,
+    authHint: String?,
+    result: AgentEvent.TaskResult?,
+    fallbackText: String?,
+    exitCode: Int,
+): String {
+    lastError?.takeIf { it.isNotBlank() }?.let { return it }
+    authHint?.takeIf { it.isNotBlank() }?.let { return it }
+    if (result?.success == false) {
+        result.finalText?.takeIf { it.isNotBlank() }?.let { return it.truncateForSummary(240) }
+    }
+    fallbackText?.takeIf { it.isNotBlank() }?.let { return it.truncateForSummary(240) }
+    return "exited with code $exitCode"
+}
+

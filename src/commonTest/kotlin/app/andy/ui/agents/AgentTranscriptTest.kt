@@ -1,6 +1,7 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.coalesceAgentStreamDeltas
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -72,5 +73,150 @@ class AgentTranscriptTest {
 
         assertEquals(2, items.size)
         assertTrue(items.all { it is TranscriptDisplayItem.Event })
+    }
+
+    @Test
+    fun bottomItemIndexAccountsForOptionalTranscriptRows() {
+        assertEquals(
+            4,
+            transcriptBottomItemIndex(
+                displayItemCount = 2,
+                hasHeader = true,
+                hasPending = false,
+                hasOriginalPrompt = true,
+                isActive = true,
+            ),
+        )
+        assertEquals(
+            1,
+            transcriptBottomItemIndex(
+                displayItemCount = 2,
+                hasHeader = false,
+                hasPending = false,
+                hasOriginalPrompt = false,
+                isActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun scrollAnchorTracksStreamingAssistantGrowth() {
+        val shortItems = transcriptDisplayItems(
+            listOf(AgentEvent.AssistantText(atMillis = 1, text = "Hel")),
+            compactToolCalls = true,
+        )
+        val longItems = transcriptDisplayItems(
+            listOf(AgentEvent.AssistantText(atMillis = 1, text = "Hello world")),
+            compactToolCalls = true,
+        )
+
+        val shortAnchor = transcriptScrollAnchor(shortItems, hasHeader = false, hasPending = false, hasOriginalPrompt = false, isActive = true)
+        val longAnchor = transcriptScrollAnchor(longItems, hasHeader = false, hasPending = false, hasOriginalPrompt = false, isActive = true)
+
+        assertTrue(shortAnchor != longAnchor)
+    }
+
+    @Test
+    fun scrollAnchorTracksCompletedContentMount() {
+        val items = transcriptDisplayItems(
+            listOf(AgentEvent.TaskResult(atMillis = 1, success = true, finalText = "Done.")),
+            compactToolCalls = true,
+        )
+        val before = transcriptScrollAnchor(
+            items,
+            hasHeader = false,
+            hasPending = false,
+            hasOriginalPrompt = false,
+            isActive = false,
+            completedContentKey = null,
+        )
+        val after = transcriptScrollAnchor(
+            items,
+            hasHeader = false,
+            hasPending = false,
+            hasOriginalPrompt = false,
+            isActive = false,
+            completedContentKey = 3,
+        )
+        assertTrue(before != after)
+    }
+
+    @Test
+    fun streamDeltaKeysStayStableWhileTextGrows() {
+        val short = AgentEvent.AssistantText(atMillis = 10, text = "Hel", isStreamDelta = true)
+        val long = short.copy(text = "Hello world")
+        val shortKey = transcriptEventKey(0, short)
+        val longKey = transcriptEventKey(0, long)
+        assertEquals(shortKey, longKey)
+    }
+
+    @Test
+    fun toolGroupKeyStaysStableAsToolsAccumulate() {
+        val first = listOf(
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Grep", summary = "a"),
+            AgentEvent.ToolResult(atMillis = 3, toolName = "Grep", summary = "ok", isError = false),
+        )
+        val grown = first + AgentEvent.ToolCall(atMillis = 4, toolName = "Read", summary = "b")
+        assertEquals(
+            transcriptDisplayItemKey(TranscriptDisplayItem.ToolCalls(1, first)),
+            transcriptDisplayItemKey(TranscriptDisplayItem.ToolCalls(1, grown)),
+        )
+    }
+
+    @Test
+    fun coalesceKeepsStreamStartTimestamp() {
+        val merged = coalesceAgentStreamDeltas(
+            existing = listOf(AgentEvent.AssistantText(atMillis = 10, text = "Hel", isStreamDelta = true)),
+            incoming = listOf(AgentEvent.AssistantText(atMillis = 11, text = "lo", isStreamDelta = true)),
+        )
+        val text = assertIs<AgentEvent.AssistantText>(merged.single())
+        assertEquals(10, text.atMillis)
+        assertEquals("Hello", text.text)
+    }
+
+    @Test
+    fun nearBottomRequiresLastItemBottomAlignedNotJustVisible() {
+        // Last item parked at the top of the viewport with empty space below — not pinned.
+        assertTrue(
+            !transcriptIsNearBottom(
+                transcriptBottomGapPx(
+                    lastItemIndex = 4,
+                    lastItemOffset = 0,
+                    lastItemSize = 40,
+                    totalItems = 5,
+                    viewportEndOffset = 800,
+                    canScrollForward = false,
+                    canScrollBackward = true,
+                ),
+            ),
+        )
+        // Tall last item scrolled so its bottom meets the viewport bottom.
+        assertTrue(
+            transcriptIsNearBottom(
+                transcriptBottomGapPx(
+                    lastItemIndex = 4,
+                    lastItemOffset = -1200,
+                    lastItemSize = 2000,
+                    totalItems = 5,
+                    viewportEndOffset = 800,
+                    canScrollForward = false,
+                    canScrollBackward = true,
+                ),
+            ),
+        )
+        // Short transcript that fits entirely.
+        assertTrue(
+            transcriptIsNearBottom(
+                transcriptBottomGapPx(
+                    lastItemIndex = 1,
+                    lastItemOffset = 100,
+                    lastItemSize = 40,
+                    totalItems = 2,
+                    viewportEndOffset = 800,
+                    canScrollForward = false,
+                    canScrollBackward = false,
+                ),
+            ),
+        )
     }
 }
