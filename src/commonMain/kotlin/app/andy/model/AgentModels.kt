@@ -93,6 +93,8 @@ fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
  * [AgentModelCatalog] exposes only the combinations documented for its CLI.
  */
 enum class AgentReasoningEffort(val label: String, val cliValue: String) {
+    None("none", "none"),
+    Minimal("minimal", "minimal"),
     Low("low", "low"),
     Medium("medium", "medium"),
     High("high", "high"),
@@ -101,23 +103,52 @@ enum class AgentReasoningEffort(val label: String, val cliValue: String) {
     Ultracode("ultracode", "ultracode"),
 }
 
+/** Claude Code aliases that accept the full effort dial Andy exposes. */
+private val ClaudeCodeEfforts = listOf(
+    AgentReasoningEffort.Low,
+    AgentReasoningEffort.Medium,
+    AgentReasoningEffort.High,
+    AgentReasoningEffort.ExtraHigh,
+    AgentReasoningEffort.Max,
+    AgentReasoningEffort.Ultracode,
+)
+
 data class AgentModelOption(
     /** Model identifier passed to the provider CLI, before any provider-specific variant syntax. */
     val id: String,
     val label: String,
     val efforts: List<AgentReasoningEffort>,
     val supportsFastMode: Boolean = false,
+    /** True when the provider CLI only advertises a `*-fast` slug for this base model. */
+    val fastRequired: Boolean = false,
+    /**
+     * Provider-specific effort suffix tokens when they differ from [AgentReasoningEffort.cliValue]
+     * (for example Cursor's `extra-high` vs Codex's `xhigh`).
+     */
+    val effortTokens: Map<AgentReasoningEffort, String> = emptyMap(),
 ) {
     /** Preferred effort when the CLI requires a suffix and the user left effort unset. */
     fun preferredEffort(): AgentReasoningEffort? =
         efforts.firstOrNull { it == AgentReasoningEffort.High } ?: efforts.firstOrNull()
+
+    fun effortToken(effort: AgentReasoningEffort): String =
+        effortTokens[effort] ?: effort.cliValue
 }
 
 /**
- * A small public catalog for the four CLIs, plus an exact custom-model escape hatch
- * in the composer. Account/workspace entitlements remain the source of truth.
+ * Offline fallback catalog for providers that cannot list models, plus a safety net when a
+ * probe fails. Live lists from [AgentRunService.providerModels] take precedence in the UI.
  */
 object AgentModelCatalog {
+    private var liveDiscovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()
+
+    /** Latest successful provider probes; used when composing CLI model ids. */
+    fun discovered(): Map<AgentKind, List<AgentModelOption>> = liveDiscovered
+
+    fun publishDiscovered(models: Map<AgentKind, List<AgentModelOption>>) {
+        liveDiscovered = models
+    }
+
     fun options(agent: AgentKind): List<AgentModelOption> = when (agent) {
         AgentKind.Codex -> listOf(
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh, AgentReasoningEffort.Max)),
@@ -126,10 +157,10 @@ object AgentModelCatalog {
             AgentModelOption("gpt-5.2-codex", "GPT-5.2-Codex", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh)),
         )
         AgentKind.ClaudeCode -> listOf(
-            AgentModelOption("opus", "Opus", AgentReasoningEffort.entries.toList()),
-            AgentModelOption("sonnet", "Sonnet", AgentReasoningEffort.entries.toList()),
+            AgentModelOption("opus", "Opus", ClaudeCodeEfforts),
+            AgentModelOption("sonnet", "Sonnet", ClaudeCodeEfforts),
             AgentModelOption("haiku", "Haiku", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
-            AgentModelOption("fable", "Fable", AgentReasoningEffort.entries.toList()),
+            AgentModelOption("fable", "Fable", ClaudeCodeEfforts),
         )
         AgentKind.Cursor -> listOf(
             AgentModelOption("auto", "Auto", emptyList()),
@@ -140,19 +171,31 @@ object AgentModelCatalog {
             AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
         AgentKind.Antigravity -> listOf(
-            AgentModelOption("Gemini 3.5 Flash", "Gemini 3.5 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
-            AgentModelOption("Gemini 3.1 Pro", "Gemini 3.1 Pro", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.High)),
-            AgentModelOption("Claude Sonnet 4.6", "Claude Sonnet 4.6", listOf(AgentReasoningEffort.High)),
-            AgentModelOption("Claude Opus 4.6", "Claude Opus 4.6", listOf(AgentReasoningEffort.High)),
-            AgentModelOption("GPT-OSS 120B", "GPT-OSS 120B", listOf(AgentReasoningEffort.Medium)),
+            AgentModelOption("gemini-3.6-flash", "Gemini 3.6 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("gemini-3.5-flash", "Gemini 3.5 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.High)),
+            AgentModelOption("claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
+            AgentModelOption("claude-opus-4-6-thinking", "Claude Opus 4.6", emptyList()),
+            AgentModelOption("gpt-oss-120b", "GPT-OSS 120B", listOf(AgentReasoningEffort.Medium)),
         )
     }
 
-    fun option(agent: AgentKind, id: String?): AgentModelOption? =
+    fun options(agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>>): List<AgentModelOption> =
+        discovered[agent]?.takeIf { it.isNotEmpty() } ?: options(agent)
+
+    fun option(agent: AgentKind, id: String?, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()): AgentModelOption? =
         id?.let { modelId ->
-            val normalized = if (agent == AgentKind.Cursor) cursorModelBaseId(modelId) else modelId
-            options(agent).firstOrNull { it.id == normalized }
+            val normalized = normalizeModelId(agent, modelId)
+            options(agent, discovered).firstOrNull { it.id == normalized }
+                ?: options(agent).firstOrNull { it.id == normalized }
         }
+}
+
+/** Normalize persisted catalog labels / full variants to the base model id Andy stores. */
+internal fun normalizeModelId(agent: AgentKind, selected: String): String = when (agent) {
+    AgentKind.Cursor -> cursorModelBaseId(selected)
+    AgentKind.Antigravity -> antigravityModelBaseId(selected)
+    else -> selected
 }
 
 /**
@@ -166,7 +209,18 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
     "GPT-5.6 Sol", "gpt-5.6-sol" -> "gpt-5.6-sol"
     "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
     "Grok 4.5", "cursor-grok-4.5" -> "cursor-grok-4.5"
-    else -> selected
+    else -> stripProviderModelVariant(selected).baseId
+}
+
+/** Map legacy Antigravity display names and full effort slugs to the base id Andy stores. */
+internal fun antigravityModelBaseId(selected: String): String = when (selected) {
+    "Gemini 3.6 Flash", "gemini-3.6-flash" -> "gemini-3.6-flash"
+    "Gemini 3.5 Flash", "gemini-3.5-flash" -> "gemini-3.5-flash"
+    "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
+    "Claude Sonnet 4.6", "claude-sonnet-4-6" -> "claude-sonnet-4-6"
+    "Claude Opus 4.6", "claude-opus-4-6", "claude-opus-4-6-thinking" -> "claude-opus-4-6-thinking"
+    "GPT-OSS 120B", "gpt-oss-120b" -> "gpt-oss-120b"
+    else -> stripProviderModelVariant(selected).baseId
 }
 
 enum class AgentTaskStatus {
@@ -527,23 +581,36 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
 )
 
 /** Provider-specific model string passed by the adapter. */
-fun AgentTask.modelForCli(): String? = model?.let { selected ->
+fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = AgentModelCatalog.discovered()): String? = model?.let { selected ->
     when (agent) {
         AgentKind.Cursor -> {
             val base = cursorModelBaseId(selected)
-            val catalog = AgentModelCatalog.option(AgentKind.Cursor, base)
+            val catalog = AgentModelCatalog.option(AgentKind.Cursor, base, discovered)
             buildString {
                 append(base)
                 // Cursor variants bake effort into the model id; bare bases like cursor-grok-4.5 are rejected.
                 val effort = reasoningEffort ?: catalog?.preferredEffort()
                 if (effort != null && catalog?.efforts?.isNotEmpty() == true) {
-                    append('-').append(effort.cliValue)
+                    append('-').append(catalog.effortToken(effort))
                 }
-                // Catalog options gate -fast; custom exact slugs stay unadorned.
-                if (fastMode && catalog?.supportsFastMode == true) append("-fast")
+                // Catalog options gate -fast; fast-only models always keep the suffix.
+                if (catalog?.supportsFastMode == true && (fastMode || catalog.fastRequired)) append("-fast")
             }
         }
-        AgentKind.Antigravity -> reasoningEffort?.let { "$selected (${it.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }})" } ?: selected
+        AgentKind.Antigravity -> {
+            val base = antigravityModelBaseId(selected)
+            val catalog = AgentModelCatalog.option(AgentKind.Antigravity, base, discovered)
+            val effort = reasoningEffort
+            when {
+                effort == null -> if (selected.any { it.isWhitespace() }) selected else base
+                // Legacy display-name tasks keep the "(High)" variant syntax.
+                selected.any { it.isWhitespace() } -> {
+                    val level = effort.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }
+                    "$selected ($level)"
+                }
+                else -> "$base-${catalog?.effortToken(effort) ?: effort.cliValue}"
+            }
+        }
         else -> selected
     }
 }

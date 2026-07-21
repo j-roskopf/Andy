@@ -303,7 +303,6 @@ internal fun AgentTaskDetail(
                     )
                 }
             },
-            completedContentKey = changeSummary?.files?.size,
             eventsReady = eventsReady,
             onSkillOpen = { skill -> scope.launch { services.agentRuns.openSkill(skill.path) } },
             restoreScrollKey = task.id,

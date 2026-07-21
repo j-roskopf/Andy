@@ -5,6 +5,8 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
+import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentModelOption
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentQueuedFollowUp
@@ -47,6 +49,8 @@ import app.andy.service.McpServerService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,6 +106,9 @@ class DesktopAgentRunService(
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses
 
+    private val _providerModels = MutableStateFlow<Map<AgentKind, List<AgentModelOption>>>(emptyMap())
+    override val providerModels: StateFlow<Map<AgentKind, List<AgentModelOption>>> = _providerModels
+
     private val _providerQuotas = MutableStateFlow<Map<AgentKind, AgentProviderQuota>>(emptyMap())
     override val providerQuotas: StateFlow<Map<AgentKind, AgentProviderQuota>> = _providerQuotas
 
@@ -131,6 +138,7 @@ class DesktopAgentRunService(
     private val mcpMutex = Mutex()
     private val quotaRefreshMutex = Mutex()
     private val quotaProbe = ProviderQuotaProbe()
+    private val modelProbe = ProviderModelProbe()
     private val ready = CompletableDeferred<Unit>()
     private var binaryOverrides: Map<String, String> = emptyMap()
     private lateinit var slots: Semaphore
@@ -1448,6 +1456,20 @@ class DesktopAgentRunService(
         ready.await()
         val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
         _cliStatuses.value = statuses
+        val models = withContext(Dispatchers.IO) {
+            statuses
+                .mapNotNull { status ->
+                    val binary = status.binaryPath?.takeIf { status.available } ?: return@mapNotNull null
+                    async { modelProbe.query(status.kind, binary)?.let { status.kind to it } }
+                }
+                .awaitAll()
+                .filterNotNull()
+                .toMap()
+        }
+        if (models.isNotEmpty()) {
+            _providerModels.update { current -> current + models }
+            AgentModelCatalog.publishDiscovered(_providerModels.value)
+        }
     }
 
     override suspend fun refreshProviderQuotas() {

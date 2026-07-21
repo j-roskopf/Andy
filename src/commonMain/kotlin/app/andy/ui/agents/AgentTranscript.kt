@@ -27,10 +27,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -38,12 +37,13 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -60,6 +60,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,6 +73,7 @@ import app.andy.loadImageBitmap
 import app.andy.model.AgentEvent
 import app.andy.model.AgentSkill
 import app.andy.ui.components.AndyMarkdownDensity
+import app.andy.ui.components.Button
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
@@ -85,23 +87,23 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
-import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private const val TRANSCRIPT_BOTTOM_THRESHOLD_PX = 32
 
 /** Explicit per-task scroll snapshot. */
 internal data class TranscriptScrollPosition(
     val index: Int,
     val offset: Int,
     val stickToBottom: Boolean,
+    /** Stable row identity keeps the same viewport when newer rows arrive while this chat is away. */
+    val anchorKey: String? = null,
 )
 
 private sealed class TranscriptRestorePlan {
     data object StickToBottom : TranscriptRestorePlan()
-    data class Exact(val index: Int, val offset: Int) : TranscriptRestorePlan()
+    data class Exact(val index: Int, val offset: Int, val anchorKey: String?) : TranscriptRestorePlan()
 }
 
 /**
@@ -121,22 +123,6 @@ internal class TranscriptScrollMemory {
     }
 }
 
-/** Suppresses stick-to-bottom updates while we programmatically scroll. */
-private class TranscriptScrollGate {
-    private var depth = 0
-    val isAutoScrolling: Boolean get() = depth > 0
-
-    suspend fun <T> run(block: suspend () -> T): T {
-        depth += 1
-        try {
-            return block()
-        } finally {
-            withFrameMillis { }
-            depth -= 1
-        }
-    }
-}
-
 @Composable
 internal fun AgentTranscript(
     events: List<AgentEvent>,
@@ -148,8 +134,6 @@ internal fun AgentTranscript(
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     completedContent: (@Composable () -> Unit)? = null,
-    /** Changes when trailing completed UI (e.g. change summary) mounts after first layout. */
-    completedContentKey: Any? = null,
     /**
      * False while a completed chat's transcript (and trailing UI) is still loading.
      * Prevents pinning to the prompt-only stub before history arrives.
@@ -160,76 +144,75 @@ internal fun AgentTranscript(
     scrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
     val displayItems = remember(events, compactToolCalls) { transcriptDisplayItems(events, compactToolCalls) }
     val originalPromptVisible = !originalPrompt.isNullOrBlank() || originalImagePaths.isNotEmpty()
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
     }
     val taskId = restoreScrollKey
-    // Freeze restore intent for this visit from memory at entry — never mutate this plan mid-load.
+    // Freeze restore intent for this visit. A bottom-origin list makes index 0 the live edge;
+    // streamed rows can then grow upward without any imperative per-token scrolling.
     val restorePlan = remember(taskId) {
         val saved = taskId?.let { scrollMemory?.get(it) }
         when {
             saved == null || saved.stickToBottom -> TranscriptRestorePlan.StickToBottom
-            else -> TranscriptRestorePlan.Exact(saved.index, saved.offset)
+            else -> TranscriptRestorePlan.Exact(saved.index, saved.offset, saved.anchorKey)
         }
     }
-    val listState = remember(taskId) {
-        when (val plan = restorePlan) {
-            is TranscriptRestorePlan.Exact -> LazyListState(plan.index, plan.offset)
-            TranscriptRestorePlan.StickToBottom -> LazyListState(0, 0)
-        }
-    }
+    // Always start at the live edge. Exact restoration happens only after async history is
+    // ready, so a prompt-only loading stub cannot clamp a saved index back to zero.
+    val listState = remember(taskId) { LazyListState(0, 0) }
     var stickToBottom by remember(taskId) {
         mutableStateOf(restorePlan is TranscriptRestorePlan.StickToBottom)
     }
     var scrollInitialized by remember(taskId) { mutableStateOf(false) }
-    val scrollGate = remember(taskId) { TranscriptScrollGate() }
     var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
-    // Bumped on real user scroll (mouse wheel / trackpad) — desktop often skips isScrollInProgress.
+    // Desktop wheel/trackpad input can complete without isScrollInProgress ever becoming true.
     var userScrollGeneration by remember(taskId) { mutableStateOf(0) }
-    val bottomItemIndex = remember(
-        displayItems.size,
-        headerContent != null,
-        pendingContent != null,
-        originalPromptVisible,
-        isActive,
-    ) {
-        transcriptBottomItemIndex(
-            displayItemCount = displayItems.size,
-            hasHeader = headerContent != null,
-            hasPending = pendingContent != null,
-            hasOriginalPrompt = originalPromptVisible,
-            isActive = isActive,
-        )
-    }
-    val scrollAnchor = remember(
+    val rowKeys = remember(
         displayItems,
-        headerContent != null,
-        pendingContent != null,
-        originalPromptVisible,
         isActive,
-        completedContentKey,
+        originalPromptVisible,
+        pendingContent != null,
+        headerContent != null,
     ) {
-        transcriptScrollAnchor(
-            displayItems = displayItems,
-            hasHeader = headerContent != null,
-            hasPending = pendingContent != null,
-            hasOriginalPrompt = originalPromptVisible,
-            isActive = isActive,
-            completedContentKey = completedContentKey,
-        )
+        buildList {
+            if (isActive) add("agent-thinking")
+            displayItems.asReversed().forEach { add(transcriptDisplayItemKey(it)) }
+            if (originalPromptVisible) add("original-prompt")
+            if (pendingContent != null) add("pending-task-input")
+            if (headerContent != null) add("task-header")
+        }
     }
-    val scrollInitializedState = rememberUpdatedState(scrollInitialized)
-    val stickToBottomState = rememberUpdatedState(stickToBottom)
-    // Observable content fingerprint so a single snapshotFlow can react to streamed text
-    // growth without a keyed LaunchedEffect restarting (and cancelling a mid-scroll) per token.
-    val scrollAnchorState = rememberUpdatedState(scrollAnchor)
-    val isActiveState = rememberUpdatedState(isActive)
 
-    // Only persist AFTER init — saving during the loading stub was overwriting mid-scroll
-    // positions with "stick=true at index 0" when the prompt alone fit the viewport.
+    LaunchedEffect(taskId, eventsReady, listState.layoutInfo.totalItemsCount, rowKeys) {
+        if (scrollInitialized || !eventsReady) return@LaunchedEffect
+        val itemCount = listState.layoutInfo.totalItemsCount
+        when (val plan = restorePlan) {
+            TranscriptRestorePlan.StickToBottom -> {
+                // Index zero is bottom in reverseLayout. No settling loop or post-layout nudge.
+                stickToBottom = true
+                scrollInitialized = true
+            }
+            is TranscriptRestorePlan.Exact -> {
+                if (itemCount == 0) return@LaunchedEffect
+                val anchoredIndex = plan.anchorKey
+                    ?.let(rowKeys::indexOf)
+                    ?.takeIf { it >= 0 }
+                listState.scrollToItem(
+                    index = (anchoredIndex ?: plan.index).coerceIn(0, itemCount - 1),
+                    scrollOffset = plan.offset,
+                )
+                stickToBottom = false
+                scrollInitialized = true
+            }
+        }
+    }
+
+    // Persist each conversation independently. Streaming does not touch these coordinates
+    // when detached because its changing rows live below the visible reverse-layout anchor.
     LaunchedEffect(taskId, listState, scrollInitialized) {
         if (!scrollInitialized) return@LaunchedEffect
         val id = taskId ?: return@LaunchedEffect
@@ -238,125 +221,76 @@ internal fun AgentTranscript(
             TranscriptScrollPosition(
                 index = listState.firstVisibleItemIndex,
                 offset = listState.firstVisibleItemScrollOffset,
-                stickToBottom = stickToBottomState.value,
+                stickToBottom = stickToBottom,
+                anchorKey = listState.firstVisibleAnchorKey(),
             )
         }.distinctUntilChanged().collect { memory.save(id, it) }
     }
-
-    LaunchedEffect(
-        taskId,
-        bottomItemIndex,
-        listState.layoutInfo.totalItemsCount,
-        eventsReady,
-        displayItems.size,
-        completedContentKey,
-    ) {
-        if (scrollInitialized || bottomItemIndex < 0) return@LaunchedEffect
-        if (!eventsReady) return@LaunchedEffect
-        val itemCount = listState.layoutInfo.totalItemsCount
-        if (itemCount == 0) return@LaunchedEffect
-        scrollGate.run {
-            when (val plan = restorePlan) {
-                TranscriptRestorePlan.StickToBottom -> {
-                    stickToBottom = true
-                    // Keep settling until truly pinned — change-summary can mount a frame late.
-                    repeat(24) {
-                        listState.scrollToEndAligned(settleFrames = 1)
-                        if (listState.isNearBottom(thresholdPx = 1) && !listState.canScrollForward) {
-                            withFrameMillis { }
-                            listState.scrollToEndAligned(settleFrames = 1)
-                            if (listState.isNearBottom(thresholdPx = 1) && !listState.canScrollForward) return@run
-                        }
-                        withFrameMillis { }
-                    }
-                }
-                is TranscriptRestorePlan.Exact -> {
-                    stickToBottom = false
-                    listState.scrollToItem(
-                        plan.index.coerceIn(0, itemCount - 1),
-                        plan.offset,
-                    )
-                }
+    DisposableEffect(taskId, listState, scrollInitialized, stickToBottom) {
+        onDispose {
+            if (scrollInitialized && taskId != null && scrollMemory != null) {
+                scrollMemory.save(
+                    taskId,
+                    TranscriptScrollPosition(
+                        index = listState.firstVisibleItemIndex,
+                        offset = listState.firstVisibleItemScrollOffset,
+                        stickToBottom = stickToBottom,
+                        anchorKey = listState.firstVisibleAnchorKey(),
+                    ),
+                )
             }
         }
-        scrollInitialized = true
     }
-    // Re-pin only on stick (re)engaging or the completed chat becoming ready — NOT per token.
-    LaunchedEffect(stickToBottom, scrollInitialized, eventsReady) {
-        if (!scrollInitialized || !stickToBottom || !eventsReady) return@LaunchedEffect
-        scrollGate.run { listState.scrollToEndAligned() }
-    }
-    // Non-active settle: images, change-summary, and restored history all mount/measure
-    // after the fact. React to those layout changes so a finished chat pins cleanly.
-    // While the agent is active, the per-frame follower below owns pinning instead.
-    LaunchedEffect(listState, taskId, scrollInitialized) {
+
+    // Detect non-pointer scrolling (keyboard, accessibility, scrollbar). Position changes do
+    // not drive auto-scroll; they only re-arm following once index zero is reached exactly.
+    LaunchedEffect(taskId, listState, scrollInitialized) {
         if (!scrollInitialized) return@LaunchedEffect
         snapshotFlow {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            scrollAnchorState.value to listOf(
-                listState.bottomGapPx(),
-                last?.index,
-                last?.size,
-                listState.canScrollForward,
-                listState.layoutInfo.totalItemsCount,
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress,
             )
-        }.distinctUntilChanged().collect {
-            if (isActiveState.value) return@collect
-            if (!stickToBottomState.value || scrollGate.isAutoScrolling) return@collect
-            if (!listState.isNearBottom(thresholdPx = 1)) {
-                scrollGate.run { listState.scrollToEndAligned() }
-            }
-        }
-    }
-    // Streaming follower: while the agent is active, re-check the bottom every frame and
-    // nudge back by the exact remaining delta. Per-frame coverage means we never drift more
-    // than one frame off the bottom; the exact-delta nudge (no scrollToItem jump, no second
-    // competing driver) means an already-pinned list does nothing, so there is no flicker.
-    LaunchedEffect(taskId, scrollInitialized, isActive) {
-        if (!scrollInitialized || !isActive) return@LaunchedEffect
-        while (true) {
-            withFrameMillis { }
-            if (!stickToBottomState.value || scrollGate.isAutoScrolling) continue
-            if (!listState.isNearBottom(thresholdPx = 1)) {
-                scrollGate.run { listState.scrollToEndAligned(settleFrames = 1) }
+        }.distinctUntilChanged().collect { (index, offset, inProgress) ->
+            if (transcriptIsAtBottom(index, offset)) {
+                stickToBottom = true
+            } else if (inProgress) {
+                stickToBottom = false
             }
         }
     }
     LaunchedEffect(userScrollGeneration, scrollInitialized) {
         if (!scrollInitialized || userScrollGeneration == 0) return@LaunchedEffect
-        // Let the wheel/trackpad scroll apply, then sync stick from the settled
-        // position. Detach immediately on Scroll (below) so streaming doesn't yank
-        // an upward gesture; this settle is what re-locks after scrolling back down.
-        // Without it, the near-bottom snapshotFlow often won't re-emit — nearBottom
-        // was already true when the last wheel tick cleared stickToBottom.
+        // Let wheel/trackpad input settle. A blocked downward tick at the live edge has no
+        // position change, so explicitly re-arm in that case.
         withFrameMillis { }
         withFrameMillis { }
-        if (!scrollGate.isAutoScrolling) {
-            stickToBottom = listState.isNearBottom()
+        if (transcriptIsAtBottom(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) {
+            stickToBottom = true
         }
     }
-    LaunchedEffect(listState, taskId, scrollInitialized) {
-        if (!scrollInitialized) return@LaunchedEffect
-        snapshotFlow { listState.isNearBottom() to listState.isScrollInProgress }
-            .distinctUntilChanged()
-            .collect { (nearBottom, inProgress) ->
-                if (scrollGate.isAutoScrolling || !scrollInitializedState.value) return@collect
-                if (nearBottom) stickToBottom = true
-                else if (inProgress) stickToBottom = false
-            }
+
+    fun jumpToLatest() {
+        stickToBottom = true
+        scope.launch { listState.scrollToItem(0) }
     }
+
     Box(
         modifier
-            .background(AndyColors.Neutral900.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R4))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4)),
+            .clip(RoundedCornerShape(AndyRadius.R4))
+            .background(AndyColors.Neutral900.copy(alpha = 0.38f))
+            .border(1.dp, Border.copy(alpha = 0.76f), RoundedCornerShape(AndyRadius.R4)),
     ) {
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
             EmptyState("waiting for agent output")
         } else {
             LazyColumn(
                 state = listState,
+                reverseLayout = true,
                 modifier = Modifier
                     .fillMaxSize()
+                    .testTag("transcript-list")
                     .graphicsLayer { alpha = if (scrollInitialized) 1f else 0f }
                     .padding(end = 8.dp)
                     .pointerInput(taskId) {
@@ -364,48 +298,39 @@ internal fun AgentTranscript(
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
                                 if (event.type == PointerEventType.Scroll) {
-                                    // Detach the instant the user scrolls so the per-frame
-                                    // follower doesn't yank an upward gesture during streaming.
-                                    // userScrollGeneration's settle effect re-locks once the
-                                    // wheel/trackpad stops near the bottom.
+                                    // Detach before the wheel delta is applied. New streaming
+                                    // content then grows below this viewport without moving it.
                                     stickToBottom = false
                                     userScrollGeneration++
                                 }
                             }
                         }
                     },
-                contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 0.dp),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (headerContent != null) {
-                    item(key = "task-header") { headerContent() }
+                // reverseLayout lays index zero at the visual bottom, so declare rows newest
+                // first while preserving the transcript's chronological reading order.
+                if (isActive) {
+                    item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
                 }
-                if (pendingContent != null) {
-                    item(key = "pending-task-input") { pendingContent() }
-                }
-                if (originalPromptVisible) {
-                    item(key = "original-prompt") {
-                        SelectionContainer {
-                            ChatMessageBubble(
-                                author = "you",
-                                authorColor = Rust,
-                                alignEnd = true,
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                        ChatMarkdown(prompt, lineHeight = 18.sp)
-                                    }
-                                    ChatAttachedImages(originalImagePaths)
-                                }
-                            }
+                items(
+                    count = displayItems.size,
+                    key = { reversedIndex ->
+                        transcriptDisplayItemKey(displayItems[displayItems.lastIndex - reversedIndex])
+                    },
+                    contentType = { reversedIndex ->
+                        when (displayItems[displayItems.lastIndex - reversedIndex]) {
+                            is TranscriptDisplayItem.Event -> "event"
+                            is TranscriptDisplayItem.ToolCalls -> "tool-group"
                         }
-                    }
-                }
-                itemsIndexed(
-                    items = displayItems,
-                    key = { _, item -> transcriptDisplayItemKey(item) },
-                ) { itemIndex, item ->
-                    SelectionContainer {
+                    },
+                ) { reversedIndex ->
+                    val itemIndex = displayItems.lastIndex - reversedIndex
+                    val item = displayItems[itemIndex]
+                    SelectionContainer(
+                        modifier = Modifier.testTag("transcript-row-${transcriptDisplayItemKey(item)}"),
+                    ) {
                         when (item) {
                             is TranscriptDisplayItem.Event -> TranscriptEvent(
                                 event = item.event,
@@ -434,120 +359,66 @@ internal fun AgentTranscript(
                         }
                     }
                 }
-                if (isActive) {
-                    item(key = "agent-thinking") { AgentThinkingIndicator() }
+                if (originalPromptVisible) {
+                    item(key = "original-prompt", contentType = "message") {
+                        SelectionContainer {
+                            ChatMessageBubble(
+                                author = "you",
+                                authorColor = Rust,
+                                alignEnd = true,
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                        ChatMarkdown(prompt, lineHeight = 18.sp)
+                                    }
+                                    ChatAttachedImages(originalImagePaths)
+                                }
+                            }
+                        }
+                    }
+                }
+                if (pendingContent != null) {
+                    item(key = "pending-task-input", contentType = "request") { pendingContent() }
+                }
+                if (headerContent != null) {
+                    item(key = "task-header", contentType = "header") { headerContent() }
                 }
             }
             DraggableScrollbar(
                 listState = listState,
+                reverseLayout = true,
+                onScroll = { stickToBottom = false },
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
             )
+            AnimatedVisibility(
+                visible = scrollInitialized && !stickToBottom,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+            ) {
+                Button(
+                    onClick = ::jumpToLatest,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
+                    shape = RoundedCornerShape(AndyRadius.Pill),
+                ) {
+                    Text(
+                        if (isActive) "↓  follow live" else "↓  latest",
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
         }
     }
 }
 
-internal fun transcriptBottomItemIndex(
-    displayItemCount: Int,
-    hasHeader: Boolean,
-    hasPending: Boolean,
-    hasOriginalPrompt: Boolean,
-    isActive: Boolean,
-): Int {
-    var index = -1
-    if (hasHeader) index++
-    if (hasPending) index++
-    if (hasOriginalPrompt) index++
-    index += displayItemCount
-    if (isActive) index++
-    return index
-}
+/** Bottom is an invariant instead of a layout estimate in the reverse transcript. */
+internal fun transcriptIsAtBottom(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int): Boolean =
+    firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset <= 1
 
-internal fun transcriptBottomGapPx(
-    lastItemIndex: Int,
-    lastItemOffset: Int,
-    lastItemSize: Int,
-    totalItems: Int,
-    viewportEndOffset: Int,
-    canScrollForward: Boolean,
-    canScrollBackward: Boolean,
-): Int? {
-    if (totalItems <= 0) return 0
-    if (!canScrollForward && !canScrollBackward) return 0
-    if (lastItemIndex < totalItems - 1) return null
-    return (lastItemOffset + lastItemSize) - viewportEndOffset
-}
-
-internal fun transcriptIsNearBottom(
-    gapPx: Int?,
-    thresholdPx: Int = TRANSCRIPT_BOTTOM_THRESHOLD_PX,
-): Boolean = gapPx != null && abs(gapPx) <= thresholdPx
-
-private fun LazyListState.isNearBottom(
-    thresholdPx: Int = TRANSCRIPT_BOTTOM_THRESHOLD_PX,
-): Boolean = transcriptIsNearBottom(gapPx = bottomGapPx(), thresholdPx = thresholdPx)
-
-private fun LazyListState.bottomGapPx(): Int? {
-    val layout = layoutInfo
-    val lastVisible = layout.visibleItemsInfo.lastOrNull()
-    return transcriptBottomGapPx(
-        lastItemIndex = lastVisible?.index ?: -1,
-        lastItemOffset = lastVisible?.offset ?: 0,
-        lastItemSize = lastVisible?.size ?: 0,
-        totalItems = layout.totalItemsCount,
-        viewportEndOffset = layout.viewportEndOffset - layout.afterContentPadding,
-        canScrollForward = canScrollForward,
-        canScrollBackward = canScrollBackward,
-    )
-}
-
-/**
- * Scroll so the bottom of the last item sits on the bottom of the viewport.
- * Prefer [scrollBy] when the last item is already visible — [scrollToItem] alone
- * parks it at the *top* and causes a visible flash during streaming.
- */
-private suspend fun LazyListState.scrollToEndAligned(settleFrames: Int = 4) {
-    // Markdown/images/change-summary often measure across multiple frames after content arrives.
-    var stable = 0
-    var previousGap: Int? = null
-    repeat(settleFrames.coerceAtLeast(1)) { attempt ->
-        alignLastItemToBottom()
-        val gap = bottomGapPx()
-        if (gap != null && abs(gap) <= 1 && !canScrollForward) {
-            if (gap == previousGap) stable++ else stable = 1
-            previousGap = gap
-            if (stable >= 2) return
-        } else {
-            stable = 0
-            previousGap = gap
-        }
-        if (attempt < settleFrames - 1) withFrameMillis { }
-    }
-}
-
-private suspend fun LazyListState.alignLastItemToBottom() {
-    val lastIndex = layoutInfo.totalItemsCount - 1
-    if (lastIndex < 0) return
-
-    var lastItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastIndex }
-    if (lastItem == null) {
-        // Jump near the end in one shot, then fine-tune with scrollBy so we never
-        // paint a frame with the last item parked at the top of the viewport.
-        scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE / 4)
-        lastItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastIndex } ?: return
-        val viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
-        val jumpDelta = (lastItem.offset + lastItem.size) - viewportEnd
-        if (abs(jumpDelta) > 1) {
-            scroll { scrollBy(jumpDelta.toFloat()) }
-        }
-        return
-    }
-
-    val viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
-    val delta = (lastItem.offset + lastItem.size) - viewportEnd
-    if (abs(delta) > 1) {
-        scroll { scrollBy(delta.toFloat()) }
-    }
-}
+private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleItemsInfo
+    .firstOrNull { it.index == firstVisibleItemIndex }
+    ?.key
+    ?.toString()
 
 /**
  * Providers commonly emit the final response once as an assistant message and
@@ -594,38 +465,6 @@ internal fun transcriptDisplayItems(
         }
     }
     return items
-}
-
-/**
- * Fingerprint for transcript auto-scroll. Streamed assistant/thinking text grows in place,
- * so the anchor tracks content length rather than relying on [ScrollState.maxValue] keys.
- */
-internal fun transcriptScrollAnchor(
-    displayItems: List<TranscriptDisplayItem>,
-    hasHeader: Boolean,
-    hasPending: Boolean,
-    hasOriginalPrompt: Boolean,
-    isActive: Boolean,
-    completedContentKey: Any? = null,
-): List<Any?> {
-    val lastMarker = when (val last = displayItems.lastOrNull()) {
-        is TranscriptDisplayItem.Event -> when (val event = last.event) {
-            is AgentEvent.AssistantText -> listOf("assistant", event.text.length, event.text.takeLast(96))
-            is AgentEvent.Thinking -> listOf("thinking", event.text.length, event.text.takeLast(96))
-            else -> listOf(transcriptEventKey(last.index, last.event))
-        }
-        is TranscriptDisplayItem.ToolCalls -> listOf(transcriptDisplayItemKey(last), last.events.size)
-        null -> listOf("empty")
-    }
-    return listOf(
-        displayItems.size,
-        lastMarker,
-        hasHeader,
-        hasPending,
-        hasOriginalPrompt,
-        isActive,
-        completedContentKey,
-    )
 }
 
 private fun AgentEvent.isToolTranscriptEvent(): Boolean =

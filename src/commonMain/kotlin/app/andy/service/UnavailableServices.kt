@@ -239,6 +239,7 @@ object UnavailableActionRunService : ActionRunService {
 object UnavailableAgentRunService : AgentRunService {
     override val tasks = MutableStateFlow(emptyList<AgentTask>())
     override val cliStatuses = MutableStateFlow(emptyList<AgentCliStatus>())
+    override val providerModels = MutableStateFlow(emptyMap<AgentKind, List<AgentModelOption>>())
     override val providerQuotas = MutableStateFlow(emptyMap<AgentKind, AgentProviderQuota>())
     override val quotaAccess = MutableStateFlow(AgentQuotaAccess())
     override val providerDefaults = MutableStateFlow(emptyMap<AgentKind, AgentProviderDefaults>())

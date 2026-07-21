@@ -77,6 +77,7 @@ internal fun lazyScrollbarMetrics(
     measuredItemSizes: Map<Int, Int>,
     viewportSize: Int,
     itemSpacing: Int,
+    reverseLayout: Boolean = false,
 ): LazyScrollbarMetrics {
     if (totalItems <= 0 || viewportSize <= 0) return LazyScrollbarMetrics(0, 0, 0)
 
@@ -103,9 +104,10 @@ internal fun lazyScrollbarMetrics(
     val measuredBeforeDiff = measuredItemSizes.entries
         .filter { it.key in 0 until currentIndex }
         .sumOf { (_, size) -> (size.coerceAtLeast(1) - averageItemSize).toLong() }
-    val scrollOffset = (baseBefore + measuredBeforeDiff + firstVisibleItemScrollOffset)
+    val distanceFromStart = (baseBefore + measuredBeforeDiff + firstVisibleItemScrollOffset)
         .coerceIn(0, maxScrollOffset.toLong())
         .toInt()
+    val scrollOffset = if (reverseLayout) maxScrollOffset - distanceFromStart else distanceFromStart
     return LazyScrollbarMetrics(contentSize, scrollOffset, maxScrollOffset)
 }
 
@@ -116,6 +118,7 @@ internal fun lazyScrollbarTarget(
     measuredItemSizes: Map<Int, Int>,
     viewportSize: Int,
     itemSpacing: Int,
+    reverseLayout: Boolean = false,
 ): LazyScrollbarTarget {
     val metrics = lazyScrollbarMetrics(
         totalItems = totalItems,
@@ -124,6 +127,7 @@ internal fun lazyScrollbarTarget(
         measuredItemSizes = measuredItemSizes,
         viewportSize = viewportSize,
         itemSpacing = itemSpacing,
+        reverseLayout = reverseLayout,
     )
     if (totalItems <= 0) return LazyScrollbarTarget(0, 0)
 
@@ -137,7 +141,8 @@ internal fun lazyScrollbarTarget(
     val spacing = itemSpacing.coerceAtLeast(0)
     val step = (averageItemSize + spacing).coerceAtLeast(1)
 
-    var remaining = scrollOffset.coerceIn(0, metrics.maxScrollOffset).toLong()
+    val clampedOffset = scrollOffset.coerceIn(0, metrics.maxScrollOffset)
+    var remaining = (if (reverseLayout) metrics.maxScrollOffset - clampedOffset else clampedOffset).toLong()
     val measured = measuredItemSizes.entries
         .filter { it.key in 0 until totalItems }
         .sortedBy { it.key }
@@ -305,6 +310,8 @@ internal fun DraggableScrollbar(
 internal fun DraggableScrollbar(
     listState: LazyListState,
     modifier: Modifier = Modifier,
+    reverseLayout: Boolean = false,
+    onScroll: () -> Unit = {},
 ) {
     val layoutInfo = listState.layoutInfo
     val measuredItemSizes = remember(listState) { mutableStateMapOf<Int, Int>() }
@@ -327,6 +334,7 @@ internal fun DraggableScrollbar(
         measuredItemSizes = knownItemSizes,
         viewportSize = viewportSize,
         itemSpacing = layoutInfo.mainAxisItemSpacing,
+        reverseLayout = reverseLayout,
     )
     if (!metrics.canScroll) return
 
@@ -351,7 +359,9 @@ internal fun DraggableScrollbar(
             measuredItemSizes = currentItemSizes,
             viewportSize = currentViewportSize,
             itemSpacing = currentItemSpacing,
+            reverseLayout = reverseLayout,
         )
+        onScroll()
         scope.launch { listState.scrollToItem(target.itemIndex, target.itemScrollOffset) }
     }
 
@@ -361,13 +371,13 @@ internal fun DraggableScrollbar(
             .width(14.dp)
             .semantics { contentDescription = "Scrollbar" }
             .pointerHoverIcon(PointerIcon.Hand)
-            .pointerInput(listState) {
+            .pointerInput(listState, reverseLayout) {
                 detectTapGestures { offset ->
                     val thumb = scrollbarThumb(size.height.toFloat(), minThumbHeight, currentMetrics)
                     currentScrollToThumb((offset.y - thumb.height / 2f), size.height.toFloat())
                 }
             }
-            .pointerInput(listState) {
+            .pointerInput(listState, reverseLayout) {
                 detectDragGestures(
                     onDragStart = { offset ->
                         dragging = true

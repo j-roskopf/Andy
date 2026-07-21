@@ -245,6 +245,11 @@ private fun DeviceFilesBrowser(
         if (transfer.status.isNotBlank()) message = transfer.status
     }
 
+    if (serial == null) {
+        InspectorEmptyState("Select an online device to browse files.")
+        return
+    }
+
     Column(
         Modifier
             .fillMaxSize()

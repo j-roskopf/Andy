@@ -17,7 +17,9 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentModelOption
 import app.andy.model.ProjectAgentProfile
+import app.andy.model.groupedByModelFamily
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.theme.Cyan
@@ -31,6 +33,7 @@ internal fun AgentProviderModelProfileControls(
     profile: ProjectAgentProfile,
     onChange: (ProjectAgentProfile) -> Unit,
     cliStatuses: List<AgentCliStatus>,
+    providerModels: Map<AgentKind, List<AgentModelOption>> = emptyMap(),
     providerSelectionActive: Boolean = true,
     showProviderControls: Boolean = true,
     showModelControls: Boolean = true,
@@ -41,8 +44,10 @@ internal fun AgentProviderModelProfileControls(
     wrapOptions: Boolean = false,
     showModelLabel: Boolean = true,
 ) {
-    val selectedModel = AgentModelCatalog.option(profile.agent, profile.model)
+    val modelOptions = AgentModelCatalog.options(profile.agent, providerModels)
+    val selectedModel = AgentModelCatalog.option(profile.agent, profile.model, providerModels)
     val customModel = profile.model != null && selectedModel == null
+    val groupedModels = if (profile.agent == AgentKind.Cursor) modelOptions.groupedByModelFamily() else null
 
     if (showProviderControls) {
         Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
@@ -88,17 +93,46 @@ internal fun AgentProviderModelProfileControls(
     if (showModelLabel) {
         Text("Model", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
     }
-    ProfileOptionRow(wrapOptions) {
-        FilterPill("provider default", profile.model == null, Cyan) {
-            onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
-        }
-        AgentModelCatalog.options(profile.agent).forEach { option ->
-            FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
-                onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = false))
+    if (groupedModels != null) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ProfileOptionRow(wrapOptions) {
+                FilterPill("provider default", profile.model == null, Cyan) {
+                    onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+                }
+                FilterPill("custom", customModel, Rust) {
+                    onChange(profile.copy(model = profile.model.takeIf { customModel }.orEmpty(), reasoningEffort = null, fastMode = false))
+                }
+            }
+            groupedModels.forEach { (family, options) ->
+                Text(
+                    family.label.uppercase(),
+                    color = TextSecondary.copy(alpha = 0.75f),
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 9.sp,
+                )
+                ProfileOptionRow(wrapOptions) {
+                    options.forEach { option ->
+                        FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
+                            onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = option.fastRequired))
+                        }
+                    }
+                }
             }
         }
-        FilterPill("custom", customModel, Rust) {
-            onChange(profile.copy(model = profile.model.takeIf { customModel }.orEmpty(), reasoningEffort = null, fastMode = false))
+    } else {
+        ProfileOptionRow(wrapOptions) {
+            FilterPill("provider default", profile.model == null, Cyan) {
+                onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+            }
+            modelOptions.forEach { option ->
+                FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
+                    onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = option.fastRequired))
+                }
+            }
+            FilterPill("custom", customModel, Rust) {
+                onChange(profile.copy(model = profile.model.takeIf { customModel }.orEmpty(), reasoningEffort = null, fastMode = false))
+            }
         }
     }
     if (customModel) {
@@ -133,7 +167,7 @@ internal fun AgentProviderModelProfileControls(
                 }
             }
         }
-        if (selectedModel.supportsFastMode) {
+        if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
             FilterPill("fast", profile.fastMode, app.andy.ui.theme.Green) {
                 onChange(profile.copy(fastMode = !profile.fastMode))
             }
@@ -142,7 +176,7 @@ internal fun AgentProviderModelProfileControls(
             Text(
                 when (profile.agent) {
                     AgentKind.Cursor -> "Cursor receives the selected provider variant. Availability follows your Cursor account."
-                    AgentKind.Antigravity -> "Antigravity receives its model plus level as one variant; its installed CLI/account remains authoritative."
+                    AgentKind.Antigravity -> "Antigravity receives its model slug plus effort as one variant from the live CLI model list."
                     else -> "The selected model and reasoning level are passed directly to the ${profile.agent.label} CLI."
                 },
                 color = TextSecondary,

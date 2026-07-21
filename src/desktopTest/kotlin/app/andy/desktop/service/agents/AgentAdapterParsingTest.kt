@@ -371,9 +371,13 @@ class AntigravityAdapterTest {
 
     @Test
     fun selectedModelAndLevelBecomeAntigravityVariant() {
-        val configured = task(AgentKind.Antigravity).copy(model = "Gemini 3.5 Flash", reasoningEffort = AgentReasoningEffort.High)
-        val argv = adapter.buildCommand("/bin/agy", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "Gemini 3.5 Flash (High)" in argv)
+        val legacy = task(AgentKind.Antigravity).copy(model = "Gemini 3.5 Flash", reasoningEffort = AgentReasoningEffort.High)
+        val legacyArgv = adapter.buildCommand("/bin/agy", legacy, mcpUrl = null)
+        assertTrue("--model" in legacyArgv && "Gemini 3.5 Flash (High)" in legacyArgv)
+
+        val slug = task(AgentKind.Antigravity).copy(model = "gemini-3.6-flash", reasoningEffort = AgentReasoningEffort.High)
+        val slugArgv = adapter.buildCommand("/bin/agy", slug, mcpUrl = null)
+        assertTrue("--model" in slugArgv && "gemini-3.6-flash-high" in slugArgv)
     }
 
     @Test

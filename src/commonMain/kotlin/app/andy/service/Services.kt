@@ -277,6 +277,11 @@ interface ActionRunService {
 interface AgentRunService {
     val tasks: StateFlow<List<AgentTask>>
     val cliStatuses: StateFlow<List<AgentCliStatus>>
+    /**
+     * Models reported by installed provider CLIs (`agy models`, `cursor-agent models`, …).
+     * Missing providers fall back to [app.andy.model.AgentModelCatalog] in the UI.
+     */
+    val providerModels: StateFlow<Map<AgentKind, List<AgentModelOption>>>
     /** Most recent provider-reported account limits, keyed by provider. */
     val providerQuotas: StateFlow<Map<AgentKind, AgentProviderQuota>>
     /** Explicit consent for provider-local account sources; disabled by default. */
