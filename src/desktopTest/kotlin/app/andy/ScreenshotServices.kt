@@ -2,6 +2,7 @@ package app.andy
 
 import app.andy.model.*
 import app.andy.service.*
+import app.andy.ui.screenshots.AndyScreenshotScenario
 import app.andy.ui.screenshots.ScreenshotFixture
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,14 +16,31 @@ import kotlinx.coroutines.flow.flowOf
 internal object ScreenshotServices {
     private const val serial = ScreenshotFixture.serial
     private const val now = ScreenshotFixture.nowMillis
+    private const val gardenPackage = "com.example.garden"
 
-    fun create(): AndyServices {
+    fun create(scenario: AndyScreenshotScenario? = null): AndyServices {
         val workspace = ScreenshotWorkspaceStore(
             WorkspaceState(
                 selectedSdkPath = "/Android/sdk",
                 selectedDeviceSerial = serial,
                 projectsIntroductionCompleted = true,
-                selectedPackage = "com.example.garden",
+                selectedPackage = gardenPackage,
+                filesTab = when (scenario) {
+                    AndyScreenshotScenario.SharedPreferences -> FilesTab.SharedPreferences.name
+                    AndyScreenshotScenario.AppDatabase -> FilesTab.Database.name
+                    else -> FilesTab.Files.name
+                },
+                // Prefer workspace tab over AndyDestination.Tracing so navigateTo cannot
+                // race initialize() and persist a default WorkspaceState.
+                performanceTab = when (scenario) {
+                    AndyScreenshotScenario.TracingPerfetto -> PerformanceTab.Tracing.name
+                    else -> PerformanceTab.Metrics.name
+                },
+                // Leave room above the library so the seeded user config row is visible.
+                tracingLibraryPaneHeight = when (scenario) {
+                    AndyScreenshotScenario.TracingPerfetto -> 160f
+                    else -> 240f
+                },
                 proxyPort = 9099,
                 proxyRules = listOf(
                     ProxyRule("mock-profile", "Mock profile", true, "*/profile*", "GET", 200, responseBody = "{\"name\":\"Ada\"}"),
@@ -47,6 +65,10 @@ internal object ScreenshotServices {
             accessibility = ScreenshotAccessibility,
             bugs = ScreenshotBugs,
             artifacts = ScreenshotArtifacts,
+            tracing = ScreenshotTracing,
+            traceViewer = ScreenshotTraceViewer,
+            sharedPrefs = ScreenshotSharedPrefs,
+            appDatabase = ScreenshotAppDatabase,
             workspaceStore = workspace,
             updates = ScreenshotUpdates,
             mcp = ScreenshotMcp,
@@ -199,6 +221,144 @@ internal object ScreenshotServices {
 
     private object ScreenshotMetrics : MetricsService {
         override fun stream(serial: String, packageName: String?) = flowOf(PerformanceSample(now, 31f, 412f, 58.7f, 87, "Normal", 128f, 44f, listOf(ProcessMetric("4021", "com.example.garden", 28f, 312f), ProcessMetric("901", "surfaceflinger", 6f, 98f)), listOf(FrameRenderMetric("draw", 8.4f), FrameRenderMetric("layout", 14.7f), FrameRenderMetric("jank", 23.1f, 16.7f))))
+    }
+
+    private object ScreenshotTracing : TracingService {
+        private val recording = TraceRecording(
+            id = "andy-20250101-120000",
+            name = "checkout-jank",
+            serial = serial,
+            deviceLabel = "Pixel 8 API 36",
+            presetId = "default",
+            recordedAtMillis = now - 45_000,
+            durationMs = 10_000,
+            sizeBytes = 2_400_000,
+            localPath = "/workspace/.andy/traces/checkout-jank.perfetto-trace",
+        )
+        override val status = MutableStateFlow(TraceRecordingStatus(phase = TracePhase.Idle, message = "API 36 · traced running"))
+        override val recordings = MutableStateFlow(listOf(recording))
+        override suspend fun checkSupport(serial: String) = CommandResult.success("API 36 · traced running")
+        override suspend fun start(serial: String, configTextProto: String, name: String, presetId: String?) = CommandResult.success()
+        override suspend fun stop() = CommandResult.success()
+        override suspend fun refreshRecordings() = Unit
+        override suspend fun deleteRecording(id: String) = true
+        override suspend fun revealRecording(id: String) = CommandResult.success()
+        override suspend fun importConfig(sourcePath: String) = CommandResult.success()
+        override suspend fun listUserConfigs() = listOf(
+            TraceUserConfig("user-checkout", "checkout-focus", "/workspace/.andy/trace-configs/checkout-focus.textproto"),
+        )
+        override suspend fun loadUserConfig(id: String) = "# custom checkout focus\nduration_ms: 10000\n"
+        override suspend fun saveUserConfig(name: String, content: String) = CommandResult.success()
+        override suspend fun deleteUserConfig(id: String) = true
+        override suspend fun retryPull() = CommandResult.success()
+    }
+
+    private object ScreenshotTraceViewer : TraceViewerService {
+        override suspend fun openExternally(traceId: String) = CommandResult.success()
+        override fun shutdown() = Unit
+    }
+
+    private object ScreenshotSharedPrefs : SharedPrefsService {
+        private val files = listOf("garden_prefs.xml", "com.example.garden_preferences.xml")
+        private val entries = mapOf(
+            "garden_prefs.xml" to listOf(
+                PrefEntry("onboarding_complete", PrefType.Boolean, "true"),
+                PrefEntry("plant_count", PrefType.Int, "24"),
+                PrefEntry("display_name", PrefType.String, "Ada"),
+                PrefEntry("last_sync_ms", PrefType.Long, now.toString()),
+                PrefEntry("favorite_tags", PrefType.StringSet, "indoor,tropical"),
+            ),
+            "com.example.garden_preferences.xml" to listOf(
+                PrefEntry("dark_mode", PrefType.Boolean, "false"),
+                PrefEntry("grid_density", PrefType.Float, "1.25"),
+            ),
+        )
+        override suspend fun listFiles(serial: String, packageName: String) = Result.success(files)
+        override suspend fun read(serial: String, packageName: String, fileName: String) =
+            Result.success(entries[fileName].orEmpty())
+        override suspend fun upsert(serial: String, packageName: String, fileName: String, entry: PrefEntry) =
+            CommandResult.success()
+        override suspend fun delete(serial: String, packageName: String, fileName: String, key: String) =
+            CommandResult.success()
+    }
+
+    private object ScreenshotAppDatabase : AppDatabaseService {
+        private val database = AppDatabaseInfo(
+            name = "garden.db",
+            path = "databases/garden.db",
+            hasWal = true,
+            hasShm = true,
+        )
+        private val tableInfo = DbTableInfo(
+            name = "plants",
+            columns = listOf(
+                DbColumnInfo("id", "INTEGER", primaryKey = true),
+                DbColumnInfo("name", "TEXT", primaryKey = false),
+                DbColumnInfo("species", "TEXT", primaryKey = false),
+                DbColumnInfo("watered", "INTEGER", primaryKey = false),
+            ),
+            hasRowId = true,
+        )
+        private val browseResult = DbQueryResult(
+            columns = listOf("__rowid__", "id", "name", "species", "watered"),
+            rows = listOf(
+                listOf("1", "1", "Monstera", "M. deliciosa", "1"),
+                listOf("2", "2", "Fiddle Leaf", "F. lyrata", "0"),
+                listOf("3", "3", "Snake Plant", "S. trifasciata", "1"),
+            ),
+        )
+        override suspend fun listDatabases(serial: String, packageName: String) = Result.success(listOf(database))
+        override suspend fun listTables(serial: String, packageName: String, dbName: String) =
+            Result.success(listOf("android_metadata", "plants", "rooms"))
+        override suspend fun tableRowCounts(
+            serial: String,
+            packageName: String,
+            dbName: String,
+            tables: List<String>,
+        ) = Result.success(
+            // Put plants first so DatabasePane's "first table with rows" selection shows data.
+            mapOf(
+                "plants" to 24L,
+                "rooms" to 3L,
+                "android_metadata" to 1L,
+            ).filterKeys { tables.isEmpty() || it in tables },
+        )
+        override suspend fun tableInfo(serial: String, packageName: String, dbName: String, tableName: String) =
+            Result.success(if (tableName == "plants") tableInfo else tableInfo.copy(name = tableName, columns = emptyList()))
+        override suspend fun browseTable(
+            serial: String,
+            packageName: String,
+            dbName: String,
+            tableName: String,
+            limit: Int,
+            offset: Int,
+        ) = Result.success(if (tableName == "plants") browseResult else DbQueryResult(emptyList(), emptyList()))
+        override suspend fun query(serial: String, packageName: String, dbName: String, sql: String, limit: Int) =
+            Result.success(browseResult)
+        override suspend fun updateCell(
+            serial: String,
+            packageName: String,
+            dbName: String,
+            tableName: String,
+            column: String,
+            newValue: String?,
+            rowId: Long?,
+            primaryKeyColumn: String?,
+            primaryKeyValue: String?,
+        ) = CommandResult.success()
+        override suspend fun pullToHost(serial: String, packageName: String, dbName: String, localPath: String) =
+            CommandResult.success()
+        override suspend fun listSavedQueries(packageName: String) = listOf(
+            SavedSqlQuery(
+                id = "q-active-plants",
+                name = "Active plants",
+                sql = "SELECT id, name, species FROM plants WHERE watered = 1",
+                packageName = gardenPackage,
+                updatedAtMillis = now - 86_400_000,
+            ),
+        )
+        override suspend fun saveQuery(packageName: String, name: String, sql: String) = CommandResult.success()
+        override suspend fun deleteQuery(packageName: String, id: String) = true
     }
 
     private object ScreenshotAccessibility : AccessibilityService {
