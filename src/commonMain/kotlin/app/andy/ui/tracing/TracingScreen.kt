@@ -28,7 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.HostCodeEditor
 import app.andy.formatDisplayDateTime
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
@@ -43,6 +42,7 @@ import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PaneDivider
+import app.andy.ui.components.TextField
 import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
@@ -119,8 +119,10 @@ internal fun TracingScreen(
 
     val recordingActive = status.phase == TracePhase.Recording || status.phase == TracePhase.Starting ||
         status.phase == TracePhase.Stopping || status.phase == TracePhase.Pulling
+    val pullRetryAvailable = status.phase == TracePhase.Error &&
+        status.message.orEmpty().contains("Retry pull", ignoreCase = true)
     val deviceOnline = device?.state == DeviceConnectionState.Online
-    val canRecord = serial != null && deviceOnline && !recordingActive
+    val canRecord = serial != null && deviceOnline && !recordingActive && !pullRetryAvailable
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -321,17 +323,15 @@ internal fun TracingScreen(
                         }
                     }) { Text("Save as user config") }
                 }
-                HostCodeEditor(
-                    path = "trace-config.textproto",
-                    text = configText,
-                    languageHint = "text",
-                    modifier = Modifier.fillMaxSize().weight(1f),
-                    onTextChange = { _, next ->
+                TextField(
+                    value = configText,
+                    onValueChange = { next ->
                         configText = next
                         modified = next != baselineConfig
                     },
-                    onSave = { _, _ -> },
-                    onClose = {},
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    singleLine = false,
+                    minLines = 12,
                 )
             }
         }

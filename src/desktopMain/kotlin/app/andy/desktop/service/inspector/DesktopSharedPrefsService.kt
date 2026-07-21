@@ -107,7 +107,10 @@ class DesktopSharedPrefsService(
 
     private fun requireXmlName(fileName: String): String {
         val name = fileName.substringAfterLast('/').trim()
-        require(name.endsWith(".xml") && name.none { it == '/' || it == '\\' || it == '\'' }) {
+        require(
+            name.endsWith(".xml") &&
+                name.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' },
+        ) {
             "Invalid prefs file name"
         }
         return name

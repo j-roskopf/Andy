@@ -88,6 +88,8 @@ class DesktopAppDatabaseService(
                             sqlite,
                             "-header",
                             "-csv",
+                            "-nullvalue",
+                            SQLITE_NULL_MARKER,
                             local.absolutePath,
                             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
                         ),
@@ -102,7 +104,10 @@ class DesktopAppDatabaseService(
                 val sql = names.joinToString(separator = " UNION ALL ") { name ->
                     "SELECT ${DbCellUpdate.sqlLiteral(name)} AS name, COUNT(*) AS c FROM ${DbCellUpdate.quoteIdent(name)}"
                 } + ";"
-                val counted = runner.run(listOf(sqlite, "-header", "-csv", local.absolutePath, sql), 60)
+                val counted = runner.run(
+                    listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
+                    60,
+                )
                 if (!counted.isSuccess) {
                     error(counted.stderr.ifBlank { counted.stdout }.ifBlank { "Failed to count rows" })
                 }
@@ -266,7 +271,7 @@ class DesktopAppDatabaseService(
         try {
             val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
             val result = runner.run(
-                listOf(sqlite, "-header", "-csv", local.absolutePath, sql),
+                listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
                 60,
             )
             if (!result.isSuccess) {
@@ -397,7 +402,11 @@ class DesktopAppDatabaseService(
 
     private fun requireDbPath(dbName: String): String {
         val trimmed = dbName.trim().trimStart('/')
-        require(trimmed.isNotEmpty() && !trimmed.contains("..") && trimmed.none { it == '\\' || it == '\'' }) {
+        require(
+            trimmed.isNotEmpty() &&
+                !trimmed.contains("..") &&
+                trimmed.all { it.isLetterOrDigit() || it == '_' || it == '-' || it == '.' || it == '/' },
+        ) {
             "Invalid database name"
         }
         return if (trimmed.contains('/')) trimmed else "databases/$trimmed"
@@ -413,7 +422,13 @@ class DesktopAppDatabaseService(
         val columns = parseCsvLine(lines.first())
         val rows = lines.drop(1).map { line ->
             val cells = parseCsvLine(line)
-            columns.indices.map { index -> cells.getOrNull(index) }
+            columns.indices.map { index ->
+                when (val cell = cells.getOrNull(index)) {
+                    null -> null
+                    SQLITE_NULL_MARKER -> null
+                    else -> cell
+                }
+            }
         }
         return DbQueryResult(columns, rows)
     }
@@ -446,6 +461,8 @@ class DesktopAppDatabaseService(
         return values
     }
 }
+
+internal const val SQLITE_NULL_MARKER = "\u0001NULL\u0001"
 
 internal fun locateHostSqlite3(): String? {
     val candidates = listOfNotNull(

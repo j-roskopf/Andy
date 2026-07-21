@@ -57,4 +57,17 @@ class DbCellUpdateTest {
         )
         assertEquals("""UPDATE "t" SET "c" = 'O''Brien' WHERE rowid = 1;""", sql)
     }
+
+    @Test
+    fun nullLiteralWritesSqlNull() {
+        val sql = DbCellUpdate.buildUpdateSql(
+            tableName = "t",
+            column = "c",
+            newValue = null,
+            rowId = 1,
+            primaryKeyColumn = null,
+            primaryKeyValue = null,
+        )
+        assertEquals("""UPDATE "t" SET "c" = NULL WHERE rowid = 1;""", sql)
+    }
 }

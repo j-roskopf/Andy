@@ -84,6 +84,11 @@ class DesktopTracingService(
         name: String,
         presetId: String?,
     ): CommandResult = withContext(Dispatchers.IO) {
+        // Failed pulls leave [active] populated so Retry pull can recover the remote file.
+        // Do not replace that handle with a new recording.
+        if (active.get() != null) {
+            return@withContext CommandResult.failure("Finish or retry the current recording first")
+        }
         val phase = mutableStatus.value.phase
         if (phase !in setOf(TracePhase.Idle, TracePhase.Done, TracePhase.Error)) {
             return@withContext CommandResult.failure("Recording already in progress")
@@ -412,6 +417,7 @@ class DesktopTracingService(
     }
 
     private fun resolveConfigFile(id: String): File? {
+        if (id.isBlank() || id.contains("..") || id.contains('/') || id.contains('\\')) return null
         val candidates = listOf(
             File(configsDir, "$id.textproto"),
             File(configsDir, "$id.pbtxt"),

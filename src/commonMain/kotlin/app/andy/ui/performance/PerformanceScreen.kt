@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -93,21 +92,21 @@ internal fun PerformanceScreen(
             }
         }
         Box(Modifier.fillMaxSize().weight(1f)) {
-            Box(if (selectedTab == PerformanceTab.Metrics) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
-                MetricsTabContent(
+            // Compose only the active tab. Tracing must not realize a heavyweight editor
+            // while Metrics is showing (screenshot tests / occlusion).
+            when (selectedTab) {
+                PerformanceTab.Metrics -> MetricsTabContent(
                     services = services,
                     serial = serial,
                     device = device,
-                    active = active && selectedTab == PerformanceTab.Metrics,
+                    active = active,
                     processesPaneWidth = processesPaneWidth,
                     onProcessesPaneWidthChange = onProcessesPaneWidthChange,
                     liveVisible = liveVisible,
                     livePaneWidth = livePaneWidth,
                     onLivePaneWidthChange = onLivePaneWidthChange,
                 )
-            }
-            Box(if (selectedTab == PerformanceTab.Tracing) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
-                TracingScreen(
+                PerformanceTab.Tracing -> TracingScreen(
                     services = services,
                     serial = serial,
                     device = device,

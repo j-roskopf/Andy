@@ -187,6 +187,10 @@ class DesktopTracingServiceTest {
         }
         assertTrue(service.status.value.message.orEmpty().contains("Retry pull"))
         assertFalse(env.ran("rm"))
+
+        val blocked = service.start("emulator-5554", "buffers { size_kb: 1024 }\nduration_ms: 500\n", "y", null)
+        assertFalse(blocked.isSuccess)
+        assertTrue(blocked.stderr.contains("retry", ignoreCase = true))
     }
 
     @Test

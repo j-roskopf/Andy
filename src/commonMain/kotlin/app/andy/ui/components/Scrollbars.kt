@@ -87,18 +87,25 @@ internal fun lazyScrollbarMetrics(
         ?.roundToInt()
         ?.coerceAtLeast(1)
         ?: (viewportSize / totalItems).coerceAtLeast(1)
+    val spacing = itemSpacing.coerceAtLeast(0)
 
-    fun extentFor(index: Int): Int {
-        val itemSize = measuredItemSizes[index]?.coerceAtLeast(1) ?: averageItemSize
-        return itemSize + if (index < totalItems - 1) itemSpacing.coerceAtLeast(0) else 0
-    }
-
-    val contentSize = (0 until totalItems).sumOf(::extentFor)
+    // O(measured) instead of O(totalItems): unmeasured items share averageItemSize.
+    val baseSum = totalItems.toLong() * averageItemSize +
+        (totalItems - 1).coerceAtLeast(0).toLong() * spacing
+    val measuredDiff = measuredItemSizes.entries
+        .filter { it.key in 0 until totalItems }
+        .sumOf { (_, size) -> (size.coerceAtLeast(1) - averageItemSize).toLong() }
+    val contentSize = (baseSum + measuredDiff).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
     val maxScrollOffset = (contentSize - viewportSize).coerceAtLeast(0)
     val currentIndex = firstVisibleItemIndex.coerceIn(0, totalItems - 1)
-    val scrollBeforeCurrentItem = (0 until currentIndex).sumOf(::extentFor)
-    val scrollOffset = (scrollBeforeCurrentItem + firstVisibleItemScrollOffset)
-        .coerceIn(0, maxScrollOffset)
+    val baseBefore = currentIndex.toLong() * averageItemSize +
+        currentIndex.toLong() * spacing
+    val measuredBeforeDiff = measuredItemSizes.entries
+        .filter { it.key in 0 until currentIndex }
+        .sumOf { (_, size) -> (size.coerceAtLeast(1) - averageItemSize).toLong() }
+    val scrollOffset = (baseBefore + measuredBeforeDiff + firstVisibleItemScrollOffset)
+        .coerceIn(0, maxScrollOffset.toLong())
+        .toInt()
     return LazyScrollbarMetrics(contentSize, scrollOffset, maxScrollOffset)
 }
 
@@ -127,19 +134,50 @@ internal fun lazyScrollbarTarget(
         ?.roundToInt()
         ?.coerceAtLeast(1)
         ?: (viewportSize / totalItems).coerceAtLeast(1)
-    fun extentFor(index: Int): Int {
-        val itemSize = measuredItemSizes[index]?.coerceAtLeast(1) ?: averageItemSize
-        return itemSize + if (index < totalItems - 1) itemSpacing.coerceAtLeast(0) else 0
-    }
+    val spacing = itemSpacing.coerceAtLeast(0)
+    val step = (averageItemSize + spacing).coerceAtLeast(1)
 
-    var remaining = scrollOffset.coerceIn(0, metrics.maxScrollOffset)
-    for (index in 0 until totalItems) {
-        val extent = extentFor(index)
-        if (remaining < extent || index == totalItems - 1) {
-            return LazyScrollbarTarget(index, remaining.coerceIn(0, (extent - 1).coerceAtLeast(0)))
+    var remaining = scrollOffset.coerceIn(0, metrics.maxScrollOffset).toLong()
+    val measured = measuredItemSizes.entries
+        .filter { it.key in 0 until totalItems }
+        .sortedBy { it.key }
+    var lastIndex = -1
+
+    for (entry in measured) {
+        val measuredIndex = entry.key
+        val unmeasuredCount = measuredIndex - (lastIndex + 1)
+        if (unmeasuredCount > 0) {
+            val unmeasuredExtent = unmeasuredCount.toLong() * step
+            if (remaining < unmeasuredExtent) {
+                val skip = (remaining / step).toInt()
+                val targetIndex = lastIndex + 1 + skip
+                val offset = (remaining % step).toInt()
+                val extent = averageItemSize + if (targetIndex < totalItems - 1) spacing else 0
+                return LazyScrollbarTarget(targetIndex, offset.coerceAtMost((extent - 1).coerceAtLeast(0)))
+            }
+            remaining -= unmeasuredExtent
+        }
+
+        val extent = entry.value.coerceAtLeast(1) + if (measuredIndex < totalItems - 1) spacing else 0
+        if (remaining < extent || measuredIndex == totalItems - 1) {
+            return LazyScrollbarTarget(
+                measuredIndex,
+                remaining.toInt().coerceIn(0, (extent - 1).coerceAtLeast(0)),
+            )
         }
         remaining -= extent
+        lastIndex = measuredIndex
     }
+
+    val trailingUnmeasured = totalItems - (lastIndex + 1)
+    if (trailingUnmeasured > 0) {
+        val skip = (remaining / step).toInt().coerceAtMost(trailingUnmeasured - 1)
+        val targetIndex = lastIndex + 1 + skip
+        val offset = (remaining % step).toInt()
+        val extent = averageItemSize + if (targetIndex < totalItems - 1) spacing else 0
+        return LazyScrollbarTarget(targetIndex, offset.coerceAtMost((extent - 1).coerceAtLeast(0)))
+    }
+
     return LazyScrollbarTarget(totalItems - 1, 0)
 }
 
