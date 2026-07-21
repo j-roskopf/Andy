@@ -78,6 +78,23 @@ class MirrorLifecycleTest {
     }
 
     @Test
+    fun embeddedLivePanelDisconnectsMirrorWhenSerialBecomesNull() = withComposeMirrorRenderer {
+        runDesktopComposeUiTestDrainingPriorFailures {
+            val serial = mutableStateOf<String?>("device-1")
+            val mirror = TrackingMirror()
+            val services = ScreenshotServices.create().copy(mirror = mirror)
+
+            setContent {
+                DeviceLivePanel(services = services, serial = serial.value, device = null)
+            }
+
+            waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
+            runOnUiThread { serial.value = null }
+            waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
+        }
+    }
+
+    @Test
     fun embeddedLivePanelKeepsMirrorConnectedWhenRemovedFromComposition() = withComposeMirrorRenderer {
         runDesktopComposeUiTestDrainingPriorFailures {
             val visible = mutableStateOf(true)

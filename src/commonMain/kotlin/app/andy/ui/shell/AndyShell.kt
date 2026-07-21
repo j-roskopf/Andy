@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
+import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.accessibility.AccessibilityScreen
@@ -61,7 +62,9 @@ import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Ink
 import app.andy.ui.theme.Rust
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 @Composable
@@ -94,6 +97,19 @@ internal fun AndyShell(
         services.updates.pendingInstallConfirmation.collectAsState()
     } else {
         remember { mutableStateOf<AvailableUpdate?>(null) }
+    }
+    val mirrorSession by services.mirror.session.collectAsState()
+
+    LaunchedEffect(state.selectedSerial, state.devices, mirrorSession?.serial) {
+        val serial = state.selectedSerial
+        val device = state.devices.firstOrNull { it.serial == serial }
+        val selectedOnline = serial != null && device?.state == DeviceConnectionState.Online
+        val activeSerial = mirrorSession?.serial
+        if (!selectedOnline || (activeSerial != null && activeSerial != serial)) {
+            withContext(NonCancellable) {
+                services.mirror.disconnect()
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
