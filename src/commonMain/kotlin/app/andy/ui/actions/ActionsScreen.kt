@@ -2,8 +2,6 @@ package app.andy.ui.actions
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
@@ -15,7 +13,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -49,7 +46,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -61,7 +57,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -74,16 +69,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.drawscope.Stroke
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.project_new_chat
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
 import app.andy.model.ActionProject
-import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentTask
+import app.andy.model.AndroidDevice
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
@@ -99,13 +93,13 @@ import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
-import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ProjectActivityIndicator
+import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.shell.RetainedDestination
 import app.andy.ui.theme.AndyColors
@@ -113,7 +107,6 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
-import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
@@ -141,7 +134,6 @@ private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
 
 private enum class ProjectCanvas(val label: String) { Chat("chat"), Tasks("tasks"), Runbook("runbook"), Scratchpad("scratchpad") }
-private enum class TerminalPlacement { Right, Bottom }
 
 private const val RecentSessionsPerProject = 5
 
@@ -161,6 +153,9 @@ private fun ProjectCockpit(
     requestedProjectId: String?,
     onRequestedAgentTaskConsumed: () -> Unit,
     compactToolCalls: Boolean,
+    serial: String?,
+    device: AndroidDevice?,
+    active: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
@@ -179,10 +174,13 @@ private fun ProjectCockpit(
     var profilesOpen by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
+    val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     var expandedProjectSessionsId by remember { mutableStateOf<String?>(null) }
-    var terminalPlacement by remember { mutableStateOf<TerminalPlacement?>(null) }
-    var lastTerminalPlacement by remember { mutableStateOf(TerminalPlacement.Right) }
+    var viewingArchivedForProjectId by remember { mutableStateOf<String?>(null) }
+    var collapsedProjectIds by remember { mutableStateOf(setOf<String>()) }
+    var docks by remember { mutableStateOf(AuxDocks()) }
+    var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
     var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
@@ -194,11 +192,34 @@ private fun ProjectCockpit(
         onActiveRunIdChange(runId)
     }
 
+    fun ensureTerminalDock(placement: DockPlacement = lastTerminalPlacement) {
+        lastTerminalPlacement = placement
+        docks = docks.show(placement, DockKind.Terminal)
+    }
+
+    fun openOrFocusTerminal(placement: DockPlacement, project: ActionProject) {
+        val runId = activeRunId?.takeIf { activeId ->
+            running.any { it.runId == activeId && it.projectId == project.id }
+        } ?: services.actionRuns.openShell(project)
+        selectTerminalTab(runId)
+        ensureTerminalDock(placement)
+    }
+
     fun closeTerminalTab(runId: String) {
         val remaining = terminalTabIds.filter { it != runId }
         terminalTabIds = remaining
         if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())
-        if (remaining.isEmpty()) terminalPlacement = null
+        if (remaining.isEmpty()) docks = docks.clearKind(DockKind.Terminal)
+    }
+
+    fun onDockToggle(placement: DockPlacement, kind: DockKind) {
+        if (kind == DockKind.Terminal && docks[placement] != DockKind.Terminal) {
+            val current = project ?: return
+            openOrFocusTerminal(placement, current)
+            return
+        }
+        if (kind == DockKind.Terminal) lastTerminalPlacement = placement
+        docks = docks.toggle(placement, kind)
     }
 
     LaunchedEffect(config.projects) {
@@ -210,6 +231,7 @@ private fun ProjectCockpit(
         if (task != null) {
             selectedProjectId = task.projectId
             selectedTaskId = task.id
+            if (task.archived) viewingArchivedForProjectId = task.projectId
             canvas = ProjectCanvas.Chat
             services.agentRuns.markRead(task.id)
         }
@@ -237,9 +259,8 @@ private fun ProjectCockpit(
         if (runId == handledTerminalRunId) return@LaunchedEffect
         val terminalRun = running.firstOrNull { it.runId == runId } ?: return@LaunchedEffect
         selectedProjectId = terminalRun.projectId
-        selectedTaskId = null
         selectTerminalTab(runId)
-        terminalPlacement = lastTerminalPlacement
+        ensureTerminalDock(lastTerminalPlacement)
         handledTerminalRunId = runId
     }
     LaunchedEffect(running) {
@@ -254,14 +275,28 @@ private fun ProjectCockpit(
     }
     val unreadProjectIds = remember(agentTasks) {
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
-            task.projectId?.takeIf { task.unread }
+            task.projectId?.takeIf { task.unread && !task.archived }
         }
     }
     val projectTasks = project?.let { item ->
         agentTasks
-            .filter { it.projectId == item.id }
+            .filter { it.projectId == item.id && !it.archived }
             .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
     }.orEmpty()
+    val selectedProjectTask = project?.let { item ->
+        agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
+    }
+    // Open chats stay read — including when a live run finishes while you're watching.
+    // Only while Projects is the active destination: RetainedDestination keeps this
+    // screen composed off-page, and clearing unread there would hide the badge.
+    LaunchedEffect(active, selectedProjectTask?.id, selectedProjectTask?.status, canvas) {
+        if (!active) return@LaunchedEffect
+        val task = selectedProjectTask ?: return@LaunchedEffect
+        if (canvas != ProjectCanvas.Chat) return@LaunchedEffect
+        if (task.unread && !task.isActive) {
+            services.agentRuns.markRead(task.id)
+        }
+    }
     LaunchedEffect(loadedProjectWorkflow?.tasks, selectedWorkflowTaskId) {
         if (selectedWorkflowTaskId != null && loadedProjectWorkflow != null && loadedProjectWorkflow.tasks.none { it.id == selectedWorkflowTaskId }) {
             selectedWorkflowTaskId = null
@@ -290,30 +325,65 @@ private fun ProjectCockpit(
                     TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Find a project", color = TextSecondary, fontFamily = MonoFont) })
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
                         items(projects, key = { it.id }) { item ->
-                            val sessions = agentTasks.filter { it.projectId == item.id }
+                            val sessions = agentTasks.filter { it.projectId == item.id && !it.archived }
                                 .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
+                            val archivedSessions = agentTasks.filter { it.projectId == item.id && it.archived }
+                                .sortedByDescending { it.createdAtMillis }
+                            val viewingArchived = viewingArchivedForProjectId == item.id
+                            val sessionsCollapsed = item.id in collapsedProjectIds
                             ProjectSessionGroup(
                                 project = item,
-                                sessions = if (expandedProjectSessionsId == item.id) sessions else sessions.take(RecentSessionsPerProject),
+                                sessions = when {
+                                    sessionsCollapsed -> emptyList()
+                                    viewingArchived -> archivedSessions
+                                    expandedProjectSessionsId == item.id -> sessions
+                                    else -> sessions.take(RecentSessionsPerProject)
+                                },
                                 selectedProject = item.id == selectedProjectId,
                                 selectedSessionId = selectedTaskId,
                                 hasUnread = item.id in unreadProjectIds,
-                                showMore = sessions.size > RecentSessionsPerProject && expandedProjectSessionsId != item.id,
-                                onOpenProject = {
-                                    selectedProjectId = item.id
-                                    selectedTaskId = sessions.firstOrNull()?.id
-                                    selectedWorkflowTaskId = null
-                                    canvas = ProjectCanvas.Chat
+                                sessionsCollapsed = sessionsCollapsed,
+                                viewingArchived = viewingArchived,
+                                archivedCount = archivedSessions.size,
+                                showMore = !sessionsCollapsed && !viewingArchived &&
+                                    sessions.size > RecentSessionsPerProject &&
+                                    expandedProjectSessionsId != item.id,
+                                onToggleProject = {
+                                    if (item.id == selectedProjectId) {
+                                        collapsedProjectIds = if (sessionsCollapsed) {
+                                            collapsedProjectIds - item.id
+                                        } else {
+                                            collapsedProjectIds + item.id
+                                        }
+                                    } else {
+                                        collapsedProjectIds = collapsedProjectIds - item.id
+                                        selectedProjectId = item.id
+                                        selectedTaskId = sessions.firstOrNull()?.id
+                                        selectedWorkflowTaskId = null
+                                        canvas = ProjectCanvas.Chat
+                                    }
                                 },
                                 onOpenSession = { task ->
+                                    collapsedProjectIds = collapsedProjectIds - item.id
                                     selectedProjectId = item.id
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
                                     if (task.unread) services.agentRuns.markRead(task.id)
                                 },
                                 onMarkSessionUnread = { task -> services.agentRuns.markUnread(task.id) },
+                                onArchiveSession = { task ->
+                                    services.agentRuns.archive(task.id)
+                                    if (selectedTaskId == task.id) selectedTaskId = null
+                                },
+                                onUnarchiveSession = { task -> services.agentRuns.unarchive(task.id) },
                                 onShowMore = { expandedProjectSessionsId = item.id },
+                                onToggleArchived = {
+                                    viewingArchivedForProjectId = if (viewingArchived) null else item.id
+                                    expandedProjectSessionsId = null
+                                },
                                 onNewChat = {
+                                    collapsedProjectIds = collapsedProjectIds - item.id
+                                    viewingArchivedForProjectId = null
                                     selectedProjectId = item.id
                                     selectedTaskId = null
                                     selectedWorkflowTaskId = null
@@ -324,42 +394,20 @@ private fun ProjectCockpit(
                         }
                     }
                 }
-                project?.let { current ->
+                val current = project
+                if (current == null) {
+                    EmptyState("Create a project to start", Modifier.weight(1f).fillMaxHeight())
+                } else {
                     Column(Modifier.widthIn(min = minimumChatWidth).weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
-                            terminalPlacement = terminalPlacement,
+                            docks = docks,
                             onCanvasChange = {
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
                             },
-                            onToggleRightTerminal = {
-                                if (terminalPlacement == TerminalPlacement.Right) {
-                                    terminalPlacement = null
-                                    return@ProjectChatToolbar
-                                }
-                                lastTerminalPlacement = TerminalPlacement.Right
-                                val runId = activeRunId?.takeIf { activeId ->
-                                    running.any { it.runId == activeId && it.projectId == current.id }
-                                }
-                                    ?: services.actionRuns.openShell(current)
-                                selectTerminalTab(runId)
-                                terminalPlacement = TerminalPlacement.Right
-                            },
-                            onToggleBottomTerminal = {
-                                if (terminalPlacement == TerminalPlacement.Bottom) {
-                                    terminalPlacement = null
-                                    return@ProjectChatToolbar
-                                }
-                                lastTerminalPlacement = TerminalPlacement.Bottom
-                                val runId = activeRunId?.takeIf { activeId ->
-                                    running.any { it.runId == activeId && it.projectId == current.id }
-                                }
-                                    ?: services.actionRuns.openShell(current)
-                                selectTerminalTab(runId)
-                                terminalPlacement = TerminalPlacement.Bottom
-                            },
+                            onDockToggle = ::onDockToggle,
                         )
                         PanelCard(
                             Modifier.fillMaxSize().testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
@@ -367,7 +415,7 @@ private fun ProjectCockpit(
                         ) {
                             when (canvas) {
                                 ProjectCanvas.Chat -> {
-                                    val selected = projectTasks.firstOrNull { it.id == selectedTaskId }
+                                    val selected = agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == current.id }
                                     Box(Modifier.fillMaxSize()) {
                                         // Keep the composer mounted so draft text/images survive opening a transcript.
                                         RetainedDestination(active = selected == null) {
@@ -384,8 +432,15 @@ private fun ProjectCockpit(
                                                 services,
                                                 selected,
                                                 nowMillis,
-                                                onDelete = { task -> scope.launch { services.agentRuns.delete(task.id, task.ownsWorktree); selectedTaskId = null } },
+                                                onDelete = { task ->
+                                                    scope.launch {
+                                                        transcriptScrollMemory.remove(task.id)
+                                                        services.agentRuns.delete(task.id, task.ownsWorktree)
+                                                        selectedTaskId = null
+                                                    }
+                                                },
                                                 compactToolCalls = compactToolCalls,
+                                                transcriptScrollMemory = transcriptScrollMemory,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -439,7 +494,7 @@ private fun ProjectCockpit(
                                     onRunAction = { action ->
                                         val runId = services.actionRuns.run(current, action)
                                         selectTerminalTab(runId)
-                                        terminalPlacement = lastTerminalPlacement
+                                        ensureTerminalDock(lastTerminalPlacement)
                                     },
                                 )
                                 ProjectCanvas.Scratchpad -> ProjectScratchpadEditor(
@@ -451,29 +506,37 @@ private fun ProjectCockpit(
                             }
                         }
                     }
-                    if (terminalPlacement == TerminalPlacement.Right) {
-                        ProjectTerminalDrawer(
+                    docks.right?.let { rightKind ->
+                        ProjectAuxDock(
+                            kind = rightKind,
                             services = services,
                             terminalTabs = terminalTabs,
                             activeRunId = activeTerminalRunId,
-                            placement = TerminalPlacement.Right,
+                            placement = DockPlacement.Right,
+                            serial = serial,
+                            device = device,
+                            liveActive = active,
                             onSelectTab = ::selectTerminalTab,
                             onCloseTab = ::closeTerminalTab,
-                            onClose = { terminalPlacement = null },
+                            onClose = { docks = docks.clear(DockPlacement.Right) },
                             modifier = Modifier.width(460.dp).fillMaxHeight(),
                         )
                     }
-                } ?: EmptyState("Create a project to start")
+                }
             }
-            if (terminalPlacement == TerminalPlacement.Bottom) {
-                ProjectTerminalDrawer(
+            docks.bottom?.let { bottomKind ->
+                ProjectAuxDock(
+                    kind = bottomKind,
                     services = services,
                     terminalTabs = terminalTabs,
                     activeRunId = activeTerminalRunId,
-                    placement = TerminalPlacement.Bottom,
+                    placement = DockPlacement.Bottom,
+                    serial = serial,
+                    device = device,
+                    liveActive = active,
                     onSelectTab = ::selectTerminalTab,
                     onCloseTab = ::closeTerminalTab,
-                    onClose = { terminalPlacement = null },
+                    onClose = { docks = docks.clear(DockPlacement.Bottom) },
                     modifier = Modifier.fillMaxWidth().height(300.dp),
                 )
             }
@@ -567,6 +630,8 @@ internal fun ActionsScreen(
     requestedProjectId: String? = null,
     onRequestedAgentTaskConsumed: () -> Unit = {},
     compactToolCalls: Boolean = true,
+    serial: String? = null,
+    device: AndroidDevice? = null,
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -586,15 +651,11 @@ internal fun ActionsScreen(
             requestedProjectId = requestedProjectId,
             onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
             compactToolCalls = compactToolCalls,
+            serial = serial,
+            device = device,
+            active = active,
         )
     }
-}
-
-private fun actionStatusColor(status: ActionRunStatus): Color = when (status) {
-    ActionRunStatus.Running -> Green
-    ActionRunStatus.Exited -> Cyan
-    ActionRunStatus.Failed -> Red
-    ActionRunStatus.Stopped -> Rust
 }
 
 @Composable
@@ -650,11 +711,17 @@ private fun ProjectSessionGroup(
     selectedProject: Boolean,
     selectedSessionId: String?,
     hasUnread: Boolean,
+    sessionsCollapsed: Boolean,
+    viewingArchived: Boolean,
+    archivedCount: Int,
     showMore: Boolean,
-    onOpenProject: () -> Unit,
+    onToggleProject: () -> Unit,
     onOpenSession: (AgentTask) -> Unit,
     onMarkSessionUnread: (AgentTask) -> Unit,
+    onArchiveSession: (AgentTask) -> Unit,
+    onUnarchiveSession: (AgentTask) -> Unit,
     onShowMore: () -> Unit,
+    onToggleArchived: () -> Unit,
     onNewChat: () -> Unit,
     onEditProject: () -> Unit,
 ) {
@@ -665,16 +732,23 @@ private fun ProjectSessionGroup(
             Modifier.fillMaxWidth()
                 .background(if (selectedProject) AndyColors.Neutral700 else Color.Transparent, RoundedCornerShape(AndyRadius.R3))
                 .hoverable(interactionSource)
+                .clickable(onClick = onToggleProject)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
+                if (sessionsCollapsed) ">" else "v",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+            )
+            Text(
                 project.name,
                 color = TextPrimary,
                 fontFamily = DisplayFont,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f).clickable(onClick = onOpenProject),
+                modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -694,22 +768,52 @@ private fun ProjectSessionGroup(
             NewProjectChatButton(onClick = onNewChat, size = 15.dp)
             if (hasUnread) UnreadDot()
         }
-        sessions.forEach { task ->
-            ProjectSessionRow(
-                task = task,
-                selected = task.id == selectedSessionId,
-                onOpen = { onOpenSession(task) },
-                onMarkUnread = { onMarkSessionUnread(task) },
-            )
-        }
-        if (showMore) {
-            Text(
-                "Show more",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                modifier = Modifier.padding(start = 22.dp, top = 2.dp).clickable(onClick = onShowMore).padding(vertical = 2.dp),
-            )
+        AnimatedVisibility(
+            visible = !sessionsCollapsed,
+            enter = fadeIn(tween(120)) + expandVertically(tween(160)),
+            exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (viewingArchived) {
+                    Text(
+                        "Archived chats",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 14.dp, bottom = 2.dp),
+                    )
+                }
+                sessions.forEach { task ->
+                    ProjectSessionRow(
+                        task = task,
+                        selected = task.id == selectedSessionId,
+                        onOpen = { onOpenSession(task) },
+                        onMarkUnread = { onMarkSessionUnread(task) },
+                        onArchive = {
+                            if (viewingArchived) onUnarchiveSession(task) else onArchiveSession(task)
+                        },
+                        archiveLabel = if (viewingArchived) "Unarchive" else "Archive",
+                    )
+                }
+                if (showMore) {
+                    Text(
+                        "Show more",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 22.dp, top = 2.dp).clickable(onClick = onShowMore).padding(vertical = 2.dp),
+                    )
+                }
+                if (archivedCount > 0 || viewingArchived) {
+                    Text(
+                        if (viewingArchived) "Back to chats" else "Archived ($archivedCount)",
+                        color = if (viewingArchived) Cyan else TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 22.dp, top = 2.dp).clickable(onClick = onToggleArchived).padding(vertical = 2.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -720,6 +824,8 @@ private fun ProjectSessionRow(
     selected: Boolean,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
+    onArchive: () -> Unit,
+    archiveLabel: String = "Archive",
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -776,6 +882,14 @@ private fun ProjectSessionRow(
                 },
                 enabled = !task.unread,
             )
+            DropdownMenuItem(
+                text = { Text(archiveLabel, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp) },
+                onClick = {
+                    menuExpanded = false
+                    onArchive()
+                },
+                enabled = archiveLabel == "Unarchive" || !task.isActive,
+            )
         }
     }
 }
@@ -784,10 +898,9 @@ private fun ProjectSessionRow(
 private fun ProjectChatToolbar(
     project: ActionProject,
     canvas: ProjectCanvas,
-    terminalPlacement: TerminalPlacement?,
+    docks: AuxDocks,
     onCanvasChange: (ProjectCanvas) -> Unit,
-    onToggleRightTerminal: () -> Unit,
-    onToggleBottomTerminal: () -> Unit,
+    onDockToggle: (DockPlacement, DockKind) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Column(Modifier.weight(1f)) {
@@ -799,16 +912,62 @@ private fun ProjectChatToolbar(
                 FilterPill(tab.label, canvas == tab, if (tab == ProjectCanvas.Runbook) Rust else Cyan) { onCanvasChange(tab) }
             }
         }
-        TerminalDrawerToggle(
-            placement = TerminalPlacement.Bottom,
-            selected = terminalPlacement == TerminalPlacement.Bottom,
-            onClick = onToggleBottomTerminal,
-        )
-        TerminalDrawerToggle(
-            placement = TerminalPlacement.Right,
-            selected = terminalPlacement == TerminalPlacement.Right,
-            onClick = onToggleRightTerminal,
-        )
+        DockToggleRow(docks = docks, onToggle = onDockToggle)
+    }
+}
+
+@Composable
+private fun ProjectAuxDock(
+    kind: DockKind,
+    services: AndyServices,
+    terminalTabs: List<RunningAction>,
+    activeRunId: String?,
+    placement: DockPlacement,
+    serial: String?,
+    device: AndroidDevice?,
+    liveActive: Boolean,
+    onSelectTab: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (kind) {
+        DockKind.Terminal -> {
+            if (liveActive) {
+                TerminalDockDrawer(
+                    services = services,
+                    terminalTabs = terminalTabs,
+                    activeRunId = activeRunId,
+                    placement = placement,
+                    onSelectTab = onSelectTab,
+                    onCloseTab = onCloseTab,
+                    onClose = onClose,
+                    modifier = modifier,
+                )
+            } else {
+                PanelCard(modifier, accent = Rust) {
+                    EmptyState("Terminal pauses while another tab is open")
+                }
+            }
+        }
+        DockKind.Live -> {
+            // Keep the live mirror out of composition while Projects is retained but inactive
+            // so the Live tab (and other embedded live panes) can own the session.
+            if (liveActive) {
+                LiveDockDrawer(
+                    services = services,
+                    serial = serial,
+                    device = device,
+                    placement = placement,
+                    onClose = onClose,
+                    modifier = modifier,
+                )
+            } else {
+                PanelCard(modifier, accent = Cyan) {
+                    EmptyState("Live view pauses while another tab is open")
+                }
+            }
+        }
     }
 }
 
@@ -824,141 +983,6 @@ private fun NewProjectChatButton(onClick: () -> Unit, size: androidx.compose.ui.
             .testTag("project-new-chat")
             .clickable(onClick = onClick),
     )
-}
-
-@Composable
-private fun TerminalDrawerToggle(placement: TerminalPlacement, selected: Boolean, onClick: () -> Unit) {
-    val label = if (placement == TerminalPlacement.Right) "Show terminal on right" else "Show terminal at bottom"
-    Box(
-        Modifier
-            .size(28.dp)
-            .background(if (selected) AndyColors.OrangeSubtle else AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, if (selected) AndyColors.OrangeBorder else Border, RoundedCornerShape(AndyRadius.R2))
-            .semantics { contentDescription = label; role = Role.Button }
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.size(15.dp)) {
-            val stroke = Stroke(width = 1.4.dp.toPx())
-            val color = if (selected) Rust else TextSecondary
-            drawRect(color = color, style = stroke)
-            if (placement == TerminalPlacement.Right) {
-                drawLine(color, start = androidx.compose.ui.geometry.Offset(size.width * 0.32f, 0f), end = androidx.compose.ui.geometry.Offset(size.width * 0.32f, size.height), strokeWidth = stroke.width)
-            } else {
-                drawLine(color, start = androidx.compose.ui.geometry.Offset(0f, size.height * 0.68f), end = androidx.compose.ui.geometry.Offset(size.width, size.height * 0.68f), strokeWidth = stroke.width)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProjectTerminalDrawer(
-    services: AndyServices,
-    terminalTabs: List<RunningAction>,
-    activeRunId: String?,
-    placement: TerminalPlacement,
-    onSelectTab: (String) -> Unit,
-    onCloseTab: (String) -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val reveal = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        reveal.snapTo(0f)
-        reveal.animateTo(1f, animationSpec = tween(170, easing = FastOutSlowInEasing))
-    }
-    PanelCard(
-        modifier.graphicsLayer {
-            alpha = 0.72f + reveal.value * 0.28f
-            if (placement == TerminalPlacement.Right) translationX = (1f - reveal.value) * 28f
-            else translationY = (1f - reveal.value) * 28f
-        },
-        accent = Rust,
-    ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Terminal", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold)
-                Text(if (activeRunId == null) "Run an action to start a shell" else "Interactive project shell", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-            }
-            OutlinedButton(onClick = onClose) { Text("Close") }
-        }
-        if (terminalTabs.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                terminalTabs.forEach { terminal ->
-                    TerminalTabPill(
-                        text = terminal.actionName,
-                        selected = terminal.runId == activeRunId,
-                        color = actionStatusColor(terminal.status),
-                        icon = actionIconMarker(terminal.icon),
-                        onClick = { onSelectTab(terminal.runId) },
-                        onClose = { onCloseTab(terminal.runId) },
-                    )
-                }
-            }
-        }
-        if (activeRunId == null) {
-            EmptyState("Run an action to open its terminal")
-        } else {
-            // Right-docked SwingPanel can cover chrome menus; bottom placement cannot.
-            val suppressForChromeMenus =
-                LocalSuppressHeavyweightSurfaces.current && placement == TerminalPlacement.Right
-            CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides suppressForChromeMenus) {
-                ProjectTerminalSurface(services, activeRunId, Modifier.fillMaxSize())
-            }
-        }
-    }
-}
-
-@Composable
-private fun TerminalTabPill(
-    text: String,
-    selected: Boolean,
-    color: Color,
-    icon: String,
-    onClick: () -> Unit,
-    onClose: () -> Unit,
-) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    Row(
-        Modifier
-            .height(28.dp)
-            .hoverable(interaction)
-            .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
-            .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(icon, color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300, fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp)
-        Text(
-            text.lowercase(),
-            color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
-            fontFamily = MonoFont,
-            fontWeight = FontWeight.Medium,
-            fontSize = 10.sp,
-            lineHeight = 14.sp,
-        )
-        if (hovered) {
-            Text(
-                "×",
-                color = Red,
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                lineHeight = 14.sp,
-                modifier = Modifier
-                    .semantics { contentDescription = "Close tab"; role = Role.Button }
-                    .clickable(onClick = onClose)
-                    .padding(start = 2.dp),
-            )
-        }
-    }
 }
 
 @Composable

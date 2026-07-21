@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -99,7 +101,9 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
         state.selected = state.reports.firstOrNull { it.id == id } ?: id?.let { state.bugs.loadBug(it) }
         state.logcat = id?.let { state.bugs.loadBugLog(it) }.orEmpty()
         state.resetPlaybackForSelection()
+        state.isVideoLoading = id != null
         state.playbackFrameCount = id?.let { state.bugs.bugVideoFrameCount(it) } ?: 0
+        if (state.playbackFrameCount <= 0) state.isVideoLoading = false
     }
     LaunchedEffect(state.selectedId, state.playbackFrameCount, state.playbackFrameIndex, state.isReplaying) {
         val id = state.selectedId ?: return@LaunchedEffect
@@ -107,6 +111,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
         state.bugs.loadBugVideoFrame(id, state.playbackFrameIndex)?.let { frame ->
             state.playbackFrame = frame
         }
+        state.isVideoLoading = false
     }
     LaunchedEffect(state.selectedId, state.playbackRunId, state.isReplaying) {
         val id = state.selectedId ?: return@LaunchedEffect
@@ -334,6 +339,11 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                                             } ?: MirrorOverlay(),
                                         )
                                     }
+                                } else if (state.isVideoLoading || state.playbackFrameCount > 0) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                                        Text("Loading capture.mp4…", color = TextSecondary, fontSize = 12.sp)
+                                    }
                                 } else {
                                     Text(if (recordings) "Press Play to watch capture.mp4" else "Press Reproduce to play capture.mp4", color = TextSecondary, fontSize = 12.sp)
                                 }
@@ -359,6 +369,8 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                                         modifier = Modifier.width(84.dp),
                                     )
                                 }
+                            } else if (state.isVideoLoading) {
+                                Text("Loading video…", color = TextSecondary, fontSize = 12.sp)
                             } else {
                                 Text("No video frames captured", color = TextSecondary, fontSize = 12.sp)
                             }

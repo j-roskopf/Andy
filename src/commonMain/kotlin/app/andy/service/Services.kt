@@ -325,6 +325,10 @@ interface AgentRunService {
     fun markRead(taskId: String)
     /** Marks a chat unread so list/dock badges show again. */
     fun markUnread(taskId: String)
+    /** Hides a finished chat from the default list without deleting it. */
+    fun archive(taskId: String)
+    /** Restores an archived chat to the default list. */
+    fun unarchive(taskId: String)
     fun events(taskId: String): StateFlow<List<AgentEvent>>
     fun interactiveResumeCommand(taskId: String): String?
     suspend fun openInTerminal(taskId: String): CommandResult

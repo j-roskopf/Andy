@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -34,14 +39,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,8 +54,11 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -77,10 +85,57 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val TRANSCRIPT_BOTTOM_THRESHOLD_PX = 32
+
+/** Explicit per-task scroll snapshot. */
+internal data class TranscriptScrollPosition(
+    val index: Int,
+    val offset: Int,
+    val stickToBottom: Boolean,
+)
+
+private sealed class TranscriptRestorePlan {
+    data object StickToBottom : TranscriptRestorePlan()
+    data class Exact(val index: Int, val offset: Int) : TranscriptRestorePlan()
+}
+
+/**
+ * Remembers where each chat was scrolled. First open has no entry → stick to bottom.
+ */
+internal class TranscriptScrollMemory {
+    private val positions = mutableMapOf<String, TranscriptScrollPosition>()
+
+    fun get(taskId: String): TranscriptScrollPosition? = positions[taskId]
+
+    fun save(taskId: String, position: TranscriptScrollPosition) {
+        positions[taskId] = position
+    }
+
+    fun remove(taskId: String) {
+        positions.remove(taskId)
+    }
+}
+
+/** Suppresses stick-to-bottom updates while we programmatically scroll. */
+private class TranscriptScrollGate {
+    private var depth = 0
+    val isAutoScrolling: Boolean get() = depth > 0
+
+    suspend fun <T> run(block: suspend () -> T): T {
+        depth += 1
+        try {
+            return block()
+        } finally {
+            withFrameMillis { }
+            depth -= 1
+        }
+    }
+}
 
 @Composable
 internal fun AgentTranscript(
@@ -93,7 +148,16 @@ internal fun AgentTranscript(
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     completedContent: (@Composable () -> Unit)? = null,
+    /** Changes when trailing completed UI (e.g. change summary) mounts after first layout. */
+    completedContentKey: Any? = null,
+    /**
+     * False while a completed chat's transcript (and trailing UI) is still loading.
+     * Prevents pinning to the prompt-only stub before history arrives.
+     */
+    eventsReady: Boolean = true,
     onSkillOpen: (AgentSkill) -> Unit = {},
+    restoreScrollKey: String? = null,
+    scrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
     val displayItems = remember(events, compactToolCalls) { transcriptDisplayItems(events, compactToolCalls) }
@@ -101,29 +165,184 @@ internal fun AgentTranscript(
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
     }
-    val scrollState = rememberScrollState()
-    var stickToBottom by remember { mutableStateOf(true) }
-    var expandedToolKeys by remember { mutableStateOf(setOf<String>()) }
-    var expandedToolGroups by remember { mutableStateOf(setOf<String>()) }
-    val isAtBottom by remember {
-        derivedStateOf {
-            scrollState.value >= scrollState.maxValue
+    val taskId = restoreScrollKey
+    // Freeze restore intent for this visit from memory at entry — never mutate this plan mid-load.
+    val restorePlan = remember(taskId) {
+        val saved = taskId?.let { scrollMemory?.get(it) }
+        when {
+            saved == null || saved.stickToBottom -> TranscriptRestorePlan.StickToBottom
+            else -> TranscriptRestorePlan.Exact(saved.index, saved.offset)
         }
     }
-    // Stream deltas replace the final item in place, so size alone does not
-    // change while a long assistant message is growing.
-    val transcriptItemCount = displayItems.size + (if (headerContent != null) 1 else 0) + (if (pendingContent != null) 1 else 0) + (if (originalPromptVisible) 1 else 0) + if (isActive) 1 else 0
-    LaunchedEffect(displayItems.lastOrNull(), headerContent != null, pendingContent != null, originalPromptVisible, isActive, stickToBottom, scrollState.maxValue) {
-        if (stickToBottom && transcriptItemCount > 0) {
-            scrollState.scrollTo(scrollState.maxValue)
+    val listState = remember(taskId) {
+        when (val plan = restorePlan) {
+            is TranscriptRestorePlan.Exact -> LazyListState(plan.index, plan.offset)
+            TranscriptRestorePlan.StickToBottom -> LazyListState(0, 0)
         }
     }
-    LaunchedEffect(scrollState) {
-        snapshotFlow { scrollState.isScrollInProgress to isAtBottom }
+    var stickToBottom by remember(taskId) {
+        mutableStateOf(restorePlan is TranscriptRestorePlan.StickToBottom)
+    }
+    var scrollInitialized by remember(taskId) { mutableStateOf(false) }
+    val scrollGate = remember(taskId) { TranscriptScrollGate() }
+    var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
+    var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
+    // Bumped on real user scroll (mouse wheel / trackpad) — desktop often skips isScrollInProgress.
+    var userScrollGeneration by remember(taskId) { mutableStateOf(0) }
+    val bottomItemIndex = remember(
+        displayItems.size,
+        headerContent != null,
+        pendingContent != null,
+        originalPromptVisible,
+        isActive,
+    ) {
+        transcriptBottomItemIndex(
+            displayItemCount = displayItems.size,
+            hasHeader = headerContent != null,
+            hasPending = pendingContent != null,
+            hasOriginalPrompt = originalPromptVisible,
+            isActive = isActive,
+        )
+    }
+    val scrollAnchor = remember(
+        displayItems,
+        headerContent != null,
+        pendingContent != null,
+        originalPromptVisible,
+        isActive,
+        completedContentKey,
+    ) {
+        transcriptScrollAnchor(
+            displayItems = displayItems,
+            hasHeader = headerContent != null,
+            hasPending = pendingContent != null,
+            hasOriginalPrompt = originalPromptVisible,
+            isActive = isActive,
+            completedContentKey = completedContentKey,
+        )
+    }
+    val scrollInitializedState = rememberUpdatedState(scrollInitialized)
+    val stickToBottomState = rememberUpdatedState(stickToBottom)
+    // Observable content fingerprint so a single snapshotFlow can react to streamed text
+    // growth without a keyed LaunchedEffect restarting (and cancelling a mid-scroll) per token.
+    val scrollAnchorState = rememberUpdatedState(scrollAnchor)
+    val isActiveState = rememberUpdatedState(isActive)
+
+    // Only persist AFTER init — saving during the loading stub was overwriting mid-scroll
+    // positions with "stick=true at index 0" when the prompt alone fit the viewport.
+    LaunchedEffect(taskId, listState, scrollInitialized) {
+        if (!scrollInitialized) return@LaunchedEffect
+        val id = taskId ?: return@LaunchedEffect
+        val memory = scrollMemory ?: return@LaunchedEffect
+        snapshotFlow {
+            TranscriptScrollPosition(
+                index = listState.firstVisibleItemIndex,
+                offset = listState.firstVisibleItemScrollOffset,
+                stickToBottom = stickToBottomState.value,
+            )
+        }.distinctUntilChanged().collect { memory.save(id, it) }
+    }
+
+    LaunchedEffect(
+        taskId,
+        bottomItemIndex,
+        listState.layoutInfo.totalItemsCount,
+        eventsReady,
+        displayItems.size,
+        completedContentKey,
+    ) {
+        if (scrollInitialized || bottomItemIndex < 0) return@LaunchedEffect
+        if (!eventsReady) return@LaunchedEffect
+        val itemCount = listState.layoutInfo.totalItemsCount
+        if (itemCount == 0) return@LaunchedEffect
+        scrollGate.run {
+            when (val plan = restorePlan) {
+                TranscriptRestorePlan.StickToBottom -> {
+                    stickToBottom = true
+                    // Keep settling until truly pinned — change-summary can mount a frame late.
+                    repeat(24) {
+                        listState.scrollToEndAligned(settleFrames = 1)
+                        if (listState.isNearBottom(thresholdPx = 1) && !listState.canScrollForward) {
+                            withFrameMillis { }
+                            listState.scrollToEndAligned(settleFrames = 1)
+                            if (listState.isNearBottom(thresholdPx = 1) && !listState.canScrollForward) return@run
+                        }
+                        withFrameMillis { }
+                    }
+                }
+                is TranscriptRestorePlan.Exact -> {
+                    stickToBottom = false
+                    listState.scrollToItem(
+                        plan.index.coerceIn(0, itemCount - 1),
+                        plan.offset,
+                    )
+                }
+            }
+        }
+        scrollInitialized = true
+    }
+    // Re-pin only on stick (re)engaging or the completed chat becoming ready — NOT per token.
+    LaunchedEffect(stickToBottom, scrollInitialized, eventsReady) {
+        if (!scrollInitialized || !stickToBottom || !eventsReady) return@LaunchedEffect
+        scrollGate.run { listState.scrollToEndAligned() }
+    }
+    // Non-active settle: images, change-summary, and restored history all mount/measure
+    // after the fact. React to those layout changes so a finished chat pins cleanly.
+    // While the agent is active, the per-frame follower below owns pinning instead.
+    LaunchedEffect(listState, taskId, scrollInitialized) {
+        if (!scrollInitialized) return@LaunchedEffect
+        snapshotFlow {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            scrollAnchorState.value to listOf(
+                listState.bottomGapPx(),
+                last?.index,
+                last?.size,
+                listState.canScrollForward,
+                listState.layoutInfo.totalItemsCount,
+            )
+        }.distinctUntilChanged().collect {
+            if (isActiveState.value) return@collect
+            if (!stickToBottomState.value || scrollGate.isAutoScrolling) return@collect
+            if (!listState.isNearBottom(thresholdPx = 1)) {
+                scrollGate.run { listState.scrollToEndAligned() }
+            }
+        }
+    }
+    // Streaming follower: while the agent is active, re-check the bottom every frame and
+    // nudge back by the exact remaining delta. Per-frame coverage means we never drift more
+    // than one frame off the bottom; the exact-delta nudge (no scrollToItem jump, no second
+    // competing driver) means an already-pinned list does nothing, so there is no flicker.
+    LaunchedEffect(taskId, scrollInitialized, isActive) {
+        if (!scrollInitialized || !isActive) return@LaunchedEffect
+        while (true) {
+            withFrameMillis { }
+            if (!stickToBottomState.value || scrollGate.isAutoScrolling) continue
+            if (!listState.isNearBottom(thresholdPx = 1)) {
+                scrollGate.run { listState.scrollToEndAligned(settleFrames = 1) }
+            }
+        }
+    }
+    LaunchedEffect(userScrollGeneration, scrollInitialized) {
+        if (!scrollInitialized || userScrollGeneration == 0) return@LaunchedEffect
+        // Let the wheel/trackpad scroll apply, then sync stick from the settled
+        // position. Detach immediately on Scroll (below) so streaming doesn't yank
+        // an upward gesture; this settle is what re-locks after scrolling back down.
+        // Without it, the near-bottom snapshotFlow often won't re-emit — nearBottom
+        // was already true when the last wheel tick cleared stickToBottom.
+        withFrameMillis { }
+        withFrameMillis { }
+        if (!scrollGate.isAutoScrolling) {
+            stickToBottom = listState.isNearBottom()
+        }
+    }
+    LaunchedEffect(listState, taskId, scrollInitialized) {
+        if (!scrollInitialized) return@LaunchedEffect
+        snapshotFlow { listState.isNearBottom() to listState.isScrollInProgress }
             .distinctUntilChanged()
-            .collect { (scrolling, atBottom) ->
-                if (scrolling && !atBottom) stickToBottom = false
-                if (atBottom) stickToBottom = true
+            .collect { (nearBottom, inProgress) ->
+                if (scrollGate.isAutoScrolling || !scrollInitializedState.value) return@collect
+                if (nearBottom) stickToBottom = true
+                else if (inProgress) stickToBottom = false
             }
     }
     Box(
@@ -134,18 +353,38 @@ internal fun AgentTranscript(
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
             EmptyState("waiting for agent output")
         } else {
-            Column(
-                Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 14.dp, vertical = 12.dp).padding(end = 8.dp),
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = if (scrollInitialized) 1f else 0f }
+                    .padding(end = 8.dp)
+                    .pointerInput(taskId) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                if (event.type == PointerEventType.Scroll) {
+                                    // Detach the instant the user scrolls so the per-frame
+                                    // follower doesn't yank an upward gesture during streaming.
+                                    // userScrollGeneration's settle effect re-locks once the
+                                    // wheel/trackpad stops near the bottom.
+                                    stickToBottom = false
+                                    userScrollGeneration++
+                                }
+                            }
+                        }
+                    },
+                contentPadding = PaddingValues(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                headerContent?.let { header ->
-                    key("task-header") { header() }
+                if (headerContent != null) {
+                    item(key = "task-header") { headerContent() }
                 }
-                pendingContent?.let { content ->
-                    key("pending-task-input") { content() }
+                if (pendingContent != null) {
+                    item(key = "pending-task-input") { pendingContent() }
                 }
                 if (originalPromptVisible) {
-                    key("original-prompt") {
+                    item(key = "original-prompt") {
                         SelectionContainer {
                             ChatMessageBubble(
                                 author = "you",
@@ -162,47 +401,151 @@ internal fun AgentTranscript(
                         }
                     }
                 }
-                displayItems.forEachIndexed { itemIndex, item ->
-                    key(transcriptDisplayItemKey(item)) {
-                        SelectionContainer {
-                            when (item) {
-                                is TranscriptDisplayItem.Event -> TranscriptEvent(
-                                    event = item.event,
-                                    eventKey = transcriptEventKey(item.index, item.event),
-                                    expandedToolKeys = expandedToolKeys,
-                                    agentLabel = agentLabel,
-                                    completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
-                                    onToolExpandedChange = { key, expanded ->
-                                        expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
-                                    },
-                                    onSkillOpen = onSkillOpen,
-                                )
-                                is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
-                                    events = item.events,
-                                    startIndex = item.startIndex,
-                                    expanded = transcriptDisplayItemKey(item) in expandedToolGroups,
-                                    onExpandedChange = { expanded ->
-                                        val key = transcriptDisplayItemKey(item)
-                                        expandedToolGroups = if (expanded) expandedToolGroups + key else expandedToolGroups - key
-                                    },
-                                    expandedToolKeys = expandedToolKeys,
-                                    onToolExpandedChange = { key, expanded ->
-                                        expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
-                                    },
-                                )
-                            }
+                itemsIndexed(
+                    items = displayItems,
+                    key = { _, item -> transcriptDisplayItemKey(item) },
+                ) { itemIndex, item ->
+                    SelectionContainer {
+                        when (item) {
+                            is TranscriptDisplayItem.Event -> TranscriptEvent(
+                                event = item.event,
+                                eventKey = transcriptEventKey(item.index, item.event),
+                                expandedToolKeys = expandedToolKeys,
+                                agentLabel = agentLabel,
+                                completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
+                                onToolExpandedChange = { key, expanded ->
+                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                },
+                                onSkillOpen = onSkillOpen,
+                            )
+                            is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
+                                events = item.events,
+                                startIndex = item.startIndex,
+                                expanded = transcriptDisplayItemKey(item) in expandedToolGroups,
+                                onExpandedChange = { expanded ->
+                                    val key = transcriptDisplayItemKey(item)
+                                    expandedToolGroups = if (expanded) expandedToolGroups + key else expandedToolGroups - key
+                                },
+                                expandedToolKeys = expandedToolKeys,
+                                onToolExpandedChange = { key, expanded ->
+                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                },
+                            )
                         }
                     }
                 }
                 if (isActive) {
-                    key("agent-thinking") { AgentThinkingIndicator() }
+                    item(key = "agent-thinking") { AgentThinkingIndicator() }
                 }
             }
             DraggableScrollbar(
-                scrollState = scrollState,
+                listState = listState,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
             )
         }
+    }
+}
+
+internal fun transcriptBottomItemIndex(
+    displayItemCount: Int,
+    hasHeader: Boolean,
+    hasPending: Boolean,
+    hasOriginalPrompt: Boolean,
+    isActive: Boolean,
+): Int {
+    var index = -1
+    if (hasHeader) index++
+    if (hasPending) index++
+    if (hasOriginalPrompt) index++
+    index += displayItemCount
+    if (isActive) index++
+    return index
+}
+
+internal fun transcriptBottomGapPx(
+    lastItemIndex: Int,
+    lastItemOffset: Int,
+    lastItemSize: Int,
+    totalItems: Int,
+    viewportEndOffset: Int,
+    canScrollForward: Boolean,
+    canScrollBackward: Boolean,
+): Int? {
+    if (totalItems <= 0) return 0
+    if (!canScrollForward && !canScrollBackward) return 0
+    if (lastItemIndex < totalItems - 1) return null
+    return (lastItemOffset + lastItemSize) - viewportEndOffset
+}
+
+internal fun transcriptIsNearBottom(
+    gapPx: Int?,
+    thresholdPx: Int = TRANSCRIPT_BOTTOM_THRESHOLD_PX,
+): Boolean = gapPx != null && abs(gapPx) <= thresholdPx
+
+private fun LazyListState.isNearBottom(
+    thresholdPx: Int = TRANSCRIPT_BOTTOM_THRESHOLD_PX,
+): Boolean = transcriptIsNearBottom(gapPx = bottomGapPx(), thresholdPx = thresholdPx)
+
+private fun LazyListState.bottomGapPx(): Int? {
+    val layout = layoutInfo
+    val lastVisible = layout.visibleItemsInfo.lastOrNull()
+    return transcriptBottomGapPx(
+        lastItemIndex = lastVisible?.index ?: -1,
+        lastItemOffset = lastVisible?.offset ?: 0,
+        lastItemSize = lastVisible?.size ?: 0,
+        totalItems = layout.totalItemsCount,
+        viewportEndOffset = layout.viewportEndOffset - layout.afterContentPadding,
+        canScrollForward = canScrollForward,
+        canScrollBackward = canScrollBackward,
+    )
+}
+
+/**
+ * Scroll so the bottom of the last item sits on the bottom of the viewport.
+ * Prefer [scrollBy] when the last item is already visible — [scrollToItem] alone
+ * parks it at the *top* and causes a visible flash during streaming.
+ */
+private suspend fun LazyListState.scrollToEndAligned(settleFrames: Int = 4) {
+    // Markdown/images/change-summary often measure across multiple frames after content arrives.
+    var stable = 0
+    var previousGap: Int? = null
+    repeat(settleFrames.coerceAtLeast(1)) { attempt ->
+        alignLastItemToBottom()
+        val gap = bottomGapPx()
+        if (gap != null && abs(gap) <= 1 && !canScrollForward) {
+            if (gap == previousGap) stable++ else stable = 1
+            previousGap = gap
+            if (stable >= 2) return
+        } else {
+            stable = 0
+            previousGap = gap
+        }
+        if (attempt < settleFrames - 1) withFrameMillis { }
+    }
+}
+
+private suspend fun LazyListState.alignLastItemToBottom() {
+    val lastIndex = layoutInfo.totalItemsCount - 1
+    if (lastIndex < 0) return
+
+    var lastItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastIndex }
+    if (lastItem == null) {
+        // Jump near the end in one shot, then fine-tune with scrollBy so we never
+        // paint a frame with the last item parked at the top of the viewport.
+        scrollToItem(lastIndex, scrollOffset = Int.MAX_VALUE / 4)
+        lastItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastIndex } ?: return
+        val viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+        val jumpDelta = (lastItem.offset + lastItem.size) - viewportEnd
+        if (abs(jumpDelta) > 1) {
+            scroll { scrollBy(jumpDelta.toFloat()) }
+        }
+        return
+    }
+
+    val viewportEnd = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+    val delta = (lastItem.offset + lastItem.size) - viewportEnd
+    if (abs(delta) > 1) {
+        scroll { scrollBy(delta.toFloat()) }
     }
 }
 
@@ -221,7 +564,6 @@ internal sealed class TranscriptDisplayItem {
     data class ToolCalls(val startIndex: Int, val events: List<AgentEvent>) : TranscriptDisplayItem()
 }
 
-/** Groups consecutive tool rows when [compactToolCalls] is on; otherwise one item per event. */
 internal fun transcriptDisplayItems(
     events: List<AgentEvent>,
     compactToolCalls: Boolean,
@@ -252,6 +594,38 @@ internal fun transcriptDisplayItems(
         }
     }
     return items
+}
+
+/**
+ * Fingerprint for transcript auto-scroll. Streamed assistant/thinking text grows in place,
+ * so the anchor tracks content length rather than relying on [ScrollState.maxValue] keys.
+ */
+internal fun transcriptScrollAnchor(
+    displayItems: List<TranscriptDisplayItem>,
+    hasHeader: Boolean,
+    hasPending: Boolean,
+    hasOriginalPrompt: Boolean,
+    isActive: Boolean,
+    completedContentKey: Any? = null,
+): List<Any?> {
+    val lastMarker = when (val last = displayItems.lastOrNull()) {
+        is TranscriptDisplayItem.Event -> when (val event = last.event) {
+            is AgentEvent.AssistantText -> listOf("assistant", event.text.length, event.text.takeLast(96))
+            is AgentEvent.Thinking -> listOf("thinking", event.text.length, event.text.takeLast(96))
+            else -> listOf(transcriptEventKey(last.index, last.event))
+        }
+        is TranscriptDisplayItem.ToolCalls -> listOf(transcriptDisplayItemKey(last), last.events.size)
+        null -> listOf("empty")
+    }
+    return listOf(
+        displayItems.size,
+        lastMarker,
+        hasHeader,
+        hasPending,
+        hasOriginalPrompt,
+        isActive,
+        completedContentKey,
+    )
 }
 
 private fun AgentEvent.isToolTranscriptEvent(): Boolean =
@@ -786,16 +1160,21 @@ private fun ToolBlock(
     }
 }
 
-private fun transcriptDisplayItemKey(item: TranscriptDisplayItem): String = when (item) {
+/**
+ * Lazy identity for a transcript row. Must stay stable while streamed text / tool
+ * groups grow in place — putting size, text, or summary hashes here remounts the
+ * row every token and reads as flicker.
+ */
+internal fun transcriptDisplayItemKey(item: TranscriptDisplayItem): String = when (item) {
     is TranscriptDisplayItem.Event -> transcriptEventKey(item.index, item.event)
     is TranscriptDisplayItem.ToolCalls -> {
         val first = item.events.firstOrNull()
-        "tool-group-${item.startIndex}-${item.events.size}-${first?.atMillis ?: 0}-${item.events.hashCode()}"
+        "tool-group-${item.startIndex}-${first?.atMillis ?: 0}"
     }
 }
 
-private fun transcriptEventKey(index: Int, event: AgentEvent): String = when (event) {
-    is AgentEvent.ToolCall -> "tool-call-$index-${event.atMillis}-${event.toolName}-${event.summary.hashCode()}"
-    is AgentEvent.ToolResult -> "tool-result-$index-${event.atMillis}-${event.toolName}-${event.summary.hashCode()}-${event.isError}"
+internal fun transcriptEventKey(index: Int, event: AgentEvent): String = when (event) {
+    is AgentEvent.ToolCall -> "tool-call-$index-${event.atMillis}-${event.toolName}"
+    is AgentEvent.ToolResult -> "tool-result-$index-${event.atMillis}-${event.toolName}-${event.isError}"
     else -> "${event::class.simpleName}-$index-${event.atMillis}"
 }

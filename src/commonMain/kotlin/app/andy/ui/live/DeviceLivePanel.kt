@@ -23,6 +23,7 @@ internal fun DeviceLivePanel(
     device: AndroidDevice?,
     modifier: Modifier = Modifier,
     showChromeControls: Boolean = true,
+    showDeviceHeader: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -34,7 +35,7 @@ internal fun DeviceLivePanel(
     fun connect() {
         if (serial != null) {
             scope.launch {
-                val result = services.mirror.connect(serial)
+                val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
                 connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
             }
         }
@@ -42,7 +43,7 @@ internal fun DeviceLivePanel(
     LaunchedEffect(serial) {
         connectResult = ""
         if (serial != null) {
-            val result = services.mirror.connect(serial)
+            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
             connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
             if (result.isSuccess) {
                 try {
@@ -63,6 +64,7 @@ internal fun DeviceLivePanel(
             connectResult = connectResult,
             modifier = modifier,
             showChromeControls = showChromeControls,
+            showDeviceHeader = showDeviceHeader,
             onInput = sendMirrorInput,
             onConnect = ::connect,
         )

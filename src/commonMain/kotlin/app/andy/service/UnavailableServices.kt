@@ -259,6 +259,8 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit
     override fun markRead(taskId: String) = Unit
     override fun markUnread(taskId: String) = Unit
+    override fun archive(taskId: String) = Unit
+    override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())
     override fun interactiveResumeCommand(taskId: String): String? = null
     override suspend fun openInTerminal(taskId: String) = unavailable()

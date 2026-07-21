@@ -374,4 +374,20 @@ class DesktopAgentTaskStoreTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun roundTripsArchivedFlag() = withStore { store ->
+        val task = AgentTask(
+            id = "archived-task",
+            title = "old chat",
+            prompt = "done",
+            agent = AgentKind.Codex,
+            projectId = "proj-1",
+            status = AgentTaskStatus.Completed,
+            createdAtMillis = 42,
+            archived = true,
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        assertEquals(true, store.load().tasks.single().archived)
+    }
 }

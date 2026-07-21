@@ -63,6 +63,32 @@ object SharedPrefsXml {
     fun delete(entries: List<PrefEntry>, key: String): List<PrefEntry> =
         entries.filterNot { it.key == key }
 
+    fun valueValidationError(type: PrefType, rawValue: String): String? =
+        if (coerceValue(type, rawValue) == null) {
+            when (type) {
+                PrefType.Boolean -> "Boolean value must be true or false"
+                PrefType.Int -> "Int value must be a whole number"
+                PrefType.Long -> "Long value must be a whole number"
+                PrefType.Float -> "Float value must be a number"
+                PrefType.String, PrefType.StringSet -> null
+            }
+        } else {
+            null
+        }
+
+    fun coerceValue(type: PrefType, rawValue: String): String? {
+        return when (type) {
+            PrefType.Boolean -> when (rawValue.trim().lowercase()) {
+                "true", "false" -> rawValue.trim().lowercase()
+                else -> null
+            }
+            PrefType.Int -> rawValue.trim().toIntOrNull()?.let { rawValue.trim() }
+            PrefType.Long -> rawValue.trim().toLongOrNull()?.let { rawValue.trim() }
+            PrefType.Float -> rawValue.trim().toFloatOrNull()?.let { rawValue.trim() }
+            PrefType.String, PrefType.StringSet -> rawValue
+        }
+    }
+
     private fun encodeXml(value: String): String = buildString(value.length) {
         value.forEach { ch ->
             when (ch) {

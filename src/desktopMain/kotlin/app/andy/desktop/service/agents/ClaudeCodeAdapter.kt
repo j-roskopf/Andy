@@ -61,6 +61,11 @@ class ClaudeCodeAdapter : AgentCliAdapter {
     }
 
     override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> {
+        val trimmed = line.trim()
+        // Claude prints some fatal startup failures as plain text before any stream-json.
+        if (trimmed.startsWith("Error:", ignoreCase = true)) {
+            return listOf(AgentEvent.TaskError(nowMillis, trimmed.substring(6).trim().ifBlank { trimmed }))
+        }
         val obj = parseJsonObject(line) ?: return rawIfNotBlank(line, nowMillis)
         return parseClaudeStyleObject(obj, nowMillis) ?: rawIfNotBlank(line, nowMillis)
     }

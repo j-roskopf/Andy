@@ -28,14 +28,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.PrefEntry
 import app.andy.model.PrefType
+import app.andy.model.SharedPrefsXml
 import app.andy.service.AppService
 import app.andy.service.SharedPrefsService
 import app.andy.ui.components.Button
+import app.andy.ui.components.HeaderCell
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PackageSelector
 import app.andy.ui.components.PaneDivider
-import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
@@ -66,6 +67,9 @@ internal fun SharedPreferencesPane(
     var editingKey by remember { mutableStateOf<String?>(null) }
     var editingValue by remember { mutableStateOf("") }
     var listPaneWidth by remember { mutableStateOf(260f) }
+    var keyWidth by remember { mutableStateOf(220f) }
+    var typeWidth by remember { mutableStateOf(100f) }
+    var actionsWidth by remember { mutableStateOf(160f) }
 
     fun refreshFiles() {
         if (serial == null || selectedPackage.isNullOrBlank()) {
@@ -208,13 +212,19 @@ internal fun SharedPreferencesPane(
                                     message = "Key is required"
                                     return@Button
                                 }
+                                val coercedValue = SharedPrefsXml.coerceValue(newType, newValue)
+                                if (coercedValue == null) {
+                                    message = SharedPrefsXml.valueValidationError(newType, newValue)
+                                        ?: "Invalid value for ${newType.name.lowercase()}"
+                                    return@Button
+                                }
                                 scope.launch {
                                     busy = true
                                     val result = service.upsert(
                                         serial,
                                         selectedPackage,
                                         file,
-                                        PrefEntry(newKey.trim(), newType, newValue),
+                                        PrefEntry(newKey.trim(), newType, coercedValue),
                                     )
                                     message = if (result.isSuccess) "Saved ${newKey.trim()}" else result.stderr.ifBlank { "Save failed" }
                                     if (result.isSuccess) {
@@ -228,13 +238,21 @@ internal fun SharedPreferencesPane(
                             enabled = !busy,
                         ) { Text("Add") }
                     }
-                    TableHeader(listOf("KEY" to 220.dp, "TYPE" to 100.dp, "VALUE" to 1.dp, "" to 160.dp))
+                    Row(
+                        Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        HeaderCell("KEY", keyWidth.dp) { keyWidth = it.coerceIn(120f, 600f) }
+                        HeaderCell("TYPE", typeWidth.dp) { typeWidth = it.coerceIn(72f, 200f) }
+                        Text("VALUE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                        HeaderCell("", actionsWidth.dp) { actionsWidth = it.coerceIn(120f, 280f) }
+                    }
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(entries, key = { it.key }) { entry ->
                             val editing = editingKey == entry.key
                             TableRow {
-                                MonoCell(entry.key, 220.dp, TextPrimary)
-                                MonoCell(entry.type.name, 100.dp, TextSecondary)
+                                MonoCell(entry.key, keyWidth.dp, TextPrimary)
+                                MonoCell(entry.type.name, typeWidth.dp, TextSecondary)
                                 if (editing) {
                                     TextField(
                                         editingValue,
@@ -251,16 +269,22 @@ internal fun SharedPreferencesPane(
                                         Modifier.weight(1f),
                                     )
                                 }
-                                Row(Modifier.width(160.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.width(actionsWidth.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     if (editing) {
                                         OutlinedButton(onClick = {
+                                            val coercedValue = SharedPrefsXml.coerceValue(entry.type, editingValue)
+                                            if (coercedValue == null) {
+                                                message = SharedPrefsXml.valueValidationError(entry.type, editingValue)
+                                                    ?: "Invalid value for ${entry.type.name.lowercase()}"
+                                                return@OutlinedButton
+                                            }
                                             scope.launch {
                                                 busy = true
                                                 val result = service.upsert(
                                                     serial,
                                                     selectedPackage,
                                                     file,
-                                                    entry.copy(value = editingValue),
+                                                    entry.copy(value = coercedValue),
                                                 )
                                                 message = if (result.isSuccess) "Updated ${entry.key}" else result.stderr.ifBlank { "Update failed" }
                                                 editingKey = null

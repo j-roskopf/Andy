@@ -11,11 +11,17 @@ import app.andy.model.SavedSqlQuery
 import app.andy.service.AppDatabaseService
 import app.andy.service.CommandResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.coroutineContext
 
 class DesktopAppDatabaseService(
     private val runner: CommandRunner,
@@ -24,6 +30,9 @@ class DesktopAppDatabaseService(
     private val sqliteLocator: () -> String? = ::locateHostSqlite3,
 ) : AppDatabaseService {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
+    /** Non-null paths only — ConcurrentHashMap rejects null values. */
+    private val deviceSqlitePaths = ConcurrentHashMap<String, String>()
+    private val deviceSqliteMissing = ConcurrentHashMap.newKeySet<String>()
 
     override suspend fun listDatabases(serial: String, packageName: String): Result<List<AppDatabaseInfo>> =
         withContext(Dispatchers.IO) {
@@ -77,47 +86,20 @@ class DesktopAppDatabaseService(
         tables: List<String>,
     ): Result<Map<String, Long>> = withContext(Dispatchers.IO) {
         runCatching {
-            val local = pullWorkingCopy(serial, packageName, dbName)
-            try {
-                val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
-                val names = if (tables.isNotEmpty()) {
-                    tables
-                } else {
-                    val listed = runner.run(
-                        listOf(
-                            sqlite,
-                            "-header",
-                            "-csv",
-                            "-nullvalue",
-                            SQLITE_NULL_MARKER,
-                            local.absolutePath,
-                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
-                        ),
-                        60,
-                    )
-                    if (!listed.isSuccess) {
-                        error(listed.stderr.ifBlank { listed.stdout }.ifBlank { "Failed to list tables" })
-                    }
-                    parseCsv(listed.stdout).rows.mapNotNull { it.firstOrNull() }
-                }
-                if (names.isEmpty()) return@runCatching emptyMap()
-                val sql = names.joinToString(separator = " UNION ALL ") { name ->
-                    "SELECT ${DbCellUpdate.sqlLiteral(name)} AS name, COUNT(*) AS c FROM ${DbCellUpdate.quoteIdent(name)}"
-                } + ";"
-                val counted = runner.run(
-                    listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
-                    60,
-                )
-                if (!counted.isSuccess) {
-                    error(counted.stderr.ifBlank { counted.stdout }.ifBlank { "Failed to count rows" })
-                }
-                parseCsv(counted.stdout).rows.associate { row ->
-                    val name = row.getOrNull(0).orEmpty()
-                    val count = row.getOrNull(1)?.toLongOrNull() ?: 0L
-                    name to count
-                }
-            } finally {
-                local.parentFile?.deleteRecursively()
+            val names = if (tables.isNotEmpty()) {
+                tables
+            } else {
+                listTables(serial, packageName, dbName).getOrThrow()
+            }
+            if (names.isEmpty()) return@runCatching emptyMap()
+            val sql = names.joinToString(separator = " UNION ALL ") { name ->
+                "SELECT ${DbCellUpdate.sqlLiteral(name)} AS name, COUNT(*) AS c FROM ${DbCellUpdate.quoteIdent(name)}"
+            } + ";"
+            val counted = runSqlite(serial, packageName, dbName, sql)
+            counted.rows.associate { row ->
+                val name = row.getOrNull(0).orEmpty()
+                val count = row.getOrNull(1)?.toLongOrNull() ?: 0L
+                name to count
             }
         }
     }
@@ -222,7 +204,7 @@ class DesktopAppDatabaseService(
         localPath: String,
     ): CommandResult = withContext(Dispatchers.IO) {
         runCatching {
-            val working = pullWorkingCopy(serial, packageName, dbName)
+            val working = pullWorkingCopyFresh(serial, packageName, dbName)
             try {
                 val target = File(localPath)
                 target.parentFile?.mkdirs()
@@ -267,12 +249,13 @@ class DesktopAppDatabaseService(
         dbName: String,
         sql: String,
     ): DbQueryResult {
-        val local = pullWorkingCopy(serial, packageName, dbName)
+        runSqliteOnDevice(serial, packageName, dbName, sql)?.let { return it }
+        val local = pullWorkingCopyFresh(serial, packageName, dbName)
         try {
             val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
             val result = runner.run(
                 listOf(sqlite, "-header", "-csv", "-nullvalue", SQLITE_NULL_MARKER, local.absolutePath, sql),
-                60,
+                HOST_SQLITE_TIMEOUT_SECONDS,
             )
             if (!result.isSuccess) {
                 error(result.stderr.ifBlank { result.stdout }.ifBlank { "sqlite3 query failed" })
@@ -283,13 +266,55 @@ class DesktopAppDatabaseService(
         }
     }
 
+    private suspend fun runSqliteOnDevice(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        sql: String,
+    ): DbQueryResult? {
+        val sqlite = deviceSqlitePath(serial) ?: return null
+        ensureRunAs(serial, packageName)
+        val safePath = requireDbPath(dbName)
+        val result = runAs(
+            serial,
+            packageName,
+            sqlite,
+            "-header",
+            "-csv",
+            "-nullvalue",
+            SQLITE_NULL_MARKER,
+            safePath,
+            sql,
+            timeoutSeconds = DEVICE_SQLITE_TIMEOUT_SECONDS,
+        )
+        if (!result.isSuccess) return null
+        return parseCsv(result.stdout)
+    }
+
+    private suspend fun deviceSqlitePath(serial: String): String? {
+        deviceSqlitePaths[serial]?.let { return it }
+        if (serial in deviceSqliteMissing) return null
+        val adb = devices.adbPath() ?: return null
+        val discovered = DEVICE_SQLITE_CANDIDATES.firstOrNull { path ->
+            // Wireless probes are slower; 8s was timing out and falling through to a broken null-cache.
+            val probe = runner.run(listOf(adb, "-s", serial, "shell", "$path -version"), DEVICE_SQLITE_PROBE_TIMEOUT_SECONDS)
+            probe.isSuccess && probe.stdout.contains("SQLite", ignoreCase = true)
+        }
+        if (discovered != null) {
+            deviceSqlitePaths[serial] = discovered
+        } else {
+            deviceSqliteMissing.add(serial)
+        }
+        return discovered
+    }
+
     private suspend fun runSqliteWrite(
         serial: String,
         packageName: String,
         dbName: String,
         sql: String,
     ): Int {
-        val local = pullWorkingCopy(serial, packageName, dbName)
+        val local = pullWorkingCopyFresh(serial, packageName, dbName)
         try {
             val sqlite = sqliteLocator() ?: error("Host sqlite3 not found")
             val result = runner.run(listOf(sqlite, local.absolutePath, sql), 60)
@@ -316,7 +341,7 @@ class DesktopAppDatabaseService(
      * tables. We pull the main DB + WAL, drop any `-shm`, then checkpoint so queries
      * always see committed rows.
      */
-    private suspend fun pullWorkingCopy(serial: String, packageName: String, dbName: String): File {
+    private suspend fun pullWorkingCopyFresh(serial: String, packageName: String, dbName: String): File {
         ensureRunAs(serial, packageName)
         val safePath = requireDbPath(dbName)
         val fileName = safePath.substringAfterLast('/')
@@ -350,7 +375,7 @@ class DesktopAppDatabaseService(
         val adb = devices.adbPath() ?: error("ADB not found")
         val safePath = requireDbPath(dbName)
         val remoteTmp = "/data/local/tmp/andy-db-${UUID.randomUUID()}.db"
-        val push = runner.run(listOf(adb, "-s", serial, "push", local.absolutePath, remoteTmp), 60)
+        val push = runner.run(listOf(adb, "-s", serial, "push", local.absolutePath, remoteTmp), HOST_SQLITE_TIMEOUT_SECONDS)
         if (!push.isSuccess) error(push.stderr.ifBlank { "Failed to push database" })
         val copy = runAs(serial, packageName, "cp", remoteTmp, safePath)
         runner.run(listOf(adb, "-s", serial, "shell", "rm", "-f", remoteTmp), 10)
@@ -371,14 +396,43 @@ class DesktopAppDatabaseService(
         val process = ProcessBuilder(listOf(adb, "-s", serial, "exec-out", "run-as", packageName, "cat", remotePath))
             .redirectErrorStream(false)
             .start()
-        local.outputStream().use { out -> process.inputStream.copyTo(out) }
-        val code = process.waitFor()
-        val err = process.errorStream.bufferedReader().readText()
-        if (code != 0 || !local.exists()) {
-            error(err.ifBlank { "Failed to pull $remotePath" })
-        }
-        if (!allowEmpty && local.length() == 0L) {
-            error("Pulled empty file for $remotePath")
+        val timedOut = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            coroutineScope {
+                val watchdog = launch {
+                    delay(PULL_TIMEOUT_MILLIS)
+                    timedOut.set(true)
+                    process.destroyForcibly()
+                }
+                try {
+                    local.outputStream().use { out -> process.inputStream.copyTo(out) }
+                    coroutineContext.ensureActive()
+                    val code = process.waitFor()
+                    watchdog.cancel()
+                    if (timedOut.get()) {
+                        local.delete()
+                        error("Timed out pulling $remotePath — try again or use a USB connection")
+                    }
+                    val err = process.errorStream.bufferedReader().readText()
+                    if (code != 0 || !local.exists()) {
+                        error(err.ifBlank { "Failed to pull $remotePath" })
+                    }
+                    if (!allowEmpty && local.length() == 0L) {
+                        error("Pulled empty file for $remotePath")
+                    }
+                } catch (error: Throwable) {
+                    watchdog.cancel()
+                    process.destroyForcibly()
+                    if (timedOut.get()) {
+                        local.delete()
+                        error("Timed out pulling $remotePath — try again or use a USB connection")
+                    }
+                    throw error
+                }
+            }
+        } catch (error: Throwable) {
+            process.destroyForcibly()
+            throw error
         }
     }
 
@@ -392,9 +446,14 @@ class DesktopAppDatabaseService(
         }
     }
 
-    private suspend fun runAs(serial: String, packageName: String, vararg command: String): CommandResult {
+    private suspend fun runAs(
+        serial: String,
+        packageName: String,
+        vararg command: String,
+        timeoutSeconds: Long = RUN_AS_TIMEOUT_SECONDS,
+    ): CommandResult {
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
-        return runner.run(listOf(adb, "-s", serial, "shell", "run-as", packageName, *command), 20)
+        return runner.run(listOf(adb, "-s", serial, "shell", "run-as", packageName, *command), timeoutSeconds)
     }
 
     private fun packageDir(packageName: String): File =
@@ -459,6 +518,18 @@ class DesktopAppDatabaseService(
         }
         values += current.toString()
         return values
+    }
+
+    companion object {
+        private const val RUN_AS_TIMEOUT_SECONDS = 30L
+        private const val DEVICE_SQLITE_TIMEOUT_SECONDS = 120L
+        private const val DEVICE_SQLITE_PROBE_TIMEOUT_SECONDS = 20L
+        private const val HOST_SQLITE_TIMEOUT_SECONDS = 120L
+        private const val PULL_TIMEOUT_MILLIS = 120_000L
+        private val DEVICE_SQLITE_CANDIDATES = listOf(
+            "/system/bin/sqlite3",
+            "/system_ext/bin/sqlite3",
+        )
     }
 }
 
