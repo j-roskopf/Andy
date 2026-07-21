@@ -119,6 +119,8 @@ data class AgentModelOption(
     val label: String,
     val efforts: List<AgentReasoningEffort>,
     val supportsFastMode: Boolean = false,
+    /** True when the provider CLI only advertises a `*-fast` slug for this base model. */
+    val fastRequired: Boolean = false,
     /**
      * Provider-specific effort suffix tokens when they differ from [AgentReasoningEffort.cliValue]
      * (for example Cursor's `extra-high` vs Codex's `xhigh`).
@@ -591,8 +593,8 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
                 if (effort != null && catalog?.efforts?.isNotEmpty() == true) {
                     append('-').append(catalog.effortToken(effort))
                 }
-                // Catalog options gate -fast; custom exact slugs stay unadorned.
-                if (fastMode && catalog?.supportsFastMode == true) append("-fast")
+                // Catalog options gate -fast; fast-only models always keep the suffix.
+                if (catalog?.supportsFastMode == true && (fastMode || catalog.fastRequired)) append("-fast")
             }
         }
         AgentKind.Antigravity -> {

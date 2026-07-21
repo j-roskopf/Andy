@@ -367,7 +367,11 @@ private fun rememberAgentTaskComposerForm(
                 state.reasoningEffort = if (state.agent == AgentKind.Cursor) model.preferredEffort() else null
             }
         }
-        if (model?.supportsFastMode != true) state.fastMode = false
+        if (model?.supportsFastMode != true) {
+            state.fastMode = false
+        } else if (model.fastRequired) {
+            state.fastMode = true
+        }
     }
 
     return AgentTaskComposerForm(
@@ -745,7 +749,9 @@ private fun AgentChatComposer(
                             selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
                         }
                     }
-                    if (selectedModel.supportsFastMode) FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
+                    if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
+                        FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
+                    }
                 }
                 FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
                 Box {

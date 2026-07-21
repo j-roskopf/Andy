@@ -114,7 +114,7 @@ internal fun AgentProviderModelProfileControls(
                 ProfileOptionRow(wrapOptions) {
                     options.forEach { option ->
                         FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
-                            onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = false))
+                            onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = option.fastRequired))
                         }
                     }
                 }
@@ -127,7 +127,7 @@ internal fun AgentProviderModelProfileControls(
             }
             modelOptions.forEach { option ->
                 FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
-                    onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = false))
+                    onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = option.fastRequired))
                 }
             }
             FilterPill("custom", customModel, Rust) {
@@ -167,7 +167,7 @@ internal fun AgentProviderModelProfileControls(
                 }
             }
         }
-        if (selectedModel.supportsFastMode) {
+        if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
             FilterPill("fast", profile.fastMode, app.andy.ui.theme.Green) {
                 onChange(profile.copy(fastMode = !profile.fastMode))
             }

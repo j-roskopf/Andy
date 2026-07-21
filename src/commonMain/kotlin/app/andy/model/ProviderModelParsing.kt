@@ -118,6 +118,7 @@ private fun groupProviderModelVariants(rows: List<Pair<String, String>>): List<A
             label = acc.label.ifBlank { humanizeModelSlug(baseId) },
             efforts = efforts,
             supportsFastMode = acc.supportsFastMode,
+            fastRequired = acc.supportsFastMode && !acc.sawBareVariant,
             effortTokens = acc.efforts.toMap(),
         )
     }

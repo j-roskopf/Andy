@@ -49,6 +49,8 @@ import app.andy.service.McpServerService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1455,11 +1457,14 @@ class DesktopAgentRunService(
         val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
         _cliStatuses.value = statuses
         val models = withContext(Dispatchers.IO) {
-            statuses.mapNotNull { status ->
-                val binary = status.binaryPath ?: return@mapNotNull null
-                if (!status.available) return@mapNotNull null
-                modelProbe.query(status.kind, binary)?.let { status.kind to it }
-            }.toMap()
+            statuses
+                .mapNotNull { status ->
+                    val binary = status.binaryPath?.takeIf { status.available } ?: return@mapNotNull null
+                    async { modelProbe.query(status.kind, binary)?.let { status.kind to it } }
+                }
+                .awaitAll()
+                .filterNotNull()
+                .toMap()
         }
         if (models.isNotEmpty()) {
             _providerModels.update { current -> current + models }

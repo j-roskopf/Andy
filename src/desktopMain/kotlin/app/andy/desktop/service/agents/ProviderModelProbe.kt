@@ -27,6 +27,7 @@ internal class ProviderModelProbe {
             .directory(File(System.getProperty("user.home")))
             .redirectErrorStream(true)
             .start()
+        process.outputStream.close()
         val output = StringBuffer()
         val reader = Thread({
             runCatching {

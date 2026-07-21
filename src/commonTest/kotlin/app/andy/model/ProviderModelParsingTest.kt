@@ -83,6 +83,7 @@ class ProviderModelParsingTest {
         val composer = options.single { it.id == "composer-2.5" }
         assertEquals(emptyList(), composer.efforts)
         assertTrue(composer.supportsFastMode)
+        assertFalse(composer.fastRequired)
 
         assertEquals("auto", options.single { it.id == "auto" }.id)
     }
@@ -131,6 +132,31 @@ class ProviderModelParsingTest {
     fun catalogResolvesLegacyAntigravityDisplayNames() {
         val option = AgentModelCatalog.option(AgentKind.Antigravity, "Gemini 3.6 Flash")
         assertEquals("gemini-3.6-flash", option?.id)
+    }
+
+    @Test
+    fun fastOnlyCursorModelRequiresFastSuffix() {
+        val options = parseCursorModels(
+            """
+            composer-2.5-fast - Composer 2.5 Fast
+            """.trimIndent(),
+        )
+
+        val composer = options.single { it.id == "composer-2.5" }
+        assertTrue(composer.supportsFastMode)
+        assertTrue(composer.fastRequired)
+
+        val task = AgentTask(
+            id = "1",
+            title = "t",
+            prompt = "p",
+            agent = AgentKind.Cursor,
+            model = "composer-2.5",
+            reasoningEffort = null,
+            fastMode = false,
+            createdAtMillis = 0,
+        )
+        assertEquals("composer-2.5-fast", task.modelForCli(mapOf(AgentKind.Cursor to options)))
     }
 
     @Test
