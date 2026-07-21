@@ -349,10 +349,17 @@ internal fun LiveScreen(
                     awaitCancellation()
                 } finally {
                     withContext(NonCancellable) {
+                        // Keep the scrcpy session warm when leaving Live so returning is instant.
+                        // Device stop / serial change still tear down via ShellState / reconnect.
                         services.bugs.stopCapture()
-                        services.mirror.disconnect()
                     }
                 }
+            }
+        } else {
+            // Still on Live but no online device — release the stream.
+            withContext(NonCancellable) {
+                services.bugs.stopCapture()
+                services.mirror.disconnect()
             }
         }
     }

@@ -1,11 +1,12 @@
 package app.andy.ui.intents
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.LocalTextStyle
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -17,8 +18,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andy.model.IntentDraft
 import app.andy.model.IntentMode
+import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
@@ -30,11 +35,18 @@ import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
-import androidx.compose.ui.unit.dp
+import androidx.compose.material3.LocalTextStyle
 import kotlinx.coroutines.launch
 
+private const val MaxRecentIntents = 10
+
 @Composable
-internal fun IntentsScreen(services: AndyServices, serial: String?) {
+internal fun IntentsScreen(
+    services: AndyServices,
+    serial: String?,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
     val intentService = services.intents
     val scope = rememberCoroutineScope()
     var mode by remember { mutableStateOf(IntentMode.DeepLink) }
@@ -44,6 +56,12 @@ internal fun IntentsScreen(services: AndyServices, serial: String?) {
     var result by remember { mutableStateOf("") }
     val draft = IntentDraft(mode = mode, action = action, component = component, dataUri = dataUri)
     val command = intentService.buildCommand(draft).joinToString(" ")
+    fun applyDraft(item: IntentDraft) {
+        mode = item.mode
+        action = item.action
+        component = item.component
+        dataUri = item.dataUri
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PanelCard {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -57,9 +75,49 @@ internal fun IntentsScreen(services: AndyServices, serial: String?) {
                 Button(onClick = {
                     if (serial != null) scope.launch {
                         services.bugs.recordAction("intent", "Send ${mode.name}", command)
-                        result = intentService.send(serial, draft).let { if (it.isSuccess) it.stdout.ifBlank { "Sent" } else it.stderr }
+                        val sendResult = intentService.send(serial, draft)
+                        result = if (sendResult.isSuccess) sendResult.stdout.ifBlank { "Sent" } else sendResult.stderr
+                        if (sendResult.isSuccess) {
+                            onUpdateWorkspace { state ->
+                                state.copy(
+                                    savedIntents = (listOf(draft) + state.savedIntents.filterNot { it == draft })
+                                        .take(MaxRecentIntents),
+                                )
+                            }
+                        }
                     }
                 }) { Text("Send") }
+            }
+        }
+        if (workspaceState.savedIntents.isNotEmpty()) {
+            PanelCard {
+                Text("Recent", color = TextPrimary, fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    workspaceState.savedIntents.forEach { item ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { applyDraft(item) }
+                                .padding(vertical = 6.dp),
+                        ) {
+                            Text(
+                                item.mode.name.lowercase(),
+                                color = Rust,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                intentSummary(item),
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
             }
         }
         PanelCard {
@@ -67,4 +125,11 @@ internal fun IntentsScreen(services: AndyServices, serial: String?) {
             Text(result.ifBlank { "No intent sent yet." }, color = TextSecondary, fontFamily = FontFamily.Monospace)
         }
     }
+}
+
+internal fun intentSummary(draft: IntentDraft): String = when {
+    draft.dataUri.isNotBlank() -> draft.dataUri
+    draft.component.isNotBlank() -> draft.component
+    draft.action.isNotBlank() -> draft.action
+    else -> draft.mode.name.lowercase()
 }

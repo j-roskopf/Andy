@@ -376,7 +376,12 @@ internal fun AndyShell(
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } }
                         )
-                        AndyDestination.Intents -> IntentsScreen(services, state.selectedSerial)
+                        AndyDestination.Intents -> IntentsScreen(
+                            services = services,
+                            serial = state.selectedSerial,
+                            workspaceState = state.workspaceState,
+                            onUpdateWorkspace = { state.updateWorkspace(it) },
+                        )
                         AndyDestination.Files -> FilesScreen(
                             files = services.files,
                             apps = services.apps,

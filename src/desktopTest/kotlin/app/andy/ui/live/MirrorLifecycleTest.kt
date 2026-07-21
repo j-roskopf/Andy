@@ -17,16 +17,18 @@ import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.logcat.LogcatState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 @OptIn(ExperimentalTestApi::class)
 class MirrorLifecycleTest {
     @Test
-    fun liveScreenDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
+    fun liveScreenKeepsMirrorConnectedWhenRemovedFromComposition() = withComposeMirrorRenderer {
         // Prior Compose desktop tests can leave uncaught Job failures that poison the next
         // runTest scope. Consume that once, then assert the lifecycle behavior.
         runDesktopComposeUiTestDrainingPriorFailures {
@@ -67,14 +69,16 @@ class MirrorLifecycleTest {
 
             waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
             runOnUiThread { visible.value = false }
-            waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
+            // Give composition teardown a moment; disconnect must not fire on leave.
+            runBlocking { delay(250) }
 
-            assertEquals(1, mirror.disconnectCalls)
+            assertEquals(1, mirror.connectCalls)
+            assertEquals(0, mirror.disconnectCalls)
         }
     }
 
     @Test
-    fun embeddedLivePanelDisconnectsMirrorWhenRemovedFromComposition() = withComposeMirrorRenderer {
+    fun embeddedLivePanelKeepsMirrorConnectedWhenRemovedFromComposition() = withComposeMirrorRenderer {
         runDesktopComposeUiTestDrainingPriorFailures {
             val visible = mutableStateOf(true)
             val mirror = TrackingMirror()
@@ -88,9 +92,10 @@ class MirrorLifecycleTest {
 
             waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
             runOnUiThread { visible.value = false }
-            waitUntil(timeoutMillis = 5_000) { mirror.disconnectCalls == 1 }
+            runBlocking { delay(250) }
 
-            assertEquals(1, mirror.disconnectCalls)
+            assertEquals(1, mirror.connectCalls)
+            assertEquals(0, mirror.disconnectCalls)
         }
     }
 
