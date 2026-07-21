@@ -6,6 +6,8 @@ import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.FilesTab
+import app.andy.model.PerformanceTab
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.service.WorkspaceStore
@@ -39,6 +41,7 @@ class DesktopWorkspaceStore(
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
+            workspaceStatusExpanded = props.getProperty("workspaceStatusExpanded")?.toBooleanStrictOrNull() ?: false,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             proxyRules = loadProxyRules(props),
             pairedWifiDevices = loadPairedWifi(props),
@@ -48,6 +51,17 @@ class DesktopWorkspaceStore(
             appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
             performanceLivePaneWidth = props.getProperty("performanceLivePaneWidth")?.toFloatOrNull() ?: 320f,
+            performanceTab = props.getProperty("performanceTab")?.takeIf { tab ->
+                PerformanceTab.entries.any { it.name == tab }
+            } ?: PerformanceTab.Metrics.name,
+            filesTab = props.getProperty("filesTab")?.takeIf { tab ->
+                FilesTab.entries.any { it.name == tab }
+            } ?: FilesTab.Files.name,
+            tracingPresetId = props.getProperty("tracingPresetId")?.takeIf { it.isNotBlank() } ?: "default",
+            tracingDurationSeconds = props.getProperty("tracingDurationSeconds")?.toIntOrNull() ?: 10,
+            tracingBufferSizeMb = props.getProperty("tracingBufferSizeMb")?.toIntOrNull() ?: 64,
+            tracingPresetsPaneWidth = props.getProperty("tracingPresetsPaneWidth")?.toFloatOrNull() ?: 320f,
+            tracingLibraryPaneHeight = props.getProperty("tracingLibraryPaneHeight")?.toFloatOrNull() ?: 240f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
             accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
             hostFileRoots = props.getProperty("hostFileRoots").orEmpty().lines().filter { it.isNotBlank() },
@@ -81,6 +95,7 @@ class DesktopWorkspaceStore(
             setProperty("surfaceModeId", state.surfaceModeId)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
+            setProperty("workspaceStatusExpanded", state.workspaceStatusExpanded.toString())
             setProperty("projectsIntroductionCompleted", state.projectsIntroductionCompleted.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
             state.proxyRules.forEachIndexed { index, rule ->
@@ -110,6 +125,13 @@ class DesktopWorkspaceStore(
             setProperty("appsDetailsPaneHeight", state.appsDetailsPaneHeight.toString())
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
             setProperty("performanceLivePaneWidth", state.performanceLivePaneWidth.toString())
+            setProperty("performanceTab", state.performanceTab)
+            setProperty("filesTab", state.filesTab)
+            setProperty("tracingPresetId", state.tracingPresetId)
+            setProperty("tracingDurationSeconds", state.tracingDurationSeconds.toString())
+            setProperty("tracingBufferSizeMb", state.tracingBufferSizeMb.toString())
+            setProperty("tracingPresetsPaneWidth", state.tracingPresetsPaneWidth.toString())
+            setProperty("tracingLibraryPaneHeight", state.tracingLibraryPaneHeight.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
             setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
             setProperty("hostFileRoots", state.hostFileRoots.joinToString("\n"))

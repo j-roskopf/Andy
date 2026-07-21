@@ -31,6 +31,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -50,10 +51,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.onImageFilesDropped
 import app.andy.model.ActionProject
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentCliStatus
@@ -81,6 +84,7 @@ import app.andy.service.AndyServices
 import app.andy.ui.agents.AgentBadge
 import app.andy.ui.agents.AgentProviderModelProfileControls
 import app.andy.ui.agents.AgentUserInputCard
+import app.andy.ui.agents.ChatAttachedImages
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
@@ -89,6 +93,7 @@ import app.andy.ui.components.MarkdownPreview
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
+import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
@@ -337,7 +342,12 @@ internal fun ProjectWorkflowDetail(
             ProjectTaskKind.Review -> ReviewDetail(task, agentTasks)
             ProjectTaskKind.Verification -> VerificationDetail(task)
         }
-        if (task.instructions.isNotBlank() && task.kind == ProjectTaskKind.Spec) DetailBlock("BRIEF", task.instructions)
+        if (task.instructions.isNotBlank() && task.kind == ProjectTaskKind.Spec) {
+            DetailBlock("BRIEF", task.instructions)
+            if (task.imagePaths.isNotEmpty()) {
+                ChatAttachedImages(paths = task.imagePaths, maxWidth = 160.dp, maxHeight = 110.dp)
+            }
+        }
         if (task.attempts.isNotEmpty()) {
             Text("RUN ACTIVITY", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
             task.attempts.sortedByDescending { it.createdAtMillis }.forEach { attempt ->
@@ -785,6 +795,8 @@ internal fun SpecTaskDialog(
     val initialProfile = existing?.profile ?: workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()
     var title by remember(existing?.id) { mutableStateOf(existing?.title.orEmpty()) }
     var brief by remember(existing?.id) { mutableStateOf(existing?.instructions.orEmpty()) }
+    var imagePaths by remember(existing?.id) { mutableStateOf(existing?.imagePaths.orEmpty()) }
+    var imageDragActive by remember(existing?.id) { mutableStateOf(false) }
     var profile by remember(existing?.id) { mutableStateOf(initialProfile) }
     var includeScratchpad by remember(existing?.id) { mutableStateOf(existing?.includeScratchpad ?: false) }
     val installedSkills by services.agentRuns.skills(profile.agent, project.contextDir).collectAsState()
@@ -797,7 +809,45 @@ internal fun SpecTaskDialog(
         text = {
             Column(Modifier.width(760.dp).heightIn(max = 690.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 LabeledField("Title", title, { title = it }, Modifier.fillMaxWidth(), testTag = "spec-title-field")
-                LabeledField("Brief", brief, { brief = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 170.dp, testTag = "spec-brief-field")
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("brief", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    TextField(
+                        value = brief,
+                        onValueChange = { brief = it },
+                        singleLine = false,
+                        minLines = 6,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 170.dp)
+                            .testTag("spec-brief-field")
+                            .onImageFilesDropped(
+                                onFiles = { dropped -> imagePaths = (imagePaths + dropped).distinct() },
+                                onDragActiveChange = { active -> imageDragActive = active },
+                            )
+                            .border(
+                                if (imageDragActive) 2.dp else 1.dp,
+                                if (imageDragActive) Cyan else Border.copy(alpha = 0.35f),
+                                RoundedCornerShape(AndyRadius.R2),
+                            ),
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                        colors = fieldColors(),
+                        placeholder = {
+                            Text(
+                                if (imageDragActive) "release to attach image" else "describe the work — drag images here",
+                                color = if (imageDragActive) Cyan else TextSecondary,
+                                fontFamily = MonoFont,
+                            )
+                        },
+                    )
+                    if (imagePaths.isNotEmpty()) {
+                        ChatAttachedImages(
+                            paths = imagePaths,
+                            onRemove = { path -> imagePaths = imagePaths.filterNot { it == path } },
+                            maxWidth = 140.dp,
+                            maxHeight = 100.dp,
+                        )
+                    }
+                }
                 ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, ProjectTaskKind.Spec)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -817,7 +867,18 @@ internal fun SpecTaskDialog(
         confirmButton = {
             Button(onClick = {
                 scope.launch {
-                    val id = services.projectWorkflows.saveSpec(ProjectSpecDraft(project.id, title, brief, profile, includeScratchpad, grillMe, existing?.id))
+                    val id = services.projectWorkflows.saveSpec(
+                        ProjectSpecDraft(
+                            projectId = project.id,
+                            title = title,
+                            brief = brief,
+                            profile = profile,
+                            includeScratchpad = includeScratchpad,
+                            grillMeEnabled = grillMe,
+                            taskId = existing?.id,
+                            imagePaths = imagePaths,
+                        ),
+                    )
                     onSaved(id)
                 }
             }, enabled = title.isNotBlank() && brief.isNotBlank(), colors = primaryButtonColors()) { Text("Save draft") }

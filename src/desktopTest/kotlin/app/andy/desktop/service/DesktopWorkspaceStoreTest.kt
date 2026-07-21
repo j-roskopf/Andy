@@ -46,5 +46,38 @@ class DesktopWorkspaceStoreTest {
 
         file.writeText(file.readText().replace("compactToolCalls=false", "compactToolCalls=not-a-bool"))
         assertEquals(true, DesktopWorkspaceStore(file).load().compactToolCalls)
+
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                tracingPresetId = "battery",
+                tracingDurationSeconds = 0,
+                tracingBufferSizeMb = 32,
+                tracingPresetsPaneWidth = 360f,
+                tracingLibraryPaneHeight = 300f,
+                workspaceStatusExpanded = true,
+                performanceTab = "Tracing",
+                filesTab = "Database",
+            ),
+        )
+        val tracing = DesktopWorkspaceStore(file).load()
+        assertEquals("battery", tracing.tracingPresetId)
+        assertEquals(0, tracing.tracingDurationSeconds)
+        assertEquals(32, tracing.tracingBufferSizeMb)
+        assertEquals(360f, tracing.tracingPresetsPaneWidth)
+        assertEquals(300f, tracing.tracingLibraryPaneHeight)
+        assertEquals(true, tracing.workspaceStatusExpanded)
+        assertEquals("Tracing", tracing.performanceTab)
+        assertEquals("Database", tracing.filesTab)
+
+        file.writeText(file.readText().replace("performanceTab=Tracing", "performanceTab=Nope"))
+        assertEquals("Metrics", DesktopWorkspaceStore(file).load().performanceTab)
+        file.writeText(
+            DesktopWorkspaceStore(file).load().let { state ->
+                // reload after reset default, then poison filesTab
+                DesktopWorkspaceStore(file).save(state.copy(filesTab = "SharedPreferences"))
+                file.readText().replace("filesTab=SharedPreferences", "filesTab=Nope")
+            },
+        )
+        assertEquals("Files", DesktopWorkspaceStore(file).load().filesTab)
     }
 }

@@ -43,6 +43,8 @@ import app.andy.ui.intents.IntentsScreen
 import app.andy.ui.live.LiveScreen
 import app.andy.ui.logcat.LogcatScreen
 import app.andy.ui.network.NetworkScreen
+import app.andy.model.FilesTab
+import app.andy.model.PerformanceTab
 import app.andy.model.ProxyStartOptions
 import app.andy.model.AgentTask
 import app.andy.model.RunningAction
@@ -104,8 +106,13 @@ internal fun AndyShell(
     }
 
     LaunchedEffect(requestedDestination) {
-        requestedDestination?.let {
-            state.navigateTo(it.takeIf(capabilities.destinations::contains) ?: AndyDestination.Devices)
+        requestedDestination?.let { requested ->
+            val target = when {
+                requested == AndyDestination.Tracing -> AndyDestination.Tracing
+                requested in capabilities.destinations -> requested
+                else -> AndyDestination.Devices
+            }
+            state.navigateTo(target)
             onDestinationConsumed()
         }
     }
@@ -190,6 +197,8 @@ internal fun AndyShell(
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
+                statusExpanded = state.workspaceState.workspaceStatusExpanded,
+                onStatusExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceStatusExpanded = expanded) } },
                 sdk = state.sdk,
                 updates = services.updates.takeIf { capabilities.updates },
                 mcpRunning = mcpRunning,
@@ -214,7 +223,10 @@ internal fun AndyShell(
                             Spacer(Modifier.width(8.dp))
                             FilterPill("Live", state.networkLiveVisible, Cyan, toolbar = true) { state.toggleNetworkLiveVisible() }
                             Spacer(Modifier.width(10.dp))
-                        } else if (state.destination == AndyDestination.Performance) {
+                        } else if (
+                            state.destination == AndyDestination.Performance &&
+                            state.workspaceState.performanceTab == PerformanceTab.Metrics.name
+                        ) {
                             FilterPill("Live", state.performanceLiveVisible, Cyan, toolbar = true) { state.togglePerformanceLiveVisible() }
                             Spacer(Modifier.width(10.dp))
                         }
@@ -229,6 +241,10 @@ internal fun AndyShell(
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents
                     val computerFilesActive = state.destination == AndyDestination.ComputerFiles
+                    val performanceActive = state.destination == AndyDestination.Performance
+                    val performanceTab = PerformanceTab.entries
+                        .firstOrNull { it.name == state.workspaceState.performanceTab }
+                        ?: PerformanceTab.Metrics
                     RetainedDestination(active = actionsActive) {
                         ActionsScreen(
                             services = services,
@@ -263,6 +279,33 @@ internal fun AndyShell(
                             service = services.hostFiles,
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
+                        )
+                    }
+                    RetainedDestination(active = performanceActive) {
+                        PerformanceScreen(
+                            services = services,
+                            serial = state.selectedSerial,
+                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                            active = performanceActive,
+                            selectedTab = performanceTab,
+                            onSelectedTabChange = { tab ->
+                                state.updateWorkspace { it.copy(performanceTab = tab.name) }
+                            },
+                            processesPaneWidth = state.workspaceState.performanceProcessesPaneWidth,
+                            onProcessesPaneWidthChange = { width -> state.updateWorkspace { it.copy(performanceProcessesPaneWidth = width) } },
+                            liveVisible = state.performanceLiveVisible,
+                            livePaneWidth = state.workspaceState.performanceLivePaneWidth,
+                            onLivePaneWidthChange = { width -> state.updateWorkspace { it.copy(performanceLivePaneWidth = width) } },
+                            tracingPresetId = state.workspaceState.tracingPresetId,
+                            tracingDurationSeconds = state.workspaceState.tracingDurationSeconds,
+                            tracingBufferSizeMb = state.workspaceState.tracingBufferSizeMb,
+                            tracingPresetsPaneWidth = state.workspaceState.tracingPresetsPaneWidth,
+                            tracingLibraryPaneHeight = state.workspaceState.tracingLibraryPaneHeight,
+                            onTracingPresetIdChange = { value -> state.updateWorkspace { it.copy(tracingPresetId = value) } },
+                            onTracingDurationSecondsChange = { value -> state.updateWorkspace { it.copy(tracingDurationSeconds = value) } },
+                            onTracingBufferSizeMbChange = { value -> state.updateWorkspace { it.copy(tracingBufferSizeMb = value) } },
+                            onTracingPresetsPaneWidthChange = { value -> state.updateWorkspace { it.copy(tracingPresetsPaneWidth = value) } },
+                            onTracingLibraryPaneHeightChange = { value -> state.updateWorkspace { it.copy(tracingLibraryPaneHeight = value) } },
                         )
                     }
                     when (state.destination) {
@@ -330,8 +373,20 @@ internal fun AndyShell(
                         AndyDestination.Files -> FilesScreen(
                             files = services.files,
                             apps = services.apps,
+                            sharedPrefs = services.sharedPrefs,
+                            appDatabase = services.appDatabase,
                             serial = state.selectedSerial,
                             transfer = state.transfer,
+                            selectedPackage = state.workspaceState.selectedPackage,
+                            onSelectedPackageChange = { pkg ->
+                                state.updateWorkspace { it.copy(selectedPackage = pkg) }
+                            },
+                            selectedTab = FilesTab.entries
+                                .firstOrNull { it.name == state.workspaceState.filesTab }
+                                ?: FilesTab.Files,
+                            onSelectedTabChange = { tab ->
+                                state.updateWorkspace { it.copy(filesTab = tab.name) }
+                            },
                         )
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
@@ -352,7 +407,7 @@ internal fun AndyShell(
                                 state.updateWorkspace { it.copy(proxyUpstreamTrustedCaPath = value.trim().takeIf { path -> path.isNotBlank() }) }
                             },
                         )
-                        AndyDestination.Actions, AndyDestination.Agents, AndyDestination.ComputerFiles -> Unit
+                        AndyDestination.Actions, AndyDestination.Agents, AndyDestination.ComputerFiles, AndyDestination.Performance, AndyDestination.Tracing -> Unit
                         AndyDestination.Snapshots -> SnapshotsScreen(
                             avd = services.avd,
                             knownDeviceSerials = { state.devices.map { it.serial }.toSet() },
@@ -361,16 +416,6 @@ internal fun AndyShell(
                             startStatus = state.emulatorStartStatus,
                         )
                         AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, state.selectedSerial)
-                        AndyDestination.Performance -> PerformanceScreen(
-                            services = services,
-                            serial = state.selectedSerial,
-                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
-                            processesPaneWidth = state.workspaceState.performanceProcessesPaneWidth,
-                            onProcessesPaneWidthChange = { width -> state.updateWorkspace { it.copy(performanceProcessesPaneWidth = width) } },
-                            liveVisible = state.performanceLiveVisible,
-                            livePaneWidth = state.workspaceState.performanceLivePaneWidth,
-                            onLivePaneWidthChange = { width -> state.updateWorkspace { it.copy(performanceLivePaneWidth = width) } },
-                        )
                         AndyDestination.Design -> DesignScreen(
                             services,
                             state.selectedSerial,

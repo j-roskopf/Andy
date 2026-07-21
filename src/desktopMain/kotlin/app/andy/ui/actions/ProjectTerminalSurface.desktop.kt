@@ -27,7 +27,7 @@ actual fun ProjectTerminalSurface(
 
     // SwingPanel always paints above Compose popups and punches a BlendMode.Clear hole in the
     // Skia layer. Hiding only the JediTerm child leaves the host JPanel (system white) in that
-    // hole and still covers TopChrome DropdownMenus — so tear the interop down while menus are
+    // hole and still covers chrome DropdownMenus — so tear the interop down while menus are
     // open and keep a matching Compose placeholder in its place.
     Box(modifier.background(TerminalPanelBackground)) {
         if (!suppressHeavyweight) {

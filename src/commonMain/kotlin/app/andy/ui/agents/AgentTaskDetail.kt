@@ -226,7 +226,7 @@ internal fun AgentTaskDetail(
         }
         if (task.status == AgentTaskStatus.Unknown) {
             Text(
-                "interrupted by an app restart — continue interactively to pick the session back up",
+                "interrupted by an app restart — retry for a fresh run, or continue interactively to pick the session back up",
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
@@ -244,6 +244,7 @@ internal fun AgentTaskDetail(
                         nowMillis = nowMillis,
                         onStop = { services.agentRuns.stop(task.id) },
                         onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
+                        onResume = { services.agentRuns.resume(task.id, "Continue where you left off.", emptyList(), emptyList()) },
                         onDelete = { onDelete(task) },
                         onCopyPrompt = { copyText(task.prompt) },
                     )
@@ -601,6 +602,7 @@ private fun AgentTaskHeader(
     nowMillis: Long,
     onStop: () -> Unit,
     onRetry: () -> Unit,
+    onResume: () -> Unit,
     onDelete: () -> Unit,
     onCopyPrompt: () -> Unit,
 ) {
@@ -643,13 +645,21 @@ private fun AgentTaskHeader(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) { Text(if (task.status == AgentTaskStatus.WaitingForInput) "cancel" else "stop", fontSize = 11.sp) }
             }
-            if (task.status == AgentTaskStatus.Failed) {
+            if (task.status == AgentTaskStatus.Failed || task.status == AgentTaskStatus.Unknown) {
                 Button(
                     onClick = onRetry,
                     colors = primaryButtonColors(),
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) { Text("retry", fontSize = 11.sp) }
+            }
+            if (task.status == AgentTaskStatus.Stopped && task.vendorSessionId != null && task.agent != AgentKind.Antigravity) {
+                Button(
+                    onClick = onResume,
+                    colors = primaryButtonColors(),
+                    modifier = Modifier.height(30.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                ) { Text("resume", fontSize = 11.sp) }
             }
             OutlinedButton(
                 onClick = onDelete,

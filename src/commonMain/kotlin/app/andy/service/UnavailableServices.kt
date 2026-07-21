@@ -130,6 +130,73 @@ object UnavailableArtifactService : ArtifactService {
     override suspend fun saveBugReport(serial: String, suggestedName: String) = unavailable()
 }
 
+object UnavailableTracingService : TracingService {
+    override val status = MutableStateFlow(TraceRecordingStatus())
+    override val recordings = MutableStateFlow(emptyList<TraceRecording>())
+    override suspend fun checkSupport(serial: String) = unavailable()
+    override suspend fun start(serial: String, configTextProto: String, name: String, presetId: String?) = unavailable()
+    override suspend fun stop() = unavailable()
+    override suspend fun refreshRecordings() = Unit
+    override suspend fun deleteRecording(id: String) = false
+    override suspend fun revealRecording(id: String) = unavailable()
+    override suspend fun importConfig(sourcePath: String) = unavailable()
+    override suspend fun listUserConfigs() = emptyList<TraceUserConfig>()
+    override suspend fun loadUserConfig(id: String): String? = null
+    override suspend fun saveUserConfig(name: String, content: String) = unavailable()
+    override suspend fun deleteUserConfig(id: String) = false
+    override suspend fun retryPull() = unavailable()
+}
+
+object UnavailableTraceViewerService : TraceViewerService {
+    override suspend fun openExternally(traceId: String) = unavailable()
+    override fun shutdown() = Unit
+}
+
+object UnavailableSharedPrefsService : SharedPrefsService {
+    override suspend fun listFiles(serial: String, packageName: String) = Result.failure<List<String>>(Exception(BrowserUnavailable))
+    override suspend fun read(serial: String, packageName: String, fileName: String) = Result.failure<List<PrefEntry>>(Exception(BrowserUnavailable))
+    override suspend fun upsert(serial: String, packageName: String, fileName: String, entry: PrefEntry) = unavailable()
+    override suspend fun delete(serial: String, packageName: String, fileName: String, key: String) = unavailable()
+}
+
+object UnavailableAppDatabaseService : AppDatabaseService {
+    override suspend fun listDatabases(serial: String, packageName: String) = Result.failure<List<AppDatabaseInfo>>(Exception(BrowserUnavailable))
+    override suspend fun listTables(serial: String, packageName: String, dbName: String) = Result.failure<List<String>>(Exception(BrowserUnavailable))
+    override suspend fun tableRowCounts(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tables: List<String>,
+    ) = Result.failure<Map<String, Long>>(Exception(BrowserUnavailable))
+    override suspend fun tableInfo(serial: String, packageName: String, dbName: String, tableName: String) =
+        Result.failure<DbTableInfo>(Exception(BrowserUnavailable))
+    override suspend fun browseTable(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tableName: String,
+        limit: Int,
+        offset: Int,
+    ) = Result.failure<DbQueryResult>(Exception(BrowserUnavailable))
+    override suspend fun query(serial: String, packageName: String, dbName: String, sql: String, limit: Int) =
+        Result.failure<DbQueryResult>(Exception(BrowserUnavailable))
+    override suspend fun updateCell(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tableName: String,
+        column: String,
+        newValue: String?,
+        rowId: Long?,
+        primaryKeyColumn: String?,
+        primaryKeyValue: String?,
+    ) = unavailable()
+    override suspend fun pullToHost(serial: String, packageName: String, dbName: String, localPath: String) = unavailable()
+    override suspend fun listSavedQueries(packageName: String) = emptyList<SavedSqlQuery>()
+    override suspend fun saveQuery(packageName: String, name: String, sql: String) = unavailable()
+    override suspend fun deleteQuery(packageName: String, id: String) = false
+}
+
 class InMemoryWorkspaceStore(initial: WorkspaceState = WorkspaceState()) : WorkspaceStore {
     private var value = initial
     override suspend fun load() = value

@@ -72,7 +72,12 @@ internal class ShellState(
     val transfer = DeviceTransferCoordinator()
 
     fun navigateTo(value: AndyDestination) {
-        destination = value
+        if (value == AndyDestination.Tracing) {
+            destination = AndyDestination.Performance
+            updateWorkspace { it.copy(performanceTab = app.andy.model.PerformanceTab.Tracing.name) }
+        } else {
+            destination = value
+        }
     }
 
     fun selectDevice(serial: String?) {
@@ -87,8 +92,16 @@ internal class ShellState(
         networkRulesVisible = !networkRulesVisible
     }
 
+    fun updateNetworkLiveVisible(value: Boolean) {
+        networkLiveVisible = value
+    }
+
     fun toggleNetworkLiveVisible() {
         networkLiveVisible = !networkLiveVisible
+    }
+
+    fun updatePerformanceLiveVisible(value: Boolean) {
+        performanceLiveVisible = value
     }
 
     fun togglePerformanceLiveVisible() {
@@ -144,7 +157,7 @@ internal class ShellState(
         scope.launch {
             startingEmulatorName = avdName
             emulatorStartStatus = "Starting $avdName..."
-            repeat(60) {
+            repeat(90) {
                 val currentDevices = refreshDevicesNow()
                 val started = currentDevices.firstOrNull {
                     it.kind == DeviceKind.Emulator &&
@@ -152,18 +165,46 @@ internal class ShellState(
                         it.serial !in previousSerials
                 }
                 if (started != null) {
-                    selectedSerial = started.serial
+                    emulatorStartStatus = "${started.displayName} online — waiting for boot…"
+                    // adb Online is not boot_completed. Opening Live too early leaves a black,
+                    // too-wide mirror until a manual reconnect.
+                    val booted = awaitDeviceBootCompleted(started.serial)
+                    val refreshed = refreshDevicesNow()
+                    val ready = refreshed.firstOrNull { it.serial == started.serial } ?: started
+                    selectedSerial = ready.serial
                     destination = AndyDestination.Live
-                    emulatorStartStatus = "${started.displayName} is online"
+                    emulatorStartStatus = if (booted) {
+                        "${ready.displayName} is ready"
+                    } else {
+                        "${ready.displayName} is online (boot still finishing)"
+                    }
                     startingEmulatorName = null
                     return@launch
                 }
-                emulatorStartStatus = "Starting $avdName... waiting for boot (${it + 1}/60)"
+                emulatorStartStatus = "Starting $avdName... waiting for boot (${it + 1}/90)"
                 delay(1_000)
             }
             emulatorStartStatus = "$avdName is still starting. Refresh devices when it finishes booting."
             startingEmulatorName = null
         }
+    }
+
+    private suspend fun awaitDeviceBootCompleted(serial: String, attempts: Int = 120): Boolean {
+        repeat(attempts) {
+            val result = runCatching {
+                services.devices.shell(serial, listOf("getprop", "sys.boot_completed"))
+            }.getOrNull()
+            if (result?.stdout?.trim() == "1") {
+                val size = runCatching {
+                    services.devices.shell(serial, listOf("wm", "size"))
+                }.getOrNull()
+                if (size?.isSuccess == true && size.stdout.contains(Regex("""\d+x\d+"""))) {
+                    return true
+                }
+            }
+            delay(500)
+        }
+        return false
     }
 
     suspend fun initialize() {

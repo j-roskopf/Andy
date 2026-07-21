@@ -42,6 +42,7 @@ enum class AndyDestination(val label: String) {
     Snapshots("Snapshots"),
     Controls("Controls"),
     Performance("Performance"),
+    Tracing("Tracing"),
     Design("Design"),
     Accessibility("Accessibility"),
     Bugs("Bugs"),

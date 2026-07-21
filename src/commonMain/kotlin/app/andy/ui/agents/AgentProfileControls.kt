@@ -34,7 +34,7 @@ internal fun AgentProviderModelProfileControls(
     providerSelectionActive: Boolean = true,
     showProviderControls: Boolean = true,
     showModelControls: Boolean = true,
-    showUnavailableAsPills: Boolean = false,
+    showUnavailableAsPills: Boolean = true,
     showProviderIcons: Boolean = true,
     showVersion: Boolean = false,
     showModelHelp: Boolean = false,
@@ -53,11 +53,12 @@ internal fun AgentProviderModelProfileControls(
                 if (ready || showUnavailableAsPills) {
                     FilterPill(
                         text = "${agent.label}${if (ready) "" else " · unavailable"}",
-                        selected = providerSelectionActive && profile.agent == agent,
+                        selected = ready && providerSelectionActive && profile.agent == agent,
                         color = agentColor(agent),
+                        enabled = ready,
                         leadingContent = if (showProviderIcons) ({ AgentPillIcon(agent) }) else null,
                     ) {
-                        if (ready) onChange(
+                        onChange(
                             profile.copy(
                                 agent = agent,
                                 model = null,

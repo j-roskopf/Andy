@@ -37,6 +37,11 @@ class WebPlatformContractTest {
         assertFalse(PlatformCapabilities.Web.updates)
         assertTrue(PlatformCapabilities.Web.acceleratedMirror)
         assertFalse(PlatformCapabilities.Desktop.acceleratedMirror)
-        assertTrue(PlatformCapabilities.Desktop.destinations.containsAll(AndyDestination.entries))
+        assertFalse(PlatformCapabilities.Desktop.destinations.contains(AndyDestination.Tracing))
+        assertTrue(
+            PlatformCapabilities.Desktop.destinations.containsAll(
+                AndyDestination.entries.filter { it != AndyDestination.Tracing },
+            ),
+        )
     }
 }

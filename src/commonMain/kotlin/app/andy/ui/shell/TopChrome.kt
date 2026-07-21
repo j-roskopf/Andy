@@ -122,7 +122,7 @@ internal fun TopChrome(
         Spacer(Modifier.width(10.dp))
         DevicePicker(
             devices = devices,
-            selectedSerial = selectedDevice?.serial,
+            selectedDevice = selectedDevice,
             expanded = deviceMenuExpanded,
             onExpandedChange = { deviceMenuExpanded = it },
             onSelect = onSelectDevice,
@@ -242,7 +242,7 @@ private fun ActionRunnerSelector(
 @Composable
 private fun DevicePicker(
     devices: List<AndroidDevice>,
-    selectedSerial: String?,
+    selectedDevice: AndroidDevice?,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
@@ -251,11 +251,18 @@ private fun DevicePicker(
         Button(onClick = { onExpandedChange(true) }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
             Text("•", color = Green, fontSize = 18.sp)
             Spacer(Modifier.width(6.dp))
-            Text(selectedSerial ?: "no device", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
+            Text(
+                selectedDevice?.displayName ?: "no device",
+                color = TextPrimary,
+                fontFamily = MonoFont,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
             devices.forEach { device ->
-                DropdownMenuItem(text = { Text("${device.serial}  ${device.displayName}", color = TextPrimary) }, onClick = {
+                DropdownMenuItem(text = { Text(device.displayName, color = TextPrimary) }, onClick = {
                     onSelect(device.serial)
                     onExpandedChange(false)
                 })

@@ -902,7 +902,7 @@ private fun ProjectTerminalDrawer(
         if (activeRunId == null) {
             EmptyState("Run an action to open its terminal")
         } else {
-            // Right-docked SwingPanel can cover TopChrome menus; bottom placement cannot.
+            // Right-docked SwingPanel can cover chrome menus; bottom placement cannot.
             val suppressForChromeMenus =
                 LocalSuppressHeavyweightSurfaces.current && placement == TerminalPlacement.Right
             CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides suppressForChromeMenus) {

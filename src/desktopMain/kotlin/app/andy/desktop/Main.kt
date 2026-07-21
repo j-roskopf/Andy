@@ -113,9 +113,10 @@ fun main() {
             }
             Divider()
             SubMenu(label = "Go") {
-                AndyDestination.entries.filter { it != AndyDestination.Bugs }.forEach { destination ->
+                services.capabilities.destinations.filter { it != AndyDestination.Bugs }.forEach { destination ->
                     Item(label = destination.label) { open(destination) }
                 }
+                Item(label = "Tracing") { open(AndyDestination.Tracing) }
             }
         }
         // Keep the Window composed while hidden. Removing it from composition when
@@ -153,13 +154,18 @@ fun main() {
             }
             MenuBar {
                 Menu("Go") {
-                    AndyDestination.entries.forEach { destination ->
+                    services.capabilities.destinations.forEach { destination ->
                         Item(
                             destination.label,
                             shortcut = destination.menuShortcut(),
                             onClick = { open(destination) },
                         )
                     }
+                    Item(
+                        "Tracing",
+                        shortcut = AndyDestination.Tracing.menuShortcut(),
+                        onClick = { open(AndyDestination.Tracing) },
+                    )
                 }
                 Menu("View") {
                     Item(
@@ -296,6 +302,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.Snapshots -> KeyShortcut(Key.S, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Controls -> KeyShortcut(Key.C, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Performance -> KeyShortcut(Key.P, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Tracing -> KeyShortcut(Key.T, meta = meta, ctrl = ctrl, shift = true)
         // Shift+D is already used by View → Pop Out Mirror / Show controls.
         AndyDestination.Design -> KeyShortcut(Key.E, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Accessibility -> KeyShortcut(Key.A, meta = meta, ctrl = ctrl, shift = true)

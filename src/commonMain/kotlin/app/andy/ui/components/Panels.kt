@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -35,7 +36,6 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
-import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
@@ -128,35 +128,27 @@ internal fun PlaceholderScreen(name: String) {
 
 @Composable
 internal fun Toolbar(
-    title: String,
-    subtitle: String,
+    @Suppress("UNUSED_PARAMETER") title: String,
+    @Suppress("UNUSED_PARAMETER") subtitle: String,
     onPrimary: (() -> Unit)? = null,
     primaryLabel: String = "Run",
     primaryEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .width(3.dp)
-                    .height(30.dp)
-                    .background(Rust, RoundedCornerShape(AndyRadius.R2)),
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(title, color = AndyColors.Neutral100, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 22.sp)
-                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, lineHeight = 14.sp)
-            }
-        }
-        if (onPrimary != null) {
-            Button(
-                onClick = onPrimary,
-                enabled = primaryEnabled,
-                colors = primaryButtonColors(),
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            ) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
-        }
+    // Page title/subtitle chrome lives in the global TopChrome; keep only trailing actions here.
+    if (onPrimary == null) return
+    Row(
+        modifier.fillMaxWidth().padding(bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Button(
+            onClick = onPrimary,
+            enabled = primaryEnabled,
+            colors = primaryButtonColors(),
+            shape = RoundedCornerShape(AndyRadius.R2),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
 
@@ -206,23 +198,46 @@ internal fun FilterPill(
     text: String,
     selected: Boolean,
     color: Color,
+    enabled: Boolean = true,
     toolbar: Boolean = false,
     leadingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(AndyRadius.R2)
+    val containerColor = when {
+        !enabled -> AndyColors.Neutral750
+        selected -> color.copy(alpha = 0.26f)
+        else -> AndyColors.Neutral850
+    }
+    val borderColor = when {
+        !enabled -> AndyColors.Neutral500.copy(alpha = 0.48f)
+        selected -> color.copy(alpha = 0.70f)
+        else -> Border
+    }
+    val contentColor = when {
+        !enabled -> AndyColors.Neutral500
+        selected -> AndyColors.Neutral100
+        else -> AndyColors.Neutral300
+    }
     if (toolbar) {
         OutlinedButton(
             onClick = onClick,
+            enabled = enabled,
             shape = shape,
             colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850,
-                contentColor = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+                containerColor = containerColor,
+                contentColor = contentColor,
+                disabledContainerColor = containerColor,
+                disabledContentColor = contentColor,
             ),
-            border = BorderStroke(1.dp, if (selected) color.copy(alpha = 0.70f) else Border),
+            border = BorderStroke(1.dp, borderColor),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.alpha(if (enabled) 1f else 0.55f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 leadingContent?.invoke()
                 Text(
                     text.lowercase(),
@@ -237,17 +252,21 @@ internal fun FilterPill(
     Box(
         Modifier
             .height(28.dp)
-            .background(if (selected) color.copy(alpha = 0.26f) else AndyColors.Neutral850, shape)
-            .border(1.dp, if (selected) color.copy(alpha = 0.70f) else Border, shape)
-            .clickable(onClick = onClick)
+            .background(containerColor, shape)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.alpha(if (enabled) 1f else 0.55f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             leadingContent?.invoke()
             Text(
                 text.lowercase(),
-                color = if (selected) AndyColors.Neutral100 else AndyColors.Neutral300,
+                color = contentColor,
                 fontFamily = MonoFont,
                 fontWeight = FontWeight.Medium,
                 fontSize = 10.sp,

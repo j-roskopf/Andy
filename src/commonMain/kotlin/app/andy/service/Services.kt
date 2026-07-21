@@ -171,6 +171,74 @@ interface ArtifactService {
     suspend fun saveBugReport(serial: String, suggestedName: String): CommandResult
 }
 
+interface TracingService {
+    val status: StateFlow<TraceRecordingStatus>
+    val recordings: StateFlow<List<TraceRecording>>
+    suspend fun checkSupport(serial: String): CommandResult
+    suspend fun start(serial: String, configTextProto: String, name: String, presetId: String?): CommandResult
+    suspend fun stop(): CommandResult
+    suspend fun refreshRecordings()
+    suspend fun deleteRecording(id: String): Boolean
+    suspend fun revealRecording(id: String): CommandResult
+    suspend fun importConfig(sourcePath: String): CommandResult
+    suspend fun listUserConfigs(): List<TraceUserConfig>
+    suspend fun loadUserConfig(id: String): String?
+    suspend fun saveUserConfig(name: String, content: String): CommandResult
+    suspend fun deleteUserConfig(id: String): Boolean
+    /** Retries pulling the remote file for the last failed recording, if any. */
+    suspend fun retryPull(): CommandResult
+}
+
+interface TraceViewerService {
+    suspend fun openExternally(traceId: String): CommandResult
+    fun shutdown()
+}
+
+interface SharedPrefsService {
+    /** Lists shared_prefs XML basenames for a debuggable package. */
+    suspend fun listFiles(serial: String, packageName: String): Result<List<String>>
+    suspend fun read(serial: String, packageName: String, fileName: String): Result<List<PrefEntry>>
+    suspend fun upsert(serial: String, packageName: String, fileName: String, entry: PrefEntry): CommandResult
+    suspend fun delete(serial: String, packageName: String, fileName: String, key: String): CommandResult
+}
+
+interface AppDatabaseService {
+    suspend fun listDatabases(serial: String, packageName: String): Result<List<AppDatabaseInfo>>
+    suspend fun listTables(serial: String, packageName: String, dbName: String): Result<List<String>>
+    /** Row counts for the given tables (one device pull). Missing tables are omitted. */
+    suspend fun tableRowCounts(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tables: List<String>,
+    ): Result<Map<String, Long>>
+    suspend fun tableInfo(serial: String, packageName: String, dbName: String, tableName: String): Result<DbTableInfo>
+    suspend fun browseTable(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tableName: String,
+        limit: Int = 200,
+        offset: Int = 0,
+    ): Result<DbQueryResult>
+    suspend fun query(serial: String, packageName: String, dbName: String, sql: String, limit: Int = 500): Result<DbQueryResult>
+    suspend fun updateCell(
+        serial: String,
+        packageName: String,
+        dbName: String,
+        tableName: String,
+        column: String,
+        newValue: String?,
+        rowId: Long?,
+        primaryKeyColumn: String?,
+        primaryKeyValue: String?,
+    ): CommandResult
+    suspend fun pullToHost(serial: String, packageName: String, dbName: String, localPath: String): CommandResult
+    suspend fun listSavedQueries(packageName: String): List<SavedSqlQuery>
+    suspend fun saveQuery(packageName: String, name: String, sql: String): CommandResult
+    suspend fun deleteQuery(packageName: String, id: String): Boolean
+}
+
 interface WorkspaceStore {
     suspend fun load(): WorkspaceState
     suspend fun save(state: WorkspaceState)
@@ -485,7 +553,8 @@ data class PlatformCapabilities(
     companion object {
         val Desktop = PlatformCapabilities(
             platform = AndyPlatform.Desktop,
-            destinations = AndyDestination.entries,
+            // Tracing lives under Performance as a tab; keep the enum for shortcut remapping.
+            destinations = AndyDestination.entries.filter { it != AndyDestination.Tracing },
             avdManagement = true,
             wifiPairing = true,
             hostAutomation = true,
@@ -539,6 +608,10 @@ data class AndyServices(
     val accessibility: AccessibilityService,
     val bugs: BugService,
     val artifacts: ArtifactService,
+    val tracing: TracingService = UnavailableTracingService,
+    val traceViewer: TraceViewerService = UnavailableTraceViewerService,
+    val sharedPrefs: SharedPrefsService = UnavailableSharedPrefsService,
+    val appDatabase: AppDatabaseService = UnavailableAppDatabaseService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val mcp: McpServerService,

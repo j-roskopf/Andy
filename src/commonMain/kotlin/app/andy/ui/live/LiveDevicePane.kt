@@ -68,6 +68,28 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.Flow
 import org.jetbrains.compose.resources.painterResource
 
+internal data class MirrorSourceSize(val width: Int, val height: Int)
+
+/**
+ * Size used for the Live host aspect ratio. Prefer the active stream frame so Compose and
+ * Metal letterboxing stay aligned; fall back to [AndroidDevice.screenSize], then a tall-phone
+ * default (not the old 720x1280 fallback, which made first-boot Live look too wide).
+ */
+internal fun liveMirrorSourceSize(device: AndroidDevice?, frame: MirrorFrame?): MirrorSourceSize {
+    if (frame != null && frame.width > 1 && frame.height > 1) {
+        return MirrorSourceSize(frame.width, frame.height)
+    }
+    val raw = device?.screenSize
+    if (raw != null) {
+        val width = raw.substringBefore('x').toIntOrNull()
+        val height = raw.substringAfter('x').toIntOrNull()
+        if (width != null && height != null && width > 1 && height > 1 && 'x' in raw) {
+            return MirrorSourceSize(width, height)
+        }
+    }
+    return MirrorSourceSize(1080, 2400)
+}
+
 @Composable
 internal fun LiveDevicePane(
     serial: String?,
@@ -156,30 +178,21 @@ internal fun LiveDevicePane(
 
         Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             if (showDeviceHeader && serial != null) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        displayName ?: device?.serial ?: serial,
-                        color = TextPrimary,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.weight(1f, fill = false),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        mirrorTelemetry.ifBlank {
-                            listOfNotNull(
-                                frame?.let { "${it.width}×${it.height} stream" },
-                                frame?.displayedFps?.let { "${app.andy.formatDecimal(it, 1)} displayed fps" },
-                                frame?.decodedFps?.let { "${app.andy.formatDecimal(it, 1)} decoded fps" },
-                            ).joinToString(" · ").ifBlank { mirrorStatus }
-                        },
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(start = 8.dp),
-                        maxLines = 1,
-                    )
-                }
-                Spacer(Modifier.height(18.dp))
+                Text(
+                    mirrorTelemetry.ifBlank {
+                        listOfNotNull(
+                            frame?.let { "${it.width}×${it.height} stream" },
+                            frame?.displayedFps?.let { "${it.toInt()} displayed fps" },
+                            frame?.decodedFps?.let { "${it.toInt()} decoded fps" },
+                        ).joinToString(" · ").ifBlank { mirrorStatus }
+                    },
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(14.dp))
             }
 
             BoxWithConstraints(
@@ -188,8 +201,11 @@ internal fun LiveDevicePane(
             ) {
                 val viewportWidth = maxWidth
                 val zoomFactor = zoom.coerceIn(0.5f, 4f)
-                val sourceWidth = (device?.screenSize?.substringBefore("x")?.toIntOrNull() ?: frame?.width ?: 1080).coerceAtLeast(1)
-                val sourceHeight = (device?.screenSize?.substringAfter("x")?.toIntOrNull() ?: frame?.height ?: 2340).coerceAtLeast(1)
+                // Prefer the live stream size so the Compose host matches Metal letterboxing.
+                // device.screenSize can lag or disagree on first emulator boot.
+                val source = liveMirrorSourceSize(device, frame)
+                val sourceWidth = source.width
+                val sourceHeight = source.height
                 val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
                 val navHeight = if (showChromeControls) 60.dp else 0.dp
                 val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)

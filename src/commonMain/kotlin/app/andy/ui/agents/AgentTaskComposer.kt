@@ -638,17 +638,27 @@ private fun AgentChatComposer(
                     agentMenuExpanded = true
                 }
                 DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
-                    form.cliStatuses.filter { it.ready }.forEach { status ->
+                    // Keep this in step with the expanded provider controls: an
+                    // unavailable provider should still be discoverable here.
+                    // It remains disabled until its CLI is available, so a task
+                    // cannot be launched with an unusable provider.
+                    AgentKind.entries.forEach { agent ->
+                        val status = form.cliStatuses.firstOrNull { it.kind == agent }
+                        val ready = status?.ready == true || form.cliStatuses.isEmpty()
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    AgentPillIcon(status.kind)
-                                    Text(status.kind.label, color = TextPrimary)
+                                    AgentPillIcon(agent)
+                                    Text(
+                                        "${agent.label}${if (ready) "" else " · ${if (status?.issue != null) "needs repair" else "unavailable"}"}",
+                                        color = TextPrimary,
+                                    )
                                 }
                             },
+                            enabled = ready,
                             onClick = {
                                 state.providerChosenInComposer = true
-                                state.agent = status.kind
+                                state.agent = agent
                                 agentMenuExpanded = false
                             },
                         )

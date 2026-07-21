@@ -5,10 +5,10 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -75,6 +75,8 @@ internal fun Sidebar(
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    statusExpanded: Boolean,
+    onStatusExpandedChange: (Boolean) -> Unit,
     sdk: SdkDiscovery,
     updates: AppUpdateService?,
     mcpRunning: Boolean,
@@ -180,88 +182,107 @@ internal fun Sidebar(
                 }
             }
         }
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandHorizontally(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
-            exit = shrinkHorizontally(animationSpec = tween(140, easing = FastOutSlowInEasing)) + fadeOut(tween(90)),
-        ) {
+        if (expanded) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral900.copy(alpha = 0.56f), RoundedCornerShape(AndyRadius.R3))
                     .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                    .padding(10.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    "v${app.andy.updates.AndyBuildInfo.versionName}",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "h.264 embedded",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                )
-                if (updates != null) {
-                    StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-                    StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
-                    StatusRow("Proxy CA", "local", true)
-                    StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
-                } else {
-                    StatusRow("Web ADB", if (deviceCount > 0) "connected" else "disconnected", deviceCount > 0)
-                    StatusRow("Local only", "port 10000", true)
-                }
-
-                HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
-
-                if (updates != null) {
-                val updateText = when (updateState) {
-                    AppUpdateState.Idle -> "Check for updates"
-                    AppUpdateState.Checking -> "Checking for updates..."
-                    AppUpdateState.Current -> "Andy is up to date"
-                    is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
-                    is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
-                        val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
-                        "${it.message}$pct"
-                    }
-                    is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
-                }
-
-                val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
-                val updateColor = when (updateState) {
-                    is AppUpdateState.Available -> Rust
-                    is AppUpdateState.Failed -> Red
-                    else -> TextSecondary
-                }
-
                 Row(
-                    modifier = Modifier
+                    Modifier
                         .fillMaxWidth()
-                        .then(if (isActionable) Modifier.clickable {
-                            scope.launch {
-                                if (updateState is AppUpdateState.Available) {
-                                    updates.installAvailableUpdate()
-                                } else {
-                                    updates.checkForUpdates()
-                                }
-                            }
-                        } else Modifier)
-                        .padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .clickable { onStatusExpandedChange(!statusExpanded) },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
-                        text = updateText,
-                        color = updateColor,
-                        fontSize = 11.sp,
+                        "v${app.andy.updates.AndyBuildInfo.versionName}",
+                        color = TextSecondary,
                         fontFamily = MonoFont,
-                        fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (statusExpanded) "▾" else "▸",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
                     )
                 }
+                AnimatedVisibility(
+                    visible = statusExpanded,
+                    enter = expandVertically(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
+                    exit = shrinkVertically(animationSpec = tween(140, easing = FastOutSlowInEasing)) + fadeOut(tween(90)),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "h.264 embedded",
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                        )
+                        if (updates != null) {
+                            StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
+                            StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
+                            StatusRow("Proxy CA", "local", true)
+                            StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
+                        } else {
+                            StatusRow("Web ADB", if (deviceCount > 0) "connected" else "disconnected", deviceCount > 0)
+                            StatusRow("Local only", "port 10000", true)
+                        }
+
+                        HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+
+                        if (updates != null) {
+                            val updateText = when (updateState) {
+                                AppUpdateState.Idle -> "Check for updates"
+                                AppUpdateState.Checking -> "Checking for updates..."
+                                AppUpdateState.Current -> "Andy is up to date"
+                                is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
+                                is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
+                                    val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
+                                    "${it.message}$pct"
+                                }
+                                is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
+                            }
+
+                            val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
+                            val updateColor = when (updateState) {
+                                is AppUpdateState.Available -> Rust
+                                is AppUpdateState.Failed -> Red
+                                else -> TextSecondary
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (isActionable) Modifier.clickable {
+                                        scope.launch {
+                                            if (updateState is AppUpdateState.Available) {
+                                                updates.installAvailableUpdate()
+                                            } else {
+                                                updates.checkForUpdates()
+                                            }
+                                        }
+                                    } else Modifier)
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = updateText,
+                                    color = updateColor,
+                                    fontSize = 11.sp,
+                                    fontFamily = MonoFont,
+                                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -330,6 +351,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.Snapshots -> "[]"
     AndyDestination.Controls -> "+-"
     AndyDestination.Performance -> "/^"
+    AndyDestination.Tracing -> "~*"
     AndyDestination.Design -> "%%"
     AndyDestination.Accessibility -> "13"
     AndyDestination.Bugs -> "!!"

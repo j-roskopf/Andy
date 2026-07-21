@@ -120,6 +120,8 @@ data class ProjectTask(
     val instructions: String,
     val profile: ProjectAgentProfile,
     val includeScratchpad: Boolean,
+    /** Local images attached to a Spec brief (or other task instructions). */
+    val imagePaths: List<String> = emptyList(),
     val state: ProjectTaskState = ProjectTaskState.Draft,
     val linkedSpecTaskId: String? = null,
     val linkedBuildTaskId: String? = null,
@@ -172,6 +174,7 @@ data class ProjectSpecDraft(
     val includeScratchpad: Boolean = false,
     val grillMeEnabled: Boolean = false,
     val taskId: String? = null,
+    val imagePaths: List<String> = emptyList(),
 )
 
 data class ProjectBuildPairDraft(

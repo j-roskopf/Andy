@@ -69,6 +69,7 @@ class DesktopBugService(
     private var logJob: Job? = null
     private var screenJob: Job? = null
     @Volatile private var lastFrameSampledAtMillis: Long = 0L
+    @Volatile private var lastH264PictureAtMillis: Long = 0L
 
     private val bugsDir: File get() = File(homeDir, ".andy/bugs")
     private val exportsDir: File get() = File(homeDir, ".andy/exports")
@@ -83,10 +84,11 @@ class DesktopBugService(
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = false
             lastFrameSampledAtMillis = 0L
+            lastH264PictureAtMillis = 0L
         }
         status.value = BugCaptureStatus(active = true, deviceSerial = serial, message = "Recording last 30s for $serial")
-        // Prefer the live Annex-B H.264 bitstream (full stream FPS). Keep ARGB samples as a
-        // parallel backup — packet remux can fail, and GPU metadata frames alone cannot encode.
+        // Prefer the live Annex-B H.264 bitstream (full stream FPS). Sample ARGB only when
+        // H.264 is unavailable — parallel full-rate ARGB copies multi‑GB at 1080p.
         encodedJob = scope.launch {
             val encoded = (mirror as? DesktopMirrorEngine)?.encodedVideo ?: mirror.encodedVideo
             encoded.collect { unit ->
@@ -95,6 +97,11 @@ class DesktopBugService(
                     if (captureSerial == null) return@synchronized
                     if (isH264ConfigAccessUnit(unit.bytes)) {
                         latestH264Config = unit.bytes.copyOf()
+                    }
+                    if (isH264PictureAccessUnit(unit.bytes)) {
+                        lastH264PictureAtMillis = now
+                        // Free any prior ARGB backup once the bitstream is healthy.
+                        if (frames.isNotEmpty()) frames.clear()
                     }
                     h264Units += TimestampedH264(now, unit.bytes.copyOf(), unit.width, unit.height)
                     trimLocked(now)
@@ -113,17 +120,21 @@ class DesktopBugService(
             }
             try {
                 while (currentCoroutineContext().isActive) {
-                    delay(ARGB_SAMPLE_INTERVAL_MILLIS)
+                    delay(ARGB_POLL_MILLIS)
                     val now = System.currentTimeMillis()
-                    // Keep ARGB samples as a backup even when H.264 is flowing — remux can fail
-                    // (missing encoder, bad annex-B window) and GPU metadata frames cannot encode.
-                    // Native YUV snapshot copies planes quickly so VT/Metal stay responsive.
+                    if (hasFreshH264(now)) continue
+                    if (now - lastFrameSampledAtMillis < ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS) continue
+                    // Remux can fail without a bitstream tap; keep a sparse, byte-capped ARGB backup.
                     val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
                         ?: NativeMirrorJni.copyLatestFrameArgb()
                     if (sampled == null) continue
                     synchronized(lock) {
                         if (captureSerial == null) return@synchronized
-                        if (now - lastFrameSampledAtMillis < ARGB_SAMPLE_INTERVAL_MILLIS) return@synchronized
+                        if (hasFreshH264Locked(now)) {
+                            if (frames.isNotEmpty()) frames.clear()
+                            return@synchronized
+                        }
+                        if (now - lastFrameSampledAtMillis < ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS) return@synchronized
                         lastFrameSampledAtMillis = now
                         frames += TimestampedFrame(now, sampled)
                         trimLocked(now)
@@ -166,6 +177,7 @@ class DesktopBugService(
         screenJob?.cancel()
         screenJob = null
         synchronized(lock) {
+            clearCaptureLocked()
             captureSerial = null
             captureDevice = null
             captureStartedAtMillis = 0L
@@ -663,7 +675,24 @@ class DesktopBugService(
         while (logs.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) logs.removeFirst()
         while (frames.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) frames.removeFirst()
         while (h264Units.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) h264Units.removeFirst()
+        trimArgbBudgetLocked()
     }
+
+    /** Cap ARGB backup so soft-decode fallback cannot grow into multi‑GB rings. */
+    private fun trimArgbBudgetLocked() {
+        var totalBytes = frames.sumOf { it.frame.argb.size.toLong() * Int.SIZE_BYTES }
+        while (totalBytes > ARGB_MAX_BYTES && frames.isNotEmpty()) {
+            val removed = frames.removeFirst()
+            totalBytes -= removed.frame.argb.size.toLong() * Int.SIZE_BYTES
+        }
+    }
+
+    private fun hasFreshH264(now: Long): Boolean {
+        val last = lastH264PictureAtMillis
+        return last > 0L && now - last < H264_FRESH_MILLIS
+    }
+
+    private fun hasFreshH264Locked(now: Long): Boolean = hasFreshH264(now)
 
     private fun clearCaptureLocked() {
         actions.clear()
@@ -672,6 +701,7 @@ class DesktopBugService(
         h264Units.clear()
         latestH264Config = null
         lastFrameSampledAtMillis = 0L
+        lastH264PictureAtMillis = 0L
     }
 
     private fun listReports(idPrefix: String): List<BugReport> = bugsDir.listFiles()
@@ -766,8 +796,15 @@ class DesktopBugService(
     companion object {
         private const val WINDOW_MILLIS = 30_000L
         /** ARGB fallback only — used when no H.264 bitstream tap is available. */
-        private const val ARGB_FALLBACK_FRAME_RATE = 30.0
-        private const val ARGB_SAMPLE_INTERVAL_MILLIS = 33L
+        private const val ARGB_FALLBACK_FRAME_RATE = 2.0
+        /** How often we check whether H.264 is healthy enough to skip ARGB. */
+        private const val ARGB_POLL_MILLIS = 100L
+        /** Sparse ARGB backup when the bitstream tap is missing (~2 fps). */
+        private const val ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS = 500L
+        /** Hard cap so even ARGB-only soft decode cannot retain multi‑GB of pixels. */
+        private const val ARGB_MAX_BYTES = 96L * 1024L * 1024L
+        /** Treat picture AUs newer than this as a healthy bitstream (skip ARGB). */
+        private const val H264_FRESH_MILLIS = 2_000L
         private const val SCREEN_POLL_MILLIS = 3_000L
 
         private fun isH264ConfigAccessUnit(bytes: ByteArray): Boolean {

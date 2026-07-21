@@ -8,9 +8,13 @@ import app.andy.desktop.service.agents.CursorAdapter
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.WorktreeManager
+import app.andy.desktop.service.inspector.DesktopAppDatabaseService
+import app.andy.desktop.service.inspector.DesktopSharedPrefsService
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
+import app.andy.desktop.service.tracing.DesktopTraceViewerService
+import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.model.AgentKind
 import app.andy.desktop.updates.DesktopAppUpdateService
 import app.andy.service.AndyServices
@@ -38,6 +42,13 @@ fun createDesktopServices(): AndyServices {
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
+    val tracing = DesktopTracingService(runner, devices, files)
+    val traceViewer = DesktopTraceViewerService()
+    val sharedPrefs = DesktopSharedPrefsService(runner, devices)
+    val appDatabase = DesktopAppDatabaseService(runner, devices)
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runCatching { traceViewer.shutdown() }
+    })
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -82,6 +93,10 @@ fun createDesktopServices(): AndyServices {
         accessibility = accessibility,
         bugs = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility),
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        tracing = tracing,
+        traceViewer = traceViewer,
+        sharedPrefs = sharedPrefs,
+        appDatabase = appDatabase,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,

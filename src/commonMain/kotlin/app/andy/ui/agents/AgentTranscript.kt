@@ -26,9 +26,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -39,10 +36,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -104,27 +101,25 @@ internal fun AgentTranscript(
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
     }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
     var stickToBottom by remember { mutableStateOf(true) }
     var expandedToolKeys by remember { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember { mutableStateOf(setOf<String>()) }
     val isAtBottom by remember {
         derivedStateOf {
-            val total = listState.layoutInfo.totalItemsCount
-            if (total == 0) true else (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= total - 1
+            scrollState.value >= scrollState.maxValue
         }
     }
     // Stream deltas replace the final item in place, so size alone does not
     // change while a long assistant message is growing.
     val transcriptItemCount = displayItems.size + (if (headerContent != null) 1 else 0) + (if (pendingContent != null) 1 else 0) + (if (originalPromptVisible) 1 else 0) + if (isActive) 1 else 0
-    LaunchedEffect(displayItems.lastOrNull(), headerContent != null, pendingContent != null, originalPromptVisible, isActive, stickToBottom) {
+    LaunchedEffect(displayItems.lastOrNull(), headerContent != null, pendingContent != null, originalPromptVisible, isActive, stickToBottom, scrollState.maxValue) {
         if (stickToBottom && transcriptItemCount > 0) {
-            listState.scrollToItem(transcriptItemCount - 1)
+            scrollState.scrollTo(scrollState.maxValue)
         }
     }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to isAtBottom }
+    LaunchedEffect(scrollState) {
+        snapshotFlow { scrollState.isScrollInProgress to isAtBottom }
             .distinctUntilChanged()
             .collect { (scrolling, atBottom) ->
                 if (scrolling && !atBottom) stickToBottom = false
@@ -139,19 +134,18 @@ internal fun AgentTranscript(
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
             EmptyState("waiting for agent output")
         } else {
-            LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp).padding(end = 8.dp),
-                state = listState,
+            Column(
+                Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 14.dp, vertical = 12.dp).padding(end = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 headerContent?.let { header ->
-                    item(key = "task-header") { header() }
+                    key("task-header") { header() }
                 }
                 pendingContent?.let { content ->
-                    item(key = "pending-task-input") { content() }
+                    key("pending-task-input") { content() }
                 }
                 if (originalPromptVisible) {
-                    item(key = "original-prompt") {
+                    key("original-prompt") {
                         SelectionContainer {
                             ChatMessageBubble(
                                 author = "you",
@@ -168,52 +162,45 @@ internal fun AgentTranscript(
                         }
                     }
                 }
-                itemsIndexed(
-                    displayItems,
-                    key = { _, item -> transcriptDisplayItemKey(item) },
-                ) { itemIndex, item ->
-                    SelectionContainer {
-                        when (item) {
-                            is TranscriptDisplayItem.Event -> TranscriptEvent(
-                                event = item.event,
-                                eventKey = transcriptEventKey(item.index, item.event),
-                                expandedToolKeys = expandedToolKeys,
-                                agentLabel = agentLabel,
-                                completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
-                                onToolExpandedChange = { key, expanded ->
-                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
-                                },
-                                onSkillOpen = onSkillOpen,
-                            )
-                            is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
-                                events = item.events,
-                                startIndex = item.startIndex,
-                                expanded = transcriptDisplayItemKey(item) in expandedToolGroups,
-                                onExpandedChange = { expanded ->
-                                    val key = transcriptDisplayItemKey(item)
-                                    expandedToolGroups = if (expanded) expandedToolGroups + key else expandedToolGroups - key
-                                },
-                                expandedToolKeys = expandedToolKeys,
-                                onToolExpandedChange = { key, expanded ->
-                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
-                                },
-                            )
+                displayItems.forEachIndexed { itemIndex, item ->
+                    key(transcriptDisplayItemKey(item)) {
+                        SelectionContainer {
+                            when (item) {
+                                is TranscriptDisplayItem.Event -> TranscriptEvent(
+                                    event = item.event,
+                                    eventKey = transcriptEventKey(item.index, item.event),
+                                    expandedToolKeys = expandedToolKeys,
+                                    agentLabel = agentLabel,
+                                    completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
+                                    onToolExpandedChange = { key, expanded ->
+                                        expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                    },
+                                    onSkillOpen = onSkillOpen,
+                                )
+                                is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
+                                    events = item.events,
+                                    startIndex = item.startIndex,
+                                    expanded = transcriptDisplayItemKey(item) in expandedToolGroups,
+                                    onExpandedChange = { expanded ->
+                                        val key = transcriptDisplayItemKey(item)
+                                        expandedToolGroups = if (expanded) expandedToolGroups + key else expandedToolGroups - key
+                                    },
+                                    expandedToolKeys = expandedToolKeys,
+                                    onToolExpandedChange = { key, expanded ->
+                                        expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                    },
+                                )
+                            }
                         }
                     }
                 }
                 if (isActive) {
-                    item(key = "agent-thinking") { AgentThinkingIndicator() }
+                    key("agent-thinking") { AgentThinkingIndicator() }
                 }
             }
             DraggableScrollbar(
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                visibleItems = listState.layoutInfo.visibleItemsInfo.size,
-                totalItems = listState.layoutInfo.totalItemsCount,
+                scrollState = scrollState,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
-                onDragToIndex = { index ->
-                    stickToBottom = index >= (listState.layoutInfo.totalItemsCount - listState.layoutInfo.visibleItemsInfo.size - 1)
-                    scope.launch { listState.scrollToItem(index.coerceAtLeast(0)) }
-                },
             )
         }
     }

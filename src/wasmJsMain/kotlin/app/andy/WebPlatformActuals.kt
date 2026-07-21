@@ -30,6 +30,8 @@ actual suspend fun pickDirectory(initialDir: String?): String? = null
 actual suspend fun pickFiles(initialDir: String?, allowMultiple: Boolean): List<String> =
     Json.decodeFromString(webPickFiles(allowMultiple).await<JsString>().toString())
 
+actual suspend fun pickSavePath(suggestedName: String, initialDir: String?): String? = null
+
 actual fun downloadsDirectory(): String = "browser-downloads"
 
 actual fun uniqueLocalPath(directory: String, fileName: String): String = fileName
@@ -74,3 +76,13 @@ actual fun Modifier.verticalResizeCursor(): Modifier = this
 actual fun loadImageBitmap(path: String): ImageBitmap? = null
 
 actual fun loadImageBitmap(bytes: ByteArray): ImageBitmap? = null
+
+internal actual fun formatDisplayDateTime(epochMillis: Long): String {
+    if (epochMillis <= 0L) return "-"
+    return formatJsDisplayDateTime(epochMillis.toDouble()).toString()
+}
+
+private fun formatJsDisplayDateTime(epochMillis: Double): JsString =
+    js(
+        "(new Date(epochMillis)).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })",
+    )
