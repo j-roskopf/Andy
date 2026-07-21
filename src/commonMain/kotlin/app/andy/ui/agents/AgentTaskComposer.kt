@@ -68,6 +68,7 @@ import app.andy.model.AgentTaskDraft
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
+import app.andy.model.groupedByModelFamily
 import app.andy.model.labelFor
 import app.andy.model.parseAgentGoalCommand
 import app.andy.model.sandboxControlLabel
@@ -236,9 +237,9 @@ private class AgentTaskComposerFormState(
         skillMenuDismissed = false
     }
 
-    fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind) {
+    fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()) {
         val savedModel = defaults?.model
-        val catalogModel = AgentModelCatalog.option(agent, savedModel)
+        val catalogModel = AgentModelCatalog.option(agent, savedModel, discovered)
         modelId = when {
             savedModel == null -> null
             catalogModel != null -> catalogModel.id
@@ -265,10 +266,13 @@ private fun AgentTaskComposerFormState.providerProfile(): ProjectAgentProfile = 
     fastMode = fastMode,
 )
 
-private fun AgentTaskComposerFormState.applyProviderProfile(profile: ProjectAgentProfile) {
+private fun AgentTaskComposerFormState.applyProviderProfile(
+    profile: ProjectAgentProfile,
+    discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap(),
+) {
     providerChosenInComposer = true
     agent = profile.agent
-    val catalogModel = AgentModelCatalog.option(profile.agent, profile.model)
+    val catalogModel = AgentModelCatalog.option(profile.agent, profile.model, discovered)
     modelId = when {
         profile.model == null -> null
         catalogModel != null -> catalogModel.id
@@ -286,6 +290,7 @@ private fun rememberAgentTaskComposerForm(
     projectContext: ActionProject?,
 ): AgentTaskComposerForm {
     val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
+    val providerModels by services.agentRuns.providerModels.collectAsState()
     val lastUsedAgent by services.agentRuns.lastUsedAgent.collectAsState()
     val scope = rememberCoroutineScope()
     val formsByProject = remember { mutableMapOf<String?, AgentTaskComposerFormState>() }
@@ -301,7 +306,8 @@ private fun rememberAgentTaskComposerForm(
     }.collectAsState()
     val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.ready }
     val showModelSection = state.providerChosenInComposer && selectedCliAvailable
-    val selectedModel = AgentModelCatalog.option(state.agent, state.modelId)
+    val modelOptions = AgentModelCatalog.options(state.agent, providerModels)
+    val selectedModel = AgentModelCatalog.option(state.agent, state.modelId, providerModels)
     val slashCommand = findComposerSlashCommand(state.prompt)
     val matchingCommands = slashCommand?.let { command ->
         AgentNativeSlashCommands.forAgent(state.agent).filter { nativeCommand ->
@@ -340,10 +346,10 @@ private fun rememberAgentTaskComposerForm(
 
     // Apply defaults when the agent changes, or once for a newly created project draft.
     // Do not re-apply merely because we navigated back to an existing draft.
-    LaunchedEffect(state, state.agent, providerDefaults[state.agent]) {
+    LaunchedEffect(state, state.agent, providerDefaults[state.agent], providerModels) {
         val agent = state.agent
         if (state.defaultsSeededForAgent != agent) {
-            state.applyProviderDefaults(providerDefaults[agent], agent)
+            state.applyProviderDefaults(providerDefaults[agent], agent, providerModels)
             state.defaultsSeededForAgent = agent
         }
     }
@@ -352,7 +358,7 @@ private fun rememberAgentTaskComposerForm(
         state.directoryIsGitRepo = directory?.let { services.agentRuns.isGitRepo(it) } == true
         if (!state.directoryIsGitRepo) state.useWorktree = false
     }
-    LaunchedEffect(state.agent, state.modelId) {
+    LaunchedEffect(state.agent, state.modelId, selectedModel) {
         val model = selectedModel
         when {
             state.usesCustomModel || model == null || model.efforts.isEmpty() -> state.reasoningEffort = null
@@ -368,6 +374,8 @@ private fun rememberAgentTaskComposerForm(
         state = state,
         services = services,
         cliStatuses = cliStatuses,
+        providerModels = providerModels,
+        modelOptions = modelOptions,
         projectContext = projectContext,
         directory = directory,
         showModelSection = showModelSection,
@@ -386,6 +394,8 @@ private class AgentTaskComposerForm(
     val state: AgentTaskComposerFormState,
     val services: AndyServices,
     val cliStatuses: List<AgentCliStatus>,
+    val providerModels: Map<AgentKind, List<AgentModelOption>>,
+    val modelOptions: List<AgentModelOption>,
     val projectContext: ActionProject?,
     val directory: String?,
     val showModelSection: Boolean,
@@ -680,14 +690,41 @@ private fun AgentChatComposer(
                             modelMenuExpanded = false
                         },
                     )
-                    AgentModelCatalog.options(state.agent).forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(option.label, color = TextPrimary) },
-                            onClick = {
-                                state.modelId = option.id
-                                modelMenuExpanded = false
-                            },
-                        )
+                    if (state.agent == AgentKind.Cursor) {
+                        form.modelOptions.groupedByModelFamily().forEach { (family, options) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        family.label.uppercase(),
+                                        color = TextSecondary,
+                                        fontFamily = MonoFont,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                            options.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label, color = TextPrimary) },
+                                    onClick = {
+                                        state.modelId = option.id
+                                        modelMenuExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    } else {
+                        form.modelOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label, color = TextPrimary) },
+                                onClick = {
+                                    state.modelId = option.id
+                                    modelMenuExpanded = false
+                                },
+                            )
+                        }
                     }
                     DropdownMenuItem(
                         text = { Text("custom", color = TextPrimary) },
@@ -764,8 +801,9 @@ private fun AgentTaskComposerFields(
         if (showAgentControls) {
             AgentProviderModelProfileControls(
                 profile = state.providerProfile(),
-                onChange = state::applyProviderProfile,
+                onChange = { state.applyProviderProfile(it, form.providerModels) },
                 cliStatuses = form.cliStatuses,
+                providerModels = form.providerModels,
                 providerSelectionActive = state.providerChosenInComposer,
                 showModelControls = false,
             )
@@ -779,8 +817,9 @@ private fun AgentTaskComposerFields(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 AgentProviderModelProfileControls(
                     profile = state.providerProfile(),
-                    onChange = state::applyProviderProfile,
+                    onChange = { state.applyProviderProfile(it, form.providerModels) },
                     cliStatuses = form.cliStatuses,
+                    providerModels = form.providerModels,
                     showProviderControls = false,
                     showVersion = true,
                     showModelHelp = true,

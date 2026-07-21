@@ -98,11 +98,29 @@ internal fun ChatMarkdown(
 ) {
     if (text.isBlank()) return
     AndyMarkdown(
-        text = text,
+        // CommonMark treats a single newline as a soft break, which most renderers display as
+        // a space. In a chat transcript, pressing Shift+Enter or pasting multiline text is an
+        // explicit formatting choice, so promote those breaks to Markdown hard breaks.
+        text = text.withChatLineBreaks(),
         density = density,
         bodyLineHeight = lineHeight,
         modifier = modifier.fillMaxWidth(),
     )
+}
+
+/** Preserves chat line breaks without changing blank-line paragraphs or fenced code blocks. */
+internal fun String.withChatLineBreaks(): String {
+    val lines = replace("\r\n", "\n").split('\n')
+    var inFence = false
+    return lines.mapIndexed { index, line ->
+        val fence = line.trimStart().startsWith("```") || line.trimStart().startsWith("~~~")
+        val next = lines.getOrNull(index + 1)
+        val nextIsFence = next?.trimStart()?.let { it.startsWith("```") || it.startsWith("~~~") } == true
+        val hardBreak = !inFence && !fence && !nextIsFence && line.isNotBlank() && next != null && next.isNotBlank()
+        val renderedLine = if (hardBreak && !line.endsWith("  ") && !line.endsWith("\\")) "$line  " else line
+        if (fence) inFence = !inFence
+        renderedLine
+    }.joinToString("\n")
 }
 
 internal enum class AndyMarkdownDensity {

@@ -792,6 +792,7 @@ internal fun SpecTaskDialog(
     onSaved: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val providerModels by services.agentRuns.providerModels.collectAsState()
     val initialProfile = existing?.profile ?: workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()
     var title by remember(existing?.id) { mutableStateOf(existing?.title.orEmpty()) }
     var brief by remember(existing?.id) { mutableStateOf(existing?.instructions.orEmpty()) }
@@ -848,7 +849,7 @@ internal fun SpecTaskDialog(
                         )
                     }
                 }
-                ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, ProjectTaskKind.Spec)
+                ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill("Include scratchpad", includeScratchpad, Cyan) { includeScratchpad = !includeScratchpad }
@@ -916,6 +917,7 @@ internal fun BuildPairDialog(
     onSaved: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val providerModels by services.agentRuns.providerModels.collectAsState()
     val existing = seed.buildTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
     val linkedReview = existing?.linkedReviewTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
     val linkedVerify = existing?.linkedVerificationTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
@@ -998,20 +1000,20 @@ internal fun BuildPairDialog(
                 }
                 LabeledField("Build notes (optional)", buildNotes, { buildNotes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 90.dp, testTag = "build-notes-field")
                 LabeledField("Reported-cost guardrail in USD (optional)", budgetText, { budgetText = it.filter { char -> char.isDigit() || char == '.' } }, Modifier.fillMaxWidth())
-                ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, ProjectTaskKind.Build)
+                ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Build)
                 FilterPill("Build gets scratchpad snapshot", includeBuildScratchpad, Cyan) { includeBuildScratchpad = !includeBuildScratchpad }
                 FilterPill("Run review before verification", reviewEnabled, AndyColors.Blue) { reviewEnabled = !reviewEnabled }
                 AnimatedVisibility(reviewEnabled) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         LabeledField("Custom review instructions (optional)", reviewInstructions, { reviewInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 100.dp)
-                        ProjectAgentProfileEditor("REVIEW PROFILE · BUILD WORKSPACE INHERITED", reviewProfile, { reviewProfile = it }, cliStatuses, ProjectTaskKind.Review)
+                        ProjectAgentProfileEditor("REVIEW PROFILE · BUILD WORKSPACE INHERITED", reviewProfile, { reviewProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
                         FilterPill("Reviewer gets scratchpad snapshot", includeReviewScratchpad, AndyColors.Blue) { includeReviewScratchpad = !includeReviewScratchpad }
                     }
                 }
                 LabeledField("Verification instructions (optional)", verificationInstructions, { verificationInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
                 AnimatedVisibility(verificationInstructions.isNotBlank()) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, ProjectTaskKind.Verification)
+                        ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Verification)
                         FilterPill("Verifier gets scratchpad snapshot", includeVerifyScratchpad, Cyan) { includeVerifyScratchpad = !includeVerifyScratchpad }
                     }
                 }
@@ -1056,6 +1058,7 @@ internal fun ProjectProfilesDialog(
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val providerModels by services.agentRuns.providerModels.collectAsState()
     var spec by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()) }
     var build by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Build] ?: ProjectAgentProfile()) }
     var review by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Review] ?: ProjectAgentProfile()) }
@@ -1076,10 +1079,10 @@ internal fun ProjectProfilesDialog(
                     }
                 }
                 when (selectedRole) {
-                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN + READ ONLY LOCKED", spec, { spec = it }, cliStatuses, ProjectTaskKind.Spec)
-                    ProjectTaskKind.Build -> ProjectAgentProfileEditor("BUILD", build, { build = it }, cliStatuses, ProjectTaskKind.Build)
-                    ProjectTaskKind.Review -> ProjectAgentProfileEditor("REVIEW · BUILD WORKSPACE INHERITED", review, { review = it }, cliStatuses, ProjectTaskKind.Review)
-                    ProjectTaskKind.Verification -> ProjectAgentProfileEditor("VERIFY · BUILD WORKSPACE INHERITED", verify, { verify = it }, cliStatuses, ProjectTaskKind.Verification)
+                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN + READ ONLY LOCKED", spec, { spec = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
+                    ProjectTaskKind.Build -> ProjectAgentProfileEditor("BUILD", build, { build = it }, cliStatuses, providerModels, ProjectTaskKind.Build)
+                    ProjectTaskKind.Review -> ProjectAgentProfileEditor("REVIEW · BUILD WORKSPACE INHERITED", review, { review = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
+                    ProjectTaskKind.Verification -> ProjectAgentProfileEditor("VERIFY · BUILD WORKSPACE INHERITED", verify, { verify = it }, cliStatuses, providerModels, ProjectTaskKind.Verification)
                 }
             }
         },
@@ -1104,6 +1107,7 @@ internal fun ProjectAgentProfileEditor(
     profile: ProjectAgentProfile,
     onChange: (ProjectAgentProfile) -> Unit,
     cliStatuses: List<AgentCliStatus>,
+    providerModels: Map<AgentKind, List<app.andy.model.AgentModelOption>>,
     role: ProjectTaskKind,
 ) {
     Column(Modifier.fillMaxWidth().background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1112,6 +1116,7 @@ internal fun ProjectAgentProfileEditor(
             profile = profile,
             onChange = onChange,
             cliStatuses = cliStatuses,
+            providerModels = providerModels,
             showUnavailableAsPills = true,
             showProviderIcons = false,
             showModelControls = false,
@@ -1122,6 +1127,7 @@ internal fun ProjectAgentProfileEditor(
                 profile = profile,
                 onChange = onChange,
                 cliStatuses = cliStatuses,
+                providerModels = providerModels,
                 showProviderControls = false,
                 showUnavailableAsPills = true,
                 showProviderIcons = false,

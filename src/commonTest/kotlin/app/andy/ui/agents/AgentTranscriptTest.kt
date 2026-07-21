@@ -76,69 +76,40 @@ class AgentTranscriptTest {
     }
 
     @Test
-    fun bottomItemIndexAccountsForOptionalTranscriptRows() {
-        assertEquals(
-            4,
-            transcriptBottomItemIndex(
-                displayItemCount = 2,
-                hasHeader = true,
-                hasPending = false,
-                hasOriginalPrompt = true,
-                isActive = true,
-            ),
-        )
-        assertEquals(
-            1,
-            transcriptBottomItemIndex(
-                displayItemCount = 2,
-                hasHeader = false,
-                hasPending = false,
-                hasOriginalPrompt = false,
-                isActive = false,
-            ),
-        )
+    fun reverseTranscriptBottomIsIndexZeroWithNoOffset() {
+        assertTrue(transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 0))
+        assertTrue(transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 1))
+        assertTrue(!transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 2))
+        assertTrue(!transcriptIsAtBottom(firstVisibleItemIndex = 1, firstVisibleItemScrollOffset = 0))
     }
 
     @Test
-    fun scrollAnchorTracksStreamingAssistantGrowth() {
-        val shortItems = transcriptDisplayItems(
-            listOf(AgentEvent.AssistantText(atMillis = 1, text = "Hel")),
-            compactToolCalls = true,
-        )
-        val longItems = transcriptDisplayItems(
-            listOf(AgentEvent.AssistantText(atMillis = 1, text = "Hello world")),
-            compactToolCalls = true,
-        )
+    fun scrollMemoryKeepsIndependentConversationPositions() {
+        val memory = TranscriptScrollMemory()
+        val first = TranscriptScrollPosition(index = 8, offset = 14, stickToBottom = false)
+        val second = TranscriptScrollPosition(index = 0, offset = 0, stickToBottom = true)
 
-        val shortAnchor = transcriptScrollAnchor(shortItems, hasHeader = false, hasPending = false, hasOriginalPrompt = false, isActive = true)
-        val longAnchor = transcriptScrollAnchor(longItems, hasHeader = false, hasPending = false, hasOriginalPrompt = false, isActive = true)
+        memory.save("first", first)
+        memory.save("second", second)
 
-        assertTrue(shortAnchor != longAnchor)
+        assertEquals(first, memory.get("first"))
+        assertEquals(second, memory.get("second"))
+        memory.remove("first")
+        assertEquals(null, memory.get("first"))
+        assertEquals(second, memory.get("second"))
     }
 
     @Test
-    fun scrollAnchorTracksCompletedContentMount() {
-        val items = transcriptDisplayItems(
-            listOf(AgentEvent.TaskResult(atMillis = 1, success = true, finalText = "Done.")),
-            compactToolCalls = true,
+    fun firstConversationVisitHasNoSavedPositionAndDefaultsToLiveEdge() {
+        val memory = TranscriptScrollMemory()
+
+        assertEquals(null, memory.get("new-chat"))
+        assertTrue(
+            transcriptIsAtBottom(
+                firstVisibleItemIndex = 0,
+                firstVisibleItemScrollOffset = 0,
+            ),
         )
-        val before = transcriptScrollAnchor(
-            items,
-            hasHeader = false,
-            hasPending = false,
-            hasOriginalPrompt = false,
-            isActive = false,
-            completedContentKey = null,
-        )
-        val after = transcriptScrollAnchor(
-            items,
-            hasHeader = false,
-            hasPending = false,
-            hasOriginalPrompt = false,
-            isActive = false,
-            completedContentKey = 3,
-        )
-        assertTrue(before != after)
     }
 
     @Test
@@ -172,51 +143,5 @@ class AgentTranscriptTest {
         val text = assertIs<AgentEvent.AssistantText>(merged.single())
         assertEquals(10, text.atMillis)
         assertEquals("Hello", text.text)
-    }
-
-    @Test
-    fun nearBottomRequiresLastItemBottomAlignedNotJustVisible() {
-        // Last item parked at the top of the viewport with empty space below — not pinned.
-        assertTrue(
-            !transcriptIsNearBottom(
-                transcriptBottomGapPx(
-                    lastItemIndex = 4,
-                    lastItemOffset = 0,
-                    lastItemSize = 40,
-                    totalItems = 5,
-                    viewportEndOffset = 800,
-                    canScrollForward = false,
-                    canScrollBackward = true,
-                ),
-            ),
-        )
-        // Tall last item scrolled so its bottom meets the viewport bottom.
-        assertTrue(
-            transcriptIsNearBottom(
-                transcriptBottomGapPx(
-                    lastItemIndex = 4,
-                    lastItemOffset = -1200,
-                    lastItemSize = 2000,
-                    totalItems = 5,
-                    viewportEndOffset = 800,
-                    canScrollForward = false,
-                    canScrollBackward = true,
-                ),
-            ),
-        )
-        // Short transcript that fits entirely.
-        assertTrue(
-            transcriptIsNearBottom(
-                transcriptBottomGapPx(
-                    lastItemIndex = 1,
-                    lastItemOffset = 100,
-                    lastItemSize = 40,
-                    totalItems = 2,
-                    viewportEndOffset = 800,
-                    canScrollForward = false,
-                    canScrollBackward = false,
-                ),
-            ),
-        )
     }
 }

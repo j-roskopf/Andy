@@ -435,6 +435,7 @@ internal object ScreenshotServices {
         private val task = AgentTask("task-1", "Tighten checkout validation", "Fix the empty postal code validation and add a regression test.", AgentKind.Codex, "garden", "/workspace/sample-app", "/workspace/sample-app", status = AgentTaskStatus.Completed, createdAtMillis = now - 40_000, startedAtMillis = now - 39_000, finishedAtMillis = now - 3_000, totalCostUsd = 0.18, inputTokens = 2_420, outputTokens = 860, contextTokens = 12_400, contextWindowTokens = 128_000, unread = true)
         override val tasks = MutableStateFlow(listOf(task))
         override val cliStatuses = MutableStateFlow(AgentKind.entries.map { AgentCliStatus(it, "/usr/local/bin/${it.cliName}", "1.0.0") })
+        override val providerModels = MutableStateFlow(emptyMap<AgentKind, List<app.andy.model.AgentModelOption>>())
         override val providerQuotas = MutableStateFlow(mapOf(AgentKind.Codex to AgentProviderQuota(listOf(AgentQuotaWindow("5 hour", 0.64f, now + 10_800_000)), now)))
         override val quotaAccess = MutableStateFlow(AgentQuotaAccess())
         override val providerDefaults = MutableStateFlow(mapOf(AgentKind.Codex to AgentProviderDefaults(model = "gpt-5.2-codex", reasoningEffort = AgentReasoningEffort.High)))

@@ -35,6 +35,46 @@ class ScrollbarsTest {
     }
 
     @Test
+    fun reverseLayoutPlacesLiveEdgeThumbAtTheBottom() {
+        val metrics = lazyScrollbarMetrics(
+            totalItems = 3,
+            firstVisibleItemIndex = 0,
+            firstVisibleItemScrollOffset = 0,
+            measuredItemSizes = mapOf(0 to 2_000, 1 to 120, 2 to 120),
+            viewportSize = 400,
+            itemSpacing = 10,
+            reverseLayout = true,
+        )
+
+        assertEquals(metrics.maxScrollOffset, metrics.scrollOffset)
+        val thumb = scrollbarThumb(400f, 28f, metrics)
+        assertEquals(400f - thumb.height, thumb.top)
+    }
+
+    @Test
+    fun reverseLayoutScrollbarBottomMapsToItemZero() {
+        val metrics = lazyScrollbarMetrics(
+            totalItems = 3,
+            firstVisibleItemIndex = 0,
+            firstVisibleItemScrollOffset = 0,
+            measuredItemSizes = mapOf(0 to 2_000, 1 to 120, 2 to 120),
+            viewportSize = 400,
+            itemSpacing = 10,
+            reverseLayout = true,
+        )
+        val target = lazyScrollbarTarget(
+            scrollOffset = metrics.maxScrollOffset,
+            totalItems = 3,
+            measuredItemSizes = mapOf(0 to 2_000, 1 to 120, 2 to 120),
+            viewportSize = 400,
+            itemSpacing = 10,
+            reverseLayout = true,
+        )
+
+        assertEquals(LazyScrollbarTarget(itemIndex = 0, itemScrollOffset = 0), target)
+    }
+
+    @Test
     fun scrollbarUsesAUsableMinimumThumbSize() {
         val thumb = scrollbarThumb(
             trackHeight = 600f,
