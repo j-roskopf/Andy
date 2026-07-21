@@ -36,6 +36,11 @@ internal object ScreenshotServices {
                     AndyScreenshotScenario.TracingPerfetto -> PerformanceTab.Tracing.name
                     else -> PerformanceTab.Metrics.name
                 },
+                // Leave room above the library so the seeded user config row is visible.
+                tracingLibraryPaneHeight = when (scenario) {
+                    AndyScreenshotScenario.TracingPerfetto -> 160f
+                    else -> 240f
+                },
                 proxyPort = 9099,
                 proxyRules = listOf(
                     ProxyRule("mock-profile", "Mock profile", true, "*/profile*", "GET", 200, responseBody = "{\"name\":\"Ada\"}"),

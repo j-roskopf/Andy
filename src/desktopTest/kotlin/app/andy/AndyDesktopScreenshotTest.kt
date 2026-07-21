@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.hasAnyDescendant
@@ -165,6 +166,12 @@ class AndyDesktopScreenshotTest {
                         }
                         AndyScreenshotScenario.ProjectsScratchpadEditor -> {
                             onNodeWithText("edit").performClick()
+                            waitForIdle()
+                        }
+                        AndyScreenshotScenario.TracingPerfetto -> {
+                            // Quick-start cards fill the left pane; scroll so the seeded
+                            // user config row is inside the capture viewport.
+                            onNodeWithText("checkout-focus").performScrollTo()
                             waitForIdle()
                         }
                         else -> Unit
