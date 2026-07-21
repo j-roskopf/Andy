@@ -39,6 +39,8 @@ class AndyDesktopScreenshotTest {
         AndyScreenshotScenario.LogcatStream,
         AndyScreenshotScenario.IntentsDraft,
         AndyScreenshotScenario.DeviceFiles,
+        AndyScreenshotScenario.SharedPreferences,
+        AndyScreenshotScenario.AppDatabase,
         AndyScreenshotScenario.ComputerFiles,
         AndyScreenshotScenario.NetworkCapture,
     )
@@ -48,6 +50,7 @@ class AndyDesktopScreenshotTest {
         AndyScreenshotScenario.SnapshotsPopulated,
         AndyScreenshotScenario.ControlsHardware,
         AndyScreenshotScenario.PerformanceSamples,
+        AndyScreenshotScenario.TracingPerfetto,
         AndyScreenshotScenario.DesignOverlay,
         AndyScreenshotScenario.AccessibilityHierarchy,
         AndyScreenshotScenario.BugsReplay,
@@ -130,7 +133,7 @@ class AndyDesktopScreenshotTest {
                                 drawContent()
                             },
                         ) {
-                            AndyScreenshotApp(scenario, ScreenshotServices.create())
+                            AndyScreenshotApp(scenario, ScreenshotServices.create(scenario))
                         }
                     }
                     waitForIdle()

@@ -54,6 +54,14 @@ Build and send Android activity, deep link, service, and broadcast intents. Andy
 
 Browse device file paths such as `/sdcard`, `/data/local/tmp`, and `/storage/emulated/0`. Navigate directories, inspect mode, size, and modified timestamps, and use the file service for pull, push, and delete workflows.
 
+### Shared Preferences
+
+Inspect `shared_prefs` XML for a selected debuggable package. Browse files and typed keys, edit values in place, and add or delete entries without dropping to `adb shell`.
+
+### App Databases
+
+Browse SQLite databases for a debuggable app. List databases and tables with row counts, inspect and edit cells, run or save SQL queries, and pull a database copy to the host when you need offline analysis.
+
 ### Network
 
 Run a debug-app HTTPS proxy backed by mitmproxy. Start and stop capture, configure device proxy routing, install the local CA, inspect request and response headers or bodies, and organize traffic by host and path.
@@ -77,6 +85,10 @@ Toggle common device state without memorizing `adb shell` commands. Andy include
 ### Performance
 
 Monitor device performance samples over time. Andy displays CPU, memory, frame rendering, battery, process metrics, and frame timing bars that make slower-than-60-fps frames stand out.
+
+### Tracing
+
+Capture Perfetto traces from Android 9+ devices with quick-start presets for general, battery, thermal, graphics, Chrome, and V8 workloads. Tune duration and buffer size, edit the textproto config, keep a local trace library, and open completed traces in the Perfetto UI through Andy's local viewer.
 
 ### Design
 
@@ -130,9 +142,12 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Logcat | Intents |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-logcat-stream.png" alt="Andy logcat" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-intents-draft.png" alt="Andy intent draft" width="480"> |
-| Files | Computer Files |
+| Files | Shared Preferences |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="480"> |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-device-files.png" alt="Andy files" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-shared-preferences.png" alt="Andy shared preferences" width="480"> |
+| App Databases | Computer Files |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-app-database.png" alt="Andy app database" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-computer-files.png" alt="Andy computer files" width="480"> |
 | Network | Project tasks |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-network-capture.png" alt="Andy network capture" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-workflows.png" alt="Andy project tasks" width="480"> |
@@ -154,15 +169,15 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Controls | Performance |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="480"> |
-| Design | Accessibility |
+| Tracing | Design |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> |
-| Bug Capture | Settings |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-tracing-perfetto.png" alt="Andy Perfetto tracing" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> |
+| Accessibility | Bug Capture |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> |
-| Mirror pop-out | |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> |
+| Settings | Mirror pop-out |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> | |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |
 
 ### Runtime Requirements
 
