@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.model.AgentNotificationTiming
+import app.andy.model.IntentDraft
+import app.andy.model.IntentMode
 import app.andy.model.WorkspaceState
 import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
@@ -22,6 +24,23 @@ class DesktopWorkspaceStoreTest {
         )
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
+
+        val withIntents = saved.copy(
+            savedIntents = listOf(
+                IntentDraft(
+                    mode = IntentMode.DeepLink,
+                    action = "android.intent.action.VIEW",
+                    dataUri = "app://open?id=1",
+                ),
+                IntentDraft(
+                    mode = IntentMode.Activity,
+                    action = "android.intent.action.MAIN",
+                    component = "com.example/.MainActivity",
+                ),
+            ),
+        )
+        DesktopWorkspaceStore(file).save(withIntents)
+        assertEquals(withIntents.savedIntents, DesktopWorkspaceStore(file).load().savedIntents)
 
         file.writeText(file.readText().replace("agentNotificationSoundId=ping", "agentNotificationSoundId=unknown"))
         assertEquals("chime", DesktopWorkspaceStore(file).load().agentNotificationSoundId)

@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.model.IntentDraft
 import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
 import app.andy.model.WorkspaceState
@@ -15,6 +16,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.Properties
 
@@ -30,6 +34,7 @@ class DesktopWorkspaceStore(
         WorkspaceState(
             selectedSdkPath = props.getProperty("selectedSdkPath")?.takeIf { it.isNotBlank() },
             selectedDeviceSerial = props.getProperty("selectedDeviceSerial")?.takeIf { it.isNotBlank() },
+            savedIntents = decodeSavedIntents(props.getProperty("savedIntents").orEmpty()),
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
             proxyStartOnLaunch = props.getProperty("proxyStartOnLaunch")?.toBooleanStrictOrNull() ?: false,
@@ -84,6 +89,7 @@ class DesktopWorkspaceStore(
         val props = Properties().apply {
             setProperty("selectedSdkPath", state.selectedSdkPath.orEmpty())
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
+            setProperty("savedIntents", encodeSavedIntents(state.savedIntents))
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
             setProperty("proxyStartOnLaunch", state.proxyStartOnLaunch.toString())
@@ -151,6 +157,18 @@ class DesktopWorkspaceStore(
         mutableState.value = state
     }
 
+    private fun encodeSavedIntents(intents: List<IntentDraft>): String {
+        if (intents.isEmpty()) return ""
+        return WorkspaceJson.encodeToString(intents)
+    }
+
+    private fun decodeSavedIntents(value: String): List<IntentDraft> {
+        if (value.isBlank()) return emptyList()
+        return runCatching {
+            WorkspaceJson.decodeFromString(ListSerializer(IntentDraft.serializer()), value)
+        }.getOrDefault(emptyList())
+    }
+
     private fun loadProxyRules(props: Properties): List<ProxyRule> {
         val count = props.getProperty("proxyRuleCount")?.toIntOrNull() ?: return emptyList()
         return (0 until count).mapNotNull { index ->
@@ -194,5 +212,9 @@ class DesktopWorkspaceStore(
             .map { it.trim() }
             .filter { it.isNotBlank() && ":" in it }
             .associate { it.substringBefore(':').trim() to it.substringAfter(':').trim() }
+    }
+
+    private companion object {
+        val WorkspaceJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     }
 }

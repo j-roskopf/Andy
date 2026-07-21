@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,17 +39,16 @@ internal fun DeviceLivePanel(
             }
         }
     }
+    // Connect on enter; leave the session warm when the panel leaves composition so Live /
+    // Design / Performance handoffs stay instant (same pattern as DesignScreen).
     LaunchedEffect(serial) {
         connectResult = ""
         if (serial != null) {
             val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
             connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
-            if (result.isSuccess) {
-                try {
-                    awaitCancellation()
-                } finally {
-                    withContext(NonCancellable) { services.mirror.disconnect() }
-                }
+        } else {
+            withContext(NonCancellable) {
+                services.mirror.disconnect()
             }
         }
     }

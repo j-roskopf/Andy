@@ -64,8 +64,9 @@ interface MirrorEngine {
     suspend fun connect(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult
     /**
      * Release the live session. By default implementations may keep the stream warm briefly so
-     * navigating between Live/Design/Accessibility can reuse scrcpy instead of black-screening.
-     * Pass [immediate] for shutdown, device changes, or other cases that must tear down now.
+     * navigating between Live/Design/Accessibility (and back) can reuse scrcpy instead of
+     * black-screening. Live and embedded panels no longer disconnect on leave; pass [immediate]
+     * for shutdown, device changes, or other cases that must tear down now.
      */
     suspend fun disconnect(immediate: Boolean = false)
     suspend fun sendInput(input: MirrorInput): CommandResult
