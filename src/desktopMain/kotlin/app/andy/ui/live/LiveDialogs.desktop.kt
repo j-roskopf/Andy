@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.rememberDialogState
+import app.andy.desktop.ApplyMacWindowChrome
+import app.andy.desktop.macTitleBarContentInset
 import app.andy.model.BugCaptureDraft
 import app.andy.ui.components.Button
 import app.andy.ui.components.LabeledField
@@ -40,9 +42,17 @@ internal actual fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureD
         resizable = false,
         alwaysOnTop = true,
     ) {
+        ApplyMacWindowChrome(Panel)
         Surface(modifier = Modifier.fillMaxSize(), color = Panel, shape = RoundedCornerShape(0.dp)) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(20.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(
+                        start = 20.dp,
+                        end = 20.dp,
+                        top = 20.dp + macTitleBarContentInset,
+                        bottom = 20.dp,
+                    ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text("Capture bug", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -87,9 +97,17 @@ internal actual fun ClipTextDialog(onDismiss: () -> Unit, onSend: (String) -> Un
         resizable = false,
         alwaysOnTop = true,
     ) {
+        ApplyMacWindowChrome(Panel)
         Surface(modifier = Modifier.fillMaxSize(), color = Panel) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(20.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(
+                        start = 20.dp,
+                        end = 20.dp,
+                        top = 20.dp + macTitleBarContentInset,
+                        bottom = 20.dp,
+                    ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text("Clip text", color = TextPrimary, fontWeight = FontWeight.Bold)

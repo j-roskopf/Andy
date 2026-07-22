@@ -549,7 +549,7 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
-    fun specForcesPlanModeAndAttachesAnExactInstalledGrillMeSkill() = runBlocking {
+    fun specForcesPlanModeAndAttachesInstalledGrillSkills() = runBlocking {
         val adapter = WorkflowAdapter(kind = AgentKind.ClaudeCode)
         withHarness(
             adapter = adapter,
@@ -557,6 +557,10 @@ class ProjectWorkflowServiceTest {
                 File(projectDir, ".claude/skills/grill-me/SKILL.md").apply {
                     parentFile.mkdirs()
                     writeText("---\nname: grill-me\ndescription: sharpen the plan\n---\n")
+                }
+                File(projectDir, ".claude/skills/grilling/SKILL.md").apply {
+                    parentFile.mkdirs()
+                    writeText("---\nname: grilling\ndescription: interview the user\n---\n")
                 }
             },
         ) { harness ->
@@ -576,7 +580,30 @@ class ProjectWorkflowServiceTest {
             assertTrue(run.planMode)
             assertEquals(AgentAutonomy.ReadOnly, run.autonomy)
             assertEquals(AgentSandboxMode.ReadOnly, run.sandboxMode)
-            assertEquals(listOf("grill-me"), run.skills.map { it.name })
+            assertEquals(listOf("grill-me", "grilling"), run.skills.map { it.name })
+            assertTrue(run.prompt.contains("andy_user_input"))
+        }
+    }
+
+    @Test
+    fun specGrillMeWorksWithoutInstalledPortableSkills() = runBlocking {
+        val adapter = WorkflowAdapter(kind = AgentKind.Codex)
+        withHarness(adapter = adapter) { harness ->
+            val specId = harness.service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan with questions",
+                    brief = "Produce a decision-complete implementation plan",
+                    profile = specProfile().copy(agent = AgentKind.Codex),
+                    grillMeEnabled = true,
+                ),
+            )
+            harness.service.runSpec(specId)
+            await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.state == ProjectTaskState.Completed }
+
+            val run = adapter.launched.single()
+            assertTrue(run.prompt.contains("andy_user_input"))
+            assertTrue(run.prompt.contains("headless", ignoreCase = true))
         }
     }
 

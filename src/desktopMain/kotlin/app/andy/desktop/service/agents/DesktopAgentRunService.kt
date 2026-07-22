@@ -5,6 +5,8 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
+import app.andy.model.grillMeHeadlessPromptAddendum
+import app.andy.model.isGrillMeSkillName
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
 import app.andy.model.coalesceAgentStreamDeltas
@@ -268,12 +270,7 @@ class DesktopAgentRunService(
             return
         }
         val installedSkills = withContext(Dispatchers.IO) { discoverSkills(spec.profile.agent, directory) }
-        val grillMe = installedSkills.firstOrNull { it.name == "grill-me" }
-        if (spec.grillMeEnabled && grillMe == null) {
-            updateProjectTask(taskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = "grill-me is not installed for ${spec.profile.agent.label}") }
-            persist()
-            return
-        }
+        val grillSkills = installedSkills.filter { isGrillMeSkillName(it.name) }
         val scratchpad = project.scratchpad.takeIf { spec.includeScratchpad && it.isNotBlank() }
         val attempt = spec.attempts.count { it.stage == ProjectWorkflowStage.Spec } + 1
         val prompt = specPrompt(spec, scratchpad, revisionRequest)
@@ -286,7 +283,7 @@ class DesktopAgentRunService(
                 projectId = spec.projectId,
                 directory = directory,
                 planMode = true,
-                skills = listOfNotNull(grillMe.takeIf { spec.grillMeEnabled }),
+                skills = grillSkills.takeIf { spec.grillMeEnabled }.orEmpty(),
                 imagePaths = spec.imagePaths,
                 workflowTaskId = spec.id,
                 stage = ProjectWorkflowStage.Spec,
@@ -1062,6 +1059,7 @@ class DesktopAgentRunService(
         var lastError: String? = null
         var lastAssistantText: String? = null
         var requestedInput: AgentUserInputRequest? = null
+        val turnAssistantText = StringBuilder()
         val rawTail = ArrayDeque<String>()
         val rawPlanOutput = StringBuilder()
         var structuredPlanText: String? = null
@@ -1091,17 +1089,34 @@ class DesktopAgentRunService(
                             .getOrElse { listOf(AgentEvent.Raw(now, line)) }
                             .mapNotNull { event ->
                                 val parsed = when (event) {
-                                    is AgentEvent.AssistantText -> parseAgentUserInput(event.text)
-                                    is AgentEvent.TaskResult -> event.finalText?.let(::parseAgentUserInput)
+                                    is AgentEvent.AssistantText -> {
+                                        if (event.isStreamDelta) {
+                                            turnAssistantText.append(event.text)
+                                        } else {
+                                            if (turnAssistantText.isNotEmpty()) turnAssistantText.append("\n\n")
+                                            turnAssistantText.append(event.text)
+                                        }
+                                        parseAgentUserInput(turnAssistantText.toString())
+                                    }
+                                    is AgentEvent.TaskResult -> parseAgentUserInputFromSources(event.finalText, turnAssistantText.toString())
                                     is AgentEvent.Raw -> parseAgentUserInput(event.line)
                                     else -> null
                                 }
                                 if (parsed == null) {
-                                    event
+                                    when (event) {
+                                        is AgentEvent.AssistantText -> {
+                                            if (containsPartialAgentUserInputMarkup(turnAssistantText.toString())) null else event
+                                        }
+                                        else -> event
+                                    }
                                 } else {
                                     if (requestedInput == null) requestedInput = parsed.request
                                     when (event) {
-                                        is AgentEvent.AssistantText -> event.copy(text = parsed.visibleText).takeIf { it.text.isNotBlank() }
+                                        is AgentEvent.AssistantText -> when {
+                                            parsed.visibleText.isBlank() -> null
+                                            event.isStreamDelta -> null
+                                            else -> event.copy(text = parsed.visibleText, isStreamDelta = false)
+                                        }
                                         is AgentEvent.TaskResult -> event.copy(finalText = parsed.visibleText.takeIf { it.isNotBlank() })
                                         is AgentEvent.Raw -> event.copy(line = parsed.visibleText).takeIf { it.line.isNotBlank() }
                                         else -> event
@@ -1151,6 +1166,10 @@ class DesktopAgentRunService(
             }
         }
 
+        if (requestedInput == null && turnAssistantText.isNotEmpty()) {
+            parseAgentUserInputFromSources(turnAssistantText.toString())?.let { requestedInput = it.request }
+        }
+
         val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
         val result = lastResult
         val waitingForInput = requestedInput?.takeIf { exitCode == 0 && lastError == null && !handle.stopRequested }
@@ -1162,11 +1181,12 @@ class DesktopAgentRunService(
         }
         val fallbackText = lastAssistantText ?: rawTail.joinToString("\n").takeIf { it.isNotBlank() }
         val completedPlanText = if (status == AgentTaskStatus.Completed && task.planMode) {
-            structuredPlanText
-                ?: result?.finalText?.takeIf { it.isNotBlank() }
-                ?: lastAssistantText?.takeIf { it.isNotBlank() }
-                ?: rawPlanOutput.toString().trim().takeIf { it.isNotBlank() }
-                ?: fallbackText
+            agentPlanTextCandidate(structuredPlanText)
+                ?: agentPlanTextCandidate(result?.finalText)
+                ?: agentPlanTextCandidate(lastAssistantText)
+                ?: agentPlanTextCandidate(turnAssistantText.toString())
+                ?: agentPlanTextCandidate(rawPlanOutput.toString())
+                ?: agentPlanTextCandidate(fallbackText)
         } else {
             null
         }
@@ -1663,7 +1683,11 @@ class DesktopAgentRunService(
             append("\n\nRevision request:\n").append(request.trim())
         }
         scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
-        append("\n\nReturn the complete implementation plan as the final response, including interfaces, edge cases, and verification steps.")
+        if (spec.grillMeEnabled) {
+            append("\n\n").append(grillMeHeadlessPromptAddendum())
+        } else {
+            append("\n\nReturn the complete implementation plan as the final response, including interfaces, edge cases, and verification steps.")
+        }
     }
 
     private fun buildPrompt(

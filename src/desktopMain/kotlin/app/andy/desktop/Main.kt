@@ -29,10 +29,8 @@ import app.andy.ui.theme.windowBackgroundForTint
 import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
-import java.awt.Color
 import java.awt.desktop.AppReopenedListener
 import java.awt.desktop.SystemEventListener
-import javax.swing.JFrame
 import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
@@ -146,12 +144,9 @@ fun main() {
                 window.addWindowListener(listener)
                 onDispose { window.removeWindowListener(listener) }
             }
-            LaunchedEffect(window, workspaceState.tintId, workspaceState.surfaceModeId) {
-                configureMacTitleBar(
-                    window,
-                    windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
-                )
-            }
+            ApplyMacWindowChrome(
+                windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
+            )
             MenuBar {
                 Menu("Go") {
                     services.capabilities.destinations.forEach { destination ->
@@ -198,6 +193,9 @@ fun main() {
                 title = "Andy mirror - $serial",
                 icon = appIcon,
             ) {
+                ApplyMacWindowChrome(
+                    windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
+                )
                 MenuBar {
                     Menu("View") {
                         CheckboxItem(
@@ -246,16 +244,6 @@ private fun updateDockBadge(count: Int) {
     }
 }
 
-private fun configureMacTitleBar(window: JFrame, background: androidx.compose.ui.graphics.Color) {
-    runCatching {
-        window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
-        window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
-        window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
-        window.rootPane.putClientProperty("apple.awt.noTitleBarSeparator", true)
-        window.background = Color(background.red, background.green, background.blue)
-    }
-}
-
 private fun installDockReopenHandler(onReopen: () -> Unit): SystemEventListener? {
     if (!isMacOs() || !Desktop.isDesktopSupported()) return null
     val listener = AppReopenedListener { onReopen() }
@@ -271,9 +259,6 @@ private fun removeDockReopenHandler(listener: SystemEventListener?) {
         Desktop.getDesktop().removeAppEventListener(listener)
     }
 }
-
-private fun isMacOs(): Boolean =
-    System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
 
 /** Thread-safe focus snapshot read by the background attention coordinator. */
 private class AppFocusState {
