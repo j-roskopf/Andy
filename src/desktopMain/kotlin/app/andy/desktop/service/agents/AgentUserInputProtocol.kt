@@ -23,7 +23,8 @@ internal data class ParsedAgentUserInput(
  */
 internal fun parseAgentUserInput(text: String): ParsedAgentUserInput? {
     val open = ANDY_USER_INPUT_OPEN.find(text) ?: return null
-    val jsonStart = open.range.last + 1
+    var jsonStart = open.range.last + 1
+    while (jsonStart < text.length && text[jsonStart].isWhitespace()) jsonStart++
     val jsonEnd = findJsonObjectEnd(text, jsonStart) ?: return null
     val json = text.substring(jsonStart, jsonEnd).trim()
     val remainder = text.substring(jsonEnd)

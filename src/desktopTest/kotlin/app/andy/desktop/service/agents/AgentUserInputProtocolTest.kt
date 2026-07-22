@@ -19,6 +19,17 @@ class AgentUserInputProtocolTest {
     }
 
     @Test
+    fun acceptsWhitespaceAfterOpeningTag() {
+        val text =
+            """<andy_user_input>
+{"questions":[{"id":"choice","question":"Pick one","options":[{"label":"A"},{"label":"B"}]}]}
+</andy_user_input>"""
+
+        val parsed = assertNotNull(parseAgentUserInput(text))
+        assertEquals("choice", parsed.request.questions.single().id)
+    }
+
+    @Test
     fun parsesNestedOptionObjectsFromCursor() {
         val text = """
             Resolved so far:
