@@ -71,6 +71,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
 import app.andy.model.AgentEvent
+import app.andy.model.stripDecisionCheckpointMarkup
 import app.andy.model.AgentSkill
 import app.andy.ui.components.AndyMarkdownDensity
 import app.andy.ui.components.Button
@@ -179,10 +180,10 @@ internal fun AgentTranscript(
         headerContent != null,
     ) {
         buildList {
+            if (pendingContent != null) add("pending-task-input")
             if (isActive) add("agent-thinking")
             displayItems.asReversed().forEach { add(transcriptDisplayItemKey(it)) }
             if (originalPromptVisible) add("original-prompt")
-            if (pendingContent != null) add("pending-task-input")
             if (headerContent != null) add("task-header")
         }
     }
@@ -311,6 +312,9 @@ internal fun AgentTranscript(
             ) {
                 // reverseLayout lays index zero at the visual bottom, so declare rows newest
                 // first while preserving the transcript's chronological reading order.
+                if (pendingContent != null) {
+                    item(key = "pending-task-input", contentType = "request") { pendingContent() }
+                }
                 if (isActive) {
                     item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
                 }
@@ -376,9 +380,6 @@ internal fun AgentTranscript(
                             }
                         }
                     }
-                }
-                if (pendingContent != null) {
-                    item(key = "pending-task-input", contentType = "request") { pendingContent() }
                 }
                 if (headerContent != null) {
                     item(key = "task-header", contentType = "header") { headerContent() }
@@ -514,12 +515,16 @@ private fun TranscriptEvent(
                 fontSize = 10.sp,
             )
         }
-        is AgentEvent.AssistantText -> ChatMessageBubble(
-            author = agentLabel,
-            authorColor = Cyan,
-            alignEnd = false,
-        ) {
-            ChatMarkdown(event.text, lineHeight = 19.sp)
+        is AgentEvent.AssistantText -> {
+            val visibleText = stripDecisionCheckpointMarkup(event.text)
+            if (visibleText.isBlank()) return
+            ChatMessageBubble(
+                author = agentLabel,
+                authorColor = Cyan,
+                alignEnd = false,
+            ) {
+                ChatMarkdown(visibleText, lineHeight = 19.sp)
+            }
         }
         is AgentEvent.Thinking -> ThinkingStep(event.text)
         is AgentEvent.UserMessage -> ChatMessageBubble(
@@ -583,7 +588,7 @@ private fun TranscriptEvent(
                     formatTokens(event.inputTokens, event.outputTokens)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
                 }
                 event.finalText?.takeIf { it.isNotBlank() }?.let {
-                    ChatMarkdown(it, lineHeight = 18.sp)
+                    ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
                 }
                 if (event.success) completedContent?.invoke()
             }

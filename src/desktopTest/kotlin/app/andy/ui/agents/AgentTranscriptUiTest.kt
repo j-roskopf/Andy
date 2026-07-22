@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -165,6 +166,31 @@ class AgentTranscriptUiTest {
             assertEquals(true, followed.stickToBottom)
             assertEquals(0, followed.index)
             assertEquals(0, followed.offset)
+        }
+
+    @Test
+    fun pendingInputRendersOnLiveEdge() =
+        runTranscriptUiTest {
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "spec brief"),
+                            AgentEvent.AssistantText(atMillis = 2, text = "What frame-rate behavior should this task ship?"),
+                        ),
+                        isActive = false,
+                        pendingContent = {
+                            androidx.compose.material3.Text(
+                                "DECISION NEEDED",
+                                modifier = Modifier.testTag("pending-input"),
+                            )
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+            onNodeWithTag("pending-input").assertIsDisplayed()
         }
 
     /** Some existing async service tests can leave one failure queued in coroutines-test. */

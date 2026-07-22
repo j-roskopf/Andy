@@ -77,6 +77,7 @@ import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.defaultSandboxMode
 import app.andy.model.grillMeInstallCommand
+import app.andy.model.isGrillMeSkillName
 import app.andy.model.labelFor
 import app.andy.model.sandboxControlLabel
 import app.andy.formatDecimal
@@ -801,8 +802,8 @@ internal fun SpecTaskDialog(
     var profile by remember(existing?.id) { mutableStateOf(initialProfile) }
     var includeScratchpad by remember(existing?.id) { mutableStateOf(existing?.includeScratchpad ?: false) }
     val installedSkills by services.agentRuns.skills(profile.agent, project.contextDir).collectAsState()
-    val grillAvailable = installedSkills.any { it.name == "grill-me" }
-    var grillMe by remember(existing?.id, grillAvailable) { mutableStateOf(existing?.grillMeEnabled == true && grillAvailable) }
+    val hasPortableGrillSkills = installedSkills.any { isGrillMeSkillName(it.name) }
+    var grillMe by remember(existing?.id) { mutableStateOf(existing?.grillMeEnabled == true) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
@@ -853,9 +854,9 @@ internal fun SpecTaskDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill("Include scratchpad", includeScratchpad, Cyan) { includeScratchpad = !includeScratchpad }
-                        if (grillAvailable) FilterPill("Use grill-me", grillMe, Rust) { grillMe = !grillMe }
+                        FilterPill("Use grill-me", grillMe, Rust) { grillMe = !grillMe }
                     }
-                    if (!grillAvailable) {
+                    if (!hasPortableGrillSkills) {
                         GrillMeInstallHint(
                             agent = profile.agent,
                             onRefresh = { services.agentRuns.refreshSkills(profile.agent, project.contextDir) },
@@ -897,8 +898,8 @@ private fun GrillMeInstallHint(agent: AgentKind, onRefresh: () -> Unit) {
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Text("grill-me isn't installed for ${agent.label}.", color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
-        Text("Run this once in Terminal, then check again:", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+        Text("Optional: install portable grill-me skills for ${agent.label}.", color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
+        Text("Andy runs grill-me headlessly for every provider; these skills are only needed outside Andy.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         SelectionContainer {
             Text(agent.grillMeInstallCommand(), color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
         }

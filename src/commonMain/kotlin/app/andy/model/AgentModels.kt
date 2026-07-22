@@ -7,17 +7,6 @@ enum class AgentKind(val label: String, val cliName: String) {
     Antigravity("Antigravity", "agy"),
 }
 
-/** Command for installing the portable grill-me skill into this provider's global skill directory. */
-fun AgentKind.grillMeInstallCommand(): String =
-    "npx skills add mattpocock/skills --skill grill-me --global --agent ${grillMeSkillsAgent()}"
-
-private fun AgentKind.grillMeSkillsAgent(): String = when (this) {
-    AgentKind.ClaudeCode -> "claude-code"
-    AgentKind.Codex -> "codex"
-    AgentKind.Cursor -> "cursor"
-    AgentKind.Antigravity -> "antigravity-cli"
-}
-
 /** Unified autonomy dial; each adapter maps it to vendor-specific flags. */
 enum class AgentAutonomy(val label: String) {
     ReadOnly("read-only"),

@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.rememberDialogState
+import app.andy.desktop.ApplyMacWindowChrome
+import app.andy.desktop.macTitleBarContentInset
 import app.andy.service.AvailableUpdate
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
@@ -38,13 +40,21 @@ internal actual fun UpdateInstallConfirmationDialog(
         resizable = false,
         alwaysOnTop = true,
     ) {
+        ApplyMacWindowChrome(Panel)
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = Panel,
             shape = RoundedCornerShape(0.dp),
         ) {
             Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(
+                        start = 24.dp,
+                        end = 24.dp,
+                        top = 24.dp + macTitleBarContentInset,
+                        bottom = 24.dp,
+                    ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
