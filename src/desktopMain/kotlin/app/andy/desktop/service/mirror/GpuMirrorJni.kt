@@ -101,6 +101,10 @@ internal object GpuMirrorJni {
         if (!loadResult.isSuccess || decoderId == 0L) 0L
         else runCatching { nativeFramesPresented(decoderId) }.getOrDefault(0L)
 
+    fun hasDecodedFrame(decoderId: Long): Boolean =
+        loadResult.isSuccess && decoderId != 0L &&
+            runCatching { nativeHasDecodedFrame(decoderId) }.getOrDefault(false)
+
     fun isHardwareReady(decoderId: Long): Boolean =
         loadResult.isSuccess && decoderId != 0L &&
             runCatching { nativeIsHardwareReady(decoderId) }.getOrDefault(false)
@@ -210,6 +214,7 @@ internal object GpuMirrorJni {
     private external fun nativeRecordInput(decoderId: Long)
     private external fun nativeRecordTransportIngress(decoderId: Long)
     private external fun nativeFramesPresented(decoderId: Long): Long
+    private external fun nativeHasDecodedFrame(decoderId: Long): Boolean
     private external fun nativeIsHardwareReady(decoderId: Long): Boolean
     private external fun nativeSetIosDecoder(decoderId: Long)
     private external fun nativeClearIosDecoder(decoderId: Long)

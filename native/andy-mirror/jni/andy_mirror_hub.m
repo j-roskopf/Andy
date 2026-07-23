@@ -1052,6 +1052,15 @@ uint64_t andy_hub_frames_presented(int64_t decoder_id) {
     return count;
 }
 
+bool andy_hub_has_decoded_frame(int64_t decoder_id) {
+    GpuDecoder *decoder = find_decoder(decoder_id);
+    if (!decoder) return false;
+    pthread_mutex_lock(&decoder->latest_pixels_lock);
+    const bool ready = decoder->latest_pixels != NULL;
+    pthread_mutex_unlock(&decoder->latest_pixels_lock);
+    return ready;
+}
+
 bool andy_hub_is_hardware_ready(int64_t decoder_id) {
     GpuDecoder *decoder = find_decoder(decoder_id);
     if (!decoder) return false;
@@ -1325,6 +1334,12 @@ JNIEXPORT jlong JNICALL GPU_JNI_METHOD(nativeFramesPresented)(JNIEnv *env, jclas
     (void) env;
     (void) clazz;
     return (jlong) andy_hub_frames_presented((int64_t) decoder_id);
+}
+
+JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeHasDecodedFrame)(JNIEnv *env, jclass clazz, jlong decoder_id) {
+    (void) env;
+    (void) clazz;
+    return andy_hub_has_decoded_frame((int64_t) decoder_id) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeIsHardwareReady)(JNIEnv *env, jclass clazz, jlong decoder_id) {

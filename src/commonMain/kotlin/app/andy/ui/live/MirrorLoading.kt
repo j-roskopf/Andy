@@ -31,7 +31,9 @@ internal fun hasMirrorPresentation(frame: MirrorFrame?, session: MirrorSession?)
 internal fun hasMirrorRendered(frame: MirrorFrame?, session: MirrorSession?): Boolean {
     if (!hasMirrorPresentation(frame, session)) return false
     if (session?.backend?.isHardwareBacked == true) {
-        return session.stats.framesPresented > 0 || session.stats.displayedFps > 0f
+        return session.readyForPresentation ||
+            session.stats.framesPresented > 0 ||
+            session.stats.displayedFps > 0f
     }
     if (session?.backend?.kind == MirrorBackendKind.LegacyCpu) {
         // Compose mirror metadata strips ARGB from state; frame numbers still advance on CPU.

@@ -252,12 +252,8 @@ internal fun LiveDevicePane(
                             contentAlignment = Alignment.Center,
                         ) {
                             val mirrorLoading = isMirrorSurfaceLoading(serial, frame, mirrorSession, mirrorStatus)
-                            // Dialog occlusion hides Metal via [surfaceOccluded] on the Swing panel.
-                            // Do not hide Metal during loading: that left GPU mirrors black because
-                            // native frame counters do not trigger Compose recomposition.
-                            // The native desktop renderer must attach before it receives its
-                            // first H.264 access unit. The screenshot renderer remains fully
-                            // Compose-only, so deterministic tests never need an AWT host.
+                            // Heavyweight desktop surfaces render above Compose. Defer the GPU
+                            // host until a decoded frame is buffered so this overlay stays visible.
                             if (mirroredElsewhere) {
                                 Column(
                                     Modifier.fillMaxSize().padding(24.dp),
@@ -321,6 +317,7 @@ internal fun LiveDevicePane(
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
+                                        deferNativePresentation = mirrorLoading && device != null,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
                                         gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
@@ -337,6 +334,7 @@ internal fun LiveDevicePane(
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
+                                        deferNativePresentation = mirrorLoading && device != null,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
                                         gpuMirrorStreamKey = serial.takeIf { registerNativeHost },

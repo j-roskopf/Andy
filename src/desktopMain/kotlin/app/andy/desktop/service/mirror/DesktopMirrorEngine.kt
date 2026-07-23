@@ -575,6 +575,37 @@ class DesktopMirrorEngine(
         )
     }
 
+    private fun publishNativePresentationStats(
+        framesPresented: Long,
+        displayedFps: Float? = null,
+        p95InputToPresentMillis: Float? = null,
+        readyForPresentation: Boolean? = null,
+    ) {
+        val active = session.value ?: return
+        val frame = frames.value
+        val nextStats = active.stats.copy(
+            displayedFps = displayedFps ?: active.stats.displayedFps,
+            decodedFps = displayedFps ?: active.stats.decodedFps,
+            framesPresented = framesPresented,
+            p95InputToPresentMillis = p95InputToPresentMillis ?: active.stats.p95InputToPresentMillis,
+        )
+        val width = frame.width.takeIf { it > 1 } ?: active.width
+        val height = frame.height.takeIf { it > 1 } ?: active.height
+        val ready = readyForPresentation ?: active.readyForPresentation
+        if (
+            nextStats == active.stats &&
+            width == active.width &&
+            height == active.height &&
+            ready == active.readyForPresentation
+        ) return
+        session.value = active.copy(
+            stats = nextStats,
+            width = width,
+            height = height,
+            readyForPresentation = ready,
+        )
+    }
+
     private fun publishCpuFrame(frame: MirrorFrame) {
         frames.value = frame
         val active = session.value ?: return
@@ -900,6 +931,15 @@ class DesktopMirrorEngine(
                             }
                             val now = System.nanoTime()
                             val framesPresented = pipeline.framesPresented()
+                            if (pipeline.hasDecodedFrame() && session.value?.readyForPresentation == false) {
+                                publishNativePresentationStats(
+                                    framesPresented,
+                                    readyForPresentation = true,
+                                )
+                            }
+                            if (framesPresented > 0L && session.value?.stats?.framesPresented == 0L) {
+                                publishNativePresentationStats(framesPresented)
+                            }
                             val elapsedNanos = now - nativeStatsWindowStartedAt
                             if (elapsedNanos >= 1_000_000_000L) {
                                 val displayedFps = if (elapsedNanos > 0L) {
@@ -909,15 +949,7 @@ class DesktopMirrorEngine(
                                 }
                                 nativeStatsWindowStartedAt = now
                                 nativeStatsWindowFrames = framesPresented
-                                session.value?.let { active ->
-                                    session.value = active.copy(
-                                        stats = active.stats.copy(
-                                            displayedFps = displayedFps,
-                                            decodedFps = displayedFps,
-                                            framesPresented = framesPresented,
-                                        ),
-                                    )
-                                }
+                                publishNativePresentationStats(framesPresented, displayedFps)
                             }
                         }
                     } else {
@@ -942,6 +974,12 @@ class DesktopMirrorEngine(
                             }
                             val now = System.nanoTime()
                             val framesPresented = NativeMirrorJni.framesPresented()
+                            if (framesPresented > 0L && session.value?.stats?.framesPresented == 0L) {
+                                publishNativePresentationStats(
+                                    framesPresented,
+                                    p95InputToPresentMillis = NativeMirrorJni.p95InputToPresentMillis(),
+                                )
+                            }
                             val elapsedNanos = now - nativeStatsWindowStartedAt
                             if (elapsedNanos >= 1_000_000_000L) {
                                 val displayedFps = if (elapsedNanos > 0L) {
@@ -951,16 +989,11 @@ class DesktopMirrorEngine(
                                 }
                                 nativeStatsWindowStartedAt = now
                                 nativeStatsWindowFrames = framesPresented
-                                session.value?.let { active ->
-                                    session.value = active.copy(
-                                        stats = active.stats.copy(
-                                            displayedFps = displayedFps,
-                                            decodedFps = displayedFps,
-                                            framesPresented = framesPresented,
-                                            p95InputToPresentMillis = NativeMirrorJni.p95InputToPresentMillis(),
-                                        ),
-                                    )
-                                }
+                                publishNativePresentationStats(
+                                    framesPresented,
+                                    displayedFps,
+                                    NativeMirrorJni.p95InputToPresentMillis(),
+                                )
                             }
                         }
                     }

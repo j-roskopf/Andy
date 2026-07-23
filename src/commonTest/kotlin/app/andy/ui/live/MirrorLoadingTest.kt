@@ -61,6 +61,25 @@ class MirrorLoadingTest {
     }
 
     @Test
+    fun notLoadingWhenGpuFrameIsDecodedWhileSurfaceIsHidden() {
+        assertFalse(
+            isMirrorSurfaceLoading(
+                serial = "emulator-5554",
+                frame = MirrorFrame(1080, 2400, IntArray(0)),
+                session = MirrorSession(
+                    serial = "emulator-5554",
+                    requestedMode = MirrorRendererMode.Accelerated,
+                    backend = MirrorBackend(MirrorBackendKind.NativeHardware),
+                    width = 1080,
+                    height = 2400,
+                    readyForPresentation = true,
+                ),
+                mirrorStatus = "Connected",
+            ),
+        )
+    }
+
+    @Test
     fun notLoadingWhenIosConnectSeedsPresentedStats() {
         // DesktopIosMirrorEngine seeds framesPresented from the native counter at connect time so
         // Live does not keep the black dimmer until the 1s stats tick.

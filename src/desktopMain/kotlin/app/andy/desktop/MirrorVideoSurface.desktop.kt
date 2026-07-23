@@ -65,6 +65,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    deferNativePresentation: Boolean,
     nativePresentation: Boolean,
     nativePresentationFillHost: Boolean,
     gpuMirrorStreamKey: Any?,
@@ -74,6 +75,8 @@ actual fun MirrorVideoSurface(
         return
     }
     val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    val deferGpuHost =
+        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
     // SwingPanel punches a Skia clear-hole above Compose popups; hiding the child is not
     // enough (the host still eclipses chrome DropdownMenus), so tear the interop down.
     key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
@@ -85,7 +88,7 @@ actual fun MirrorVideoSurface(
             )
         }
         Box(modifier.background(Color.Black)) {
-            if (!suppressHeavyweight) {
+            if (!suppressHeavyweight && !deferGpuHost) {
                 SwingPanel(
                     modifier = Modifier.fillMaxSize(),
                     background = Color.Black,
@@ -120,6 +123,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    deferNativePresentation: Boolean,
     nativePresentation: Boolean,
     nativePresentationFillHost: Boolean,
     gpuMirrorStreamKey: Any?,
@@ -130,6 +134,8 @@ actual fun MirrorVideoSurface(
         return
     }
     val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    val deferGpuHost =
+        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
     key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
         val panel = remember {
             MirrorPanel(
@@ -139,7 +145,7 @@ actual fun MirrorVideoSurface(
             )
         }
         Box(modifier.background(Color.Black)) {
-            if (!suppressHeavyweight) {
+            if (!suppressHeavyweight && !deferGpuHost) {
                 SwingPanel(
                     modifier = Modifier.fillMaxSize(),
                     background = Color.Black,
@@ -471,7 +477,10 @@ private class MirrorPanel(
             if (prefersGpuHub()) {
                 val presenter = ensureGpuPresenter()
                 presenter?.setVisible(!next)
-                if (!next) presenter?.updateGeometry(this)
+                if (!next) {
+                    presenter?.updateGeometry(this)
+                    presenter?.repaint()
+                }
             } else {
                 NativeMirrorJni.setInlineOverlayVisible(!next)
                 if (!next) updatePresentationGeometry()

@@ -491,6 +491,8 @@ data class MirrorSession(
     val stats: MirrorStats = MirrorStats(),
     val width: Int = 0,
     val height: Int = 0,
+    /** A decoded frame is buffered and can be shown as soon as the native surface is revealed. */
+    val readyForPresentation: Boolean = false,
     val failureReason: String? = null,
 )
 

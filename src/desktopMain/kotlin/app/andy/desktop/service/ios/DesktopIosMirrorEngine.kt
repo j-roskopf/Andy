@@ -22,9 +22,11 @@ import app.andy.service.MirrorStats
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +46,7 @@ class DesktopIosMirrorEngine(
     private var connectedUdid: String? = null
     private var nextFrameNumber = 1L
     private var statsJob: Job? = null
+    private var inputReadyJob: Deferred<Boolean>? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Serial this engine currently holds a GPU pipeline reference for; null when unheld. */
@@ -221,7 +224,7 @@ class DesktopIosMirrorEngine(
         startStats()
         if (target?.kind != IosTargetKind.Physical) {
             // HID warm-up after pixels are live — never on the connect critical path.
-            scope.launch {
+            inputReadyJob = scope.async {
                 NativeIosSimJni.ensureInputReady()
             }
         }
@@ -341,6 +344,8 @@ class DesktopIosMirrorEngine(
     override suspend fun disconnect(immediate: Boolean) {
         statsJob?.cancel()
         statsJob = null
+        inputReadyJob?.cancel()
+        inputReadyJob = null
         val udid = connectedUdid
         val hadSession = udid != null && session.value != null
         connectedUdid = null
@@ -387,6 +392,20 @@ class DesktopIosMirrorEngine(
         // Compose UI dispatcher: the input channel is shared, so a stalled iOS HID call on the UI
         // thread would freeze input for BOTH iOS and Android and stall connect's run_on_main calls.
         return withContext(Dispatchers.IO) {
+            val requiresHid = when (input) {
+                MirrorInput.Back,
+                MirrorInput.Recents,
+                is MirrorInput.Key -> false
+                else -> true
+            }
+            if (requiresHid) {
+                val warmed = inputReadyJob
+                    ?.let { job -> runCatching { job.await() }.getOrDefault(false) }
+                    ?: false
+                if (!warmed && !NativeIosSimJni.ensureInputReady()) {
+                    return@withContext CommandResult.failure("Simulator input is still starting")
+                }
+            }
             when (input) {
                 is MirrorInput.Touch -> {
                     val action = when (input.action) {
@@ -395,7 +414,8 @@ class DesktopIosMirrorEngine(
                         MirrorTouchAction.Up -> 2
                     }
                     val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
-                    val delivered = NativeIosSimJni.sendTouch(action, nx, ny)
+                    val delivered = NativeIosSimJni.sendTouch(action, nx, ny) ||
+                        (NativeIosSimJni.ensureInputReady() && NativeIosSimJni.sendTouch(action, nx, ny))
                     activeGpuPipeline()?.recordInput()
                     if (delivered) {
                         CommandResult.success("Sent")
@@ -405,10 +425,12 @@ class DesktopIosMirrorEngine(
                 }
                 is MirrorInput.Tap -> {
                     val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
-                    val downDelivered = NativeIosSimJni.sendTouch(0, nx, ny)
+                    val downDelivered = NativeIosSimJni.sendTouch(0, nx, ny) ||
+                        (NativeIosSimJni.ensureInputReady() && NativeIosSimJni.sendTouch(0, nx, ny))
                     activeGpuPipeline()?.recordInput()
                     delay(170)
-                    val upDelivered = NativeIosSimJni.sendTouch(2, nx, ny)
+                    val upDelivered = NativeIosSimJni.sendTouch(2, nx, ny) ||
+                        (NativeIosSimJni.ensureInputReady() && NativeIosSimJni.sendTouch(2, nx, ny))
                     if (downDelivered && upDelivered) {
                         CommandResult.success("Sent")
                     } else {

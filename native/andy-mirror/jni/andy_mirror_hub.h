@@ -38,6 +38,7 @@ void andy_hub_repaint_decoder(int64_t decoder_id);
 void andy_hub_record_input(int64_t decoder_id);
 void andy_hub_record_transport_ingress(int64_t decoder_id);
 uint64_t andy_hub_frames_presented(int64_t decoder_id);
+bool andy_hub_has_decoded_frame(int64_t decoder_id);
 bool andy_hub_is_hardware_ready(int64_t decoder_id);
 bool andy_hub_latency_probe_changed(int64_t decoder_id, CVPixelBufferRef pixels);
 void andy_hub_set_ios_source_active(int64_t decoder_id, bool active);

@@ -38,6 +38,8 @@ internal class GpuMirrorPipeline private constructor(
 
     fun framesPresented(): Long = if (closed) 0L else GpuMirrorJni.framesPresented(decoderId)
 
+    fun hasDecodedFrame(): Boolean = !closed && GpuMirrorJni.hasDecodedFrame(decoderId)
+
     fun isHardwareReady(): Boolean = !closed && GpuMirrorJni.isHardwareReady(decoderId)
 
     fun bindIosCapture() {
@@ -102,6 +104,7 @@ internal class GpuMirrorPresenter internal constructor(
     private var contentHeight = 0
     private var geometryUpdateScheduled = false
     private var lastGeometryKey: String? = null
+    private var visibleRequested = true
 
     fun attach(host: Canvas, fillHost: Boolean): Boolean {
         if (attachedHost === host && this.fillHost == fillHost) {
@@ -145,6 +148,7 @@ internal class GpuMirrorPresenter internal constructor(
     }
 
     fun setVisible(visible: Boolean) {
+        visibleRequested = visible
         GpuMirrorJni.setPresenterVisible(presenterId, visible)
         // Do not refresh geometry here. updateGeometry → setFrame flashes the black Canvas
         // under the mouse-transparent Metal overlay (every click looked like a black blink).
@@ -153,6 +157,7 @@ internal class GpuMirrorPresenter internal constructor(
 
     /** Re-front the Metal overlay without resizing (safe on mouse press / focus). */
     fun bringToFront() {
+        visibleRequested = true
         GpuMirrorJni.setPresenterVisible(presenterId, true)
     }
 
@@ -273,7 +278,7 @@ internal class GpuMirrorPresenter internal constructor(
         }.getOrDefault(false)
         // Mark visible once geometry has been attempted. setPresenterVisible no longer
         // orderFronts when already showing, so this is cheap and does not flash.
-        GpuMirrorJni.setPresenterVisible(presenterId, true)
+        GpuMirrorJni.setPresenterVisible(presenterId, visibleRequested)
         if (!applied) {
             GpuMirrorJni.repaintPresenter(presenterId)
         }

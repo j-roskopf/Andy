@@ -7,6 +7,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class GpuMirrorSessionsTest {
     @AfterTest
@@ -38,6 +39,16 @@ class GpuMirrorSessionsTest {
         assertSame(first, second)
         GpuMirrorSessions.release(key)
         GpuMirrorSessions.release(key)
+    }
+
+    @Test
+    fun decodedFrameIsReadyBeforeAHiddenPresenterCanPresentIt() {
+        if (!GpuMirrorJni.isAvailable()) return
+        val key = "loading-ready"
+        val pipeline = GpuMirrorSessions.createAndBind(key)
+        assertNotNull(pipeline)
+        assertTrue(pipeline.presentSolidBgra(8, 8, blue = 0, green = 0, red = 255))
+        assertTrue(pipeline.hasDecodedFrame())
     }
 
     @Test
