@@ -31,10 +31,6 @@ class DesktopIosDeviceService(
     override suspend fun boot(udid: String): CommandResult {
         val result = runner.run(listOf("xcrun", "simctl", "boot", udid), timeoutSeconds = 120)
         if (!result.isSuccess) return result
-        // simctl boots the runtime headlessly. SimulatorKit screen capture can attach without
-        // Simulator.app, but LegacyHIDClient / Indigo injection needs that process. Launch it
-        // in the background so Devices → Live touch works without an extra click.
-        ensureSimulatorAppRunning()
         return CommandResult.success("Booted $udid")
     }
 
@@ -69,8 +65,8 @@ class DesktopIosDeviceService(
     }
 
     /**
-     * Starts Simulator.app without activating it (`open -g`) so embedded Live can inject HID
-     * after a headless [boot]. Safe to call when the app is already running.
+     * Starts Simulator.app hidden and without activating it (`open -g -j`) so embedded Live can
+     * inject HID after a headless [boot]. Safe to call when the app is already running.
      */
     private suspend fun ensureSimulatorAppRunning(): CommandResult {
         if (simulatorAppRunning()) {
@@ -78,7 +74,7 @@ class DesktopIosDeviceService(
         }
         // Avoid `--args -CurrentDeviceUDID`: launching with it can reset the booted device's
         // display just as Live tries to attach capture. Boot already selected the runtime via simctl.
-        val result = runner.run(listOf("open", "-g", "-a", "Simulator"))
+        val result = runner.run(listOf("open", "-g", "-j", "-a", "Simulator"))
         return if (result.isSuccess) CommandResult.success("Simulator.app launching") else result
     }
 

@@ -10,7 +10,23 @@ import kotlinx.coroutines.runBlocking
 
 class DesktopIosDeviceServiceTest {
     @Test
-    fun prepareEmbeddedMirrorLaunchesSimulatorWithoutDeviceResetArgs() = runBlocking {
+    fun bootStartsSimulatorHeadlessly() = runBlocking {
+        val commands = mutableListOf<List<String>>()
+        val runner = CommandRunner { command, _ ->
+            commands += command
+            CommandResult.success()
+        }
+        val service = DesktopIosDeviceService(runner, simulatorAppRunning = { false })
+        val udid = "CA4B2892-6294-4CD4-AA5A-6031551226BA"
+
+        val result = service.boot(udid)
+
+        assertTrue(result.isSuccess)
+        assertEquals(listOf(listOf("xcrun", "simctl", "boot", udid)), commands)
+    }
+
+    @Test
+    fun prepareEmbeddedMirrorLaunchesSimulatorHiddenWithoutDeviceResetArgs() = runBlocking {
         val commands = mutableListOf<List<String>>()
         var running = false
         val runner = CommandRunner { command, _ ->
@@ -22,7 +38,7 @@ class DesktopIosDeviceServiceTest {
         val result = service.prepareEmbeddedMirror("CA4B2892-6294-4CD4-AA5A-6031551226BA")
         assertTrue(result.isSuccess, result.stderr.ifBlank { result.stdout })
         val openCommand = commands.single { it.firstOrNull() == "open" }
-        assertEquals(listOf("open", "-g", "-a", "Simulator"), openCommand)
+        assertEquals(listOf("open", "-g", "-j", "-a", "Simulator"), openCommand)
         assertFalse(openCommand.contains("-CurrentDeviceUDID"))
         assertFalse(openCommand.contains("--args"))
     }

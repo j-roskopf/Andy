@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -768,6 +769,7 @@ private fun IosTargetRow(
     onLive: () -> Unit,
 ) {
     val booted = target.state == IosTargetState.Booted
+    val liveReady = target.isLiveReady
     val statusLabel = when {
         target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> "network only"
         target.kind == IosTargetKind.Physical -> null
@@ -777,20 +779,33 @@ private fun IosTargetRow(
         else -> target.state.name.lowercase()
     }
     val statusColor = when {
-        booted -> Green
+        liveReady -> Green
         target.state == IosTargetState.Unavailable -> TextSecondary
         target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
         else -> TextSecondary
     }
+    val rowShape = RoundedCornerShape(AndyRadius.R4)
     Row(
         Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .height(IntrinsicSize.Min)
+            .heightIn(min = if (liveReady) 76.dp else 48.dp)
+            .background(
+                if (liveReady) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f),
+                rowShape,
+            )
+            .border(
+                1.dp,
+                if (liveReady) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f),
+                rowShape,
+            )
+            .padding(horizontal = if (liveReady) 16.dp else 12.dp, vertical = if (liveReady) 10.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (liveReady) {
+            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.R2)))
+            Spacer(Modifier.width(18.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(target.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
             Text(
