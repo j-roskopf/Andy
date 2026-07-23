@@ -24,6 +24,8 @@ import java.awt.BasicStroke
 import java.awt.Cursor
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.event.HierarchyBoundsAdapter
+import java.awt.event.HierarchyEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -56,6 +58,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    nativePresentation: Boolean,
 ) {
     if (isScreenshotRenderer()) {
         ScreenshotMirrorSurface(frame, modifier, overlay)
@@ -99,6 +102,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    nativePresentation: Boolean,
 ) {
     if (isScreenshotRenderer()) {
         val frame by frames.collectAsState(initial = null)
@@ -106,7 +110,7 @@ actual fun MirrorVideoSurface(
         return
     }
     val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
-    val panel = remember { MirrorPanel(hostsNativePresentation = true) }
+    val panel = remember(nativePresentation) { MirrorPanel(hostsNativePresentation = nativePresentation) }
     Box(modifier.background(Color.Black)) {
         if (!suppressHeavyweight) {
             SwingPanel(
@@ -291,17 +295,26 @@ private class MirrorPanel(
         addMouseMotionListener(listener)
         addComponentListener(object : ComponentAdapter() {
             override fun componentResized(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
                 if (!nativeMetadataFrame) presentCpuFrame()
             }
 
             override fun componentMoved(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
             }
 
             override fun componentShown(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
                 if (!nativeMetadataFrame) presentCpuFrame()
+            }
+        })
+        addHierarchyBoundsListener(object : HierarchyBoundsAdapter() {
+            override fun ancestorResized(event: HierarchyEvent) {
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+
+            override fun ancestorMoved(event: HierarchyEvent) {
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
             }
         })
     }
@@ -311,16 +324,21 @@ private class MirrorPanel(
     override fun addNotify() {
         super.addNotify()
         if (hostsNativePresentation) {
+            NativeMirrorHostRegistry.markHostsMetalPresentation(this, hostsMetal = true)
             NativeMirrorHostRegistry.register(this)
         }
         val window = SwingUtilities.getWindowAncestor(this)
         ancestorMoveListener = object : ComponentAdapter() {
             override fun componentMoved(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
             }
 
             override fun componentResized(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+            }
+
+            override fun componentShown(event: ComponentEvent) {
+                if (!occluded && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
             }
         }.also { window?.addComponentListener(it) }
     }
@@ -398,7 +416,7 @@ private class MirrorPanel(
             presentCpuFrame()
         } else {
             NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)
-            if (sizeChanged) NativeMirrorJni.updateMetalLayerGeometry(this)
+            if (sizeChanged && hostsNativePresentation) NativeMirrorJni.updateMetalLayerGeometry(this)
         }
     }
 

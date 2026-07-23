@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -56,11 +57,16 @@ import app.andy.andy.generated.resources.hardware_volume_up
 import app.andy.model.AndroidDevice
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
-import app.andy.ui.components.Button
+import app.andy.service.MirrorSession
+import app.andy.ui.actions.DockPlacement
+import app.andy.ui.actions.TerminalDockToggleRow
+import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.PanelSoft
+import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.Border
+import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -98,6 +104,7 @@ internal fun LiveDevicePane(
     frame: MirrorFrame?,
     frameFlow: Flow<MirrorFrame>? = null,
     mirrorStatus: String,
+    mirrorSession: MirrorSession? = null,
     mirrorTelemetry: String = "",
     connectResult: String,
     modifier: Modifier = Modifier,
@@ -143,13 +150,20 @@ internal fun LiveDevicePane(
     onClipText: () -> Unit = {},
     onPopOut: () -> Unit = {},
     showPopOut: Boolean = true,
+    terminalPlacement: DockPlacement? = null,
+    onTerminalToggle: ((DockPlacement) -> Unit)? = null,
+    registerNativeHost: Boolean = true,
     surfaceOccluded: Boolean = false,
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
-    val containerShape = RoundedCornerShape(if (showContainerChrome) 8.dp else 0.dp)
+    val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.R3 else 0.dp)
     val containerModifier = if (showContainerChrome) {
-        modifier.background(PanelSoft, containerShape).padding(14.dp)
+        modifier
+            .background(AndyColors.Neutral800.copy(alpha = 0.82f), containerShape)
+            .border(1.dp, Border, containerShape)
+            .noiseGridOverlay(0.025f)
+            .padding(AndySpace.S4)
     } else {
         modifier.background(Color.Black)
     }
@@ -172,28 +186,24 @@ internal fun LiveDevicePane(
                 recordingDuration = recordingDuration,
                 showRecord = showRecord,
                 onClipText = onClipText,
-                onPopOut = onPopOut,
-                showPopOut = showPopOut,
             )
         }
 
         Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             if (showDeviceHeader && serial != null) {
-                Text(
-                    mirrorTelemetry.ifBlank {
-                        listOfNotNull(
-                            frame?.let { "${it.width}×${it.height} stream" },
-                            frame?.displayedFps?.let { "${it.toInt()} displayed fps" },
-                            frame?.decodedFps?.let { "${it.toInt()} decoded fps" },
-                        ).joinToString(" · ").ifBlank { mirrorStatus }
-                    },
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
+                val streamChips = remember(mirrorSession, frame, mirrorStatus, mirrorTelemetry) {
+                    val structured = liveStreamChips(mirrorSession, frame, mirrorStatus)
+                    if (structured.isNotEmpty()) structured else mirrorTelemetry.takeIf { it.isNotBlank() }?.let { listOf(LiveStreamChip(it)) } ?: emptyList()
+                }
+                LiveStreamHeader(
+                    chips = streamChips,
+                    showPopOut = showPopOut,
+                    popOutEnabled = true,
+                    onPopOut = onPopOut,
+                    terminalPlacement = terminalPlacement,
+                    onTerminalToggle = onTerminalToggle,
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(10.dp))
             }
 
             BoxWithConstraints(
@@ -235,6 +245,10 @@ internal fun LiveDevicePane(
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
+                            val mirrorLoading = isMirrorSurfaceLoading(serial, frame, mirrorSession, mirrorStatus)
+                            // Dialog occlusion hides Metal via [surfaceOccluded] on the Swing panel.
+                            // Do not hide Metal during loading: that left GPU mirrors black because
+                            // native frame counters do not trigger Compose recomposition.
                             // The native desktop renderer must attach before it receives its
                             // first H.264 access unit. The screenshot renderer remains fully
                             // Compose-only, so deterministic tests never need an AWT host.
@@ -271,6 +285,7 @@ internal fun LiveDevicePane(
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
+                                        nativePresentation = registerNativeHost,
                                     )
                                 } else {
                                     MirrorVideoSurface(
@@ -284,7 +299,11 @@ internal fun LiveDevicePane(
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
+                                        nativePresentation = registerNativeHost,
                                     )
+                                }
+                                if (mirrorLoading) {
+                                    MirrorLoadingOverlay(mirrorStatus)
                                 }
                                 if (recordingCountdown != null) {
                                     Box(
@@ -388,8 +407,6 @@ internal fun LiveHardwareToolbar(
     recordingDuration: String?,
     showRecord: Boolean,
     onClipText: () -> Unit,
-    onPopOut: () -> Unit,
-    showPopOut: Boolean,
 ) {
     Box(
         Modifier.width(68.dp).fillMaxHeight(),
@@ -412,7 +429,6 @@ internal fun LiveHardwareToolbar(
             ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
             ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
             ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
-            if (showPopOut) ToolbarButton(HardwareIcon.PopOut, "Pop Out", enabled, onPopOut)
             if (showRecord) {
                 ToolbarButton(HardwareIcon.Record, recordLabel, enabled && recordEnabled, onRecord)
                 recordingDuration?.let { duration ->
@@ -478,5 +494,83 @@ internal fun HardwareControlIcon(icon: HardwareIcon, color: Color, modifier: Mod
         contentDescription = null,
         modifier = modifier,
         colorFilter = ColorFilter.tint(color),
+    )
+}
+
+@Composable
+internal fun LiveStreamHeader(
+    chips: List<LiveStreamChip>,
+    showPopOut: Boolean,
+    popOutEnabled: Boolean,
+    onPopOut: () -> Unit,
+    terminalPlacement: DockPlacement? = null,
+    onTerminalToggle: ((DockPlacement) -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (chips.isEmpty()) {
+                Text("Waiting for stream", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            } else {
+                chips.forEach { chip -> LiveStreamChipView(chip) }
+            }
+        }
+        if (onTerminalToggle != null) {
+            TerminalDockToggleRow(
+                terminalPlacement = terminalPlacement,
+                onToggle = onTerminalToggle,
+            )
+        }
+        if (showPopOut) {
+            OutlinedButton(
+                onClick = onPopOut,
+                enabled = popOutEnabled,
+                modifier = Modifier.height(32.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            ) {
+                HardwareControlIcon(
+                    HardwareIcon.PopOut,
+                    if (popOutEnabled) TextPrimary else TextSecondary.copy(alpha = 0.38f),
+                    Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Pop out", fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveStreamChipView(chip: LiveStreamChip) {
+    val accent = when (chip.tone) {
+        LiveStreamChipTone.Neutral -> TextSecondary
+        LiveStreamChipTone.Active -> Green
+        LiveStreamChipTone.Warning -> Rust
+    }
+    val shape = RoundedCornerShape(AndyRadius.R2)
+    Text(
+        chip.label,
+        color = if (chip.tone == LiveStreamChipTone.Neutral) TextSecondary else TextPrimary,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 10.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(shape)
+            .background(AndyColors.Neutral850.copy(alpha = 0.92f))
+            .border(1.dp, accent.copy(alpha = if (chip.tone == LiveStreamChipTone.Neutral) 0.22f else 0.48f), shape)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
     )
 }

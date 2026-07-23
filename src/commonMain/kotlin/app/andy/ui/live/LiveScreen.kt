@@ -123,6 +123,56 @@ internal fun MirrorSession.liveTelemetry(): String = buildString {
     backend.fallbackReason?.let { append(" · $it") }
 }
 
+internal enum class LiveStreamChipTone { Neutral, Active, Warning }
+
+internal data class LiveStreamChip(
+    val label: String,
+    val tone: LiveStreamChipTone = LiveStreamChipTone.Neutral,
+)
+
+internal fun liveStreamChips(
+    session: MirrorSession?,
+    frame: app.andy.service.MirrorFrame?,
+    mirrorStatus: String,
+): List<LiveStreamChip> {
+    val chips = mutableListOf<LiveStreamChip>()
+    val width = session?.width?.takeIf { it > 1 } ?: frame?.width?.takeIf { it > 1 }
+    val height = session?.height?.takeIf { it > 1 } ?: frame?.height?.takeIf { it > 1 }
+    if (width != null && height != null) {
+        chips += LiveStreamChip("${width}×${height}")
+    }
+    val fps = session?.stats?.displayedFps?.takeIf { it > 0f }
+        ?: frame?.displayedFps?.takeIf { it > 0f }
+    if (fps != null) {
+        chips += LiveStreamChip("${fps.toInt()} fps", LiveStreamChipTone.Active)
+    }
+    session?.let { active ->
+        if (active.backend.decoder != "Unavailable") {
+            chips += LiveStreamChip(active.backend.decoder)
+        }
+        if (active.backend.renderer != "Unavailable") {
+            chips += LiveStreamChip(active.backend.renderer)
+        }
+        chips += LiveStreamChip(
+            if (active.backend.isHardwareBacked) "GPU" else "CPU",
+            if (active.backend.isHardwareBacked) LiveStreamChipTone.Active else LiveStreamChipTone.Neutral,
+        )
+        if (active.stats.droppedFrames > 0) {
+            chips += LiveStreamChip("${active.stats.droppedFrames} dropped", LiveStreamChipTone.Warning)
+        }
+        active.stats.p95InputToPresentMillis?.let { latency ->
+            chips += LiveStreamChip("${app.andy.formatDecimal(latency, 1)} ms P95")
+        }
+        active.backend.fallbackReason?.let { reason ->
+            chips += LiveStreamChip(reason, LiveStreamChipTone.Warning)
+        }
+    }
+    if (chips.isEmpty() && mirrorStatus.isNotBlank()) {
+        chips += LiveStreamChip(mirrorStatus)
+    }
+    return chips
+}
+
 private sealed interface LiveRecordingState {
     data object Idle : LiveRecordingState
     data class Countdown(val seconds: Int) : LiveRecordingState
@@ -384,6 +434,7 @@ internal fun LiveScreen(
     }
     val showLogcat = !isIosTarget
     val showMirrorStreamControls = !isIosTarget
+    val iosSinglePane = isIosTarget
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Row(Modifier.weight(1f).fillMaxWidth()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
@@ -395,18 +446,22 @@ internal fun LiveScreen(
                 frame = frame,
                 frameFlow = frameFlow,
                 mirrorStatus = mirrorStatus,
-                mirrorTelemetry = mirrorSession?.liveTelemetry().orEmpty(),
+                mirrorSession = mirrorSession,
                 connectResult = when {
                     mirrorSession?.failureReason != null -> mirrorSession?.failureReason.orEmpty()
                     else -> connectResult
                 },
                 showAndroidNavButtons = !isIosTarget,
-                showHardwareControls = !isIosTarget || iosInputEnabled,
+                showHardwareControls = !isIosTarget,
                 passThroughInput = !isIosTarget || iosInputEnabled,
+                terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
+                onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
                 modifier = Modifier
-                    .width(localDevicePaneWidth.dp)
+                    .then(
+                        if (iosSinglePane) Modifier.weight(1f)
+                        else Modifier.width(localDevicePaneWidth.dp).padding(end = 6.dp),
+                    )
                     .fillMaxHeight()
-                    .padding(end = 6.dp)
                     .onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
                 onPower = { sendHardware(MirrorInput.Power) },
                 onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
@@ -461,6 +516,7 @@ internal fun LiveScreen(
                 },
             )
         }
+        if (!iosSinglePane) {
         PaneDivider(
             onDrag = { dragX -> localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(560f, 1800f) },
             onDragEnd = { onDevicePaneWidthChange(localDevicePaneWidth) },
@@ -486,13 +542,14 @@ internal fun LiveScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Live workspace", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TerminalDockToggleRow(
                         terminalPlacement = terminalPlacement,
                         onToggle = ::toggleTerminal,
                     )
                 }
                 if (showMirrorStreamControls) {
+                    Text("Stream settings", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
@@ -542,7 +599,7 @@ internal fun LiveScreen(
                         fontSize = 10.sp,
                     )
                 }
-                Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text("Capture", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
                     if (transfer.busy) {
@@ -592,6 +649,7 @@ internal fun LiveScreen(
                     state = logcatState
                 )
             }
+        }
         }
         if (terminalPlacement == DockPlacement.Right) {
             TerminalDockDrawer(

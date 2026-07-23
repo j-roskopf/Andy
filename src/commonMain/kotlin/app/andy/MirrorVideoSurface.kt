@@ -19,6 +19,7 @@ expect fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
+    nativePresentation: Boolean = true,
 )
 
 @Composable
@@ -34,6 +35,7 @@ expect fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
+    nativePresentation: Boolean = true,
 )
 
 data class MirrorOverlay(

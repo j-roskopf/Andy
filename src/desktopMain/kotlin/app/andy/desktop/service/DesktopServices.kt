@@ -13,6 +13,7 @@ import app.andy.desktop.service.inspector.DesktopSharedPrefsService
 import app.andy.desktop.service.ios.DesktopIosDeviceService
 import app.andy.desktop.service.ios.DesktopIosMirrorEngine
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.desktop.service.mirror.DesktopPopOutMirrorPool
 import app.andy.service.RoutingMirrorEngine
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
@@ -26,7 +27,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-fun createDesktopServices(): AndyServices {
+fun createDesktopServices(): AndyServices = createDesktopRuntime().services
+
+data class DesktopRuntime(
+    val services: AndyServices,
+    val popOutMirrors: DesktopPopOutMirrorPool,
+)
+
+fun createDesktopRuntime(): DesktopRuntime {
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
@@ -85,7 +93,9 @@ fun createDesktopServices(): AndyServices {
         actionConfig = actionConfig,
     )
 
-    return AndyServices(
+    val popOutMirrors = DesktopPopOutMirrorPool(runner, devices, iosDevices)
+
+    val services = AndyServices(
         devices = devices,
         iosDevices = iosDevices,
         avd = avd,
@@ -116,4 +126,5 @@ fun createDesktopServices(): AndyServices {
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
     )
+    return DesktopRuntime(services, popOutMirrors)
 }

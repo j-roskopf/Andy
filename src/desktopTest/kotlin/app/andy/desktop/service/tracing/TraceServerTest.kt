@@ -27,12 +27,8 @@ class TraceServerTest {
             val blocked = get("http://127.0.0.1:$port/traces/../secret.perfetto-trace")
             assertEquals(404, blocked.first)
 
-            val result = service.openExternally("andy-demo")
-            // Desktop.browse may fail in headless CI; URL construction still matters via /view.
-            if (result.isSuccess) {
-                assertTrue(result.stdout.startsWith("http://127.0.0.1:$port/view?"))
-                assertTrue(result.stdout.contains("name=andy-demo.perfetto-trace"))
-            }
+            val url = service.viewerUrlForTests("andy-demo")
+            assertEquals("http://127.0.0.1:$port/view?name=andy-demo.perfetto-trace", url)
 
             val view = get("http://127.0.0.1:$port/view?name=andy-demo.perfetto-trace")
             assertEquals(200, view.first)

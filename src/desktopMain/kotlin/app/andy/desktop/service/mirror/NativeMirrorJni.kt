@@ -43,7 +43,11 @@ internal object NativeMirrorJni {
         val opened = runCatching(::nativeOpenMetalInlineOverlay).getOrDefault(false)
         metalInlineOverlayOpen = opened
         lastGeometryKey = null
-        if (opened) updateMetalLayerGeometry(host)
+        if (opened) {
+            runCatching { nativeSetMetalInlineOverlayVisible(true) }
+            updateMetalLayerGeometry(host)
+            repaintLatestFrame()
+        }
         return opened
     }
 
@@ -116,6 +120,10 @@ internal object NativeMirrorJni {
      */
     fun updateMetalLayerGeometry(component: Component) {
         if (!loadResult.isSuccess || !component.isDisplayable || !metalInlineOverlayOpen) return
+        // The overlay is shared across Live + pop-out hosts. Only the active host may position it;
+        // otherwise the main window keeps stealing Metal back and pop-outs stay black.
+        val active = NativeMirrorHostRegistry.current()
+        if (active != null && active !== component) return
         geometryHost = component
         if (geometryUpdateScheduled) return
         geometryUpdateScheduled = true

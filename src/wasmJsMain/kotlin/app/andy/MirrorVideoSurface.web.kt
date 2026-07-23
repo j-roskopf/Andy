@@ -199,6 +199,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    nativePresentation: Boolean,
 ) {
     if (occluded) return
     WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
@@ -217,6 +218,7 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    nativePresentation: Boolean,
 ) {
     if (occluded) return
     WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)

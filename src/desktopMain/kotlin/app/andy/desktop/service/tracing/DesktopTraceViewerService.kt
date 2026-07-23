@@ -100,6 +100,9 @@ class DesktopTraceViewerService(
     /** Test helper: serves [tracesDir]. */
     suspend fun startServerForTests(): Int = ensureServer()
 
+    /** Test helper: viewer URL without opening the system browser. */
+    internal suspend fun viewerUrlForTests(traceId: String): String? = localViewerUrl(traceId)
+
     companion object {
         private val TRACE_NAME_REGEX = Regex("""[\w.\-]+\.perfetto-trace""")
 

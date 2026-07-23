@@ -1,6 +1,8 @@
 package app.andy.desktop.service.mirror
 
 import java.awt.Canvas
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -12,15 +14,15 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 internal object NativeMirrorHostRegistry {
     private val hosts = CopyOnWriteArrayList<Canvas>()
+    private val metalHosts = Collections.newSetFromMap(ConcurrentHashMap<Canvas, Boolean>())
 
     fun register(candidate: Canvas) {
         if (!hosts.contains(candidate)) {
             hosts.add(candidate)
         }
-        // Prefer the newest realized surface (pop-out when opened) for geometry tracking.
-        if (NativeMirrorJni.isMetalInlineOverlayOpen()) {
-            // removeMetalLayer() hides the overlay when the last host detaches; restore it when
-            // Live remounts without forcing a full mirror reconnect.
+        // Only Metal hosts should rebind the shared presenter. CPU-only canvases must not steal
+        // the overlay from an active GPU mirror (e.g. iOS pop-out while Android CPU pop-out opens).
+        if (NativeMirrorJni.isMetalInlineOverlayOpen() && candidate in metalHosts) {
             NativeMirrorJni.setInlineOverlayVisible(true)
             NativeMirrorJni.updateMetalLayerGeometry(candidate)
             NativeMirrorJni.repaintLatestFrame()
@@ -29,10 +31,22 @@ internal object NativeMirrorHostRegistry {
 
     fun unregister(candidate: Canvas) {
         hosts.remove(candidate)
+        metalHosts.remove(candidate)
     }
 
     fun current(): Canvas? = hosts.lastOrNull { it.isDisplayable }
 
+    /** Test-only snapshot of registered hosts for presentation regression tests. */
+    internal fun registeredHostsForTests(): List<Canvas> = hosts.toList()
+
     fun otherDisplayable(excluding: Canvas): Canvas? =
         hosts.lastOrNull { it !== excluding && it.isDisplayable }
+
+    fun markHostsMetalPresentation(canvas: Canvas, hostsMetal: Boolean) {
+        if (hostsMetal) {
+            metalHosts.add(canvas)
+        } else {
+            metalHosts.remove(canvas)
+        }
+    }
 }

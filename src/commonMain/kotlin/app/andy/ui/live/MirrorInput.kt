@@ -32,6 +32,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal fun rememberMirrorInputSender(
     services: AndyServices,
     serial: String?,
+    mirror: MirrorEngine = services.mirror,
     enabled: Boolean = true,
     recordActions: Boolean = true,
 ): (MirrorInput) -> Unit {
@@ -41,11 +42,11 @@ internal fun rememberMirrorInputSender(
     var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
     var tapAccessibilityLookup by remember { mutableStateOf<Deferred<AccessibilityNode?>?>(null) }
     val scope = rememberCoroutineScope()
-    val channel = remember(services.mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
-    LaunchedEffect(channel, services.mirror) {
+    val channel = remember(mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
+    LaunchedEffect(channel, mirror) {
         for (input in channel) {
             if (currentEnabled && currentSerial != null) {
-                services.mirror.sendInput(input)
+                mirror.sendInput(input)
             }
         }
     }

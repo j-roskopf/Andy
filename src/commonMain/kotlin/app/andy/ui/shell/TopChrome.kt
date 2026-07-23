@@ -2,6 +2,9 @@ package app.andy.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,15 +49,19 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
-import app.andy.ui.network.GlowingDot
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.network.GlowingDot
+import org.jetbrains.compose.resources.painterResource
 
 @Composable
 internal fun TopChrome(
@@ -67,6 +75,8 @@ internal fun TopChrome(
     onRefresh: () -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
+    showDevicePopOut: Boolean = false,
+    onPopOutDevice: (String, String) -> Unit = { _, _ -> },
     actionConfig: ActionsConfig,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
@@ -134,6 +144,8 @@ internal fun TopChrome(
             onExpandedChange = { deviceMenuExpanded = it },
             onSelect = onSelectDevice,
             onSelectIos = onSelectIosTarget,
+            showPopOut = showDevicePopOut,
+            onPopOut = onPopOutDevice,
         )
     }
 }
@@ -257,6 +269,8 @@ private fun DevicePicker(
     onExpandedChange: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
     onSelectIos: (String) -> Unit,
+    showPopOut: Boolean = false,
+    onPopOut: (String, String) -> Unit = { _, _ -> },
 ) {
     val activeDevices = remember(devices) {
         devices.filter { it.state == DeviceConnectionState.Online }
@@ -285,10 +299,23 @@ private fun DevicePicker(
                     enabled = false,
                 )
                 activeDevices.forEach { device ->
-                    DropdownMenuItem(text = { Text(device.displayName, color = TextPrimary) }, onClick = {
-                        onSelect(device.serial)
-                        onExpandedChange(false)
-                    })
+                    DropdownMenuItem(
+                        text = {
+                            DeviceMenuRow(
+                                title = device.displayName,
+                                subtitle = null,
+                                showPopOut = showPopOut,
+                                onPopOut = {
+                                    onExpandedChange(false)
+                                    onPopOut(device.serial, device.displayName)
+                                },
+                            )
+                        },
+                        onClick = {
+                            onSelect(device.serial)
+                            onExpandedChange(false)
+                        },
+                    )
                 }
             }
             if (activeIosTargets.isNotEmpty()) {
@@ -304,10 +331,15 @@ private fun DevicePicker(
                     }
                     DropdownMenuItem(
                         text = {
-                            Column {
-                                Text(target.displayName, color = TextPrimary)
-                                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                            }
+                            DeviceMenuRow(
+                                title = target.displayName,
+                                subtitle = subtitle,
+                                showPopOut = showPopOut,
+                                onPopOut = {
+                                    onExpandedChange(false)
+                                    onPopOut(target.udid, target.displayName)
+                                },
+                            )
                         },
                         onClick = {
                             onSelectIos(target.udid)
@@ -315,6 +347,46 @@ private fun DevicePicker(
                         },
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceMenuRow(
+    title: String,
+    subtitle: String?,
+    showPopOut: Boolean,
+    onPopOut: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextPrimary)
+            if (subtitle != null) {
+                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            }
+        }
+        if (showPopOut) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onPopOut,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(Res.drawable.hardware_pop_out),
+                    contentDescription = "Pop out mirror",
+                    modifier = Modifier.size(16.dp),
+                    colorFilter = ColorFilter.tint(Cyan),
+                )
             }
         }
     }

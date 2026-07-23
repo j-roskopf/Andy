@@ -25,6 +25,7 @@ import app.andy.AndyDestination
 import app.andy.availableWithIosTarget
 import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
+import app.andy.service.IosTargetRegistry
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.accessibility.AccessibilityScreen
 import app.andy.ui.actions.ActionsScreen
@@ -78,6 +79,7 @@ internal fun AndyShell(
     requestPopOutMirror: Boolean,
     onPopOutMirrorRequestConsumed: () -> Unit,
     onPopOutMirror: (String?, String?) -> Unit,
+    onPopOutDevice: (String, String) -> Unit,
     contentTopPadding: androidx.compose.ui.unit.Dp,
     initialProjectTaskId: String?,
     initialProjectTab: String?,
@@ -239,6 +241,15 @@ internal fun AndyShell(
                     onRefresh = { state.refreshDevices() },
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
+                    showDevicePopOut = capabilities.platform != app.andy.service.AndyPlatform.Web,
+                    onPopOutDevice = { targetId, displayName ->
+                        if (IosTargetRegistry.isIosTarget(targetId)) {
+                            state.selectIosTarget(targetId)
+                        } else {
+                            state.selectDevice(targetId)
+                        }
+                        onPopOutDevice(targetId, displayName)
+                    },
                     actionConfig = state.actionsConfig,
                     onRunAction = { project, action -> state.runAction(project, action) },
                     proxyRunning = proxyRunning,

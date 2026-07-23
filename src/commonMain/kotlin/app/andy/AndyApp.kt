@@ -15,7 +15,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.andy.service.AndyServices
+import app.andy.service.IosTargetRegistry
+import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorRendererMode
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.LiveMirrorSettings
@@ -25,6 +28,7 @@ import app.andy.ui.shell.AndyShell
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.ui.theme.AndyTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -74,6 +78,7 @@ fun AndyApp(
     requestPopOutMirror: Boolean = false,
     onPopOutMirrorRequestConsumed: () -> Unit = {},
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
+    onPopOutDevice: (String, String) -> Unit = { _, _ -> },
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
     initialProjectTaskId: String? = null,
     initialProjectTab: String? = null,
@@ -87,6 +92,7 @@ fun AndyApp(
         requestPopOutMirror = requestPopOutMirror,
         onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
         onPopOutMirror = onPopOutMirror,
+        onPopOutDevice = onPopOutDevice,
         contentTopPadding = contentTopPadding,
         initialProjectTaskId = initialProjectTaskId,
         initialProjectTab = initialProjectTab,
@@ -98,7 +104,10 @@ fun AndyMirrorPopOut(
     services: AndyServices,
     serial: String?,
     deviceName: String? = null,
+    mirror: MirrorEngine = services.mirror,
+    gpuPresentation: Boolean = mirror === services.mirror,
     controlsVisible: Boolean = false,
+    contentTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
     tintId: String = AndyTint.Default.id,
     surfaceModeId: String = AndySurfaceMode.Tinted.id,
 ) {
@@ -106,24 +115,40 @@ fun AndyMirrorPopOut(
         val scope = rememberCoroutineScope()
         var mirrorStatus by remember { mutableStateOf("Disconnected") }
         var connectResult by remember { mutableStateOf("") }
-        val sendInput = rememberMirrorInputSender(services, serial)
-        val popOutPadding = if (controlsVisible) 12.dp else 0.dp
-        LaunchedEffect(Unit) {
-            services.mirror.status.collectLatest { mirrorStatus = it }
+        var mirrorSession by remember { mutableStateOf<app.andy.service.MirrorSession?>(null) }
+        val sendInput = rememberMirrorInputSender(services, serial, mirror)
+        val chromeInset = contentTopPadding + if (controlsVisible) 12.dp else 0.dp
+        val needsMetalHost = gpuPresentation || (serial != null && IosTargetRegistry.isIosTarget(serial))
+        LaunchedEffect(mirror) {
+            mirror.status.collectLatest { mirrorStatus = it }
         }
-        // Share the already-running Live mirror session. Reconnecting here with a mismatched
-        // MirrorVideoConfig would tear down GPU mode and leave the main pane blank on close.
-        LaunchedEffect(serial) {
+        LaunchedEffect(mirror) {
+            mirror.session.collectLatest { mirrorSession = it }
+        }
+        LaunchedEffect(serial, mirror, gpuPresentation, needsMetalHost) {
             if (serial == null) return@LaunchedEffect
-            if (services.mirror.session.value?.serial == serial) {
-                connectResult = "Using the Live mirror session"
-                return@LaunchedEffect
+            if (needsMetalHost) {
+                awaitMirrorSurfaceReady()
+            } else {
+                // CPU pop-outs only need the SwingPanel laid out; avoid waiting on Metal hosts.
+                delay(32)
             }
-            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
+            val base = LiveMirrorSettings.config.value
+            val config = if (gpuPresentation) {
+                base
+            } else {
+                base.copy(rendererMode = MirrorRendererMode.Legacy)
+            }
+            val result = mirror.connect(serial, config)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
-        Box(Modifier.fillMaxSize().background(Color.Black).padding(popOutPadding)) {
-            MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .padding(top = chromeInset),
+        ) {
+            MirrorFrameContent(mirror, serial) { frameFlow, frame ->
                 LiveDevicePane(
                     serial = serial,
                     device = null,
@@ -131,6 +156,7 @@ fun AndyMirrorPopOut(
                     frame = frame,
                     frameFlow = frameFlow,
                     mirrorStatus = mirrorStatus,
+                    mirrorSession = mirrorSession,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize(),
                     showDeviceHeader = controlsVisible,
@@ -138,6 +164,7 @@ fun AndyMirrorPopOut(
                     showContainerChrome = controlsVisible,
                     deviceBorderWidth = if (controlsVisible) 5.dp else 0.dp,
                     deviceCornerRadius = if (controlsVisible) 10.dp else 0.dp,
+                    registerNativeHost = needsMetalHost,
                     onPower = { sendInput(MirrorInput.Power) },
                     onVolumeUp = { sendInput(MirrorInput.Key(24)) },
                     onVolumeDown = { sendInput(MirrorInput.Key(25)) },
@@ -152,10 +179,13 @@ fun AndyMirrorPopOut(
                     },
                     onClipText = {},
                     onPopOut = {},
+                    showPopOut = false,
                     onInput = sendInput,
                     onConnect = {
                         if (serial != null) scope.launch {
-                            val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
+                            val base = LiveMirrorSettings.config.value
+                            val config = if (gpuPresentation) base else base.copy(rendererMode = MirrorRendererMode.Legacy)
+                            val result = mirror.connect(serial, config)
                             connectResult = if (result.isSuccess) result.stdout else result.stderr
                         }
                     },
