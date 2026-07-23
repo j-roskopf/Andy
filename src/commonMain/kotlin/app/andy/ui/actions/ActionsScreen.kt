@@ -155,6 +155,7 @@ private fun ProjectCockpit(
     compactToolCalls: Boolean,
     serial: String?,
     device: AndroidDevice?,
+    targetDisplayName: String? = null,
     active: Boolean,
 ) {
     val scope = rememberCoroutineScope()
@@ -515,6 +516,7 @@ private fun ProjectCockpit(
                             placement = DockPlacement.Right,
                             serial = serial,
                             device = device,
+                            targetDisplayName = targetDisplayName,
                             liveActive = active,
                             onSelectTab = ::selectTerminalTab,
                             onCloseTab = ::closeTerminalTab,
@@ -533,6 +535,7 @@ private fun ProjectCockpit(
                     placement = DockPlacement.Bottom,
                     serial = serial,
                     device = device,
+                    targetDisplayName = targetDisplayName,
                     liveActive = active,
                     onSelectTab = ::selectTerminalTab,
                     onCloseTab = ::closeTerminalTab,
@@ -632,6 +635,7 @@ internal fun ActionsScreen(
     compactToolCalls: Boolean = true,
     serial: String? = null,
     device: AndroidDevice? = null,
+    targetDisplayName: String? = null,
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -653,6 +657,7 @@ internal fun ActionsScreen(
             compactToolCalls = compactToolCalls,
             serial = serial,
             device = device,
+            targetDisplayName = targetDisplayName,
             active = active,
         )
     }
@@ -925,6 +930,7 @@ private fun ProjectAuxDock(
     placement: DockPlacement,
     serial: String?,
     device: AndroidDevice?,
+    targetDisplayName: String?,
     liveActive: Boolean,
     onSelectTab: (String) -> Unit,
     onCloseTab: (String) -> Unit,
@@ -958,6 +964,7 @@ private fun ProjectAuxDock(
                     services = services,
                     serial = serial,
                     device = device,
+                    targetDisplayName = targetDisplayName,
                     placement = placement,
                     onClose = onClose,
                     modifier = modifier,

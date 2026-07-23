@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include "andy_mirror_internal.h"
 
 typedef struct {
     float grid[4];       // enabled, normalized x step, normalized y step, unused
@@ -23,6 +24,7 @@ typedef struct {
     float ruler_color[4];
     float picker[4];     // enabled, normalized x, normalized y, cursor is in content
     float source_size[4]; // decoded coordinate space used for ruler labels
+    float format_flags[4]; // [0]=bgra, [1]=full-range yuv
 } AndyMirrorOverlay;
 
 typedef struct {
@@ -58,6 +60,8 @@ typedef struct {
     uint64_t probe_transitions;
     AndyMirrorOverlay overlay;
     CVPixelBufferRef latest_pixels;
+    id<MTLTexture> dummy_uv_texture;
+    bool ios_source_active;
 } AndyMirrorRenderer;
 
 static AndyMirrorRenderer renderer = {0};
@@ -67,6 +71,12 @@ static pthread_mutex_t stats_lock = PTHREAD_MUTEX_INITIALIZER;
 // while DecodeFrame (or its async callbacks) are in flight, and long CPU locks on live
 // CVPixelBuffers from bug-capture sampling have correlated with CoreMedia null-mutex crashes.
 static pthread_mutex_t decoder_lock = PTHREAD_MUTEX_INITIALIZER;
+// Serialize Metal presentation. Decode and overlay-repaint threads both call render_pixel_buffer;
+// sharing renderer.overlay.format_flags without a lock can mix BGRA/YUV shader modes (red tint).
+static pthread_mutex_t render_lock = PTHREAD_MUTEX_INITIALIZER;
+// Serialize renderer teardown. RoutingMirrorEngine.disconnect() and overlapping connect/
+// disconnect coroutines can call nativeDestroyRenderer from multiple JVM threads at once.
+static pthread_mutex_t destroy_lock = PTHREAD_MUTEX_INITIALIZER;
 // AppKit is owned by AWT's NSApplication in this process. Closing an NSWindow while its
 // CAMetalLayer still has a Core Animation transaction in flight can make that host release an
 // animation object after the layer is gone (a native objc_release crash on the AppKit thread).
@@ -88,6 +98,105 @@ static jint andy_pending_overlay_h = 1;
 static jdouble andy_pending_overlay_scale = 1.0;
 static bool andy_overlay_geometry_scheduled = false;
 static bool andy_overlay_suppressed = false;
+
+static bool pixel_buffer_is_bgra(CVPixelBufferRef pixels) {
+    OSType format = CVPixelBufferGetPixelFormatType(pixels);
+    return format == kCVPixelFormatType_32BGRA ||
+        format == (OSType) 'BGRX' ||
+        format == kCVPixelFormatType_32RGBA ||
+        format == kCVPixelFormatType_32ARGB ||
+        format == kCVPixelFormatType_ARGB2101010LEPacked;
+}
+
+static MTLPixelFormat pixel_buffer_metal_format(CVPixelBufferRef pixels) {
+    OSType format = CVPixelBufferGetPixelFormatType(pixels);
+    if (format == kCVPixelFormatType_32RGBA) {
+        return MTLPixelFormatRGBA8Unorm;
+    }
+    return MTLPixelFormatBGRA8Unorm;
+}
+
+static bool pixel_buffer_packed_base(CVPixelBufferRef pixels, const uint8_t **base_out, size_t *stride_out) {
+    const uint8_t *base = NULL;
+    size_t stride = 0;
+    if (CVPixelBufferGetPlaneCount(pixels) == 0) {
+        base = CVPixelBufferGetBaseAddress(pixels);
+        stride = CVPixelBufferGetBytesPerRow(pixels);
+    } else {
+        base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+    }
+    if (!base || !stride) {
+        return false;
+    }
+    *base_out = base;
+    *stride_out = stride;
+    return true;
+}
+
+static bool pixel_buffer_is_yuv_full_range(CVPixelBufferRef pixels) {
+    OSType format = CVPixelBufferGetPixelFormatType(pixels);
+    return format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+}
+
+static void pixel_buffer_dimensions(CVPixelBufferRef pixels, size_t *width, size_t *height) {
+    if (CVPixelBufferGetPlaneCount(pixels) == 0) {
+        *width = CVPixelBufferGetWidth(pixels);
+        *height = CVPixelBufferGetHeight(pixels);
+    } else {
+        *width = CVPixelBufferGetWidthOfPlane(pixels, 0);
+        *height = CVPixelBufferGetHeightOfPlane(pixels, 0);
+    }
+}
+
+static void rgb_from_yuv_sample(const uint8_t *y_base, const uint8_t *uv_base, size_t y_stride,
+                                size_t uv_stride, size_t x, size_t y, uint8_t rgb[3]) {
+    const int yy = y_base[y * y_stride + x] - 16;
+    const size_t uv_x = (x / 2) * 2;
+    const size_t uv_y = y / 2;
+    const int uu = uv_base[uv_y * uv_stride + uv_x] - 128;
+    const int vv = uv_base[uv_y * uv_stride + uv_x + 1] - 128;
+    rgb[0] = (uint8_t) fmax(0, fmin(255, (298 * yy + 409 * vv + 128) >> 8));
+    rgb[1] = (uint8_t) fmax(0, fmin(255, (298 * yy - 100 * uu - 208 * vv + 128) >> 8));
+    rgb[2] = (uint8_t) fmax(0, fmin(255, (298 * yy + 516 * uu + 128) >> 8));
+}
+
+static void rgb_from_packed_sample(CVPixelBufferRef pixels, const uint8_t *base, size_t stride, size_t x, size_t y,
+                                   uint8_t rgb[3]) {
+    const uint8_t *pixel = base + y * stride + x * 4;
+    OSType format = CVPixelBufferGetPixelFormatType(pixels);
+    if (format == kCVPixelFormatType_32RGBA) {
+        rgb[0] = pixel[0];
+        rgb[1] = pixel[1];
+        rgb[2] = pixel[2];
+    } else if (format == kCVPixelFormatType_32ARGB) {
+        rgb[0] = pixel[1];
+        rgb[1] = pixel[2];
+        rgb[2] = pixel[3];
+    } else {
+        rgb[0] = pixel[2];
+        rgb[1] = pixel[1];
+        rgb[2] = pixel[0];
+    }
+}
+
+static id<MTLTexture> ensure_dummy_uv_texture(void) {
+    if (renderer.dummy_uv_texture) {
+        return renderer.dummy_uv_texture;
+    }
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG8Unorm
+                                                                                         width:1
+                                                                                        height:1
+                                                                                     mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [renderer.device newTextureWithDescriptor:descriptor];
+    if (texture) {
+        uint8_t pixel[2] = {128, 128};
+        [texture replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:pixel bytesPerRow:2];
+        renderer.dummy_uv_texture = texture;
+    }
+    return renderer.dummy_uv_texture;
+}
 
 static NSColor *guide_color(const float components[4]) {
     return [NSColor colorWithSRGBRed:fmaxf(0.0f, fminf(1.0f, components[0]))
@@ -131,8 +240,10 @@ static void draw_picker_magnifier(const AndyMirrorOverlay overlay, NSRect bounds
     pthread_mutex_unlock(&latest_pixels_lock);
     if (!pixels) return;
 
-    const size_t width = CVPixelBufferGetWidthOfPlane(pixels, 0);
-    const size_t height = CVPixelBufferGetHeightOfPlane(pixels, 0);
+    const bool is_bgra = pixel_buffer_is_bgra(pixels);
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
     if (!width || !height ||
         CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
         CVPixelBufferRelease(pixels);
@@ -146,25 +257,41 @@ static void draw_picker_magnifier(const AndyMirrorOverlay overlay, NSRect bounds
         CVPixelBufferRelease(pixels);
         return;
     }
-    const uint8_t *y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
-    const uint8_t *uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
-    const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
-    const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+    const uint8_t *packed_base = NULL;
+    size_t packed_stride = 0;
+    const uint8_t *y_base = NULL;
+    const uint8_t *uv_base = NULL;
+    size_t y_stride = 0;
+    size_t uv_stride = 0;
+    if (is_bgra) {
+        if (!pixel_buffer_packed_base(pixels, &packed_base, &packed_stride)) {
+            free(rgba);
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return;
+        }
+    } else {
+        y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
+        y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+    }
     const int center_x = (int) fmaxf(0.0f, fminf((float) width - 1.0f, overlay.picker[1] * width));
     const int center_y = (int) fmaxf(0.0f, fminf((float) height - 1.0f, overlay.picker[2] * height));
     for (size_t row = 0; row < sample_size; row++) {
         const int source_y = (int) fmaxf(0.0f, fminf((float) height - 1.0f, center_y + (int) row - sample_radius));
         for (size_t column = 0; column < sample_size; column++) {
             const int source_x = (int) fmaxf(0.0f, fminf((float) width - 1.0f, center_x + (int) column - sample_radius));
-            const int yy = y_base[source_y * y_stride + source_x] - 16;
-            const size_t uv_x = (source_x / 2) * 2;
-            const size_t uv_y = source_y / 2;
-            const int uu = uv_base[uv_y * uv_stride + uv_x] - 128;
-            const int vv = uv_base[uv_y * uv_stride + uv_x + 1] - 128;
+            uint8_t rgb[3];
+            if (is_bgra) {
+                rgb_from_packed_sample(pixels, packed_base, packed_stride, (size_t) source_x, (size_t) source_y, rgb);
+            } else {
+                rgb_from_yuv_sample(y_base, uv_base, y_stride, uv_stride, (size_t) source_x, (size_t) source_y, rgb);
+            }
             uint8_t *pixel = rgba + (row * sample_size + column) * 4;
-            pixel[0] = (uint8_t) fmax(0, fmin(255, (298 * yy + 409 * vv + 128) >> 8));
-            pixel[1] = (uint8_t) fmax(0, fmin(255, (298 * yy - 100 * uu - 208 * vv + 128) >> 8));
-            pixel[2] = (uint8_t) fmax(0, fmin(255, (298 * yy + 516 * uu + 128) >> 8));
+            pixel[0] = rgb[0];
+            pixel[1] = rgb[1];
+            pixel[2] = rgb[2];
             pixel[3] = 255;
         }
     }
@@ -384,7 +511,6 @@ open_inline_overlay_window(void) {
         renderer.layer = (CAMetalLayer *) andy_popout_view.layer;
         renderer.layer.opaque = YES;
         renderer.layer.framebufferOnly = YES;
-        [andy_popout_window orderFront:nil];
         const CGFloat scale = andy_popout_window.backingScaleFactor > 0.0 ? andy_popout_window.backingScaleFactor : 1.0;
         renderer.layer.contentsScale = scale;
         renderer.layer.drawableSize = CGSizeMake(MAX(1.0, andy_popout_view.bounds.size.width * scale),
@@ -565,16 +691,23 @@ static NSString *const shader_source = @
     "  float2 uvs[4] = {float2(0,1), float2(1,1), float2(0,0), float2(1,0)};\n"
     "  VertexOut out; out.position=float4(positions[id],0,1); out.uv=uvs[id]; return out;\n"
     "}\n"
-    "struct Overlay { float4 grid; float4 ruler; float4 highlight; float4 grid_color; float4 ruler_color; float4 picker; };\n"
-    "float3 sampled_rgb(texture2d<float> y_tex, texture2d<float> uv_tex, sampler sample, float2 coord) {\n"
-    "  float y = 1.1643 * (y_tex.sample(sample, coord).r - 0.0625);\n"
+    "struct Overlay { float4 grid; float4 ruler; float4 highlight; float4 grid_color; float4 ruler_color; float4 picker; float4 source_size; float4 format_flags; };\n"
+    "float3 sampled_rgb(texture2d<float> y_tex, texture2d<float> uv_tex, sampler sample, float2 coord, bool is_bgra, bool full_range_yuv) {\n"
+    "  if (is_bgra) {\n"
+    "    float4 pixel = y_tex.sample(sample, coord);\n"
+    "    return pixel.rgb;\n"
+    "  }\n"
+    "  float y_sample = y_tex.sample(sample, coord).r;\n"
+    "  float y = full_range_yuv ? y_sample : (1.1643 * (y_sample - 0.0625));\n"
     "  float2 uv = uv_tex.sample(sample, coord).rg - float2(0.5, 0.5);\n"
     "  return float3(y + 1.5958 * uv.y, y - 0.39173 * uv.x - 0.81290 * uv.y, y + 2.017 * uv.x);\n"
     "}\n"
     "fragment half4 fragment_main(VertexOut in [[stage_in]], texture2d<float> y_tex [[texture(0)]], texture2d<float> uv_tex [[texture(1)]], constant Overlay &overlay [[buffer(0)]]) {\n"
     "  constexpr sampler linear_sampler(address::clamp_to_edge, filter::linear);\n"
     "  constexpr sampler nearest_sampler(address::clamp_to_edge, filter::nearest);\n"
-    "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, in.uv);\n"
+    "  bool is_bgra = overlay.format_flags.x > 0.5;\n"
+    "  bool full_range_yuv = overlay.format_flags.y > 0.5;\n"
+    "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, in.uv, is_bgra, full_range_yuv);\n"
     "  if (overlay.ruler.x > 0.5) {\n"
     "    float x_width = max(fwidth(in.uv.x), 0.001);\n"
     "    float y_width = max(fwidth(in.uv.y), 0.001);\n"
@@ -597,7 +730,7 @@ static NSString *const shader_source = @
     "        rgb = float3(0.85, 0.44, 0.29);\n"
     "      } else {\n"
     "        float2 magnified_uv = overlay.picker.yz + delta / 5.0;\n"
-    "        rgb = sampled_rgb(y_tex, uv_tex, nearest_sampler, magnified_uv);\n"
+    "        rgb = sampled_rgb(y_tex, uv_tex, nearest_sampler, magnified_uv, is_bgra, full_range_yuv);\n"
     "        float2 pixel = magnified_uv * float2(y_tex.get_width(), y_tex.get_height());\n"
     "        float2 pixel_edge = abs(fract(pixel) - 0.5);\n"
     "        if (max(pixel_edge.x, pixel_edge.y) > 0.47) rgb = mix(rgb, float3(0.0), 0.22);\n"
@@ -694,25 +827,59 @@ record_transport_to_present(uint64_t transport_ticks) {
 }
 
 static void
+run_on_main(void (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        block();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), block);
+    }
+}
+
+static void
 destroy_renderer(void) {
-    close_popout_window();
-    pthread_mutex_lock(&decoder_lock);
-    destroy_decoder();
-    free(renderer.sps);
-    free(renderer.pps);
+    pthread_mutex_lock(&destroy_lock);
+    const bool has_state = renderer.device != nil || renderer.texture_cache != NULL ||
+        renderer.decoder != NULL || renderer.layer != nil || renderer.sps != NULL ||
+        renderer.pps != NULL;
+    if (!has_state) {
+        pthread_mutex_unlock(&destroy_lock);
+        return;
+    }
+
+    uint8_t *sps = renderer.sps;
+    uint8_t *pps = renderer.pps;
     renderer.sps = NULL;
     renderer.pps = NULL;
     renderer.sps_size = 0;
     renderer.pps_size = 0;
+
+    pthread_mutex_lock(&decoder_lock);
+    destroy_decoder();
     pthread_mutex_unlock(&decoder_lock);
-    if (renderer.texture_cache) {
-        CFRelease(renderer.texture_cache);
-        renderer.texture_cache = NULL;
-    }
+
+    pthread_mutex_lock(&render_lock);
+    CVMetalTextureCacheRef texture_cache = renderer.texture_cache;
+    renderer.texture_cache = NULL;
+    id<MTLRenderPipelineState> pipeline = renderer.pipeline;
     renderer.pipeline = nil;
+    id<MTLCommandQueue> queue = renderer.queue;
     renderer.queue = nil;
+    id<MTLTexture> dummy_uv_texture = renderer.dummy_uv_texture;
+    renderer.dummy_uv_texture = nil;
+    id<MTLDevice> device = renderer.device;
     renderer.device = nil;
+    CAMetalLayer *layer = renderer.layer;
     renderer.layer = nil;
+    pthread_mutex_unlock(&render_lock);
+
+    CVPixelBufferRef latest_pixels = NULL;
+    pthread_mutex_lock(&latest_pixels_lock);
+    if (renderer.latest_pixels) {
+        latest_pixels = renderer.latest_pixels;
+        renderer.latest_pixels = NULL;
+    }
+    pthread_mutex_unlock(&latest_pixels_lock);
+
     pthread_mutex_lock(&stats_lock);
     renderer.frames_presented = 0;
     renderer.dropped_frames = 0;
@@ -724,13 +891,33 @@ destroy_renderer(void) {
     renderer.latency_probe_enabled = false;
     renderer.probe_has_baseline = false;
     renderer.probe_transitions = 0;
+    renderer.ios_source_active = false;
     pthread_mutex_unlock(&stats_lock);
-    pthread_mutex_lock(&latest_pixels_lock);
-    if (renderer.latest_pixels) {
-        CVPixelBufferRelease(renderer.latest_pixels);
-        renderer.latest_pixels = NULL;
+
+    pthread_mutex_unlock(&destroy_lock);
+
+    free(sps);
+    free(pps);
+    if (latest_pixels) {
+        CVPixelBufferRelease(latest_pixels);
     }
-    pthread_mutex_unlock(&latest_pixels_lock);
+
+    close_popout_window();
+
+    // CVMetalTextureCache and Metal command queues must be finalized on the AppKit main thread.
+    run_on_main(^{
+        if (texture_cache) {
+            CFRelease(texture_cache);
+        }
+        (void) pipeline;
+        (void) queue;
+        (void) dummy_uv_texture;
+        (void) device;
+        (void) layer;
+        if (andy_popout_view) {
+            andy_popout_view.device = nil;
+        }
+    });
 }
 
 static bool
@@ -769,23 +956,39 @@ latency_probe_changed(CVPixelBufferRef pixels) {
     if (!probe_enabled) {
         return input_pending;
     }
-    const size_t full_width = CVPixelBufferGetWidthOfPlane(pixels, 0);
-    const size_t full_height = CVPixelBufferGetHeightOfPlane(pixels, 0);
-    if (!full_width || !full_height ||
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
+    if (!width || !height ||
         CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
         return false;
     }
-    const uint8_t *base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
-    const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
-    const size_t left = (size_t) fmax(0, fmin(full_width - 1, probe_left * full_width));
-    const size_t top = (size_t) fmax(0, fmin(full_height - 1, probe_top * full_height));
-    const size_t right = (size_t) fmax(left + 1, fmin(full_width, (probe_left + probe_width) * full_width));
-    const size_t bottom = (size_t) fmax(top + 1, fmin(full_height, (probe_top + probe_height) * full_height));
+    const bool is_bgra = pixel_buffer_is_bgra(pixels);
+    const uint8_t *base = NULL;
+    size_t stride = 0;
+    if (is_bgra && !pixel_buffer_packed_base(pixels, &base, &stride)) {
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        return false;
+    }
+    if (!is_bgra) {
+        base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+    }
+    const size_t left = (size_t) fmax(0, fmin(width - 1, probe_left * width));
+    const size_t top = (size_t) fmax(0, fmin(height - 1, probe_top * height));
+    const size_t right = (size_t) fmax(left + 1, fmin(width, (probe_left + probe_width) * width));
+    const size_t bottom = (size_t) fmax(top + 1, fmin(height, (probe_top + probe_height) * height));
     uint64_t total = 0;
     size_t samples = 0;
     for (size_t y = top; y < bottom; y += 4) {
         for (size_t x = left; x < right; x += 4) {
-            total += base[y * stride + x];
+            if (is_bgra) {
+                uint8_t rgb[3];
+                rgb_from_packed_sample(pixels, base, stride, x, y, rgb);
+                total += (rgb[0] + rgb[1] + rgb[2]) / 3;
+            } else {
+                total += base[y * stride + x];
+            }
             samples++;
         }
     }
@@ -818,80 +1021,144 @@ remember_latest_pixels(CVPixelBufferRef pixels) {
     }
 }
 
+void andy_mirror_remember_latest_pixels(CVPixelBufferRef pixels) {
+    remember_latest_pixels(pixels);
+}
+
+void andy_mirror_record_input(void) {
+    pthread_mutex_lock(&stats_lock);
+    renderer.pending_input_ticks = mach_continuous_time();
+    pthread_mutex_unlock(&stats_lock);
+}
+
+uint64_t andy_mirror_frames_presented(void) {
+    pthread_mutex_lock(&stats_lock);
+    const uint64_t count = renderer.frames_presented;
+    pthread_mutex_unlock(&stats_lock);
+    return count;
+}
+
+bool andy_mirror_latency_probe_changed(CVPixelBufferRef pixels) {
+    return latency_probe_changed(pixels);
+}
+
+void andy_mirror_set_ios_source_active(bool active) {
+    pthread_mutex_lock(&stats_lock);
+    renderer.ios_source_active = active;
+    pthread_mutex_unlock(&stats_lock);
+}
+
+bool andy_mirror_is_ios_source_active(void) {
+    pthread_mutex_lock(&stats_lock);
+    const bool active = renderer.ios_source_active;
+    pthread_mutex_unlock(&stats_lock);
+    return active;
+}
+
 static void
 render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe, uint64_t packet_ticks,
                     uint64_t transport_ticks, bool record_presentation_metrics) {
+    pthread_mutex_lock(&render_lock);
     @autoreleasepool {
-        if (!renderer.layer || !renderer.texture_cache || !renderer.pipeline) {
-            return;
-        }
-        const size_t width = CVPixelBufferGetWidthOfPlane(pixels, 0);
-        const size_t height = CVPixelBufferGetHeightOfPlane(pixels, 0);
-        if (!width || !height) {
-            return;
-        }
-        // JAWT owns the layer's bounds as it tracks the Canvas rectangle. Do not replace that
-        // presentation geometry with the decoded H.264 dimensions: a 720p source inside a
-        // smaller Compose/Swing host otherwise asks Core Animation for drawables unrelated to
-        // the overlaid component. The render pass naturally scales its fullscreen quad to the
-        // drawable supplied by CAMetalLayer.
-        id<CAMetalDrawable> drawable = [renderer.layer nextDrawable];
-        if (!drawable) {
-            pthread_mutex_lock(&stats_lock);
-            renderer.dropped_frames++;
-            pthread_mutex_unlock(&stats_lock);
-            return;
-        }
-        CVMetalTextureRef y_ref = NULL;
-        CVMetalTextureRef uv_ref = NULL;
-        CVReturn y_result = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, renderer.texture_cache, pixels, NULL,
-            MTLPixelFormatR8Unorm, width, height, 0, &y_ref);
-        CVReturn uv_result = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, renderer.texture_cache, pixels, NULL,
-            MTLPixelFormatRG8Unorm, width / 2, height / 2, 1, &uv_ref);
-        if (y_result != kCVReturnSuccess || uv_result != kCVReturnSuccess) {
-            if (y_ref) CFRelease(y_ref);
-            if (uv_ref) CFRelease(uv_ref);
-            pthread_mutex_lock(&stats_lock);
-            renderer.dropped_frames++;
-            pthread_mutex_unlock(&stats_lock);
-            return;
-        }
-        id<MTLCommandBuffer> command = [renderer.queue commandBuffer];
-        id<MTLBuffer> overlay = [renderer.device newBufferWithBytes:&renderer.overlay
-                                                              length:sizeof(AndyMirrorOverlay)
-                                                             options:MTLResourceStorageModeShared];
-        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-        pass.colorAttachments[0].texture = drawable.texture;
-        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-        id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-        [encoder setRenderPipelineState:renderer.pipeline];
-        [encoder setFragmentBuffer:overlay offset:0 atIndex:0];
-        [encoder setFragmentTexture:CVMetalTextureGetTexture(y_ref) atIndex:0];
-        [encoder setFragmentTexture:CVMetalTextureGetTexture(uv_ref) atIndex:1];
-        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-        [encoder endEncoding];
-        [command presentDrawable:drawable];
-        if (record_presentation_metrics) {
-            [command addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
-                (void) buffer;
-                pthread_mutex_lock(&stats_lock);
-                renderer.frames_presented++;
-                pthread_mutex_unlock(&stats_lock);
-                record_packet_to_present(packet_ticks);
-                record_transport_to_present(transport_ticks);
-                if (input_changed_probe) {
-                    record_input_to_present();
+        if (renderer.layer && renderer.texture_cache && renderer.pipeline) {
+            size_t width = 0;
+            size_t height = 0;
+            pixel_buffer_dimensions(pixels, &width, &height);
+            if (width && height) {
+                const bool is_bgra = pixel_buffer_is_bgra(pixels);
+                AndyMirrorOverlay frame_overlay = renderer.overlay;
+                frame_overlay.format_flags[0] = is_bgra ? 1.0f : 0.0f;
+                frame_overlay.format_flags[1] = (!is_bgra && pixel_buffer_is_yuv_full_range(pixels)) ? 1.0f : 0.0f;
+                // JAWT owns the layer's bounds as it tracks the Canvas rectangle. Do not replace that
+                // presentation geometry with the decoded H.264 dimensions: a 720p source inside a
+                // smaller Compose/Swing host otherwise asks Core Animation for drawables unrelated to
+                // the overlaid component. The render pass naturally scales its fullscreen quad to the
+                // drawable supplied by CAMetalLayer.
+                id<CAMetalDrawable> drawable = [renderer.layer nextDrawable];
+                if (!drawable) {
+                    pthread_mutex_lock(&stats_lock);
+                    renderer.dropped_frames++;
+                    pthread_mutex_unlock(&stats_lock);
+                } else {
+                    CVMetalTextureRef y_ref = NULL;
+                    CVMetalTextureRef uv_ref = NULL;
+                    CVReturn y_result;
+                    CVReturn uv_result;
+                    if (is_bgra) {
+                        const MTLPixelFormat metal_format = pixel_buffer_metal_format(pixels);
+                        y_result = CVMetalTextureCacheCreateTextureFromImage(
+                            kCFAllocatorDefault, renderer.texture_cache, pixels, NULL,
+                            metal_format, width, height, 0, &y_ref);
+                        uv_result = kCVReturnSuccess;
+                    } else {
+                        y_result = CVMetalTextureCacheCreateTextureFromImage(
+                            kCFAllocatorDefault, renderer.texture_cache, pixels, NULL,
+                            MTLPixelFormatR8Unorm, width, height, 0, &y_ref);
+                        uv_result = CVMetalTextureCacheCreateTextureFromImage(
+                            kCFAllocatorDefault, renderer.texture_cache, pixels, NULL,
+                            MTLPixelFormatRG8Unorm, width / 2, height / 2, 1, &uv_ref);
+                    }
+                    if (y_result != kCVReturnSuccess || (!is_bgra && uv_result != kCVReturnSuccess)) {
+                        if (y_ref) CFRelease(y_ref);
+                        if (uv_ref) CFRelease(uv_ref);
+                        pthread_mutex_lock(&stats_lock);
+                        renderer.dropped_frames++;
+                        pthread_mutex_unlock(&stats_lock);
+                    } else {
+                        id<MTLTexture> uv_texture = is_bgra ? ensure_dummy_uv_texture() : CVMetalTextureGetTexture(uv_ref);
+                        if (!uv_texture) {
+                            if (y_ref) CFRelease(y_ref);
+                            if (uv_ref) CFRelease(uv_ref);
+                            pthread_mutex_lock(&stats_lock);
+                            renderer.dropped_frames++;
+                            pthread_mutex_unlock(&stats_lock);
+                        } else {
+                            id<MTLCommandBuffer> command = [renderer.queue commandBuffer];
+                            id<MTLBuffer> overlay = [renderer.device newBufferWithBytes:&frame_overlay
+                                                                                  length:sizeof(AndyMirrorOverlay)
+                                                                                 options:MTLResourceStorageModeShared];
+                            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                            pass.colorAttachments[0].texture = drawable.texture;
+                            pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+                            id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+                            [encoder setRenderPipelineState:renderer.pipeline];
+                            [encoder setFragmentBuffer:overlay offset:0 atIndex:0];
+                            [encoder setFragmentTexture:CVMetalTextureGetTexture(y_ref) atIndex:0];
+                            [encoder setFragmentTexture:uv_texture atIndex:1];
+                            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                            [encoder endEncoding];
+                            [command presentDrawable:drawable];
+                            if (record_presentation_metrics) {
+                                [command addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+                                    (void) buffer;
+                                    pthread_mutex_lock(&stats_lock);
+                                    renderer.frames_presented++;
+                                    pthread_mutex_unlock(&stats_lock);
+                                    record_packet_to_present(packet_ticks);
+                                    record_transport_to_present(transport_ticks);
+                                    if (input_changed_probe) {
+                                        record_input_to_present();
+                                    }
+                                }];
+                            }
+                            [command commit];
+                            CFRelease(y_ref);
+                            if (uv_ref) CFRelease(uv_ref);
+                        }
+                    }
                 }
-            }];
+            }
         }
-        [command commit];
-        CFRelease(y_ref);
-        CFRelease(uv_ref);
     }
+    pthread_mutex_unlock(&render_lock);
+}
+
+void andy_mirror_render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe,
+                                     uint64_t packet_ticks, uint64_t transport_ticks,
+                                     bool record_presentation_metrics) {
+    render_pixel_buffer(pixels, input_changed_probe, packet_ticks, transport_ticks, record_presentation_metrics);
 }
 
 static void
@@ -931,6 +1198,10 @@ present_latest_frame_for_overlay(void) {
     if (!pixels) return;
     render_pixel_buffer(pixels, false, 0, 0, false);
     CVPixelBufferRelease(pixels);
+}
+
+void andy_mirror_repaint_latest_pixels(void) {
+    present_latest_frame_for_overlay();
 }
 
 static bool
@@ -1280,6 +1551,16 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeSetMetalInlineOverlay
     }
 }
 
+JNIEXPORT void JNICALL
+Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeRepaintLatestFrame(
+        JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    @autoreleasepool {
+        andy_mirror_repaint_latest_pixels();
+    }
+}
+
 /*
  * Copies the latest VideoToolbox CVPixelBuffer as packed ARGB_8888 for bug-capture sampling.
  * out_size must be a length-2 int array that receives [width, height] on success.
@@ -1302,12 +1583,50 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeCopyLatestFrameArgb(
     if (!pixels) {
         return NULL;
     }
-    const size_t width = CVPixelBufferGetWidthOfPlane(pixels, 0);
-    const size_t height = CVPixelBufferGetHeightOfPlane(pixels, 0);
+    const bool is_bgra = pixel_buffer_is_bgra(pixels);
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
     if (!width || !height || width > 8192 || height > 8192 ||
         CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
         CVPixelBufferRelease(pixels);
         return NULL;
+    }
+    if (is_bgra) {
+        const uint8_t *base = NULL;
+        size_t stride = 0;
+        if (!pixel_buffer_packed_base(pixels, &base, &stride)) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return NULL;
+        }
+        const size_t count = width * height;
+        jintArray result = (*env)->NewIntArray(env, (jsize) count);
+        if (!result) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return NULL;
+        }
+        jint *dest = (*env)->GetIntArrayElements(env, result, NULL);
+        if (!dest) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return NULL;
+        }
+        for (size_t y = 0; y < height; ++y) {
+            jint *out_row = dest + y * width;
+            for (size_t x = 0; x < width; ++x) {
+                uint8_t rgb[3];
+                rgb_from_packed_sample(pixels, base, stride, x, y, rgb);
+                out_row[x] = (jint) (0xff000000u | ((unsigned) rgb[0] << 16) | ((unsigned) rgb[1] << 8) | (unsigned) rgb[2]);
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(pixels);
+        (*env)->ReleaseIntArrayElements(env, result, dest, 0);
+        jint size_values[2] = { (jint) width, (jint) height };
+        (*env)->SetIntArrayRegion(env, out_size, 0, 2, size_values);
+        return result;
     }
     const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
     const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
@@ -1430,6 +1749,12 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeIsHardwareReady(
         JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
+    pthread_mutex_lock(&stats_lock);
+    const bool ios_active = renderer.ios_source_active;
+    pthread_mutex_unlock(&stats_lock);
+    if (ios_active) {
+        return renderer.device && renderer.queue && renderer.pipeline ? JNI_TRUE : JNI_FALSE;
+    }
     return renderer.device && renderer.queue && renderer.decoder && renderer.decoder_is_hardware
         ? JNI_TRUE : JNI_FALSE;
 }
@@ -1613,8 +1938,10 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeInspectPixel(
     if (!pixels) {
         return -1;
     }
-    const size_t width = CVPixelBufferGetWidthOfPlane(pixels, 0);
-    const size_t height = CVPixelBufferGetHeightOfPlane(pixels, 0);
+    const bool is_bgra = pixel_buffer_is_bgra(pixels);
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
     if (!width || !height ||
         CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
         CVPixelBufferRelease(pixels);
@@ -1622,24 +1949,26 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeInspectPixel(
     }
     const size_t x = (size_t) fmaxf(0.0f, fminf((float) width - 1.0f, normalized_x * width));
     const size_t y = (size_t) fmaxf(0.0f, fminf((float) height - 1.0f, normalized_y * height));
-    const uint8_t *y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
-    const uint8_t *uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
-    const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
-    const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
-    const int yy = y_base[y * y_stride + x] - 16;
-    const size_t uv_x = (x / 2) * 2;
-    const size_t uv_y = y / 2;
-    const int uu = uv_base[uv_y * uv_stride + uv_x] - 128;
-    const int vv = uv_base[uv_y * uv_stride + uv_x + 1] - 128;
-    const int red = (298 * yy + 409 * vv + 128) >> 8;
-    const int green = (298 * yy - 100 * uu - 208 * vv + 128) >> 8;
-    const int blue = (298 * yy + 516 * uu + 128) >> 8;
+    uint8_t rgb[3];
+    if (is_bgra) {
+        const uint8_t *base = NULL;
+        size_t stride = 0;
+        if (!pixel_buffer_packed_base(pixels, &base, &stride)) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return -1;
+        }
+        rgb_from_packed_sample(pixels, base, stride, x, y, rgb);
+    } else {
+        const uint8_t *y_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        const uint8_t *uv_base = CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
+        const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+        rgb_from_yuv_sample(y_base, uv_base, y_stride, uv_stride, x, y, rgb);
+    }
     CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
     CVPixelBufferRelease(pixels);
-    const int r = red < 0 ? 0 : (red > 255 ? 255 : red);
-    const int g = green < 0 ? 0 : (green > 255 ? 255 : green);
-    const int b = blue < 0 ? 0 : (blue > 255 ? 255 : blue);
-    return (jint) (0xff000000u | ((unsigned) r << 16) | ((unsigned) g << 8) | (unsigned) b);
+    return (jint) (0xff000000u | ((unsigned) rgb[0] << 16) | ((unsigned) rgb[1] << 8) | (unsigned) rgb[2]);
 }
 
 JNIEXPORT jfloat JNICALL

@@ -19,7 +19,11 @@ internal object NativeMirrorHostRegistry {
         }
         // Prefer the newest realized surface (pop-out when opened) for geometry tracking.
         if (NativeMirrorJni.isMetalInlineOverlayOpen()) {
+            // removeMetalLayer() hides the overlay when the last host detaches; restore it when
+            // Live remounts without forcing a full mirror reconnect.
+            NativeMirrorJni.setInlineOverlayVisible(true)
             NativeMirrorJni.updateMetalLayerGeometry(candidate)
+            NativeMirrorJni.repaintLatestFrame()
         }
     }
 

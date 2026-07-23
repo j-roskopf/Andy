@@ -5,8 +5,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
@@ -58,22 +61,29 @@ actual fun MirrorVideoSurface(
         ScreenshotMirrorSurface(frame, modifier, overlay)
         return
     }
-    SwingPanel(
-        modifier = modifier,
-        background = Color.Black,
-        factory = { MirrorPanel(hostsNativePresentation = false) },
-        update = { panel ->
-            panel.setFrame(frame)
-            panel.onInput = onInput
-            panel.onHoverColor = onHoverColor
-            panel.passThroughInput = passThroughInput
-            panel.onPickerClick = onPickerClick
-            panel.onDevicePointClick = onDevicePointClick
-            panel.onRulerResize = onRulerResize
-            panel.setOverlay(overlay)
-            panel.setOccluded(occluded)
-        },
-    )
+    val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    // SwingPanel punches a Skia clear-hole above Compose popups; hiding the child is not
+    // enough (the host still eclipses chrome DropdownMenus), so tear the interop down.
+    Box(modifier.background(Color.Black)) {
+        if (!suppressHeavyweight) {
+            SwingPanel(
+                modifier = Modifier.fillMaxSize(),
+                background = Color.Black,
+                factory = { MirrorPanel(hostsNativePresentation = false) },
+                update = { panel ->
+                    panel.setFrame(frame)
+                    panel.onInput = onInput
+                    panel.onHoverColor = onHoverColor
+                    panel.passThroughInput = passThroughInput
+                    panel.onPickerClick = onPickerClick
+                    panel.onDevicePointClick = onDevicePointClick
+                    panel.onRulerResize = onRulerResize
+                    panel.setOverlay(overlay)
+                    panel.setOccluded(occluded)
+                },
+            )
+        }
+    }
 }
 
 @Composable
@@ -95,22 +105,27 @@ actual fun MirrorVideoSurface(
         ScreenshotMirrorSurface(frame, modifier, overlay)
         return
     }
+    val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
     val panel = remember { MirrorPanel(hostsNativePresentation = true) }
-    SwingPanel(
-        modifier = modifier,
-        background = Color.Black,
-        factory = { panel },
-        update = {
-            panel.onInput = onInput
-            panel.onHoverColor = onHoverColor
-            panel.passThroughInput = passThroughInput
-            panel.onPickerClick = onPickerClick
-            panel.onDevicePointClick = onDevicePointClick
-            panel.onRulerResize = onRulerResize
-            panel.setOverlay(overlay)
-            panel.setOccluded(occluded)
-        },
-    )
+    Box(modifier.background(Color.Black)) {
+        if (!suppressHeavyweight) {
+            SwingPanel(
+                modifier = Modifier.fillMaxSize(),
+                background = Color.Black,
+                factory = { panel },
+                update = {
+                    panel.onInput = onInput
+                    panel.onHoverColor = onHoverColor
+                    panel.passThroughInput = passThroughInput
+                    panel.onPickerClick = onPickerClick
+                    panel.onDevicePointClick = onDevicePointClick
+                    panel.onRulerResize = onRulerResize
+                    panel.setOverlay(overlay)
+                    panel.setOccluded(occluded)
+                },
+            )
+        }
+    }
     LaunchedEffect(panel, frames, resetKey) {
         frames.collectLatest { frame ->
             panel.enqueueFrame(frame)
@@ -364,7 +379,11 @@ private class MirrorPanel(
     }
 
     fun setFrame(frame: MirrorFrame?) {
-        if (frame == null || frame.frameNumber == frameNumber) return
+        if (frame == null) return
+        val sameMetadata = frame.frameNumber == frameNumber &&
+            image?.width == frame.width &&
+            image?.height == frame.height
+        if (sameMetadata) return
         frameNumber = frame.frameNumber
         val hasCpuPixels = frame.argb.size >= frame.width * frame.height
         nativeMetadataFrame = !hasCpuPixels

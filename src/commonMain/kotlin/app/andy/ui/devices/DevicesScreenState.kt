@@ -15,6 +15,7 @@ internal class DevicesScreenState(
     var startingAvd by mutableStateOf<String?>(null)
     var deviceQuery by mutableStateOf("")
     var deviceFilter by mutableStateOf(DeviceListFilter.All)
+    var platformTab by mutableStateOf(DevicesPlatformTab.Android)
     var showCreateWizard by mutableStateOf(false)
     var showPairDialog by mutableStateOf(false)
     var wifiStatus by mutableStateOf("")

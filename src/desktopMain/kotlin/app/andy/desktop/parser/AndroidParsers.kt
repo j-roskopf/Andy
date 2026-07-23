@@ -365,6 +365,7 @@ object AndroidParsers {
 
     fun parseAccessibilityXml(xml: String): AccessibilityNode? {
         val cleanXml = xml.substringAfter("<?xml", xml).let { if (it.startsWith(" version")) "<?xml$it" else it }
+        if (cleanXml.isBlank()) return null
         val doc = DocumentBuilderFactory.newInstance().apply {
             isNamespaceAware = false
             setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)

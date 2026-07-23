@@ -248,6 +248,12 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun blankAccessibilityXmlReturnsNull() {
+        assertNull(AndroidParsers.parseAccessibilityXml(""))
+        assertNull(AndroidParsers.parseAccessibilityXml("   "))
+    }
+
+    @Test
     fun parsesAccessibilityXmlTree() {
         val xml = """
             <?xml version='1.0' encoding='UTF-8' standalone='yes' ?>

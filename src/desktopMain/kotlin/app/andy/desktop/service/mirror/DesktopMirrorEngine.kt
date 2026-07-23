@@ -359,6 +359,9 @@ class DesktopMirrorEngine(
         // composition. The Metal presenter is an independent AppKit surface, so hide it at the
         // session boundary rather than waiting for that peer's removeNotify callback.
         NativeMirrorJni.setInlineOverlayVisible(false)
+        if (connectedSerial == null && videoJob == null && session.value == null) {
+            return
+        }
         if (immediate) {
             tearDownSession()
             return

@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
+import app.andy.availableWithIosTarget
 import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.OpenAgentTaskRequest
@@ -98,17 +99,21 @@ internal fun AndyShell(
     } else {
         remember { mutableStateOf<AvailableUpdate?>(null) }
     }
-    val mirrorSession by services.mirror.session.collectAsState()
-
-    LaunchedEffect(state.selectedSerial, state.devices, mirrorSession?.serial) {
-        val serial = state.selectedSerial
-        val device = state.devices.firstOrNull { it.serial == serial }
-        val selectedOnline = serial != null && device?.state == DeviceConnectionState.Online
-        val activeSerial = mirrorSession?.serial
-        if (!selectedOnline || (activeSerial != null && activeSerial != serial)) {
+    LaunchedEffect(state.activeTargetId, state.devices, state.iosTargets) {
+        val targetId = state.activeTargetId
+        val androidOnline = targetId != null && state.devices.any { it.serial == targetId && it.state == DeviceConnectionState.Online }
+        val iosSelected = targetId != null && state.iosTargets.any { it.udid == targetId }
+        val selectedAvailable = androidOnline || iosSelected
+        if (!selectedAvailable) {
             withContext(NonCancellable) {
                 services.mirror.disconnect()
             }
+        }
+    }
+
+    LaunchedEffect(state.isIosSelection, state.destination) {
+        if (state.isIosSelection && !state.destination.availableWithIosTarget()) {
+            state.navigateTo(AndyDestination.Live)
         }
     }
 
@@ -140,10 +145,11 @@ internal fun AndyShell(
 
     LaunchedEffect(requestPopOutMirror) {
         if (!requestPopOutMirror) return@LaunchedEffect
-        val serial = state.selectedSerial
+        val serial = state.activeTargetId
         if (serial != null) {
             val selectedDevice = state.devices.firstOrNull { it.serial == serial }
-            onPopOutMirror(serial, selectedDevice?.displayName ?: serial)
+            val iosName = state.iosTargets.firstOrNull { it.udid == serial }?.displayName
+            onPopOutMirror(serial, selectedDevice?.displayName ?: iosName ?: serial)
         }
         onPopOutMirrorRequestConsumed()
     }
@@ -204,7 +210,8 @@ internal fun AndyShell(
             Sidebar(
                 current = state.destination,
                 destinations = capabilities.destinations,
-                deviceCount = state.devices.size,
+                deviceCount = state.devices.size + state.iosTargets.size,
+                iosSelectionActive = state.isIosSelection,
                 // Project chats are owned by Actions. Keep their unread state out of
                 // the standalone Agent destination.
                 hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
@@ -225,7 +232,10 @@ internal fun AndyShell(
                     destination = state.destination,
                     selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial },
                     devices = state.devices,
+                    iosTargets = state.iosTargets,
+                    selectedIosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
                     onSelectDevice = { state.selectDevice(it) },
+                    onSelectIosTarget = { state.selectIosTarget(it) },
                     onRefresh = { state.refreshDevices() },
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
@@ -280,8 +290,9 @@ internal fun AndyShell(
                             requestedProjectId = requestedOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
                             compactToolCalls = state.workspaceState.compactToolCalls,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                            targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
                         )
                     }
                     RetainedDestination(active = agentsActive) {
@@ -331,12 +342,16 @@ internal fun AndyShell(
                             services,
                             state.devices,
                             state.sdk,
+                            iosTargets = state.iosTargets,
                             pairedWifiDevices = state.workspaceState.pairedWifiDevices,
                             onRefresh = { state.refreshDevices() },
                             onLive = { state.openLive(it) },
                             onEmulatorStarted = { previousSerials, avdName ->
                                 state.openStartedEmulator(previousSerials, avdName)
                             },
+                            onBootIosSimulator = { state.bootIosSimulator(it) },
+                            onShutdownIosSimulator = { state.shutdownIosSimulator(it) },
+                            onOpenIosInSimulatorApp = { state.openIosInSimulatorApp(it) },
                             onStopEmulator = { state.stopEmulator(it) },
                             stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                             stopStatus = state.emulatorStopStatus,
@@ -347,13 +362,15 @@ internal fun AndyShell(
                             onReconnectPairedWifi = state::reconnectPairedWifi,
                             onDisconnectWifi = state::disconnectWifi,
                             allowAvdManagement = capabilities.avdManagement,
+                            allowIosManagement = capabilities.iosDeviceManagement,
                             allowWifiPairing = capabilities.wifiPairing,
                         )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
                             services = services,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                            iosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
                             devicePaneWidth = state.workspaceState.liveDevicePaneWidth,
                             controlsPaneHeight = state.workspaceState.liveControlsPaneHeight,
                             onStopEmulator = { state.stopEmulator(it) },

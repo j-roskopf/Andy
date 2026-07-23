@@ -10,7 +10,10 @@ import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
+import app.andy.desktop.service.ios.DesktopIosDeviceService
+import app.andy.desktop.service.ios.DesktopIosMirrorEngine
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.service.RoutingMirrorEngine
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
@@ -28,7 +31,10 @@ fun createDesktopServices(): AndyServices {
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     val devices = DesktopDeviceService(runner, locator, store)
-    val mirror = DesktopMirrorEngine(runner, devices)
+    val iosDevices = DesktopIosDeviceService(runner)
+    val androidMirror = DesktopMirrorEngine(runner, devices)
+    val iosMirror = DesktopIosMirrorEngine(iosDevices)
+    val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
@@ -81,6 +87,7 @@ fun createDesktopServices(): AndyServices {
 
     return AndyServices(
         devices = devices,
+        iosDevices = iosDevices,
         avd = avd,
         mirror = mirror,
         logcat = logcat,

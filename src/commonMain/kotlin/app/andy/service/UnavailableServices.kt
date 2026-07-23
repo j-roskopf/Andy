@@ -31,6 +31,15 @@ object UnavailableAvdService : AvdService {
     override suspend fun renameSnapshot(avdName: String, oldName: String, newName: String) = unavailable()
 }
 
+object UnavailableIosDeviceService : IosDeviceService {
+    override suspend fun listTargets() = emptyList<IosTarget>()
+    override suspend fun boot(udid: String) = unavailable()
+    override suspend fun shutdown(udid: String) = unavailable()
+    override suspend fun openInSimulatorApp(udid: String) = unavailable()
+    override suspend fun iosSimAvailable() = false
+    override suspend fun iosSimDiagnostic() = BrowserUnavailable
+}
+
 object UnavailableLogcatService : LogcatService {
     override fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>> = flowOf(emptyList())
     override suspend fun snapshot(serial: String, filter: LogcatFilter, limit: Int) = emptyList<LogcatEntry>()
@@ -285,7 +294,11 @@ object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override fun pauseBuildPair(buildTaskId: String) = Unit
     override fun stopBuildPair(buildTaskId: String) = Unit
     override suspend fun resumeBuildPair(buildTaskId: String) = Unit
-    override suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String? = BrowserUnavailable
+    override suspend fun startRecoveryFollowUp(
+        buildTaskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+    ): String? = BrowserUnavailable
     override suspend fun startRecoveryReview(buildTaskId: String): String? = BrowserUnavailable
     override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
     override suspend fun deleteProject(projectId: String) = Unit

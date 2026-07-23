@@ -117,6 +117,7 @@ internal fun LiveDevicePane(
     zoom: Float = 1f,
     showDeviceHeader: Boolean = true,
     showChromeControls: Boolean = true,
+    showAndroidNavButtons: Boolean = true,
     showHardwareControls: Boolean = showChromeControls,
     showContainerChrome: Boolean = true,
     deviceBorderWidth: Dp = 5.dp,
@@ -320,14 +321,16 @@ internal fun LiveDevicePane(
                                 modifier = Modifier.fillMaxWidth().height(48.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Back) },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
+                                if (showAndroidNavButtons) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .clickable(enabled = serial != null) { onInput(MirrorInput.Back) },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        NavIconBack(color = if (serial != null) TextPrimary else TextSecondary)
+                                    }
                                 }
                                 Box(
                                     modifier = Modifier
@@ -338,14 +341,16 @@ internal fun LiveDevicePane(
                                 ) {
                                     NavIconHome(color = if (serial != null) TextPrimary else TextSecondary)
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clickable(enabled = serial != null) { onInput(MirrorInput.Recents) },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
+                                if (showAndroidNavButtons) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .clickable(enabled = serial != null) { onInput(MirrorInput.Recents) },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        NavIconRecents(color = if (serial != null) TextPrimary else TextSecondary)
+                                    }
                                 }
                             }
                         }

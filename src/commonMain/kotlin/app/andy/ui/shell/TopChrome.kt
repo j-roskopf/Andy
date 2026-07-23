@@ -37,6 +37,8 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.model.ProjectAction
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
@@ -58,7 +60,10 @@ internal fun TopChrome(
     destination: AndyDestination,
     selectedDevice: AndroidDevice?,
     devices: List<AndroidDevice>,
+    iosTargets: List<IosTarget>,
+    selectedIosTarget: IosTarget?,
     onSelectDevice: (String) -> Unit,
+    onSelectIosTarget: (String) -> Unit,
     onRefresh: () -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
@@ -86,7 +91,7 @@ internal fun TopChrome(
     ) {
         Column(Modifier.width(260.dp)) {
             Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
-            Text(selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+            Text(selectedIosTarget?.displayName ?: selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
         }
         Spacer(Modifier.weight(1f))
         actions()
@@ -123,9 +128,12 @@ internal fun TopChrome(
         DevicePicker(
             devices = devices,
             selectedDevice = selectedDevice,
+            iosTargets = iosTargets,
+            selectedIosTarget = selectedIosTarget,
             expanded = deviceMenuExpanded,
             onExpandedChange = { deviceMenuExpanded = it },
             onSelect = onSelectDevice,
+            onSelectIos = onSelectIosTarget,
         )
     }
 }
@@ -243,16 +251,25 @@ private fun ActionRunnerSelector(
 private fun DevicePicker(
     devices: List<AndroidDevice>,
     selectedDevice: AndroidDevice?,
+    iosTargets: List<IosTarget>,
+    selectedIosTarget: IosTarget?,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
+    onSelectIos: (String) -> Unit,
 ) {
+    val activeDevices = remember(devices) {
+        devices.filter { it.state == DeviceConnectionState.Online }
+    }
+    val activeIosTargets = remember(iosTargets) {
+        iosTargets.filter { it.isLiveReady }
+    }
     Box {
         Button(onClick = { onExpandedChange(true) }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
             Text("•", color = Green, fontSize = 18.sp)
             Spacer(Modifier.width(6.dp))
             Text(
-                selectedDevice?.displayName ?: "no device",
+                selectedIosTarget?.displayName ?: selectedDevice?.displayName ?: "no device",
                 color = TextPrimary,
                 fontFamily = MonoFont,
                 fontSize = 12.sp,
@@ -261,11 +278,43 @@ private fun DevicePicker(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
-            devices.forEach { device ->
-                DropdownMenuItem(text = { Text(device.displayName, color = TextPrimary) }, onClick = {
-                    onSelect(device.serial)
-                    onExpandedChange(false)
-                })
+            if (activeDevices.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("Android", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    onClick = {},
+                    enabled = false,
+                )
+                activeDevices.forEach { device ->
+                    DropdownMenuItem(text = { Text(device.displayName, color = TextPrimary) }, onClick = {
+                        onSelect(device.serial)
+                        onExpandedChange(false)
+                    })
+                }
+            }
+            if (activeIosTargets.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("iOS", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    onClick = {},
+                    enabled = false,
+                )
+                activeIosTargets.forEach { target ->
+                    val subtitle = when (target.kind) {
+                        IosTargetKind.Physical -> "usb"
+                        IosTargetKind.Simulator -> "booted"
+                    }
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(target.displayName, color = TextPrimary)
+                                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                            }
+                        },
+                        onClick = {
+                            onSelectIos(target.udid)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
             }
         }
     }

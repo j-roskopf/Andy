@@ -24,6 +24,7 @@ import app.andy.desktop.service.DesktopAgentAttentionCoordinator
 import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.PendingAgentTaskOpen
+import app.andy.desktop.service.ios.NativeIosDeviceJni
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.theme.windowBackgroundForTint
 import com.kdroid.composetray.tray.api.Tray
@@ -34,6 +35,8 @@ import java.awt.desktop.SystemEventListener
 import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
 
 fun main() {
@@ -93,6 +96,11 @@ fun main() {
                 workspace = { workspaceStore.state.value }, isForeground = appFocus::isForeground,
                 notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
             ).start()
+        }
+        LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) {
+                NativeIosDeviceJni.prepareForCapture()
+            }
         }
         LaunchedEffect(unreadCount, workspaceState.agentIconBadgeEnabled) {
             updateDockBadge(if (workspaceState.agentIconBadgeEnabled) unreadCount else 0)

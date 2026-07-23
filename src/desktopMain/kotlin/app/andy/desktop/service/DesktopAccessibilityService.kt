@@ -12,6 +12,7 @@ class DesktopAccessibilityService(
         val adb = devices.adbPath() ?: return null
         runner.run(listOf(adb, "-s", serial, "shell", "uiautomator", "dump", "/sdcard/window_dump.xml"), 10)
         val result = runner.run(listOf(adb, "-s", serial, "exec-out", "cat", "/sdcard/window_dump.xml"), 10)
+        if (result.stdout.isBlank()) return null
         return runCatching { AndroidParsers.parseAccessibilityXml(result.stdout) }.getOrNull()
     }
 }

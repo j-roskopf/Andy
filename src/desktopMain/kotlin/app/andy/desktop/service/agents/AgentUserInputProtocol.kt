@@ -120,9 +120,37 @@ private fun parseQuestion(element: kotlinx.serialization.json.JsonElement): Agen
 }
 
 private fun parseOption(element: kotlinx.serialization.json.JsonElement): AgentUserInputOption? {
-    val option = element as? JsonObject ?: return null
-    val label = option.stringOrNull("label")?.trim()?.takeIf { it.isNotBlank() } ?: return null
-    return AgentUserInputOption(label, option.stringOrNull("description")?.trim().orEmpty())
+    when (element) {
+        is kotlinx.serialization.json.JsonPrimitive -> {
+            val raw = element.content.trim().takeIf { it.isNotBlank() } ?: return null
+            return AgentUserInputOption(humanizeOptionLabel(raw), "")
+        }
+        is JsonObject -> {
+            val rawLabel = optionString(element, "label", "title", "text")
+                ?: optionString(element, "id", "key", "value")
+                ?: return null
+            val description = optionString(element, "description", "detail", "subtitle").orEmpty()
+            return AgentUserInputOption(humanizeOptionLabel(rawLabel), description)
+        }
+        else -> return null
+    }
 }
+
+private fun optionString(option: JsonObject, vararg keys: String): String? =
+    keys.firstNotNullOfOrNull { key ->
+        option.stringOrNull(key)?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+/** Models often emit snake_case keys as labels; show readable text in the decision UI. */
+private fun humanizeOptionLabel(raw: String): String {
+    val trimmed = raw.trim()
+    if (!looksLikeSnakeCaseId(trimmed)) return trimmed
+    return trimmed
+        .split('_')
+        .joinToString(" ") { word -> word.replaceFirstChar { char -> char.titlecase() } }
+}
+
+private fun looksLikeSnakeCaseId(value: String): Boolean =
+    value.matches(Regex("[a-z][a-z0-9_]*")) && value.contains('_')
 
 private fun isValidId(value: String): Boolean = value.matches(Regex("[a-z][a-z0-9_]{0,63}"))

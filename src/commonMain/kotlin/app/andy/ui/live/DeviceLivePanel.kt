@@ -20,6 +20,7 @@ internal fun DeviceLivePanel(
     services: AndyServices,
     serial: String?,
     device: AndroidDevice?,
+    displayName: String? = device?.displayName,
     modifier: Modifier = Modifier,
     showChromeControls: Boolean = true,
     showDeviceHeader: Boolean = true,
@@ -56,6 +57,7 @@ internal fun DeviceLivePanel(
         LiveDevicePane(
             serial = serial,
             device = device,
+            displayName = displayName,
             frame = frame,
             frameFlow = frameFlow,
             mirrorStatus = mirrorStatus,

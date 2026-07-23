@@ -18,6 +18,15 @@ interface DeviceService {
     suspend fun generatePairingQr(content: String): ByteArray?
 }
 
+interface IosDeviceService {
+    suspend fun listTargets(): List<IosTarget>
+    suspend fun boot(udid: String): CommandResult
+    suspend fun shutdown(udid: String): CommandResult
+    suspend fun openInSimulatorApp(udid: String): CommandResult
+    suspend fun iosSimAvailable(): Boolean
+    suspend fun iosSimDiagnostic(): String
+}
+
 interface AvdService {
     suspend fun listSystemImages(): List<SystemImage>
     suspend fun listProfiles(): List<AvdProfile>
@@ -359,7 +368,11 @@ interface ProjectWorkflowService {
     fun stopBuildPair(buildTaskId: String)
     suspend fun resumeBuildPair(buildTaskId: String)
     /** Adds a freeform fix thread to a completed workflow without auto-running its gates. */
-    suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String?
+    suspend fun startRecoveryFollowUp(
+        buildTaskId: String,
+        followUp: String,
+        imagePaths: List<String> = emptyList(),
+    ): String?
     /** Runs one explicit cumulative review after manual recovery testing is finished. */
     suspend fun startRecoveryReview(buildTaskId: String): String?
     suspend fun deleteTask(taskId: String, cascade: Boolean = false)
@@ -559,6 +572,8 @@ data class PlatformCapabilities(
     val updates: Boolean,
     /** True when Live may offer Auto/GPU renderer controls (Mac Metal or browser WebCodecs). */
     val acceleratedMirror: Boolean = false,
+    /** True on macOS desktop where simctl/devicectl discovery is available. */
+    val iosDeviceManagement: Boolean = false,
 ) {
     companion object {
         val Desktop = PlatformCapabilities(
@@ -571,6 +586,7 @@ data class PlatformCapabilities(
             proxy = true,
             mcp = true,
             updates = true,
+            iosDeviceManagement = true,
             // Overridden at service creation from the packaged native bridge (Mac only today).
             acceleratedMirror = false,
         )
@@ -606,6 +622,7 @@ data class PlatformCapabilities(
 
 data class AndyServices(
     val devices: DeviceService,
+    val iosDevices: IosDeviceService,
     val avd: AvdService,
     val mirror: MirrorEngine,
     val logcat: LogcatService,

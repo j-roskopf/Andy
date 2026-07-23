@@ -16,6 +16,8 @@ import java.nio.file.StandardCopyOption
  */
 internal object NativeMirrorJni {
     private val loadResult: Result<Unit> by lazy(::loadLibrary)
+
+    fun ensureLoaded(): Result<Unit> = loadResult
     @Volatile private var metalInlineOverlayOpen = false
     @Volatile private var contentWidth = 0
     @Volatile private var contentHeight = 0
@@ -59,6 +61,12 @@ internal object NativeMirrorJni {
             lastGeometryKey = null
             NativeMirrorHostRegistry.current()?.let(::updateMetalLayerGeometry)
         }
+    }
+
+    /** Re-submits the last decoded iOS/VideoToolbox frame after Metal geometry changes. */
+    fun repaintLatestFrame() {
+        if (!loadResult.isSuccess || !metalInlineOverlayOpen) return
+        runCatching(::nativeRepaintLatestFrame)
     }
 
     /**
@@ -300,6 +308,7 @@ internal object NativeMirrorJni {
     private external fun nativeOpenMetalInlineOverlay(): Boolean
     private external fun nativeUpdateMetalInlineOverlay(x: Int, y: Int, width: Int, height: Int, scale: Double)
     private external fun nativeSetMetalInlineOverlayVisible(visible: Boolean)
+    private external fun nativeRepaintLatestFrame()
     private external fun nativeCopyLatestFrameArgb(outSize: IntArray): IntArray?
     private external fun nativeIsHardwareReady(): Boolean
     private external fun nativeDestroyRenderer()

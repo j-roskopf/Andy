@@ -55,6 +55,10 @@ import app.andy.model.AvdProfile
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.DeviceTransport
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
+import app.andy.model.IosTransport
 import app.andy.model.PairedWifiDevice
 import app.andy.model.SdkDiscovery
 import app.andy.model.SystemImage
@@ -87,6 +91,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
@@ -94,10 +99,14 @@ internal fun DevicesScreen(
     services: AndyServices,
     devices: List<AndroidDevice>,
     sdk: SdkDiscovery,
+    iosTargets: List<IosTarget> = emptyList(),
     pairedWifiDevices: List<PairedWifiDevice>,
     onRefresh: () -> Unit,
     onLive: (String) -> Unit,
     onEmulatorStarted: (Set<String>, String) -> Unit,
+    onBootIosSimulator: (IosTarget) -> Unit,
+    onShutdownIosSimulator: (IosTarget) -> Unit,
+    onOpenIosInSimulatorApp: (IosTarget) -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
     stopStatus: String,
@@ -108,6 +117,7 @@ internal fun DevicesScreen(
     onReconnectPairedWifi: (PairedWifiDevice) -> Unit,
     onDisconnectWifi: (String) -> Unit,
     allowAvdManagement: Boolean = true,
+    allowIosManagement: Boolean = false,
     allowWifiPairing: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
@@ -138,12 +148,26 @@ internal fun DevicesScreen(
             avd.abi.orEmpty().contains(state.deviceQuery, true)
         matchesQuery && avd.matchesFilter(state.deviceFilter)
     }
+    val filteredIosTargets = iosTargets.filter { target ->
+        val matchesQuery = state.deviceQuery.isBlank() ||
+            target.displayName.contains(state.deviceQuery, true) ||
+            target.udid.contains(state.deviceQuery, true) ||
+            target.runtime.orEmpty().contains(state.deviceQuery, true) ||
+            target.model.orEmpty().contains(state.deviceQuery, true)
+        matchesQuery && target.matchesFilter(state.deviceFilter)
+    }
+    val iosSimulators = filteredIosTargets.filter { it.kind == IosTargetKind.Simulator }
+    val iosPhysicalDevices = filteredIosTargets.filter { it.kind == IosTargetKind.Physical }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        val deviceSummary = if (allowAvdManagement) {
-            "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${state.avds.size} created"
-        } else {
-            "${devices.size} connected over Web ADB"
+        val deviceSummary = when {
+            allowIosManagement && state.platformTab == DevicesPlatformTab.Ios -> {
+                "${iosSimulators.count { it.state == IosTargetState.Booted }} booted · ${iosSimulators.size} simulators · ${iosPhysicalDevices.size} physical"
+            }
+            allowAvdManagement -> {
+                "${devices.count { it.kind == DeviceKind.Physical }} physical · ${devices.count { it.kind == DeviceKind.Emulator }} emulators online · ${state.avds.size} created"
+            }
+            else -> "${devices.size} connected over Web ADB"
         }
         Toolbar("Devices", deviceSummary, onPrimary = {
             onRefresh()
@@ -194,14 +218,23 @@ internal fun DevicesScreen(
                 FilterPill(filter.label, state.deviceFilter == filter, if (state.deviceFilter == filter) Rust else Cyan) { state.deviceFilter = filter }
             }
             Spacer(Modifier.weight(1f))
-            if (allowWifiPairing) {
+            if (state.platformTab == DevicesPlatformTab.Android && allowWifiPairing) {
                 OutlinedButton(onClick = { state.showPairDialog = true }) { Text("Pair over Wi‑Fi") }
             }
-            if (allowAvdManagement) {
+            if (state.platformTab == DevicesPlatformTab.Android && allowAvdManagement) {
                 Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
             }
         }
-        if (sdk.issues.isNotEmpty()) {
+        if (allowIosManagement) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                DevicesPlatformTab.entries.forEach { tab ->
+                    FilterPill(tab.label, state.platformTab == tab, if (state.platformTab == tab) Rust else Cyan) {
+                        state.platformTab = tab
+                    }
+                }
+            }
+        }
+        if (sdk.issues.isNotEmpty() && state.platformTab == DevicesPlatformTab.Android) {
             PanelCard {
                 Text("SDK setup", color = TextPrimary, fontWeight = FontWeight.Bold)
                 SelectionContainer {
@@ -212,227 +245,40 @@ internal fun DevicesScreen(
                 }
             }
         }
-        if (allowAvdManagement) PanelCard {
-            Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
-            if (startStatus.isNotBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (startingEmulatorName != null) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
-                    Text(startStatus, color = if (startingEmulatorName != null) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                }
-            }
-            if (state.avdStatus.isNotBlank()) Text(state.avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            if (stopStatus.isNotBlank()) Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            if (filteredAvds.isEmpty()) {
-                Text("No AVDs found. Create one in Catalog or Android Studio, then refresh.", color = TextSecondary, fontSize = 12.sp)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    filteredAvds.forEach { avd ->
-                        val runningDevice = devices.firstOrNull {
-                            it.kind == DeviceKind.Emulator &&
-                                it.state == DeviceConnectionState.Online &&
-                                namesMatch(it.displayName, avd.name)
-                        }
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .heightIn(min = 48.dp)
-                                .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(avd.name, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                Text(listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" }, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                avd.graphicsBackend?.let { backend ->
-                                    Text(
-                                        listOfNotNull(
-                                            "Graphics: $backend",
-                                            avd.graphicsRenderer,
-                                            "software renderer".takeIf { avd.graphicsSoftwareRendered },
-                                        ).joinToString(" · "),
-                                        color = TextSecondary,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                            Text(if (runningDevice != null || avd.running) "running" else "stopped", color = if (runningDevice != null || avd.running) Green else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            Text(avd.deviceType.name.lowercase(), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, modifier = Modifier.width(80.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    runningDevice?.let {
-                                        onLive(it.serial)
-                                        return@OutlinedButton
-                                    }
-                                    val before = devices.map { it.serial }.toSet()
-                                    scope.launch {
-                                        state.startingAvd = avd.name
-                                        val result = state.avd.startVirtualDevice(avd.name)
-                                        state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                                        state.startingAvd = null
-                                        refreshAvds()
-                                        if (result.isSuccess) onEmulatorStarted(before, avd.name)
-                                    }
-                                },
-                                enabled = state.startingAvd == null && startingEmulatorName == null,
-                            ) {
-                                Text(
-                                    when {
-                                        startingEmulatorName == avd.name -> "Booting"
-                                        state.startingAvd == avd.name -> "Starting"
-                                        runningDevice != null -> "Live"
-                                        else -> "Start"
-                                    },
-                                )
-                            }
-                            if (runningDevice != null) {
-                                OutlinedButton(
-                                    onClick = { onStopEmulator(runningDevice) },
-                                    enabled = stoppingEmulatorSerial != runningDevice.serial,
-                                ) {
-                                    Text(if (stoppingEmulatorSerial == runningDevice.serial) "Stopping" else "Stop")
-                                }
-                            }
-                            AvdActionsMenu(
-                                enabled = state.startingAvd == null && startingEmulatorName == null,
-                                onColdBoot = {
-                                    val before = devices.map { it.serial }.toSet()
-                                    scope.launch {
-                                        state.startingAvd = avd.name
-                                        val result = state.avd.coldBootVirtualDevice(avd.name)
-                                        state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                                        state.startingAvd = null
-                                        refreshAvds()
-                                        if (result.isSuccess) onEmulatorStarted(before, avd.name)
-                                    }
-                                },
-                                onWipe = {
-                                    state.pendingConfirmation = PendingConfirmation("Wipe ${avd.name}?", "This erases user data for the virtual device.") {
-                                        scope.launch {
-                                            val result = state.avd.wipeVirtualDevice(avd.name)
-                                            state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
-                                            refreshAvds()
-                                        }
-                                    }
-                                },
-                                onClone = { state.cloneSource = avd },
-                                onDelete = {
-                                    state.pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
-                                        scope.launch {
-                                            val result = state.avd.deleteVirtualDevice(avd.name)
-                                            state.avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
-                                            refreshAvds()
-                                        }
-                                    }
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        if (allowWifiPairing && pairedWifiDevices.isNotEmpty()) PanelCard {
-            Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
-            if (state.wifiStatus.isNotBlank()) {
-                Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                pairedWifiDevices.forEach { paired ->
-                    val live = findLiveWifiDevice(devices, paired)
-                    val online = live?.state == DeviceConnectionState.Online
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(paired.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
-                            Text(
-                                listOfNotNull(paired.mdnsInstanceName, paired.lastEndpoint, live?.serial)
-                                    .distinct()
-                                    .joinToString(" · "),
-                                color = TextSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        StatusTag(if (online) "connected" else "disconnected", if (online) Green else TextSecondary)
-                        if (live != null && online) {
-                            OutlinedButton(onClick = { onLive(live.serial) }) { Text("Live") }
-                            OutlinedButton(onClick = {
-                                state.wifiStatus = "Disconnecting ${live.serial}..."
-                                onDisconnectWifi(live.serial)
-                            }) { Text("Disconnect") }
-                        } else {
-                            OutlinedButton(onClick = {
-                                state.wifiStatus = "Reconnecting ${paired.displayName}..."
-                                onReconnectPairedWifi(paired)
-                            }) { Text("Reconnect") }
-                        }
-                        OutlinedButton(onClick = {
-                            state.pendingConfirmation = PendingConfirmation(
-                                "Forget ${paired.displayName}?",
-                                "Removes this device from Andy's remembered Wi‑Fi list. It does not unpair on the phone.",
-                            ) {
-                                onForgetPairedWifi(paired.id)
-                                state.wifiStatus = "Forgot ${paired.displayName}"
-                            }
-                        }) { Text("Forget") }
-                    }
-                }
-            }
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(filteredDevices) { device ->
-                val online = device.state == DeviceConnectionState.Online
-                val rowShape = RoundedCornerShape(AndyRadius.R4)
-                Row(
-                    Modifier.fillMaxWidth()
-                        .height(IntrinsicSize.Min)
-                        .heightIn(min = 76.dp)
-                        .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
-                        .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
-                    Spacer(Modifier.width(18.dp))
-                    Column(Modifier.width(260.dp)) {
-                        Text(device.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
-                        Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
-                    Text("API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(170.dp))
-                    Text(device.storageSummary ?: "-", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(150.dp))
-                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        StatusTag(device.state.name, if (online) Green else TextSecondary)
-                        if (device.transport == DeviceTransport.Wifi) {
-                            StatusTag("Wi‑Fi", Cyan)
-                        }
-                    }
-                    OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
-                    if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
-                        Spacer(Modifier.width(8.dp))
-                        OutlinedButton(
-                            onClick = { onStopEmulator(device) },
-                            enabled = stoppingEmulatorSerial != device.serial,
-                        ) {
-                            Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
-                        }
-                    }
-                }
-            }
-        }
-        if (devices.isEmpty()) {
-            EmptyState(if (allowAvdManagement) "No connected Android devices. Connect USB debugging, pair over Wi‑Fi, or start an emulator." else "No browser-authorized Android devices. Use ADB + WebSocket or WebUSB to connect.")
+        when {
+            allowIosManagement && state.platformTab == DevicesPlatformTab.Ios -> IosDevicesTab(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                simulators = iosSimulators,
+                physicalDevices = iosPhysicalDevices,
+                startStatus = startStatus,
+                startingName = startingEmulatorName,
+                onBoot = onBootIosSimulator,
+                onShutdown = onShutdownIosSimulator,
+                onOpenInSimulatorApp = onOpenIosInSimulatorApp,
+                onLive = onLive,
+            )
+            else -> AndroidDevicesTab(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                allowAvdManagement = allowAvdManagement,
+                allowWifiPairing = allowWifiPairing,
+                devices = devices,
+                filteredDevices = filteredDevices,
+                filteredAvds = filteredAvds,
+                pairedWifiDevices = pairedWifiDevices,
+                state = state,
+                scope = scope,
+                startStatus = startStatus,
+                startingEmulatorName = startingEmulatorName,
+                stopStatus = stopStatus,
+                stoppingEmulatorSerial = stoppingEmulatorSerial,
+                onLive = onLive,
+                onEmulatorStarted = onEmulatorStarted,
+                onStopEmulator = onStopEmulator,
+                onReconnectPairedWifi = onReconnectPairedWifi,
+                onForgetPairedWifi = onForgetPairedWifi,
+                onDisconnectWifi = onDisconnectWifi,
+                refreshAvds = ::refreshAvds,
+            )
         }
         if (allowAvdManagement && state.showCreateWizard) {
             CreateVirtualDeviceDialog(
@@ -489,6 +335,11 @@ private fun normalizeName(value: String): String {
     return value.replace('_', ' ').trim().lowercase()
 }
 
+internal enum class DevicesPlatformTab(val label: String) {
+    Android("Android"),
+    Ios("iOS"),
+}
+
 internal enum class DeviceListFilter(val label: String) {
     All("All"),
     Running("Running"),
@@ -509,6 +360,470 @@ private fun AndroidDevice.matchesFilter(filter: DeviceListFilter): Boolean = whe
     DeviceListFilter.Watch -> model.orEmpty().contains("watch", true) || product.orEmpty().contains("wear", true)
     DeviceListFilter.Tv -> model.orEmpty().contains("tv", true) || product.orEmpty().contains("tv", true)
     DeviceListFilter.Api33 -> apiLevel?.toIntOrNull()?.let { it >= 33 } == true
+}
+
+private fun IosTarget.matchesFilter(filter: DeviceListFilter): Boolean = when (filter) {
+    DeviceListFilter.All -> true
+    DeviceListFilter.Running -> state == IosTargetState.Booted
+    DeviceListFilter.Phone -> kind == IosTargetKind.Physical || model.orEmpty().contains("iphone", true)
+    DeviceListFilter.Foldable -> model.orEmpty().contains("fold", true)
+    DeviceListFilter.Tablet -> model.orEmpty().contains("ipad", true)
+    DeviceListFilter.Watch -> model.orEmpty().contains("watch", true)
+    DeviceListFilter.Tv -> model.orEmpty().contains("tv", true)
+    DeviceListFilter.Api33 -> runtime.orEmpty().contains("26", ignoreCase = true) ||
+        runtime.orEmpty().contains("18", ignoreCase = true) ||
+        runtime.orEmpty().contains("17", ignoreCase = true)
+}
+
+@Composable
+private fun AndroidDevicesTab(
+    modifier: Modifier,
+    allowAvdManagement: Boolean,
+    allowWifiPairing: Boolean,
+    devices: List<AndroidDevice>,
+    filteredDevices: List<AndroidDevice>,
+    filteredAvds: List<VirtualDevice>,
+    pairedWifiDevices: List<PairedWifiDevice>,
+    state: DevicesScreenState,
+    scope: CoroutineScope,
+    startStatus: String,
+    startingEmulatorName: String?,
+    stopStatus: String,
+    stoppingEmulatorSerial: String?,
+    onLive: (String) -> Unit,
+    onEmulatorStarted: (Set<String>, String) -> Unit,
+    onStopEmulator: (AndroidDevice) -> Unit,
+    onReconnectPairedWifi: (PairedWifiDevice) -> Unit,
+    onForgetPairedWifi: (String) -> Unit,
+    onDisconnectWifi: (String) -> Unit,
+    refreshAvds: () -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (allowAvdManagement) {
+            item {
+                PanelCard {
+                    Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    if (startStatus.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (startingEmulatorName != null) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                            }
+                            Text(
+                                startStatus,
+                                color = if (startingEmulatorName != null) Rust else TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                    if (state.avdStatus.isNotBlank()) {
+                        Text(state.avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                    if (stopStatus.isNotBlank()) {
+                        Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                    if (filteredAvds.isEmpty()) {
+                        Text(
+                            "No AVDs found. Create one in Catalog or Android Studio, then refresh.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+            items(filteredAvds, key = { it.name }) { avd ->
+                val runningDevice = devices.firstOrNull {
+                    it.kind == DeviceKind.Emulator &&
+                        it.state == DeviceConnectionState.Online &&
+                        namesMatch(it.displayName, avd.name)
+                }
+                Row(
+                    Modifier.fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(avd.name, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" },
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        avd.graphicsBackend?.let { backend ->
+                            Text(
+                                listOfNotNull(
+                                    "Graphics: $backend",
+                                    avd.graphicsRenderer,
+                                    "software renderer".takeIf { avd.graphicsSoftwareRendered },
+                                ).joinToString(" · "),
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    Text(
+                        if (runningDevice != null || avd.running) "running" else "stopped",
+                        color = if (runningDevice != null || avd.running) Green else TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                    Text(
+                        avd.deviceType.name.lowercase(),
+                        color = TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        modifier = Modifier.width(80.dp),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            runningDevice?.let {
+                                onLive(it.serial)
+                                return@OutlinedButton
+                            }
+                            val before = devices.map { it.serial }.toSet()
+                            scope.launch {
+                                state.startingAvd = avd.name
+                                val result = state.avd.startVirtualDevice(avd.name)
+                                state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                state.startingAvd = null
+                                refreshAvds()
+                                if (result.isSuccess) onEmulatorStarted(before, avd.name)
+                            }
+                        },
+                        enabled = state.startingAvd == null && startingEmulatorName == null,
+                    ) {
+                        Text(
+                            when {
+                                startingEmulatorName == avd.name -> "Booting"
+                                state.startingAvd == avd.name -> "Starting"
+                                runningDevice != null -> "Live"
+                                else -> "Start"
+                            },
+                        )
+                    }
+                    if (runningDevice != null) {
+                        OutlinedButton(
+                            onClick = { onStopEmulator(runningDevice) },
+                            enabled = stoppingEmulatorSerial != runningDevice.serial,
+                        ) {
+                            Text(if (stoppingEmulatorSerial == runningDevice.serial) "Stopping" else "Stop")
+                        }
+                    }
+                    AvdActionsMenu(
+                        enabled = state.startingAvd == null && startingEmulatorName == null,
+                        onColdBoot = {
+                            val before = devices.map { it.serial }.toSet()
+                            scope.launch {
+                                state.startingAvd = avd.name
+                                val result = state.avd.coldBootVirtualDevice(avd.name)
+                                state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                state.startingAvd = null
+                                refreshAvds()
+                                if (result.isSuccess) onEmulatorStarted(before, avd.name)
+                            }
+                        },
+                        onWipe = {
+                            state.pendingConfirmation = PendingConfirmation("Wipe ${avd.name}?", "This erases user data for the virtual device.") {
+                                scope.launch {
+                                    val result = state.avd.wipeVirtualDevice(avd.name)
+                                    state.avdStatus = if (result.isSuccess) result.stdout else result.stderr.ifBlank { result.stdout }
+                                    refreshAvds()
+                                }
+                            }
+                        },
+                        onClone = { state.cloneSource = avd },
+                        onDelete = {
+                            state.pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
+                                scope.launch {
+                                    val result = state.avd.deleteVirtualDevice(avd.name)
+                                    state.avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
+                                    refreshAvds()
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        if (allowWifiPairing && pairedWifiDevices.isNotEmpty()) {
+            item {
+                PanelCard {
+                    Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    if (state.wifiStatus.isNotBlank()) {
+                        Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                }
+            }
+            items(pairedWifiDevices, key = { it.id }) { paired ->
+                val live = findLiveWifiDevice(devices, paired)
+                val online = live?.state == DeviceConnectionState.Online
+                Row(
+                    Modifier.fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(paired.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            listOfNotNull(paired.mdnsInstanceName, paired.lastEndpoint, live?.serial)
+                                .distinct()
+                                .joinToString(" · "),
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    StatusTag(if (online) "connected" else "disconnected", if (online) Green else TextSecondary)
+                    if (live != null && online) {
+                        OutlinedButton(onClick = { onLive(live.serial) }) { Text("Live") }
+                        OutlinedButton(onClick = {
+                            state.wifiStatus = "Disconnecting ${live.serial}..."
+                            onDisconnectWifi(live.serial)
+                        }) { Text("Disconnect") }
+                    } else {
+                        OutlinedButton(onClick = {
+                            state.wifiStatus = "Reconnecting ${paired.displayName}..."
+                            onReconnectPairedWifi(paired)
+                        }) { Text("Reconnect") }
+                    }
+                    OutlinedButton(onClick = {
+                        state.pendingConfirmation = PendingConfirmation(
+                            "Forget ${paired.displayName}?",
+                            "Removes this device from Andy's remembered Wi‑Fi list. It does not unpair on the phone.",
+                        ) {
+                            onForgetPairedWifi(paired.id)
+                            state.wifiStatus = "Forgot ${paired.displayName}"
+                        }
+                    }) { Text("Forget") }
+                }
+            }
+        }
+        if (filteredDevices.isNotEmpty()) {
+            item {
+                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        items(filteredDevices, key = { it.serial }) { device ->
+            val online = device.state == DeviceConnectionState.Online
+            val rowShape = RoundedCornerShape(AndyRadius.R4)
+            Row(
+                Modifier.fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .heightIn(min = 76.dp)
+                    .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
+                    .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
+                Spacer(Modifier.width(18.dp))
+                Column(Modifier.width(260.dp)) {
+                    Text(device.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+                Text(
+                    "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.width(170.dp),
+                )
+                Text(
+                    device.storageSummary ?: "-",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.width(150.dp),
+                )
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatusTag(device.state.name, if (online) Green else TextSecondary)
+                    if (device.transport == DeviceTransport.Wifi) {
+                        StatusTag("Wi‑Fi", Cyan)
+                    }
+                }
+                OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
+                if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { onStopEmulator(device) },
+                        enabled = stoppingEmulatorSerial != device.serial,
+                    ) {
+                        Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
+                    }
+                }
+            }
+        }
+        if (filteredDevices.isEmpty() && (!allowAvdManagement || filteredAvds.isEmpty()) && pairedWifiDevices.isEmpty()) {
+            item {
+                EmptyState(
+                    if (allowAvdManagement) {
+                        "No connected Android devices. Connect USB debugging, pair over Wi‑Fi, or start an emulator."
+                    } else {
+                        "No browser-authorized Android devices. Use ADB + WebSocket or WebUSB to connect."
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IosDevicesTab(
+    modifier: Modifier,
+    simulators: List<IosTarget>,
+    physicalDevices: List<IosTarget>,
+    startStatus: String,
+    startingName: String?,
+    onBoot: (IosTarget) -> Unit,
+    onShutdown: (IosTarget) -> Unit,
+    onOpenInSimulatorApp: (IosTarget) -> Unit,
+    onLive: (String) -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (startStatus.isNotBlank()) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (startingName != null) {
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                    }
+                    Text(
+                        startStatus,
+                        color = if (startingName != null) Rust else TextSecondary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+        item {
+            Text("Simulators", color = TextPrimary, fontWeight = FontWeight.Bold)
+        }
+        if (simulators.isEmpty()) {
+            item {
+                Text(
+                    "No iOS simulators found. Install an iOS runtime in Xcode, then refresh.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+        } else {
+            items(simulators, key = { it.udid }) { target ->
+                IosTargetRow(
+                    target = target,
+                    starting = startingName == target.displayName,
+                    onBoot = { onBoot(target) },
+                    onShutdown = { onShutdown(target) },
+                    onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
+                    onLive = { onLive(target.udid) },
+                )
+            }
+        }
+        if (physicalDevices.isNotEmpty()) {
+            item {
+                Text("Physical devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            }
+            items(physicalDevices, key = { it.udid }) { target ->
+                IosTargetRow(
+                    target = target,
+                    starting = false,
+                    onBoot = {},
+                    onShutdown = {},
+                    onOpenInSimulatorApp = {},
+                    onLive = { onLive(target.udid) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IosTargetRow(
+    target: IosTarget,
+    starting: Boolean,
+    onBoot: () -> Unit,
+    onShutdown: () -> Unit,
+    onOpenInSimulatorApp: () -> Unit,
+    onLive: () -> Unit,
+) {
+    val booted = target.state == IosTargetState.Booted
+    val statusLabel = when {
+        target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> "network only"
+        target.kind == IosTargetKind.Physical -> null
+        target.state == IosTargetState.Unavailable -> "unavailable"
+        booted -> "booted"
+        target.state == IosTargetState.Shutdown -> "shutdown"
+        else -> target.state.name.lowercase()
+    }
+    val statusColor = when {
+        booted -> Green
+        target.state == IosTargetState.Unavailable -> TextSecondary
+        target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
+        else -> TextSecondary
+    }
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(target.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+            Text(
+                listOfNotNull(target.runtime, target.model, target.udid).joinToString(" · "),
+                color = TextSecondary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (statusLabel != null) {
+            StatusTag(statusLabel, statusColor)
+        }
+        if (target.kind == IosTargetKind.Simulator) {
+            when {
+                booted -> {
+                    OutlinedButton(onClick = onLive, enabled = !starting) { Text("Live") }
+                    OutlinedButton(onClick = onOpenInSimulatorApp, enabled = !starting) { Text("Simulator.app") }
+                    OutlinedButton(onClick = onShutdown, enabled = !starting) { Text("Shutdown") }
+                }
+                target.state == IosTargetState.Shutdown -> {
+                    OutlinedButton(onClick = onBoot, enabled = !starting) {
+                        Text(if (starting) "Booting" else "Boot")
+                    }
+                }
+            }
+        } else if (target.isMirrorable) {
+            OutlinedButton(onClick = onLive) { Text("Live") }
+        } else if (target.transport != IosTransport.Usb) {
+            Text("USB required", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
+    }
 }
 
 private fun VirtualDevice.matchesFilter(filter: DeviceListFilter): Boolean = when (filter) {

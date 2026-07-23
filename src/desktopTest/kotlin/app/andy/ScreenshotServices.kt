@@ -53,6 +53,7 @@ internal object ScreenshotServices {
         )
         return AndyServices(
             devices = ScreenshotDevices,
+            iosDevices = UnavailableIosDeviceService,
             avd = ScreenshotAvds,
             mirror = ScreenshotMirror,
             logcat = ScreenshotLogcat,
@@ -638,7 +639,11 @@ internal object ScreenshotServices {
         override fun pauseBuildPair(buildTaskId: String) = Unit
         override fun stopBuildPair(buildTaskId: String) = Unit
         override suspend fun resumeBuildPair(buildTaskId: String) = Unit
-        override suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String? = null
+        override suspend fun startRecoveryFollowUp(
+            buildTaskId: String,
+            followUp: String,
+            imagePaths: List<String>,
+        ): String? = null
         override suspend fun startRecoveryReview(buildTaskId: String): String? = null
         override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
         override suspend fun deleteProject(projectId: String) = Unit

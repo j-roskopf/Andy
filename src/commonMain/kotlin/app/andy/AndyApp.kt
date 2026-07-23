@@ -51,6 +51,19 @@ enum class AndyDestination(val label: String) {
     Settings("Settings"),
 }
 
+/** Destinations that remain reachable while an iOS target is selected in the toolbar. */
+fun AndyDestination.availableWithIosTarget(): Boolean = when (this) {
+    AndyDestination.Live,
+    AndyDestination.Devices,
+    AndyDestination.Settings,
+    AndyDestination.Catalog,
+    AndyDestination.ComputerFiles,
+    AndyDestination.Agents,
+    AndyDestination.Actions,
+    -> true
+    else -> false
+}
+
 @Composable
 fun AndyApp(
     services: AndyServices,

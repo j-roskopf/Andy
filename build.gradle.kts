@@ -245,12 +245,18 @@ tasks.named<Copy>("desktopProcessResources") {
     }
 }
 
+val andyMirrorJniSources = listOf(
+    layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m"),
+    layout.projectDirectory.file("native/andy-mirror/jni/andy_ios_sim.m"),
+    layout.projectDirectory.file("native/andy-mirror/jni/andy_ios_device.m"),
+)
+
 val buildAndyMirrorJniMacArm64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS arm64 JAWT CAMetalLayer bridge used by the native mirror."
-    val source = layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m")
+    val sources = andyMirrorJniSources
     val output = layout.buildDirectory.file("native/andy-mirror/macos-arm64/andy-mirror-jni.dylib")
-    inputs.file(source)
+    inputs.files(sources)
     outputs.file(output)
     onlyIf {
         System.getProperty("os.name").lowercase().contains("mac") &&
@@ -266,14 +272,18 @@ val buildAndyMirrorJniMacArm64 by tasks.registering(Exec::class) {
         "-fobjc-arc",
         "-I${System.getProperty("java.home")}/include",
         "-I${System.getProperty("java.home")}/include/darwin",
-        source.asFile.absolutePath,
+        *sources.map { it.asFile.absolutePath }.toTypedArray(),
         "-framework", "AppKit",
+        "-framework", "ApplicationServices",
         "-framework", "MetalKit",
         "-framework", "QuartzCore",
         "-framework", "Metal",
         "-framework", "VideoToolbox",
         "-framework", "CoreMedia",
         "-framework", "CoreVideo",
+        "-framework", "AVFoundation",
+        "-framework", "CoreMediaIO",
+        "-framework", "IOSurface",
         "-L${System.getProperty("java.home")}/lib",
         "-ljawt",
         "-o", output.get().asFile.absolutePath,
@@ -285,9 +295,9 @@ val buildAndyMirrorJniMacArm64 by tasks.registering(Exec::class) {
 val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS x64 JAWT CAMetalLayer bridge used by the native mirror."
-    val source = layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m")
+    val sources = andyMirrorJniSources
     val output = layout.buildDirectory.file("native/andy-mirror/macos-x86_64/andy-mirror-jni.dylib")
-    inputs.file(source)
+    inputs.files(sources)
     outputs.file(output)
     onlyIf {
         System.getProperty("os.name").lowercase().contains("mac") &&
@@ -303,14 +313,18 @@ val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
         "-fobjc-arc",
         "-I${System.getProperty("java.home")}/include",
         "-I${System.getProperty("java.home")}/include/darwin",
-        source.asFile.absolutePath,
+        *sources.map { it.asFile.absolutePath }.toTypedArray(),
         "-framework", "AppKit",
+        "-framework", "ApplicationServices",
         "-framework", "MetalKit",
         "-framework", "QuartzCore",
         "-framework", "Metal",
         "-framework", "VideoToolbox",
         "-framework", "CoreMedia",
         "-framework", "CoreVideo",
+        "-framework", "AVFoundation",
+        "-framework", "CoreMediaIO",
+        "-framework", "IOSurface",
         "-L${System.getProperty("java.home")}/lib",
         "-ljawt",
         "-o", output.get().asFile.absolutePath,
@@ -340,6 +354,7 @@ val buildAndyNotificationsJniMacArm64 by tasks.registering(Exec::class) {
         "-I${System.getProperty("java.home")}/include/darwin",
         source.asFile.absolutePath,
         "-framework", "AppKit",
+        "-framework", "ApplicationServices",
         "-o", output.get().asFile.absolutePath,
     )
 }
@@ -367,6 +382,7 @@ val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
         "-I${System.getProperty("java.home")}/include/darwin",
         source.asFile.absolutePath,
         "-framework", "AppKit",
+        "-framework", "ApplicationServices",
         "-o", output.get().asFile.absolutePath,
     )
 }
@@ -407,6 +423,12 @@ compose.desktop {
             macOS {
                 bundleID = andyPackageId
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.icns"))
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSCameraUsageDescription</key>
+                        <string>Andy uses the camera permission to receive video from a connected iPhone.</string>
+                    """.trimIndent()
+                }
                 signing {
                     identity.set(
                         providers.gradleProperty("compose.desktop.mac.signing.identity")
@@ -575,6 +597,8 @@ val resignMacReleaseApp by tasks.registering {
                 <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
                 <true/>
                 <key>com.apple.security.cs.disable-library-validation</key>
+                <true/>
+                <key>com.apple.security.device.camera</key>
                 <true/>
             </dict>
             </plist>

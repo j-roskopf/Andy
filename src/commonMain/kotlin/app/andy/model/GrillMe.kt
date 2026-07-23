@@ -38,9 +38,11 @@ internal fun grillMeHeadlessPromptAddendum(): String = buildString {
 
 /** Wire format consumed by Andy's provider-neutral decision checkpoint UI. */
 internal fun andyUserInputPromptHint(): String = """
-When you need a user decision, emit one checkpoint in this exact format (2-3 options, ids in snake_case):
+When you need a user decision, emit one checkpoint in this exact format (2-3 options; only the question id is snake_case):
 
-<andy_user_input>{"questions":[{"id":"example_choice","question":"Which approach?","options":[{"label":"Option A"},{"label":"Option B"}]}]}</andy_user_input>
+<andy_user_input>{"questions":[{"id":"platform_scope","question":"Which platforms should v1 ship on?","options":[{"label":"Desktop only (Recommended)"},{"label":"Desktop and web"}]}]}</andy_user_input>
+
+Each option must use a short, human-readable label (not snake_case). Put your recommendation in the question text and mark the recommended option's label with "(Recommended)".
 
 Use the exact closing tag </andy_user_input>. Stop the turn after the checkpoint so Andy can collect the answer and resume the run.
 """.trimIndent()
