@@ -239,6 +239,13 @@ static void teardown_device_session(void) {
     content_height = (int) height;
     CVPixelBufferRetain(image_buffer);
     andy_mirror_remember_latest_pixels(image_buffer);
+    const int64_t hub_decoder = andy_hub_ios_decoder();
+    if (hub_decoder != ANDY_HUB_INVALID_ID) {
+        const bool probe = andy_hub_latency_probe_changed(hub_decoder, image_buffer);
+        andy_hub_render_pixel_buffer(hub_decoder, image_buffer, probe, 0, 0, true);
+        CVPixelBufferRelease(image_buffer);
+        return;
+    }
     const bool probe = andy_mirror_latency_probe_changed(image_buffer);
     andy_mirror_render_pixel_buffer(image_buffer, probe, 0, 0, true);
     CVPixelBufferRelease(image_buffer);

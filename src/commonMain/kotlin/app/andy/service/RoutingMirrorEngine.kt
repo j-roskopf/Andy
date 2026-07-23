@@ -7,12 +7,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 
 /**
- * Routes mirror operations to the Android or iOS engine. Both share the single Metal presenter,
- * so connecting to one target disconnects the other immediately.
+ * Routes mirror operations to the Android or iOS engine. Each backend owns its own GPU decode
+ * pipeline; multiple presenters (Live + pop-outs) can fan out from the same pipeline per device.
  */
 class RoutingMirrorEngine(
     private val android: MirrorEngine,
@@ -29,7 +30,13 @@ class RoutingMirrorEngine(
         }
     }
     override val encodedVideo: Flow<EncodedVideoAccessUnit> = merge(android.encodedVideo, ios.encodedVideo)
-    override val status: Flow<String> = merge(android.status, ios.status)
+    override val status: Flow<String> = _session.flatMapLatest { session ->
+        when {
+            session == null -> flowOf("Disconnected")
+            IosTargetRegistry.isIosTarget(session.serial) -> ios.status
+            else -> android.status
+        }
+    }
 
     init {
         scope.launch {
@@ -57,6 +64,15 @@ class RoutingMirrorEngine(
         val owner = engineFor(serial)
         val other = if (owner === ios) android else ios
         other.disconnect(immediate = true)
+        // Route frame Flow to the owner before connect finishes so the first metadata /
+        // SimulatorKit frames reach Compose and can attach GPU presenters in time.
+        _session.value = MirrorSession(
+            serial = serial,
+            requestedMode = config.rendererMode,
+            backend = MirrorBackend(MirrorBackendKind.NativeHardware),
+            width = 0,
+            height = 0,
+        )
         val result = owner.connect(serial, config)
         _session.value = owner.session.value
         return result

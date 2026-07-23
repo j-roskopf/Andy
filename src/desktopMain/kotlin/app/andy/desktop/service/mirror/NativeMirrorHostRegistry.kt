@@ -1,9 +1,11 @@
 package app.andy.desktop.service.mirror
 
 import java.awt.Canvas
+import java.awt.Window
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import javax.swing.SwingUtilities
 
 /**
  * Realized heavyweight Live/pop-out canvases that can host the in-process Metal presenter.
@@ -15,26 +17,55 @@ import java.util.concurrent.CopyOnWriteArrayList
 internal object NativeMirrorHostRegistry {
     private val hosts = CopyOnWriteArrayList<Canvas>()
     private val metalHosts = Collections.newSetFromMap(ConcurrentHashMap<Canvas, Boolean>())
+    private val fillHostMetalHosts = Collections.newSetFromMap(ConcurrentHashMap<Canvas, Boolean>())
+    @Volatile private var presentationOwner: Canvas? = null
 
     fun register(candidate: Canvas) {
         if (!hosts.contains(candidate)) {
             hosts.add(candidate)
         }
-        // Only Metal hosts should rebind the shared presenter. CPU-only canvases must not steal
-        // the overlay from an active GPU mirror (e.g. iOS pop-out while Android CPU pop-out opens).
-        if (NativeMirrorJni.isMetalInlineOverlayOpen() && candidate in metalHosts) {
-            NativeMirrorJni.setInlineOverlayVisible(true)
-            NativeMirrorJni.updateMetalLayerGeometry(candidate)
-            NativeMirrorJni.repaintLatestFrame()
+        if (presentationOwner === candidate || shouldRebindOnRegister(candidate)) {
+            rebindPresentation(candidate)
         }
     }
 
     fun unregister(candidate: Canvas) {
+        val closedWindow = SwingUtilities.getWindowAncestor(candidate)
         hosts.remove(candidate)
         metalHosts.remove(candidate)
+        fillHostMetalHosts.remove(candidate)
+        if (presentationOwner === candidate) {
+            presentationOwner = null
+            promoteFallbackExcluding(closedWindow)
+        }
     }
 
-    fun current(): Canvas? = hosts.lastOrNull { it.isDisplayable }
+    /** Moves the shared Metal presenter to [window]'s mirror host (pop-out). */
+    fun promoteWindow(window: Window) {
+        hostInWindow(window)?.let(::promote)
+    }
+
+    /** Returns presentation to the main Live host when a pop-out [window] closes. */
+    fun relinquishWindow(window: Window) {
+        if (presentationOwner != null && SwingUtilities.getWindowAncestor(presentationOwner) == window) {
+            presentationOwner = null
+            promoteFallbackExcluding(window)
+        }
+    }
+
+    fun promote(candidate: Canvas) {
+        presentationOwner = candidate
+        rebindPresentation(candidate)
+    }
+
+    fun current(): Canvas? =
+        presentationOwner?.takeIf { it.isDisplayable }
+            ?: fallbackHost()
+
+    fun hostInWindow(window: Window): Canvas? =
+        hosts.lastOrNull { canvas ->
+            canvas.isDisplayable && SwingUtilities.getWindowAncestor(canvas) == window
+        }
 
     /** Test-only snapshot of registered hosts for presentation regression tests. */
     internal fun registeredHostsForTests(): List<Canvas> = hosts.toList()
@@ -42,11 +73,46 @@ internal object NativeMirrorHostRegistry {
     fun otherDisplayable(excluding: Canvas): Canvas? =
         hosts.lastOrNull { it !== excluding && it.isDisplayable }
 
-    fun markHostsMetalPresentation(canvas: Canvas, hostsMetal: Boolean) {
+    fun markHostsMetalPresentation(canvas: Canvas, hostsMetal: Boolean, fillHost: Boolean = false) {
         if (hostsMetal) {
             metalHosts.add(canvas)
+            if (fillHost) {
+                fillHostMetalHosts.add(canvas)
+            } else {
+                fillHostMetalHosts.remove(canvas)
+            }
         } else {
             metalHosts.remove(canvas)
+            fillHostMetalHosts.remove(canvas)
         }
+    }
+
+    fun fillsHost(canvas: Canvas): Boolean = canvas in fillHostMetalHosts
+
+    fun clearPopOutPresentation() {
+        presentationOwner = null
+        NativeMirrorJni.setInlineOverlayVisible(false)
+        fallbackHost()?.let(::rebindPresentation)
+    }
+
+    private fun fallbackHost(): Canvas? = hosts.lastOrNull { it.isDisplayable }
+
+    private fun promoteFallbackExcluding(excludeWindow: Window?) {
+        hosts.firstOrNull { canvas ->
+            canvas.isDisplayable && SwingUtilities.getWindowAncestor(canvas) != excludeWindow
+        }?.let(::promote)
+            ?: fallbackHost()?.let(::rebindPresentation)
+    }
+
+    private fun shouldRebindOnRegister(candidate: Canvas): Boolean =
+        NativeMirrorJni.isMetalInlineOverlayOpen() &&
+            candidate in metalHosts &&
+            presentationOwner == null
+
+    private fun rebindPresentation(candidate: Canvas) {
+        if (!NativeMirrorJni.isMetalInlineOverlayOpen() || candidate !in metalHosts) return
+        NativeMirrorJni.setInlineOverlayVisible(true)
+        NativeMirrorJni.updateMetalLayerGeometry(candidate)
+        NativeMirrorJni.repaintLatestFrame()
     }
 }

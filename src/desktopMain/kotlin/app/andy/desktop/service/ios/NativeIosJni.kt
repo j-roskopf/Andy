@@ -37,9 +37,12 @@ internal object NativeIosSimJni {
         if (ensureLoaded().isSuccess) runCatching { nativeContentSizePoints() }.getOrNull() ?: intArrayOf(390, 844)
         else intArrayOf(390, 844)
 
-    fun sendTouch(action: Int, nx: Float, ny: Float) {
-        if (ensureLoaded().isSuccess) runCatching { nativeSendTouch(action, nx, ny) }
-    }
+    /** Best-effort HID handshake after connect; safe to call when Simulator.app is still starting. */
+    fun ensureInputReady(): Boolean =
+        ensureLoaded().isSuccess && runCatching { nativeEnsureInputReady() }.getOrDefault(false)
+
+    fun sendTouch(action: Int, nx: Float, ny: Float): Boolean =
+        ensureLoaded().isSuccess && runCatching { nativeSendTouch(action, nx, ny) }.getOrDefault(false)
 
     fun sendSwipe(startX: Float, startY: Float, endX: Float, endY: Float, steps: Int) {
         if (ensureLoaded().isSuccess) runCatching { nativeSendSwipe(startX, startY, endX, endY, steps) }
@@ -58,7 +61,8 @@ internal object NativeIosSimJni {
     private external fun nativeConnect(udid: String): IntArray
     private external fun nativeDisconnect()
     private external fun nativeContentSizePoints(): IntArray
-    private external fun nativeSendTouch(action: Int, nx: Float, ny: Float)
+    private external fun nativeEnsureInputReady(): Boolean
+    private external fun nativeSendTouch(action: Int, nx: Float, ny: Float): Boolean
     private external fun nativeSendSwipe(startX: Float, startY: Float, endX: Float, endY: Float, steps: Int)
     private external fun nativeSendText(value: String)
     private external fun nativeSendButton(button: Int)

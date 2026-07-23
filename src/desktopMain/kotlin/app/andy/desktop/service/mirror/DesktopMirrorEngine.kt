@@ -222,6 +222,18 @@ class DesktopMirrorEngine(
     private fun publishEncodedVideo(unit: EncodedVideoAccessUnit) {
         encodedVideoFlow.tryEmit(unit)
     }
+
+    private fun activeGpuPipeline(): GpuMirrorPipeline? =
+        connectedSerial?.let(GpuMirrorSessions::get)
+
+    /** Serial this engine currently holds a GPU pipeline reference for; null when unheld. */
+    private var gpuPipelineKey: String? = null
+
+    /** Idempotent: drops this engine's single pipeline reference (fallback + teardown may both call). */
+    private fun releaseGpuPipeline() {
+        gpuPipelineKey?.let(GpuMirrorSessions::release)
+        gpuPipelineKey = null
+    }
     private var videoJob: Job? = null
     private var videoProcess: Process? = null
     private var controlSocket: Socket? = null
@@ -246,6 +258,7 @@ class DesktopMirrorEngine(
             // Same config, or warm handoff from another live destination — keep scrcpy running.
             if (connectedConfig == config || handingOff) {
                 rebindPresentationHost(config)
+                activeGpuPipeline()?.repaintAll()
                 return CommandResult.success("Embedded mirror already connected for $serial")
             }
             // Explicit quality/preset change while the session is held — restart.
@@ -258,17 +271,28 @@ class DesktopMirrorEngine(
         connectedConfig = config
         connectedAtNanos = System.nanoTime()
         lastEmulatorDisplaySizeRefreshNanos = 0L
+        if (config.rendererMode == MirrorRendererMode.Legacy) {
+            nativeHost = null
+        }
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
+        val gpuHubAvailable = config.rendererMode != MirrorRendererMode.Legacy && GpuMirrorJni.isAvailable()
+        var useGpuHub = false
+        if (gpuHubAvailable) {
+            useGpuHub = GpuMirrorSessions.acquire(serial) != null
+            if (useGpuHub) gpuPipelineKey = serial
+        }
         // SwingPanel realizes its AWT child just after the Compose tree commits. Connection is
         // also started from a LaunchedEffect, so probe briefly instead of racing that lifecycle
         // and permanently selecting the CPU path for an otherwise supported Live surface.
-        val host = if (config.rendererMode != MirrorRendererMode.Legacy && NativeMirrorJni.isEmbeddedPresentationSupported()) {
+        val host = if (!useGpuHub && config.rendererMode != MirrorRendererMode.Legacy &&
+            NativeMirrorJni.isEmbeddedPresentationSupported()
+        ) {
             awaitNativeHost()
         } else {
             null
         }
-        val nativeAvailable = host != null
+        val nativeAvailable = useGpuHub || host != null
         val unavailableReason by lazy { acceleratedUnavailableReason() }
         if (config.rendererMode == MirrorRendererMode.Accelerated && !nativeAvailable) {
             val reason = unavailableReason
@@ -282,7 +306,10 @@ class DesktopMirrorEngine(
             return CommandResult.failure(status.value)
         }
         var useNativeRenderer = config.rendererMode != MirrorRendererMode.Legacy && nativeAvailable
-        if (useNativeRenderer && host != null) {
+        if (useNativeRenderer && useGpuHub) {
+            nativeHost = null
+            NativeMirrorJni.setInlineOverlayVisible(false)
+        } else if (useNativeRenderer && host != null) {
             // Product GPU path: borderless Metal surface letterboxed over the Live Canvas.
             if (!NativeMirrorJni.openMetalInlineOverlay(host)) {
                 val reason = "VideoToolbox/Metal inline overlay initialization failed"
@@ -309,6 +336,7 @@ class DesktopMirrorEngine(
         if (!useNativeRenderer) publishLegacySession(serial, config, fallbackReason = fallbackReason)
         val scrcpyServer = ScrcpyServerLocator.find()
             ?: run {
+                releaseGpuPipeline()
                 NativeMirrorJni.destroyPresentation()
                 nativeHost = null
                 return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
@@ -322,10 +350,19 @@ class DesktopMirrorEngine(
             }
             var coldStartAttempt = 0
             while (isActive && connectedSerial == serial) {
-                val framesPresentedBefore = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
+                val gpuPipeline = activeGpuPipeline()
+                val framesPresentedBefore = if (useNativeRenderer) {
+                    gpuPipeline?.framesPresented() ?: NativeMirrorJni.framesPresented()
+                } else {
+                    frames.value.frameNumber
+                }
                 runNativeVideoLoop(adb, serial, scrcpyServer, config)
                 if (!isActive || connectedSerial != serial) break
-                val framesPresentedAfter = if (useNativeRenderer) NativeMirrorJni.framesPresented() else frames.value.frameNumber
+                val framesPresentedAfter = if (useNativeRenderer) {
+                    activeGpuPipeline()?.framesPresented() ?: NativeMirrorJni.framesPresented()
+                } else {
+                    frames.value.frameNumber
+                }
                 val presentedDuringLoop = framesPresentedAfter - framesPresentedBefore
                 if (presentedDuringLoop <= 0L) {
                     coldStartAttempt++
@@ -358,7 +395,9 @@ class DesktopMirrorEngine(
         // Compose Desktop may retain a SwingPanel's native peer briefly after its screen leaves
         // composition. The Metal presenter is an independent AppKit surface, so hide it at the
         // session boundary rather than waiting for that peer's removeNotify callback.
-        NativeMirrorJni.setInlineOverlayVisible(false)
+        if (activeGpuPipeline() == null) {
+            NativeMirrorJni.setInlineOverlayVisible(false)
+        }
         if (connectedSerial == null && videoJob == null && session.value == null) {
             return
         }
@@ -375,7 +414,7 @@ class DesktopMirrorEngine(
     }
 
     private suspend fun rebindPresentationHost(config: MirrorVideoConfig) {
-        if (config.rendererMode == MirrorRendererMode.Legacy) return
+        if (config.rendererMode == MirrorRendererMode.Legacy || activeGpuPipeline() != null) return
         if (!NativeMirrorJni.isEmbeddedPresentationSupported()) return
         val host = awaitNativeHost() ?: return
         nativeHost = host
@@ -401,6 +440,7 @@ class DesktopMirrorEngine(
         }
         emulatorGrpcClient?.close()
         emulatorGrpcClient = null
+        releaseGpuPipeline()
         NativeMirrorJni.destroyPresentation()
         nativeHost = null
         videoProcess?.destroyForcibly()
@@ -494,7 +534,7 @@ class DesktopMirrorEngine(
                 // contended control lock would inflate the end-to-end result with host-side
                 // queuing that has not yet injected anything into Android.
                 if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
-                    NativeMirrorJni.recordInput()
+                    activeGpuPipeline()?.recordInput() ?: NativeMirrorJni.recordInput()
                 }
             }
             CommandResult.success("Input sent")
@@ -546,12 +586,13 @@ class DesktopMirrorEngine(
         val sizeChanged = active.width != frame.width || active.height != frame.height
         val fpsChanged =
             displayedFps != active.stats.displayedFps || decodedFps != active.stats.decodedFps
-        if (!sizeChanged && !fpsChanged) return
+        val framesPresented = frame.frameNumber.coerceAtLeast(active.stats.framesPresented)
+        if (!sizeChanged && !fpsChanged && framesPresented == active.stats.framesPresented) return
         session.value = active.copy(
             stats = active.stats.copy(
                 displayedFps = displayedFps,
                 decodedFps = decodedFps,
-                framesPresented = frame.frameNumber.coerceAtLeast(active.stats.framesPresented),
+                framesPresented = framesPresented,
             ),
             width = frame.width,
             height = frame.height,
@@ -564,8 +605,10 @@ class DesktopMirrorEngine(
     }
 
     private fun acceleratedUnavailableReason(): String = when {
-        !NativeMirrorJni.isEmbeddedPresentationSupported() -> NativeMirrorJni.embeddedPresentationFailureReason()
-        !NativeMirrorJni.isAvailable() -> "This desktop platform has no packaged VideoToolbox/Metal native mirror bridge"
+        !GpuMirrorJni.isAvailable() && !NativeMirrorJni.isEmbeddedPresentationSupported() ->
+            NativeMirrorJni.embeddedPresentationFailureReason()
+        !GpuMirrorJni.isAvailable() && !NativeMirrorJni.isAvailable() ->
+            "This desktop platform has no packaged VideoToolbox/Metal native mirror bridge"
         NativeMirrorHostRegistry.current() == null -> "No realized native mirror host is available"
         else -> "The native mirror backend could not initialize"
     }
@@ -771,15 +814,18 @@ class DesktopMirrorEngine(
                 controlOutput = BufferedOutputStream(controlSocket!!.getOutputStream(), 1024)
             }
             status.value = "scrcpy-server video connected (${captureSize.width}x${captureSize.height})"
-            var usingNativeRenderer = nativeHost != null && config.rendererMode != MirrorRendererMode.Legacy
+            var usingNativeRenderer =
+                config.rendererMode != MirrorRendererMode.Legacy && (nativeHost != null || activeGpuPipeline() != null)
             var nativeHardwareVerified = false
             var nativeStatsWindowStartedAt = System.nanoTime()
-            var nativeStatsWindowFrames = NativeMirrorJni.framesPresented()
+            val gpuPipeline = activeGpuPipeline()
+            var nativeStatsWindowFrames = gpuPipeline?.framesPresented() ?: NativeMirrorJni.framesPresented()
             if (usingNativeRenderer) {
                 // Metadata only: the Canvas needs source dimensions for coordinate mapping while
                 // VideoToolbox/Metal owns the actual pixels.
                 frames.value = MirrorFrame(captureSize.width, captureSize.height, IntArray(0), frameNumber = 1)
-                NativeMirrorJni.setPresentationContentSize(captureSize.width, captureSize.height)
+                gpuPipeline?.setContentSize(captureSize.width, captureSize.height)
+                    ?: NativeMirrorJni.setPresentationContentSize(captureSize.width, captureSize.height)
                 status.value = "Native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
             }
 
@@ -805,7 +851,8 @@ class DesktopMirrorEngine(
                             IntArray(0),
                             frameNumber = frames.value.frameNumber.coerceAtLeast(1),
                         )
-                        NativeMirrorJni.setPresentationContentSize(sessionFrame.width, sessionFrame.height)
+                        gpuPipeline?.setContentSize(sessionFrame.width, sessionFrame.height)
+                            ?: NativeMirrorJni.setPresentationContentSize(sessionFrame.width, sessionFrame.height)
                     }
                     // Session headers are exactly 12 bytes. Treating their height field as a
                     // payload size consumes the next H.264 access unit and desynchronizes the
@@ -831,45 +878,89 @@ class DesktopMirrorEngine(
                     ),
                 )
                 if (usingNativeRenderer) {
-                    NativeMirrorJni.recordTransportIngress()
-                    if (!NativeMirrorJni.consumeH264(payload)) {
-                        val reason = "VideoToolbox rejected the H.264 access unit"
-                        if (config.rendererMode == MirrorRendererMode.Accelerated) error(reason)
-                        usingNativeRenderer = false
-                        NativeMirrorJni.destroyPresentation()
-                        nativeHost = null
-                        publishLegacySession(
-                            serial,
-                            config,
-                            fallbackReason = "$reason; using legacy CPU presentation",
-                        )
-                        status.value = "Native mirror failed; falling back to legacy CPU presentation"
-                    } else {
-                        if (!nativeHardwareVerified && NativeMirrorJni.isHardwareReady()) {
-                            nativeHardwareVerified = true
-                            publishNativeSession(serial, config)
-                            status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
-                        }
-                        val now = System.nanoTime()
-                        val framesPresented = NativeMirrorJni.framesPresented()
-                        val elapsedNanos = now - nativeStatsWindowStartedAt
-                        if (elapsedNanos >= 1_000_000_000L) {
-                            val displayedFps = if (elapsedNanos > 0L) {
-                                (framesPresented - nativeStatsWindowFrames).coerceAtLeast(0) * 1_000_000_000f / elapsedNanos
-                            } else {
-                                0f
+                    val pipeline = activeGpuPipeline()
+                    if (pipeline != null) {
+                        pipeline.recordTransportIngress()
+                        if (!pipeline.consumeH264(payload)) {
+                            val reason = "VideoToolbox rejected the H.264 access unit"
+                            if (config.rendererMode == MirrorRendererMode.Accelerated) error(reason)
+                            usingNativeRenderer = false
+                            releaseGpuPipeline()
+                            publishLegacySession(
+                                serial,
+                                config,
+                                fallbackReason = "$reason; using legacy CPU presentation",
+                            )
+                            status.value = "Native mirror failed; falling back to legacy CPU presentation"
+                        } else {
+                            if (!nativeHardwareVerified && pipeline.isHardwareReady()) {
+                                nativeHardwareVerified = true
+                                publishNativeSession(serial, config)
+                                status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
                             }
-                            nativeStatsWindowStartedAt = now
-                            nativeStatsWindowFrames = framesPresented
-                            session.value?.let { active ->
-                                session.value = active.copy(
-                                    stats = active.stats.copy(
-                                        displayedFps = displayedFps,
-                                        decodedFps = displayedFps,
-                                        framesPresented = framesPresented,
-                                        p95InputToPresentMillis = NativeMirrorJni.p95InputToPresentMillis(),
-                                    ),
-                                )
+                            val now = System.nanoTime()
+                            val framesPresented = pipeline.framesPresented()
+                            val elapsedNanos = now - nativeStatsWindowStartedAt
+                            if (elapsedNanos >= 1_000_000_000L) {
+                                val displayedFps = if (elapsedNanos > 0L) {
+                                    (framesPresented - nativeStatsWindowFrames).coerceAtLeast(0) * 1_000_000_000f / elapsedNanos
+                                } else {
+                                    0f
+                                }
+                                nativeStatsWindowStartedAt = now
+                                nativeStatsWindowFrames = framesPresented
+                                session.value?.let { active ->
+                                    session.value = active.copy(
+                                        stats = active.stats.copy(
+                                            displayedFps = displayedFps,
+                                            decodedFps = displayedFps,
+                                            framesPresented = framesPresented,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        NativeMirrorJni.recordTransportIngress()
+                        if (!NativeMirrorJni.consumeH264(payload)) {
+                            val reason = "VideoToolbox rejected the H.264 access unit"
+                            if (config.rendererMode == MirrorRendererMode.Accelerated) error(reason)
+                            usingNativeRenderer = false
+                            NativeMirrorJni.destroyPresentation()
+                            nativeHost = null
+                            publishLegacySession(
+                                serial,
+                                config,
+                                fallbackReason = "$reason; using legacy CPU presentation",
+                            )
+                            status.value = "Native mirror failed; falling back to legacy CPU presentation"
+                        } else {
+                            if (!nativeHardwareVerified && NativeMirrorJni.isHardwareReady()) {
+                                nativeHardwareVerified = true
+                                publishNativeSession(serial, config)
+                                status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
+                            }
+                            val now = System.nanoTime()
+                            val framesPresented = NativeMirrorJni.framesPresented()
+                            val elapsedNanos = now - nativeStatsWindowStartedAt
+                            if (elapsedNanos >= 1_000_000_000L) {
+                                val displayedFps = if (elapsedNanos > 0L) {
+                                    (framesPresented - nativeStatsWindowFrames).coerceAtLeast(0) * 1_000_000_000f / elapsedNanos
+                                } else {
+                                    0f
+                                }
+                                nativeStatsWindowStartedAt = now
+                                nativeStatsWindowFrames = framesPresented
+                                session.value?.let { active ->
+                                    session.value = active.copy(
+                                        stats = active.stats.copy(
+                                            displayedFps = displayedFps,
+                                            decodedFps = displayedFps,
+                                            framesPresented = framesPresented,
+                                            p95InputToPresentMillis = NativeMirrorJni.p95InputToPresentMillis(),
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }

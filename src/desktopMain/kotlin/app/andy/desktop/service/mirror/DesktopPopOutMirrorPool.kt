@@ -8,9 +8,13 @@ import app.andy.service.MirrorEngine
 import app.andy.service.RoutingMirrorEngine
 
 /**
- * Dedicated mirror engines for device pop-out windows. The primary [RoutingMirrorEngine]
- * in [app.andy.desktop.service.createDesktopServices] owns the shared Metal presenter;
- * secondary pop-outs use CPU presentation so multiple devices can mirror at once.
+ * Dedicated mirror engines for device pop-out windows, one per popped-out device serial.
+ *
+ * Each engine drives its own [GpuMirrorPipeline] (keyed by serial in
+ * [app.andy.desktop.service.mirror.GpuMirrorSessions]), so multiple *different* devices mirror on
+ * the GPU simultaneously. A pop-out of the device already shown in the main Live pane instead
+ * reuses the shared primary [RoutingMirrorEngine] (see `Main.kt`), fanning a second presenter out
+ * of the same decoder rather than opening a second engine.
  */
 class DesktopPopOutMirrorPool(
     private val runner: CommandRunner,

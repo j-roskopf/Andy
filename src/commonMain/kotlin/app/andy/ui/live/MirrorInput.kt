@@ -42,7 +42,11 @@ internal fun rememberMirrorInputSender(
     var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
     var tapAccessibilityLookup by remember { mutableStateOf<Deferred<AccessibilityNode?>?>(null) }
     val scope = rememberCoroutineScope()
-    val channel = remember(mirror) { Channel<MirrorInput>(Channel.UNLIMITED) }
+    // A backend call can be slow or non-cancellable (SimulatorKit HID is synchronous JNI).
+    // Give every selected device its own queue so a stalled call from the previous device cannot
+    // hold up input after Android ↔ iOS switching. Disposing the old effect also drops stale
+    // gesture events instead of replaying them against the newly active routing backend.
+    val channel = remember(mirror, serial) { Channel<MirrorInput>(Channel.UNLIMITED) }
     LaunchedEffect(channel, mirror) {
         for (input in channel) {
             if (currentEnabled && currentSerial != null) {

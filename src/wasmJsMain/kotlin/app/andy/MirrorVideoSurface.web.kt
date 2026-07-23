@@ -200,6 +200,8 @@ actual fun MirrorVideoSurface(
     overlay: MirrorOverlay,
     occluded: Boolean,
     nativePresentation: Boolean,
+    nativePresentationFillHost: Boolean,
+    gpuMirrorStreamKey: Any? = null,
 ) {
     if (occluded) return
     WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)
@@ -219,6 +221,8 @@ actual fun MirrorVideoSurface(
     overlay: MirrorOverlay,
     occluded: Boolean,
     nativePresentation: Boolean,
+    nativePresentationFillHost: Boolean,
+    gpuMirrorStreamKey: Any? = null,
 ) {
     if (occluded) return
     WebMirrorHost(modifier, overlay, passThroughInput, onHoverColor, onPickerClick, onDevicePointClick, onRulerResize)

@@ -50,6 +50,60 @@ class NativeMirrorHostRegistryTest {
     }
 
     @Test
+    fun currentPrefersPresentationOwnerOverLaterHosts() {
+        SwingUtilities.invokeAndWait {
+            val live = realizedCanvas("live-owner")
+            val popOut = realizedCanvas("pop-out-later")
+            try {
+                NativeMirrorHostRegistry.register(live)
+                NativeMirrorHostRegistry.register(popOut)
+                NativeMirrorHostRegistry.promote(live)
+                assertSame(live, NativeMirrorHostRegistry.current())
+            } finally {
+                disposeCanvas(live)
+                disposeCanvas(popOut)
+            }
+        }
+    }
+
+    @Test
+    fun promoteWindowSelectsHostInsideWindow() {
+        SwingUtilities.invokeAndWait {
+            val live = realizedCanvas("live-window")
+            val popOut = realizedCanvas("pop-out-window")
+            try {
+                NativeMirrorHostRegistry.register(live)
+                NativeMirrorHostRegistry.register(popOut)
+                val popFrame = SwingUtilities.getWindowAncestor(popOut)!!
+                NativeMirrorHostRegistry.promoteWindow(popFrame)
+                assertSame(popOut, NativeMirrorHostRegistry.current())
+            } finally {
+                disposeCanvas(live)
+                disposeCanvas(popOut)
+            }
+        }
+    }
+
+    @Test
+    fun relinquishWindowReturnsPresentationToRemainingHost() {
+        SwingUtilities.invokeAndWait {
+            val live = realizedCanvas("live-relinquish")
+            val popOut = realizedCanvas("pop-out-relinquish")
+            try {
+                NativeMirrorHostRegistry.register(live)
+                NativeMirrorHostRegistry.register(popOut)
+                val popFrame = SwingUtilities.getWindowAncestor(popOut)!!
+                NativeMirrorHostRegistry.promoteWindow(popFrame)
+                NativeMirrorHostRegistry.relinquishWindow(popFrame)
+                assertSame(live, NativeMirrorHostRegistry.current())
+            } finally {
+                disposeCanvas(live)
+                disposeCanvas(popOut)
+            }
+        }
+    }
+
+    @Test
     fun unregisterRemovesHostFromActiveSelection() {
         SwingUtilities.invokeAndWait {
             val live = realizedCanvas("live")

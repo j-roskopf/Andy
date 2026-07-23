@@ -20,6 +20,8 @@ expect fun MirrorVideoSurface(
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
     nativePresentation: Boolean = true,
+    nativePresentationFillHost: Boolean = false,
+    gpuMirrorStreamKey: Any? = null,
 )
 
 @Composable
@@ -36,6 +38,8 @@ expect fun MirrorVideoSurface(
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
     nativePresentation: Boolean = true,
+    nativePresentationFillHost: Boolean = false,
+    gpuMirrorStreamKey: Any? = null,
 )
 
 data class MirrorOverlay(

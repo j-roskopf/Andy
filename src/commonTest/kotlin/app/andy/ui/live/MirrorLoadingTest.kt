@@ -61,6 +61,27 @@ class MirrorLoadingTest {
     }
 
     @Test
+    fun notLoadingWhenIosConnectSeedsPresentedStats() {
+        // DesktopIosMirrorEngine seeds framesPresented from the native counter at connect time so
+        // Live does not keep the black dimmer until the 1s stats tick.
+        assertFalse(
+            isMirrorSurfaceLoading(
+                serial = "ios-sim",
+                frame = MirrorFrame(1170, 2532, IntArray(0), frameNumber = 1),
+                session = MirrorSession(
+                    serial = "ios-sim",
+                    requestedMode = MirrorRendererMode.Accelerated,
+                    backend = MirrorBackend(MirrorBackendKind.NativeHardware, decoder = "SimulatorKit"),
+                    stats = MirrorStats(displayedFps = 1f, framesPresented = 3),
+                    width = 1170,
+                    height = 2532,
+                ),
+                mirrorStatus = "Connected to iOS target",
+            ),
+        )
+    }
+
+    @Test
     fun notLoadingWhenSessionFailed() {
         assertFalse(
             isMirrorSurfaceLoading(
@@ -73,6 +94,24 @@ class MirrorLoadingTest {
                     failureReason = "Metal unavailable",
                 ),
                 mirrorStatus = "Accelerated mirror unavailable",
+            ),
+        )
+    }
+
+    @Test
+    fun notLoadingWhenLegacyCpuFrameNumbersAdvanceWithoutComposeArgb() {
+        assertFalse(
+            isMirrorSurfaceLoading(
+                serial = "emulator-5554",
+                frame = MirrorFrame(1080, 2400, IntArray(0), frameNumber = 4),
+                session = MirrorSession(
+                    serial = "emulator-5554",
+                    requestedMode = MirrorRendererMode.Legacy,
+                    backend = MirrorBackend(MirrorBackendKind.LegacyCpu),
+                    width = 1080,
+                    height = 2400,
+                ),
+                mirrorStatus = "Connected",
             ),
         )
     }

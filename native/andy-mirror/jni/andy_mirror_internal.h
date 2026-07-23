@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "andy_mirror_hub.h"
+
 void andy_mirror_remember_latest_pixels(CVPixelBufferRef pixels);
 void andy_mirror_render_pixel_buffer(CVPixelBufferRef pixels, bool input_changed_probe,
                                      uint64_t packet_ticks, uint64_t transport_ticks,

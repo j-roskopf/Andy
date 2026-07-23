@@ -247,6 +247,7 @@ tasks.named<Copy>("desktopProcessResources") {
 
 val andyMirrorJniSources = listOf(
     layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_jni.m"),
+    layout.projectDirectory.file("native/andy-mirror/jni/andy_mirror_hub.m"),
     layout.projectDirectory.file("native/andy-mirror/jni/andy_ios_sim.m"),
     layout.projectDirectory.file("native/andy-mirror/jni/andy_ios_device.m"),
 )

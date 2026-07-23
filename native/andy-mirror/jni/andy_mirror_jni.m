@@ -96,6 +96,7 @@ static jint andy_pending_overlay_y = 0;
 static jint andy_pending_overlay_w = 1;
 static jint andy_pending_overlay_h = 1;
 static jdouble andy_pending_overlay_scale = 1.0;
+static jint andy_pending_parent_window_number = 0;
 static bool andy_overlay_geometry_scheduled = false;
 static bool andy_overlay_suppressed = false;
 
@@ -526,7 +527,8 @@ open_inline_overlay_window(void) {
 }
 
 static void
-apply_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdouble scale) {
+apply_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdouble scale,
+                           jint parent_window_number) {
     if (!andy_popout_window || !andy_inline_overlay || !renderer.layer) {
         return;
     }
@@ -546,12 +548,18 @@ apply_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdou
     const NSRect frame = NSMakeRect(awt_x, screen_height - awt_y - h, w, h);
     const CGFloat backing_scale = scale > 0.0 ? (CGFloat) scale :
         (andy_popout_window.backingScaleFactor > 0.0 ? andy_popout_window.backingScaleFactor : 1.0);
-    // The presenter is shared by the main Live Canvas and Compose's separate pop-out Window.
-    // Reparent only when that active Canvas changes its top-level window. Keeping the original
-    // parent leaves the pop-out Canvas black: the Metal surface remains above the main window.
-    NSPoint probe = NSMakePoint(NSMidX(frame), NSMidY(frame));
-    const NSInteger window_number = [NSWindow windowNumberAtPoint:probe belowWindowWithWindowNumber:0];
-    NSWindow *under = [NSApp windowWithWindowNumber:window_number];
+    // Reparent to the Canvas' owning AWT window when possible. windowNumberAtPoint often picks the
+    // main Andy window while geometry targets a Compose pop-out, which leaves a borderless phone
+    // frame floating over the desktop instead of inside the pop-out window.
+    NSWindow *under = nil;
+    if (parent_window_number > 0) {
+        under = [NSApp windowWithWindowNumber:parent_window_number];
+    }
+    if (!under) {
+        NSPoint probe = NSMakePoint(NSMidX(frame), NSMidY(frame));
+        const NSInteger window_number = [NSWindow windowNumberAtPoint:probe belowWindowWithWindowNumber:0];
+        under = [NSApp windowWithWindowNumber:window_number];
+    }
     NSWindow *parent = andy_popout_window.parentWindow;
     if (under && under != andy_popout_window && parent != under) {
         if (parent) {
@@ -596,7 +604,8 @@ set_inline_overlay_visible(bool visible) {
 }
 
 static void
-update_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdouble scale) {
+update_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdouble scale,
+                            jint parent_window_number) {
     if (!andy_popout_window || !andy_inline_overlay || !renderer.layer) {
         return;
     }
@@ -605,6 +614,7 @@ update_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdo
     andy_pending_overlay_w = width;
     andy_pending_overlay_h = height;
     andy_pending_overlay_scale = scale;
+    andy_pending_parent_window_number = parent_window_number;
     if (andy_overlay_geometry_scheduled) {
         return;
     }
@@ -616,7 +626,8 @@ update_inline_overlay_frame(jint awt_x, jint awt_y, jint width, jint height, jdo
             andy_pending_overlay_y,
             andy_pending_overlay_w,
             andy_pending_overlay_h,
-            andy_pending_overlay_scale);
+            andy_pending_overlay_scale,
+            andy_pending_parent_window_number);
     });
 }
 
@@ -1533,11 +1544,12 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeOpenMetalInlineOverla
 
 JNIEXPORT void JNICALL
 Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeUpdateMetalInlineOverlay(
-        JNIEnv *env, jclass clazz, jint x, jint y, jint width, jint height, jdouble scale) {
+        JNIEnv *env, jclass clazz, jint x, jint y, jint width, jint height, jdouble scale,
+        jint parent_window_number) {
     (void) env;
     (void) clazz;
     @autoreleasepool {
-        update_inline_overlay_frame(x, y, width, height, scale);
+        update_inline_overlay_frame(x, y, width, height, scale, parent_window_number);
     }
 }
 

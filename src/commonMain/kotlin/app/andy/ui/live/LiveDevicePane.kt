@@ -150,9 +150,15 @@ internal fun LiveDevicePane(
     onClipText: () -> Unit = {},
     onPopOut: () -> Unit = {},
     showPopOut: Boolean = true,
+    /** When true this device is shown elsewhere (Andy pop-out or external app); show a placeholder. */
+    mirroredElsewhere: Boolean = false,
+    /** When true the hand-off target is the device's own native app (Simulator.app / emulator). */
+    mirroredInExternalApp: Boolean = false,
     terminalPlacement: DockPlacement? = null,
     onTerminalToggle: ((DockPlacement) -> Unit)? = null,
     registerNativeHost: Boolean = true,
+    registerNativeHostFill: Boolean = false,
+    mirrorStreamKey: Any? = null,
     surfaceOccluded: Boolean = false,
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
@@ -252,7 +258,37 @@ internal fun LiveDevicePane(
                             // The native desktop renderer must attach before it receives its
                             // first H.264 access unit. The screenshot renderer remains fully
                             // Compose-only, so deterministic tests never need an AWT host.
-                            if (serial != null || frame != null) {
+                            if (mirroredElsewhere) {
+                                Column(
+                                    Modifier.fillMaxSize().padding(24.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Text(
+                                        if (mirroredInExternalApp) "Viewing in the device’s own app" else "Open in a pop-out window",
+                                        color = TextPrimary,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        if (mirroredInExternalApp) {
+                                            "This simulator is shown in Simulator.app. Andy isn’t mirroring it."
+                                        } else {
+                                            "This device is mirroring in its own Andy window. Close that window to view it here."
+                                        },
+                                        color = TextSecondary,
+                                        fontSize = 12.sp,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    )
+                                    if (mirroredInExternalApp) {
+                                        Spacer(Modifier.height(12.dp))
+                                        OutlinedButton(onClick = onPopOut) {
+                                            Text("Mirror in Andy again", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+                            } else if (serial != null || frame != null) {
                                 val surfaceOverlay = MirrorOverlay(
                                     highlightBounds = highlightBounds,
                                     sourceWidth = sourceWidth,
@@ -275,7 +311,7 @@ internal fun LiveDevicePane(
                                 if (frameFlow != null) {
                                     MirrorVideoSurface(
                                         frames = frameFlow,
-                                        resetKey = serial,
+                                        resetKey = mirrorStreamKey ?: serial,
                                         modifier = Modifier.fillMaxSize(),
                                         onInput = onInput,
                                         onHoverColor = onHoverColor,
@@ -286,6 +322,8 @@ internal fun LiveDevicePane(
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
                                         nativePresentation = registerNativeHost,
+                                        nativePresentationFillHost = registerNativeHostFill,
+                                        gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
                                     )
                                 } else {
                                     MirrorVideoSurface(
@@ -300,6 +338,8 @@ internal fun LiveDevicePane(
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
                                         nativePresentation = registerNativeHost,
+                                        nativePresentationFillHost = registerNativeHostFill,
+                                        gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
                                     )
                                 }
                                 if (mirrorLoading) {

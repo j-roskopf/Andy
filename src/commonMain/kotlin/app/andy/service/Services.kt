@@ -23,6 +23,8 @@ interface IosDeviceService {
     suspend fun boot(udid: String): CommandResult
     suspend fun shutdown(udid: String): CommandResult
     suspend fun openInSimulatorApp(udid: String): CommandResult
+    /** Starts Simulator.app in the background so embedded Live can inject HID. */
+    suspend fun prepareEmbeddedMirror(udid: String): CommandResult = openInSimulatorApp(udid)
     suspend fun iosSimAvailable(): Boolean
     suspend fun iosSimDiagnostic(): String
 }

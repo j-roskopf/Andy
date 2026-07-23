@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.awaitCancellation
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -79,6 +81,7 @@ fun AndyApp(
     onPopOutMirrorRequestConsumed: () -> Unit = {},
     onPopOutMirror: (String?, String?) -> Unit = { _, _ -> },
     onPopOutDevice: (String, String) -> Unit = { _, _ -> },
+    poppedOutTargetIds: Set<String> = emptySet(),
     contentTopPadding: androidx.compose.ui.unit.Dp = 18.dp,
     initialProjectTaskId: String? = null,
     initialProjectTab: String? = null,
@@ -93,6 +96,7 @@ fun AndyApp(
         onPopOutMirrorRequestConsumed = onPopOutMirrorRequestConsumed,
         onPopOutMirror = onPopOutMirror,
         onPopOutDevice = onPopOutDevice,
+        poppedOutTargetIds = poppedOutTargetIds,
         contentTopPadding = contentTopPadding,
         initialProjectTaskId = initialProjectTaskId,
         initialProjectTab = initialProjectTab,
@@ -106,6 +110,7 @@ fun AndyMirrorPopOut(
     deviceName: String? = null,
     mirror: MirrorEngine = services.mirror,
     gpuPresentation: Boolean = mirror === services.mirror,
+    mirrorHostWindow: Any? = null,
     controlsVisible: Boolean = false,
     contentTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
     tintId: String = AndyTint.Default.id,
@@ -125,10 +130,10 @@ fun AndyMirrorPopOut(
         LaunchedEffect(mirror) {
             mirror.session.collectLatest { mirrorSession = it }
         }
-        LaunchedEffect(serial, mirror, gpuPresentation, needsMetalHost) {
+        LaunchedEffect(serial, mirror, gpuPresentation, needsMetalHost, mirrorHostWindow) {
             if (serial == null) return@LaunchedEffect
             if (needsMetalHost) {
-                awaitMirrorSurfaceReady()
+                awaitMirrorSurfaceReadyInWindow(mirrorHostWindow)
             } else {
                 // CPU pop-outs only need the SwingPanel laid out; avoid waiting on Metal hosts.
                 delay(32)
@@ -141,6 +146,13 @@ fun AndyMirrorPopOut(
             }
             val result = mirror.connect(serial, config)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
+            try {
+                awaitCancellation()
+            } finally {
+                if (mirror !== services.mirror) {
+                    mirror.disconnect(immediate = true)
+                }
+            }
         }
         Box(
             Modifier
@@ -148,8 +160,9 @@ fun AndyMirrorPopOut(
                 .background(Color.Black)
                 .padding(top = chromeInset),
         ) {
-            MirrorFrameContent(mirror, serial) { frameFlow, frame ->
-                LiveDevicePane(
+            key(mirror, gpuPresentation) {
+                MirrorFrameContent(mirror, serial) { frameFlow, frame ->
+                    LiveDevicePane(
                     serial = serial,
                     device = null,
                     displayName = deviceName,
@@ -165,6 +178,8 @@ fun AndyMirrorPopOut(
                     deviceBorderWidth = if (controlsVisible) 5.dp else 0.dp,
                     deviceCornerRadius = if (controlsVisible) 10.dp else 0.dp,
                     registerNativeHost = needsMetalHost,
+                    registerNativeHostFill = needsMetalHost,
+                    mirrorStreamKey = serial,
                     onPower = { sendInput(MirrorInput.Power) },
                     onVolumeUp = { sendInput(MirrorInput.Key(24)) },
                     onVolumeDown = { sendInput(MirrorInput.Key(25)) },
@@ -190,6 +205,7 @@ fun AndyMirrorPopOut(
                         }
                     },
                 )
+                }
             }
         }
     }

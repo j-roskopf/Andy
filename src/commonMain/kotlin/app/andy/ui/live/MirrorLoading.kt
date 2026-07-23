@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.service.MirrorBackendKind
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorSession
 import app.andy.ui.theme.MonoFont
@@ -31,6 +32,10 @@ internal fun hasMirrorRendered(frame: MirrorFrame?, session: MirrorSession?): Bo
     if (!hasMirrorPresentation(frame, session)) return false
     if (session?.backend?.isHardwareBacked == true) {
         return session.stats.framesPresented > 0 || session.stats.displayedFps > 0f
+    }
+    if (session?.backend?.kind == MirrorBackendKind.LegacyCpu) {
+        // Compose mirror metadata strips ARGB from state; frame numbers still advance on CPU.
+        return (frame?.frameNumber ?: 0L) > 0L || session.stats.framesPresented > 0L
     }
     val hasCpuPixels = frame?.let { candidate ->
         candidate.width > 1 &&

@@ -80,6 +80,7 @@ internal fun AndyShell(
     onPopOutMirrorRequestConsumed: () -> Unit,
     onPopOutMirror: (String?, String?) -> Unit,
     onPopOutDevice: (String, String) -> Unit,
+    poppedOutTargetIds: Set<String> = emptySet(),
     contentTopPadding: androidx.compose.ui.unit.Dp,
     initialProjectTaskId: String?,
     initialProjectTab: String?,
@@ -241,7 +242,8 @@ internal fun AndyShell(
                     onRefresh = { state.refreshDevices() },
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
-                    showDevicePopOut = capabilities.platform != app.andy.service.AndyPlatform.Web,
+                    showDevicePopOut = capabilities.platform != app.andy.service.AndyPlatform.Web &&
+                        state.activeTargetId != null,
                     onPopOutDevice = { targetId, displayName ->
                         if (IosTargetRegistry.isIosTarget(targetId)) {
                             state.selectIosTarget(targetId)
@@ -382,6 +384,7 @@ internal fun AndyShell(
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             iosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
+                            mirroredElsewhere = state.activeTargetId != null && state.activeTargetId in poppedOutTargetIds,
                             devicePaneWidth = state.workspaceState.liveDevicePaneWidth,
                             controlsPaneHeight = state.workspaceState.liveControlsPaneHeight,
                             onStopEmulator = { state.stopEmulator(it) },

@@ -186,6 +186,8 @@ internal fun LiveScreen(
     serial: String?,
     device: AndroidDevice?,
     iosTarget: IosTarget? = null,
+    /** True when this device is currently shown in a pop-out window and should not mirror here. */
+    mirroredElsewhere: Boolean = false,
     devicePaneWidth: Float,
     controlsPaneHeight: Float,
     onStopEmulator: (AndroidDevice) -> Unit,
@@ -211,6 +213,10 @@ internal fun LiveScreen(
         isIosTarget -> iosTarget.isLiveReady
         else -> serial != null && device?.state == DeviceConnectionState.Online
     }
+    // Only iOS Simulator hands off to an external host app (Simulator.app). Android emulators
+    // and physical devices use an Andy pop-out window (emulators are launched window-hidden).
+    val mirroredInExternalApp =
+        mirroredElsewhere && iosTarget?.kind == IosTargetKind.Simulator
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
@@ -233,7 +239,11 @@ internal fun LiveScreen(
     var rendererMode by remember(acceleratedMirror) {
         mutableStateOf(if (acceleratedMirror) preferred.rendererMode else MirrorRendererMode.Legacy)
     }
-    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
+    // A surface recreated for a different target must not inherit presentation stats from the
+    // previous connection. In particular, returning to the same iOS serial after Android could
+    // reuse framesPresented > 0, hide the loading overlay, and expose a black presenter while the
+    // new SimulatorKit session was still attaching.
+    var mirrorSession by remember(serial) { mutableStateOf<MirrorSession?>(null) }
     var bugDialogVisible by remember { mutableStateOf(false) }
     var bugSaveStatus by remember { mutableStateOf("") }
     var liveActionStatus by remember { mutableStateOf("") }
@@ -386,14 +396,16 @@ internal fun LiveScreen(
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
-    LaunchedEffect(Unit) {
-        services.mirror.session.collectLatest { mirrorSession = it }
+    LaunchedEffect(services.mirror, serial) {
+        services.mirror.session.collectLatest { session ->
+            mirrorSession = session?.takeIf { it.serial == serial }
+        }
     }
-    LaunchedEffect(serial, device?.state, iosTarget?.udid, mirrorReady) {
+    LaunchedEffect(serial, device?.state, iosTarget?.udid, mirrorReady, mirroredElsewhere) {
         recordingState = LiveRecordingState.Idle
         recordingStartedAtMillis = null
         recordingElapsedMillis = 0L
-        if (mirrorReady && serial != null) {
+        if (mirrorReady && serial != null && !mirroredElsewhere) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
             if (result.isSuccess) {
@@ -415,22 +427,25 @@ internal fun LiveScreen(
                 }
             }
         } else {
-            // Still on Live but no online device — release the stream.
+            // External handoff (Simulator.app) tears the stream down. Andy pop-outs keep the Live
+            // session so a second GPU presenter can fan out from the same decoder / scrcpy.
             withContext(NonCancellable) {
                 services.bugs.stopCapture()
-                services.mirror.disconnect()
+                when {
+                    mirroredInExternalApp -> services.mirror.disconnect(immediate = true)
+                    mirroredElsewhere -> Unit
+                    else -> services.mirror.disconnect(immediate = false)
+                }
             }
         }
     }
     val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
     val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
-    val iosMirrorActive = isIosTarget &&
-        mirrorSession?.failureReason == null &&
-        mirrorSession?.serial == serial &&
-        (mirrorSession?.width ?: 0) > 1
     val iosInputEnabled = isIosTarget && when (iosTarget.kind) {
+        // Physical devices have no HID path. Sims accept input as soon as Live attaches — don't
+        // gate on frame presentation or registry Booted state (Devices → Live can race that).
         IosTargetKind.Physical -> false
-        IosTargetKind.Simulator -> iosTarget.supportsInput || iosMirrorActive
+        IosTargetKind.Simulator -> true
     }
     val showLogcat = !isIosTarget
     val showMirrorStreamControls = !isIosTarget
@@ -508,7 +523,9 @@ internal fun LiveScreen(
                 showRecord = true,
                 onClipText = { clipDialogVisible = true },
                 onPopOut = onPopOutMirror,
-                showPopOut = !isWeb,
+                showPopOut = !isWeb && !mirroredElsewhere,
+                mirroredElsewhere = mirroredElsewhere,
+                mirroredInExternalApp = mirroredInExternalApp,
                 surfaceOccluded = dialogsOpen,
                 onInput = sendMirrorInput,
                 onConnect = {

@@ -59,6 +59,7 @@ class NativeMirrorPresentationLifecycleTest {
                 assertTrue(NativeMirrorJni.openMetalInlineOverlay(live))
                 NativeMirrorJni.setPresentationContentSize(1080, 1920)
 
+                NativeMirrorHostRegistry.promote(popOut)
                 assertSame(popOut, NativeMirrorHostRegistry.current())
                 NativeMirrorJni.updateMetalLayerGeometry(popOut)
                 NativeMirrorJni.repaintLatestFrame()
@@ -91,7 +92,9 @@ class NativeMirrorPresentationLifecycleTest {
                 }
                 assertTrue(NativeMirrorJni.openMetalInlineOverlay(live))
                 NativeMirrorJni.setPresentationContentSize(720, 1280)
+                NativeMirrorHostRegistry.promote(popOut)
 
+                NativeMirrorHostRegistry.relinquishWindow(SwingUtilities.getWindowAncestor(popOut)!!)
                 NativeMirrorHostRegistry.unregister(popOut)
                 NativeMirrorJni.removeMetalLayer(popOut)
                 disposeCanvas(popOut)

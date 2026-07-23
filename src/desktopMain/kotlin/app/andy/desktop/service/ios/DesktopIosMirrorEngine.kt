@@ -1,5 +1,9 @@
 package app.andy.desktop.service.ios
 
+import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
+import app.andy.desktop.service.mirror.GpuMirrorJni
+import app.andy.desktop.service.mirror.GpuMirrorPipeline
+import app.andy.desktop.service.mirror.GpuMirrorSessions
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.model.IosTargetKind
@@ -42,8 +46,18 @@ class DesktopIosMirrorEngine(
     private var statsJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Serial this engine currently holds a GPU pipeline reference for; null when unheld. */
+    private var gpuPipelineKey: String? = null
+
+    /** Idempotent: drops this engine's single pipeline reference. */
+    private fun releaseGpuPipeline() {
+        gpuPipelineKey?.let(GpuMirrorSessions::release)
+        gpuPipelineKey = null
+    }
+
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = withContext(Dispatchers.IO) {
         if (connectedUdid == serial && session.value != null) {
+            activeGpuPipeline()?.repaintAll()
             rebindPresentation()
             return@withContext CommandResult.success("iOS mirror already connected for $serial")
         }
@@ -79,7 +93,7 @@ class DesktopIosMirrorEngine(
                 return@withContext CommandResult.failure(reason)
             }
         }
-        if (!NativeMirrorJni.isEmbeddedPresentationSupported()) {
+        if (!GpuMirrorJni.isAvailable() && !NativeMirrorJni.isEmbeddedPresentationSupported()) {
             val reason = NativeMirrorJni.embeddedPresentationFailureReason()
             session.value = MirrorSession(
                 serial = serial,
@@ -89,8 +103,12 @@ class DesktopIosMirrorEngine(
             )
             return@withContext CommandResult.failure(reason)
         }
-        val host = awaitNativeHost()
-        if (host == null) {
+        val useGpuHub = GpuMirrorJni.isAvailable() &&
+            config.rendererMode != MirrorRendererMode.Legacy &&
+            GpuMirrorSessions.acquire(serial) != null
+        if (useGpuHub) gpuPipelineKey = serial
+        val host = if (!useGpuHub) awaitNativeHost() else null
+        if (!useGpuHub && host == null) {
             val reason = "Live surface is not ready for Metal presentation"
             session.value = MirrorSession(
                 serial = serial,
@@ -99,6 +117,14 @@ class DesktopIosMirrorEngine(
                 failureReason = reason,
             )
             return@withContext CommandResult.failure(reason)
+        }
+        if (useGpuHub) {
+            // Nudge Compose to attach a presenter against this pipeline before SimulatorKit
+            // starts producing IOSurfaces (otherwise frames fan out to zero presenters).
+            frames.value = MirrorFrame(2, 2, intArrayOf(), frameNumber = nextFrameNumber++)
+            awaitGpuPresenter(serial)
+            GpuMirrorSessions.get(serial)?.bindIosCapture()
+            NativeMirrorJni.setInlineOverlayVisible(false)
         }
         status.value = "Starting iOS screen capture…"
         val size = when (target?.kind) {
@@ -110,7 +136,7 @@ class DesktopIosMirrorEngine(
                 )
                 if (captureSize == null || captureSize[0] <= 0 || captureSize[1] <= 0) {
                     null
-                } else if (!openMetalPresentation(host)) {
+                } else if (!useGpuHub && !openMetalPresentation(host!!)) {
                     disconnectIosCapture(serial)
                     null
                 } else {
@@ -120,12 +146,19 @@ class DesktopIosMirrorEngine(
             else -> {
                 if (!NativeIosSimJni.isAvailable()) {
                     val reason = NativeIosSimJni.diagnostic().ifBlank { "iOS simulator mirroring is unavailable on this Mac" }
+                    releaseGpuPipeline()
                     session.value = MirrorSession(serial, config.rendererMode, MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason), failureReason = reason)
                     return@withContext CommandResult.failure(reason)
                 }
-                if (!openMetalPresentation(host)) {
+                // Headless simctl boot can mirror without Simulator.app, but HID injection cannot.
+                // Bring Simulator.app up *before* SimDeviceIO attach — launching it afterwards
+                // races the display pipeline and leaves Live black.
+                iosDevices?.prepareEmbeddedMirror(serial)
+                if (!useGpuHub && !openMetalPresentation(host!!)) {
                     null
                 } else {
+                    // Never block connect on HID warm-up: LegacyHID handshakes used to stall
+                    // "Starting iOS screen capture…" and starve presenter attach.
                     NativeIosSimJni.connect(serial)
                 }
             }
@@ -134,7 +167,8 @@ class DesktopIosMirrorEngine(
             val reason = when (target?.kind) {
                 IosTargetKind.Physical -> NativeIosDeviceJni.diagnostic().ifBlank { "Physical device mirror failed" }
                 else -> when {
-                    !NativeMirrorJni.isMetalInlineOverlayOpen() -> "Metal inline overlay failed to open"
+                    useGpuHub && NativeIosSimJni.diagnostic().isNotBlank() -> NativeIosSimJni.diagnostic()
+                    !useGpuHub && !NativeMirrorJni.isMetalInlineOverlayOpen() -> "Metal inline overlay failed to open"
                     else -> NativeIosSimJni.diagnostic().ifBlank { "Simulator mirror failed" }
                 }
             }
@@ -142,9 +176,30 @@ class DesktopIosMirrorEngine(
             session.value = MirrorSession(serial, config.rendererMode, MirrorBackend(MirrorBackendKind.Unavailable, fallbackReason = reason), failureReason = reason)
             return@withContext CommandResult.failure(reason)
         }
-        NativeMirrorJni.setPresentationContentSize(size[0], size[1])
-        NativeMirrorJni.repaintLatestFrame()
-        frames.value = MirrorFrame(size[0], size[1], intArrayOf(), frameNumber = nextFrameNumber++)
+        val presentedBeforeSession = if (useGpuHub) {
+            val pipeline = GpuMirrorSessions.get(serial)
+            pipeline?.setContentSize(size[0], size[1])
+            // Publish size before the second wait so Compose maps touch into the real frame.
+            frames.value = MirrorFrame(size[0], size[1], intArrayOf(), frameNumber = nextFrameNumber++)
+            awaitGpuPresenter(serial)
+            pipeline?.repaintAll()
+            // Wait briefly for at least one presented frame so Live isn't left on a black host.
+            awaitPresentedFrame(serial)
+            // A device switch (e.g. Android -> iOS) recreates the Live surface while the previous
+            // device's overlay window is still closing. Re-resolve parenting/geometry now so the
+            // iOS overlay re-attaches to the real host window instead of staying black.
+            delay(120)
+            pipeline?.refreshAllGeometry()
+            pipeline?.repaintAll()
+            // Keep a fresh metadata tick so surfaces that attached mid-wait pick up content size.
+            frames.value = MirrorFrame(size[0], size[1], intArrayOf(), frameNumber = nextFrameNumber++)
+            pipeline?.framesPresented() ?: 0L
+        } else {
+            NativeMirrorJni.setPresentationContentSize(size[0], size[1])
+            NativeMirrorJni.repaintLatestFrame()
+            frames.value = MirrorFrame(size[0], size[1], intArrayOf(), frameNumber = nextFrameNumber++)
+            NativeMirrorJni.framesPresented()
+        }
         session.value = MirrorSession(
             serial = serial,
             requestedMode = config.rendererMode,
@@ -153,11 +208,23 @@ class DesktopIosMirrorEngine(
                 decoder = if (target?.kind == IosTargetKind.Physical) "CMIO" else "SimulatorKit",
                 renderer = "Metal",
             ),
+            // Seed presentation stats so Live's loading overlay clears immediately; startStats
+            // only refreshes once per second and left Metal looking black under a dimmer.
+            stats = MirrorStats(
+                displayedFps = if (presentedBeforeSession > 0L) 1f else 0f,
+                framesPresented = presentedBeforeSession,
+            ),
             width = size[0],
             height = size[1],
         )
         status.value = "Connected to iOS target $serial (${size[0]}x${size[1]})"
         startStats()
+        if (target?.kind != IosTargetKind.Physical) {
+            // HID warm-up after pixels are live — never on the connect critical path.
+            scope.launch {
+                NativeIosSimJni.ensureInputReady()
+            }
+        }
         CommandResult.success(status.value)
     }
 
@@ -188,13 +255,43 @@ class DesktopIosMirrorEngine(
         return null
     }
 
+    private suspend fun awaitGpuPresenter(serial: String): Boolean {
+        val pipeline = GpuMirrorSessions.get(serial) ?: return false
+        if (GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).isNotEmpty()) return true
+        val deadline = System.nanoTime() + NATIVE_HOST_WAIT_NANOS
+        while (System.nanoTime() < deadline) {
+            delay(NATIVE_HOST_WAIT_STEP_MILLIS)
+            if (GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).isNotEmpty()) return true
+        }
+        return GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).isNotEmpty()
+    }
+
+    private suspend fun awaitPresentedFrame(serial: String): Boolean {
+        val pipeline = GpuMirrorSessions.get(serial) ?: return false
+        if (pipeline.framesPresented() > 0L) return true
+        val deadline = System.nanoTime() + 3_000_000_000L
+        while (System.nanoTime() < deadline) {
+            pipeline.repaintAll()
+            delay(50)
+            if (pipeline.framesPresented() > 0L) return true
+        }
+        return pipeline.framesPresented() > 0L
+    }
+
     private fun disconnectIosCapture(serial: String) {
         when (IosTargetRegistry.target(serial)?.kind) {
             IosTargetKind.Physical -> NativeIosDeviceJni.disconnect()
             else -> NativeIosSimJni.disconnect()
         }
-        NativeMirrorJni.destroyPresentation()
+        // On the GPU hub path the legacy singleton overlay was never opened for this device;
+        // only tear it down on the legacy path so a coexisting non-GPU surface is left intact.
+        val wasGpu = gpuPipelineKey != null
+        releaseGpuPipeline()
+        if (!wasGpu) NativeMirrorJni.destroyPresentation()
     }
+
+    private fun activeGpuPipeline(): GpuMirrorPipeline? =
+        connectedUdid?.let(GpuMirrorSessions::get)
 
     private fun openMetalPresentation(host: java.awt.Component): Boolean {
         if (!NativeMirrorJni.openMetalInlineOverlay(host)) return false
@@ -203,6 +300,10 @@ class DesktopIosMirrorEngine(
     }
 
     private fun rebindPresentation() {
+        activeGpuPipeline()?.let { pipeline ->
+            pipeline.repaintAll()
+            return
+        }
         val host = NativeMirrorHostRegistry.current() ?: return
         if (!NativeMirrorJni.isMetalInlineOverlayOpen()) {
             openMetalPresentation(host)
@@ -216,11 +317,11 @@ class DesktopIosMirrorEngine(
     private fun startStats() {
         statsJob?.cancel()
         statsJob = scope.launch {
-            var lastPresented = NativeMirrorJni.framesPresented()
+            var lastPresented = activeGpuPipeline()?.framesPresented() ?: NativeMirrorJni.framesPresented()
             var lastTick = System.nanoTime()
             while (isActive && connectedUdid != null) {
                 delay(1_000)
-                val presented = NativeMirrorJni.framesPresented()
+                val presented = activeGpuPipeline()?.framesPresented() ?: NativeMirrorJni.framesPresented()
                 val now = System.nanoTime()
                 val fps = ((presented - lastPresented).toFloat() * 1_000_000_000f) / (now - lastTick).coerceAtLeast(1)
                 lastPresented = presented
@@ -251,10 +352,16 @@ class DesktopIosMirrorEngine(
         }
         if (hadSession) {
             if (immediate) {
-                NativeMirrorJni.destroyPresentation()
+                val wasGpu = gpuPipelineKey != null
+                releaseGpuPipeline()
+                if (!wasGpu) NativeMirrorJni.destroyPresentation()
             } else {
                 delay(500)
-                if (connectedUdid == null) NativeMirrorJni.destroyPresentation()
+                if (connectedUdid == null) {
+                    val wasGpu = gpuPipelineKey != null
+                    releaseGpuPipeline()
+                    if (!wasGpu) NativeMirrorJni.destroyPresentation()
+                }
             }
         }
         session.value = null
@@ -268,40 +375,72 @@ class DesktopIosMirrorEngine(
         if (target.kind != IosTargetKind.Simulator) {
             return CommandResult.failure("Input is not supported for physical iOS devices")
         }
-        val mirrorWidth = session.value?.width?.takeIf { it > 0 } ?: NativeIosSimJni.contentSizePoints()[0]
-        val mirrorHeight = session.value?.height?.takeIf { it > 0 } ?: NativeIosSimJni.contentSizePoints()[1]
-        when (input) {
-            is MirrorInput.Touch -> {
-                val action = when (input.action) {
-                    MirrorTouchAction.Down -> 0
-                    MirrorTouchAction.Move -> 1
-                    MirrorTouchAction.Up -> 2
+        // Touch mapping must use the same space as MirrorPanel.mapPoint (MirrorFrame pixels).
+        // Prefer the live session frame size; fall back to the IOSurface pixel size, not points.
+        val mirrorWidth = session.value?.width?.takeIf { it > 1 }
+            ?: frames.value.width.takeIf { it > 1 }
+            ?: NativeIosSimJni.contentSizePoints()[0]
+        val mirrorHeight = session.value?.height?.takeIf { it > 1 }
+            ?: frames.value.height.takeIf { it > 1 }
+            ?: NativeIosSimJni.contentSizePoints()[1]
+        // SimulatorKit HID injection blocks on a dispatch semaphore (up to ~2s). Run it off the
+        // Compose UI dispatcher: the input channel is shared, so a stalled iOS HID call on the UI
+        // thread would freeze input for BOTH iOS and Android and stall connect's run_on_main calls.
+        return withContext(Dispatchers.IO) {
+            when (input) {
+                is MirrorInput.Touch -> {
+                    val action = when (input.action) {
+                        MirrorTouchAction.Down -> 0
+                        MirrorTouchAction.Move -> 1
+                        MirrorTouchAction.Up -> 2
+                    }
+                    val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
+                    val delivered = NativeIosSimJni.sendTouch(action, nx, ny)
+                    activeGpuPipeline()?.recordInput()
+                    if (delivered) {
+                        CommandResult.success("Sent")
+                    } else {
+                        CommandResult.failure("Simulator HID did not accept touch ${input.action.name.lowercase()}")
+                    }
                 }
-                val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
-                NativeIosSimJni.sendTouch(action, nx, ny)
+                is MirrorInput.Tap -> {
+                    val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
+                    val downDelivered = NativeIosSimJni.sendTouch(0, nx, ny)
+                    activeGpuPipeline()?.recordInput()
+                    delay(170)
+                    val upDelivered = NativeIosSimJni.sendTouch(2, nx, ny)
+                    if (downDelivered && upDelivered) {
+                        CommandResult.success("Sent")
+                    } else {
+                        CommandResult.failure("Simulator HID did not accept tap")
+                    }
+                }
+                is MirrorInput.Swipe -> {
+                    val w = mirrorWidth.coerceAtLeast(1).toFloat()
+                    val h = mirrorHeight.coerceAtLeast(1).toFloat()
+                    NativeIosSimJni.sendSwipe(
+                        input.startX / w, input.startY / h,
+                        input.endX / w, input.endY / h,
+                        (input.durationMillis / 16).coerceAtLeast(2),
+                    )
+                    CommandResult.success("Sent")
+                }
+                is MirrorInput.Text -> {
+                    NativeIosSimJni.sendText(input.value)
+                    CommandResult.success("Sent")
+                }
+                MirrorInput.Home -> {
+                    NativeIosSimJni.sendButton(0)
+                    CommandResult.success("Sent")
+                }
+                MirrorInput.Power -> {
+                    NativeIosSimJni.sendButton(1)
+                    CommandResult.success("Sent")
+                }
+                MirrorInput.Back, MirrorInput.Recents -> CommandResult.failure("No iOS equivalent")
+                is MirrorInput.Key -> CommandResult.failure("Use text input for iOS keyboard")
             }
-            is MirrorInput.Tap -> {
-                val (nx, ny) = iosNormalizedTouchCoordinates(input.x, input.y, mirrorWidth, mirrorHeight)
-                NativeIosSimJni.sendTouch(0, nx, ny)
-                delay(170)
-                NativeIosSimJni.sendTouch(2, nx, ny)
-            }
-            is MirrorInput.Swipe -> {
-                val w = mirrorWidth.coerceAtLeast(1).toFloat()
-                val h = mirrorHeight.coerceAtLeast(1).toFloat()
-                NativeIosSimJni.sendSwipe(
-                    input.startX / w, input.startY / h,
-                    input.endX / w, input.endY / h,
-                    (input.durationMillis / 16).coerceAtLeast(2),
-                )
-            }
-            is MirrorInput.Text -> NativeIosSimJni.sendText(input.value)
-            MirrorInput.Home -> NativeIosSimJni.sendButton(0)
-            MirrorInput.Power -> NativeIosSimJni.sendButton(1)
-            MirrorInput.Back, MirrorInput.Recents -> return CommandResult.failure("No iOS equivalent")
-            is MirrorInput.Key -> return CommandResult.failure("Use text input for iOS keyboard")
         }
-        return CommandResult.success("Sent")
     }
 
     override suspend fun screenshot(serial: String): ByteArray? {

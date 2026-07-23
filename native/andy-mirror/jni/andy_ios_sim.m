@@ -253,6 +253,14 @@ static void present_iosurface(IOSurfaceRef surface) {
         return;
     }
     andy_mirror_remember_latest_pixels(pixel_buffer);
+    const int64_t hub_decoder = andy_hub_ios_decoder();
+    if (hub_decoder != ANDY_HUB_INVALID_ID) {
+        const bool probe = andy_hub_latency_probe_changed(hub_decoder, pixel_buffer);
+        andy_hub_render_pixel_buffer(hub_decoder, pixel_buffer, probe, 0, 0, true);
+        CVPixelBufferRelease(pixel_buffer);
+        IOSurfaceDecrementUseCount(surface);
+        return;
+    }
     const bool probe = andy_mirror_latency_probe_changed(pixel_buffer);
     andy_mirror_render_pixel_buffer(pixel_buffer, probe, 0, 0, true);
     CVPixelBufferRelease(pixel_buffer);
@@ -423,8 +431,10 @@ Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeConnect(JNIEnv *env, jcl
         andy_mirror_set_ios_source_active(true);
         start_sim_frame_pump(queue);
         schedule_boot_framebuffer_refreshes(queue);
+        // Defer HID client creation to the first input. Building it here blocks the connect on
+        // synchronous HID handshakes (each up to ~2s), which surfaced as a stuck
+        // "Starting iOS screen capture" when the simulator was slow to answer HID.
         invalidate_hid_client();
-        (void) ensure_hid_client();
     } @catch (NSException *exception) {
         append_diagnostic(sim_runtime.diagnostic, sizeof(sim_runtime.diagnostic), " Native exception during connect");
         teardown_sim_session();
@@ -474,11 +484,12 @@ static bool send_hid_message_impl(id client, void *message) {
             }
             dispatch_semaphore_signal(sem);
         });
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
-    return ok;
+    const long wait_result =
+        dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+    return wait_result == 0 && ok;
 }
 
-static bool ensure_hid_client(void) {
+static bool ensure_hid_client_once(void) {
     if (sim_hid_client) return true;
     if (!sim_runtime.sim_device_legacy_hid_client_class || !sim_runtime.hid_init_sel) return false;
     pthread_mutex_lock(&sim_session_lock);
@@ -514,6 +525,23 @@ static bool ensure_hid_client(void) {
     return true;
 }
 
+/** Retries HID attach — Simulator.app may still be coming up after a headless simctl boot. */
+static bool ensure_hid_client_ready(int attempts, useconds_t delay_us) {
+    if (sim_hid_client) return true;
+    for (int attempt = 0; attempt < attempts; attempt++) {
+        if (ensure_hid_client_once()) return true;
+        if (attempt + 1 < attempts) usleep(delay_us);
+    }
+    return false;
+}
+
+static bool ensure_hid_client(void) {
+    // A couple of quick retries so the first tap after Devices → Live still works when
+    // Simulator.app / Indigo is slightly behind screen capture. Keep this short — connect
+    // no longer waits here, but sendInput still can.
+    return ensure_hid_client_ready(3, 100000);
+}
+
 static bool send_hid_message_sync(void *message) {
     if (!message) return false;
     if (!ensure_hid_client()) return false;
@@ -521,6 +549,14 @@ static bool send_hid_message_sync(void *message) {
     const bool ok = send_hid_message_impl(sim_hid_client, message);
     if (!ok) invalidate_hid_client();
     return ok;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeEnsureInputReady(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    // Longer budget than per-tap retries: used once after connect while Simulator.app starts.
+    return ensure_hid_client_ready(12, 250000) ? JNI_TRUE : JNI_FALSE;
 }
 
 static void send_hid_message(void *message) {
@@ -592,7 +628,7 @@ static void touch_event_codes(int action, int *ns_event_type, int *edge) {
     }
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendTouch(
         JNIEnv *env, jclass clazz, jint action, jfloat nx, jfloat ny) {
     (void) env;
@@ -601,8 +637,8 @@ Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendTouch(
     int edge = 2;
     touch_event_codes(action, &ns_event_type, &edge);
     void *message = create_indigo_mouse_message(nx, ny, ns_event_type, edge);
-    if (!message) return;
-    send_hid_message(message);
+    if (!message) return JNI_FALSE;
+    return send_hid_message_sync(message) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
