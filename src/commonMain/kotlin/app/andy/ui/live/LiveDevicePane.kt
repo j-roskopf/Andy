@@ -65,6 +65,7 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
+import app.andy.ui.shell.LocalWindowResizing
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
@@ -164,6 +165,7 @@ internal fun LiveDevicePane(
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
+    val windowResizing = LocalWindowResizing.current
     val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.R3 else 0.dp)
     val containerModifier = if (showContainerChrome) {
         modifier
@@ -348,6 +350,9 @@ internal fun LiveDevicePane(
                                 }
                                 if (mirrorLoading) {
                                     MirrorLoadingOverlay(mirrorStatus)
+                                }
+                                if (windowResizing) {
+                                    MirrorLoadingOverlay("Resizing window…")
                                 }
                                 if (recordingCountdown != null) {
                                     Box(

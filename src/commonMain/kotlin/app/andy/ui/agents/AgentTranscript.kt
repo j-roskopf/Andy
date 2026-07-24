@@ -1,5 +1,13 @@
+@file:Suppress("DEPRECATION")
+
 package app.andy.ui.agents
 
+/**
+ * Legacy structured-event transcript UI.
+ *
+ * The embedded-terminal redesign replaces this with [AgentTerminalSurface];
+ * the PTY buffer is the transcript. Kept for unit tests and gradual removal.
+ */
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing

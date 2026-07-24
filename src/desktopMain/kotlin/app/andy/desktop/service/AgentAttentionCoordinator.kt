@@ -29,15 +29,15 @@ class DesktopAgentAttentionCoordinator(
         tasks.forEach { task ->
             val previous = previousStatuses.put(task.id, task.status)
             val kind = when (task.status) {
-                AgentTaskStatus.Completed -> AgentAttentionKind.Completed
-                AgentTaskStatus.WaitingForInput -> AgentAttentionKind.NeedsInput
+                AgentTaskStatus.Completed -> AgentAttentionKind.Done
+                AgentTaskStatus.WaitingForInput -> AgentAttentionKind.Blocked
                 AgentTaskStatus.Failed -> AgentAttentionKind.Failed
                 else -> null
             }
             // A task that first appears already terminal is not an observed status
             // transition. This also keeps restored/imported tasks quiet.
             if (previous == null || previous == task.status || kind == null ||
-                (kind == AgentAttentionKind.Completed && task.queuedFollowUps.isNotEmpty())
+                (kind == AgentAttentionKind.Done && task.queuedFollowUps.isNotEmpty())
             ) return@forEach
             val prefs = workspace()
             if (prefs.agentNotificationTiming == AgentNotificationTiming.BackgroundOnly && isForeground()) return@forEach

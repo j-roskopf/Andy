@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentEvent
+import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -30,6 +31,31 @@ class AgentLaunchEnvironmentTest {
         assertNull(env["NODE_OPTIONS"])
         assertNull(env["VSCODE_INSPECTOR_OPTIONS"])
         assertNull(env["ELECTRON_RUN_AS_NODE"])
+    }
+
+    @Test
+    fun scrubAfterMergeRemovesIdeVarsThatPutAllCannotDrop() {
+        // Reproduces the JediTermBackend bug: System.getenv() + putAll(scrubbed) left
+        // NODE_OPTIONS in place because scrubbed maps omit keys instead of nulling them.
+        val processEnv = mutableMapOf(
+            "PATH" to "/usr/bin",
+            "NODE_OPTIONS" to "--require /Applications/Cursor.app/bootloader.js",
+            "VSCODE_INSPECTOR_OPTIONS" to "autoAttachMode=always",
+            "HOME" to "/Users/test",
+        )
+        val scrubbed = processEnv.toMutableMap().also { scrubInheritedTerminalEnvironment(it) }
+        assertFalse(scrubbed.containsKey("NODE_OPTIONS"))
+
+        val buggy = HashMap(processEnv).apply { putAll(scrubbed) }
+        assertEquals("--require /Applications/Cursor.app/bootloader.js", buggy["NODE_OPTIONS"])
+
+        val fixed = HashMap(processEnv).apply {
+            putAll(scrubbed)
+            scrubInheritedTerminalEnvironment(this)
+        }
+        assertNull(fixed["NODE_OPTIONS"])
+        assertNull(fixed["VSCODE_INSPECTOR_OPTIONS"])
+        assertEquals("/usr/bin", fixed["PATH"])
     }
 
     @Test

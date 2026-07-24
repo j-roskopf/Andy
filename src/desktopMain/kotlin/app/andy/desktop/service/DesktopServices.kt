@@ -20,6 +20,7 @@ import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.model.AgentKind
+import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
 import app.andy.service.AndyServices
 import app.andy.service.PlatformCapabilities
@@ -52,7 +53,10 @@ fun createDesktopRuntime(): DesktopRuntime {
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val actionConfig = DesktopActionConfigStore()
-    val actionRuns = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val actionRuns = DesktopActionRunService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        terminalAppearance = { store.state.value.toTerminalAppearance() },
+    )
 
     val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
     val intents = DesktopIntentService(runner, devices)

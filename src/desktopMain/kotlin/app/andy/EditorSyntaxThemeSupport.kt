@@ -7,14 +7,7 @@ import org.fife.ui.rsyntaxtextarea.Style
 import org.fife.ui.rsyntaxtextarea.Theme
 import org.fife.ui.rsyntaxtextarea.TokenTypes
 import org.fife.ui.rtextarea.RTextScrollPane
-import java.awt.Dimension
 import java.awt.Font
-import java.awt.Graphics
-import java.awt.Rectangle
-import javax.swing.JButton
-import javax.swing.JComponent
-import javax.swing.JScrollBar
-import javax.swing.plaf.basic.BasicScrollBarUI
 
 internal fun editorPanelBackground(syntaxThemeId: String): Color = when (EditorSyntaxTheme.fromId(syntaxThemeId)) {
     EditorSyntaxTheme.Andy, EditorSyntaxTheme.Dark, EditorSyntaxTheme.Monokai, EditorSyntaxTheme.Druid -> Color(0xFF11100D)
@@ -68,8 +61,8 @@ private fun applyAndyEditorTheme(editor: RSyntaxTextArea, scrollPane: RTextScrol
         pane.gutter.foldIndicatorForeground = AndySecondaryText
         pane.gutter.foldIndicatorArmedForeground = AndyRust
         pane.gutter.foldBackground = AndyGutterBackground
-        pane.verticalScrollBar.applyEditorScrollTheme(AndyEditorBackground)
-        pane.horizontalScrollBar.applyEditorScrollTheme(AndyEditorBackground)
+        pane.verticalScrollBar.applyAndyScrollTheme(AndyEditorBackground)
+        pane.horizontalScrollBar.applyAndyScrollTheme(AndyEditorBackground)
     }
 }
 
@@ -87,8 +80,8 @@ private fun applyBundledEditorTheme(
         pane.viewport.background = editor.background
         pane.gutter.background = editor.background
         pane.gutter.foldBackground = editor.background
-        pane.verticalScrollBar.applyEditorScrollTheme(editor.background)
-        pane.horizontalScrollBar.applyEditorScrollTheme(editor.background)
+        pane.verticalScrollBar.applyAndyScrollTheme(editor.background)
+        pane.horizontalScrollBar.applyAndyScrollTheme(editor.background)
     }
 }
 
@@ -119,50 +112,4 @@ private fun andySyntaxScheme(editor: RSyntaxTextArea): org.fife.ui.rsyntaxtextar
     style(TokenTypes.MARKUP_TAG_ATTRIBUTE, AndyCyan)
     style(TokenTypes.MARKUP_TAG_ATTRIBUTE_VALUE, AndyGreen)
     return scheme
-}
-
-internal fun JScrollBar.applyEditorScrollTheme(track: java.awt.Color) {
-    unitIncrement = 16
-    blockIncrement = 96
-    preferredSize = if (orientation == JScrollBar.VERTICAL) Dimension(12, 0) else Dimension(0, 12)
-    background = track
-    ui = EditorScrollBarUi(track)
-}
-
-private class EditorScrollBarUi(
-    private val track: java.awt.Color,
-) : BasicScrollBarUI() {
-    private val thumb = java.awt.Color(0x514D44)
-    private val thumbHover = java.awt.Color(0x8D6746)
-
-    override fun configureScrollBarColors() {
-        trackColor = track
-        thumbColor = thumb
-    }
-
-    override fun createDecreaseButton(orientation: Int): JButton = invisibleButton()
-
-    override fun createIncreaseButton(orientation: Int): JButton = invisibleButton()
-
-    override fun paintTrack(g: Graphics, c: JComponent, trackBounds: Rectangle) {
-        g.color = track
-        g.fillRect(trackBounds.x, trackBounds.y, trackBounds.width, trackBounds.height)
-    }
-
-    override fun paintThumb(g: Graphics, c: JComponent, thumbBounds: Rectangle) {
-        if (thumbBounds.isEmpty || !scrollbar.isEnabled) return
-        val g2 = g.create() as java.awt.Graphics2D
-        g2.color = if (isThumbRollover) thumbHover else thumb
-        g2.fillRoundRect(thumbBounds.x + 2, thumbBounds.y + 2, thumbBounds.width - 4, thumbBounds.height - 4, 8, 8)
-        g2.dispose()
-    }
-
-    private fun invisibleButton(): JButton = JButton().apply {
-        preferredSize = Dimension(0, 0)
-        minimumSize = Dimension(0, 0)
-        maximumSize = Dimension(0, 0)
-        isOpaque = false
-        isBorderPainted = false
-        isFocusable = false
-    }
 }

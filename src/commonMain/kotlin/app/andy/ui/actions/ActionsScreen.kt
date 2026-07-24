@@ -99,6 +99,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ProjectActivityIndicator
+import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.shell.RetainedDestination
@@ -287,16 +288,14 @@ private fun ProjectCockpit(
     val selectedProjectTask = project?.let { item ->
         agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
     }
-    // Open chats stay read — including when a live run finishes while you're watching.
+    // Open chats stay read — including while a live run is on screen.
     // Only while Projects is the active destination: RetainedDestination keeps this
     // screen composed off-page, and clearing unread there would hide the badge.
-    LaunchedEffect(active, selectedProjectTask?.id, selectedProjectTask?.status, canvas) {
+    LaunchedEffect(active, selectedProjectTask?.id, canvas) {
         if (!active) return@LaunchedEffect
         val task = selectedProjectTask ?: return@LaunchedEffect
         if (canvas != ProjectCanvas.Chat) return@LaunchedEffect
-        if (task.unread && !task.isActive) {
-            services.agentRuns.markRead(task.id)
-        }
+        services.agentRuns.markRead(task.id)
     }
     LaunchedEffect(loadedProjectWorkflow?.tasks, selectedWorkflowTaskId) {
         if (selectedWorkflowTaskId != null && loadedProjectWorkflow != null && loadedProjectWorkflow.tasks.none { it.id == selectedWorkflowTaskId }) {
@@ -306,15 +305,12 @@ private fun ProjectCockpit(
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val railWidth = 264.dp
-        val minimumChatWidth = 520.dp
-        val baseWorkspaceWidth = railWidth + minimumChatWidth + 12.dp
+        val chatMinWidth = if (docks.right != null) 280.dp else 520.dp
         val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
         val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
 
         Column(
-            Modifier
-                .width(maxOf(maxWidth, baseWorkspaceWidth))
-                .fillMaxHeight(),
+            Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -326,9 +322,13 @@ private fun ProjectCockpit(
                     TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Find a project", color = TextSecondary, fontFamily = MonoFont) })
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
                         items(projects, key = { it.id }) { item ->
-                            val sessions = agentTasks.filter { it.projectId == item.id && !it.archived }
+                            val sessions = agentTasks.filter {
+                                it.projectId == item.id && !it.archived && it.workflowTaskId == null
+                            }
                                 .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
-                            val archivedSessions = agentTasks.filter { it.projectId == item.id && it.archived }
+                            val archivedSessions = agentTasks.filter {
+                                it.projectId == item.id && it.archived && it.workflowTaskId == null
+                            }
                                 .sortedByDescending { it.createdAtMillis }
                             val viewingArchived = viewingArchivedForProjectId == item.id
                             val sessionsCollapsed = item.id in collapsedProjectIds
@@ -349,6 +349,7 @@ private fun ProjectCockpit(
                                 showMore = !sessionsCollapsed && !viewingArchived &&
                                     sessions.size > RecentSessionsPerProject &&
                                     expandedProjectSessionsId != item.id,
+                                sessionStatus = { taskId -> services.agentRuns.sessionStatus(taskId) },
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
                                         collapsedProjectIds = if (sessionsCollapsed) {
@@ -369,7 +370,7 @@ private fun ProjectCockpit(
                                     selectedProjectId = item.id
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
-                                    if (task.unread) services.agentRuns.markRead(task.id)
+                                    services.agentRuns.markRead(task.id)
                                 },
                                 onMarkSessionUnread = { task -> services.agentRuns.markUnread(task.id) },
                                 onArchiveSession = { task ->
@@ -399,7 +400,7 @@ private fun ProjectCockpit(
                 if (current == null) {
                     EmptyState("Create a project to start", Modifier.weight(1f).fillMaxHeight())
                 } else {
-                    Column(Modifier.widthIn(min = minimumChatWidth).weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.widthIn(min = chatMinWidth).weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
@@ -720,6 +721,7 @@ private fun ProjectSessionGroup(
     viewingArchived: Boolean,
     archivedCount: Int,
     showMore: Boolean,
+    sessionStatus: (String) -> kotlinx.coroutines.flow.StateFlow<app.andy.model.AgentSessionStatus?>,
     onToggleProject: () -> Unit,
     onOpenSession: (AgentTask) -> Unit,
     onMarkSessionUnread: (AgentTask) -> Unit,
@@ -789,8 +791,10 @@ private fun ProjectSessionGroup(
                     )
                 }
                 sessions.forEach { task ->
+                    val status by sessionStatus(task.id).collectAsState()
                     ProjectSessionRow(
                         task = task,
+                        sessionStatus = status,
                         selected = task.id == selectedSessionId,
                         onOpen = { onOpenSession(task) },
                         onMarkUnread = { onMarkSessionUnread(task) },
@@ -826,6 +830,7 @@ private fun ProjectSessionGroup(
 @Composable
 private fun ProjectSessionRow(
     task: AgentTask,
+    sessionStatus: app.andy.model.AgentSessionStatus?,
     selected: Boolean,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
@@ -861,7 +866,7 @@ private fun ProjectSessionRow(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
-                    task.isActive -> ProjectActivityIndicator(9.dp)
+                    isSessionWorking(task.isActive, sessionStatus) -> ProjectActivityIndicator(9.dp)
                     task.unread -> UnreadDot()
                 }
             }

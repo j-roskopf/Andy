@@ -47,6 +47,7 @@ import app.andy.domain.parseBounds
 import app.andy.model.AccessibilityNode
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
+import app.andy.service.MirrorSession
 import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
@@ -79,6 +80,7 @@ internal fun AccessibilityScreen(
     val scope = rememberCoroutineScope()
     var localTreePaneWidth by remember(treePaneWidth) { mutableStateOf(treePaneWidth.coerceIn(420f, 1400f)) }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
+    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var connectResult by remember { mutableStateOf("") }
     val sendMirrorInput = rememberMirrorInputSender(services, serial, enabled = !state.interactionMode)
     val flattenedNodes = remember(state.root, state.collapsedNodes.toMap(), state.interestingOnly) {
@@ -137,6 +139,11 @@ internal fun AccessibilityScreen(
 
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
+    }
+    LaunchedEffect(services.mirror, serial) {
+        services.mirror.session.collectLatest { session ->
+            mirrorSession = session?.takeIf { it.serial == serial }
+        }
     }
 
     LaunchedEffect(serial) {
@@ -213,6 +220,7 @@ internal fun AccessibilityScreen(
                     frame = frame,
                     frameFlow = frameFlow,
                     mirrorStatus = mirrorStatus,
+                    mirrorSession = mirrorSession,
                     connectResult = connectResult,
                     modifier = Modifier.fillMaxSize().padding(start = 6.dp),
                     highlightBounds = state.hoveredBounds,

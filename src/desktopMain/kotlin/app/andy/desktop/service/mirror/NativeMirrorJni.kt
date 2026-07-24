@@ -1,6 +1,7 @@
 package app.andy.desktop.service.mirror
 
 import app.andy.service.MirrorFrame
+import app.andy.desktop.MirrorPresentationGuard
 import app.andy.desktop.nsWindowNumber
 import java.awt.Canvas
 import java.awt.Component
@@ -122,6 +123,7 @@ internal object NativeMirrorJni {
      * pushing each one synchronously into AppKit freezes the Live UI.
      */
     fun updateMetalLayerGeometry(component: Component) {
+        if (MirrorPresentationGuard.suppressingGeometry) return
         if (!loadResult.isSuccess || !component.isDisplayable || !metalInlineOverlayOpen) return
         // The overlay is shared across Live + pop-out hosts. Only the active host may position it;
         // otherwise the main window keeps stealing Metal back and pop-outs stay black.

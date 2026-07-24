@@ -9,6 +9,10 @@ import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
 import app.andy.model.FilesTab
 import app.andy.model.PerformanceTab
+import app.andy.model.TerminalColorPaletteKind
+import app.andy.model.TerminalFontFamily
+import app.andy.model.TerminalThemePreset
+import app.andy.model.normalizeTerminalHex
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.service.WorkspaceStore
@@ -45,6 +49,53 @@ class DesktopWorkspaceStore(
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
+            terminalThemeId = props.getProperty("terminalThemeId")?.takeIf { it.isNotBlank() }
+                ?: TerminalThemePreset.Andy.id,
+            terminalForegroundHex = normalizeTerminalHex(
+                props.getProperty("terminalForegroundHex").orEmpty(),
+                TerminalThemePreset.Andy.foregroundHex,
+            ),
+            terminalBackgroundHex = normalizeTerminalHex(
+                props.getProperty("terminalBackgroundHex").orEmpty(),
+                TerminalThemePreset.Andy.backgroundHex,
+            ),
+            terminalSelectionFgHex = normalizeTerminalHex(
+                props.getProperty("terminalSelectionFgHex").orEmpty(),
+                TerminalThemePreset.Andy.selectionFgHex,
+            ),
+            terminalSelectionBgHex = normalizeTerminalHex(
+                props.getProperty("terminalSelectionBgHex").orEmpty(),
+                TerminalThemePreset.Andy.selectionBgHex,
+            ),
+            terminalFoundFgHex = normalizeTerminalHex(
+                props.getProperty("terminalFoundFgHex").orEmpty(),
+                TerminalThemePreset.Andy.foundFgHex,
+            ),
+            terminalFoundBgHex = normalizeTerminalHex(
+                props.getProperty("terminalFoundBgHex").orEmpty(),
+                TerminalThemePreset.Andy.foundBgHex,
+            ),
+            terminalHyperlinkFgHex = normalizeTerminalHex(
+                props.getProperty("terminalHyperlinkFgHex").orEmpty(),
+                TerminalThemePreset.Andy.hyperlinkFgHex,
+            ),
+            terminalHyperlinkBgHex = normalizeTerminalHex(
+                props.getProperty("terminalHyperlinkBgHex").orEmpty(),
+                TerminalThemePreset.Andy.hyperlinkBgHex,
+            ),
+            terminalUseInverseSelection = props.getProperty("terminalUseInverseSelection")
+                ?.toBooleanStrictOrNull()
+                ?: TerminalThemePreset.Andy.useInverseSelection,
+            terminalColorPaletteId = TerminalColorPaletteKind.fromId(
+                props.getProperty("terminalColorPaletteId").orEmpty(),
+            ).id,
+            terminalFontFamilyId = TerminalFontFamily.fromId(
+                props.getProperty("terminalFontFamilyId").orEmpty(),
+            ).id,
+            terminalFontSize = TerminalThemePreset.coerceFontSize(
+                props.getProperty("terminalFontSize")?.toFloatOrNull()
+                    ?: TerminalThemePreset.DefaultFontSize,
+            ),
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             workspaceStatusExpanded = props.getProperty("workspaceStatusExpanded")?.toBooleanStrictOrNull() ?: false,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
@@ -100,6 +151,19 @@ class DesktopWorkspaceStore(
             setProperty("tintId", state.tintId)
             setProperty("surfaceModeId", state.surfaceModeId)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)
+            setProperty("terminalThemeId", state.terminalThemeId)
+            setProperty("terminalForegroundHex", state.terminalForegroundHex)
+            setProperty("terminalBackgroundHex", state.terminalBackgroundHex)
+            setProperty("terminalSelectionFgHex", state.terminalSelectionFgHex)
+            setProperty("terminalSelectionBgHex", state.terminalSelectionBgHex)
+            setProperty("terminalFoundFgHex", state.terminalFoundFgHex)
+            setProperty("terminalFoundBgHex", state.terminalFoundBgHex)
+            setProperty("terminalHyperlinkFgHex", state.terminalHyperlinkFgHex)
+            setProperty("terminalHyperlinkBgHex", state.terminalHyperlinkBgHex)
+            setProperty("terminalUseInverseSelection", state.terminalUseInverseSelection.toString())
+            setProperty("terminalColorPaletteId", state.terminalColorPaletteId)
+            setProperty("terminalFontFamilyId", state.terminalFontFamilyId)
+            setProperty("terminalFontSize", state.terminalFontSize.toString())
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
             setProperty("workspaceStatusExpanded", state.workspaceStatusExpanded.toString())
             setProperty("projectsIntroductionCompleted", state.projectsIntroductionCompleted.toString())

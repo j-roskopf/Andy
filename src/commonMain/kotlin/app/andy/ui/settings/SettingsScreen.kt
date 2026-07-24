@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -57,6 +58,12 @@ import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.TerminalColorPaletteKind
+import app.andy.model.TerminalFontFamily
+import app.andy.model.TerminalThemePreset
+import app.andy.model.normalizeTerminalHex
+import app.andy.model.parseTerminalHex
+import app.andy.model.terminalHexArgb
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.McpServerService
@@ -86,7 +93,7 @@ private enum class DesktopSettingsCategory(
     val label: String,
     val subtitle: String,
 ) {
-    Appearance("Appearance", "Tint, background, and editor theme"),
+    Appearance("Appearance", "Tint, background, editor, and terminal"),
     Agents("Agents", "Transcript and notification preferences"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
@@ -97,7 +104,7 @@ private enum class WebSettingsCategory(
     val label: String,
     val subtitle: String,
 ) {
-    Appearance("Appearance", "Tint, background, and editor theme"),
+    Appearance("Appearance", "Tint, background, editor, and terminal"),
     Agents("Agents", "How tool activity appears in chats"),
     Connection("Connection", "ADB WebSocket and WebUSB"),
     Data("Data", "Browser storage and authorization"),
@@ -456,6 +463,273 @@ private fun AppearancePanel(
         EditorSyntaxThemePreview(
             syntaxThemeId = workspace.editorSyntaxThemeId,
             modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    TerminalAppearancePanel(workspace, update)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TerminalAppearancePanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val selectedPresetId = workspace.terminalThemeId
+    val selectedPalette = TerminalColorPaletteKind.fromId(workspace.terminalColorPaletteId)
+    val selectedFont = TerminalFontFamily.fromId(workspace.terminalFontFamilyId)
+    val selectedSize = TerminalThemePreset.coerceFontSize(workspace.terminalFontSize)
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Terminal",
+            description = "Colors and font for agent and project terminals. Changes apply to new sessions.",
+        )
+
+        Text("Preset", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalThemePreset.entries.forEach { preset ->
+                SettingsChoicePill(
+                    label = preset.label,
+                    selected = preset.id == selectedPresetId,
+                    contentDescription = "${preset.label} terminal theme",
+                    onClick = { update { preset.applyTo(it) } },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        TerminalColorPreviewStrip(workspace)
+
+        Spacer(Modifier.height(8.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TerminalColorHexRow(
+                label = "Foreground",
+                hex = workspace.terminalForegroundHex,
+                fallback = TerminalThemePreset.Andy.foregroundHex,
+                onCommit = { hex -> update { it.copy(terminalForegroundHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Background",
+                hex = workspace.terminalBackgroundHex,
+                fallback = TerminalThemePreset.Andy.backgroundHex,
+                onCommit = { hex -> update { it.copy(terminalBackgroundHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Selection fg",
+                hex = workspace.terminalSelectionFgHex,
+                fallback = TerminalThemePreset.Andy.selectionFgHex,
+                onCommit = { hex -> update { it.copy(terminalSelectionFgHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Selection bg",
+                hex = workspace.terminalSelectionBgHex,
+                fallback = TerminalThemePreset.Andy.selectionBgHex,
+                onCommit = { hex -> update { it.copy(terminalSelectionBgHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Find fg",
+                hex = workspace.terminalFoundFgHex,
+                fallback = TerminalThemePreset.Andy.foundFgHex,
+                onCommit = { hex -> update { it.copy(terminalFoundFgHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Find bg",
+                hex = workspace.terminalFoundBgHex,
+                fallback = TerminalThemePreset.Andy.foundBgHex,
+                onCommit = { hex -> update { it.copy(terminalFoundBgHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Hyperlink fg",
+                hex = workspace.terminalHyperlinkFgHex,
+                fallback = TerminalThemePreset.Andy.hyperlinkFgHex,
+                onCommit = { hex -> update { it.copy(terminalHyperlinkFgHex = hex, terminalThemeId = "custom") } },
+            )
+            TerminalColorHexRow(
+                label = "Hyperlink bg",
+                hex = workspace.terminalHyperlinkBgHex,
+                fallback = TerminalThemePreset.Andy.hyperlinkBgHex,
+                onCommit = { hex -> update { it.copy(terminalHyperlinkBgHex = hex, terminalThemeId = "custom") } },
+            )
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Checkbox(
+                checked = workspace.terminalUseInverseSelection,
+                onCheckedChange = { checked ->
+                    update { it.copy(terminalUseInverseSelection = checked, terminalThemeId = "custom") }
+                },
+            )
+            Text("Inverse selection colors", color = TextPrimary, fontSize = 13.sp)
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("ANSI palette", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalColorPaletteKind.entries.forEach { palette ->
+                SettingsChoicePill(
+                    label = palette.label,
+                    selected = palette == selectedPalette,
+                    contentDescription = "${palette.label} ANSI palette",
+                    onClick = {
+                        update {
+                            it.copy(
+                                terminalColorPaletteId = palette.id,
+                                terminalThemeId = "custom",
+                            )
+                        }
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Font", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalFontFamily.entries.forEach { font ->
+                SettingsChoicePill(
+                    label = font.label,
+                    selected = font == selectedFont,
+                    contentDescription = "${font.label} terminal font",
+                    onClick = { update { it.copy(terminalFontFamilyId = font.id) } },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Font size", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalThemePreset.FontSizes.forEach { size ->
+                SettingsChoicePill(
+                    label = size.toInt().toString(),
+                    selected = size == selectedSize,
+                    contentDescription = "Terminal font size ${size.toInt()}",
+                    onClick = { update { it.copy(terminalFontSize = size) } },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsChoicePill(
+    label: String,
+    selected: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
+        ),
+        modifier = Modifier
+            .background(
+                if (selected) AndyColors.OrangeSubtle else PanelSoft,
+                RoundedCornerShape(AndyRadius.R3),
+            )
+            .border(
+                1.dp,
+                if (selected) AndyColors.OrangeBorder else Border,
+                RoundedCornerShape(AndyRadius.R3),
+            )
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    }
+}
+
+@Composable
+private fun TerminalColorPreviewStrip(workspace: WorkspaceState) {
+    val fg = Color(terminalHexArgb(workspace.terminalForegroundHex))
+    val bg = Color(terminalHexArgb(workspace.terminalBackgroundHex))
+    val sel = Color(terminalHexArgb(workspace.terminalSelectionBgHex))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .clip(RoundedCornerShape(AndyRadius.R3))
+            .background(bg)
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Aa", color = fg, fontFamily = MonoFont, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Box(
+            modifier = Modifier
+                .background(sel, RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        ) {
+            Text("selection", color = Color(terminalHexArgb(workspace.terminalSelectionFgHex)), fontFamily = MonoFont, fontSize = 11.sp)
+        }
+        Text(
+            "link",
+            color = Color(terminalHexArgb(workspace.terminalHyperlinkFgHex)),
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+        )
+    }
+}
+
+@Composable
+private fun TerminalColorHexRow(
+    label: String,
+    hex: String,
+    fallback: String,
+    onCommit: (String) -> Unit,
+) {
+    val normalized = normalizeTerminalHex(hex, fallback)
+    var draft by remember(normalized) { mutableStateOf(normalized) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            label,
+            color = TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.width(96.dp),
+        )
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color(terminalHexArgb(parseTerminalHex(draft) ?: normalized)))
+                .border(1.dp, Border, RoundedCornerShape(4.dp)),
+        )
+        TextField(
+            value = draft,
+            onValueChange = { value ->
+                draft = value
+                parseTerminalHex(value)?.let(onCommit)
+            },
+            modifier = Modifier.width(120.dp),
+            textStyle = LocalTextStyle.current.copy(
+                color = TextPrimary,
+                fontSize = 12.sp,
+                fontFamily = MonoFont,
+            ),
         )
     }
 }

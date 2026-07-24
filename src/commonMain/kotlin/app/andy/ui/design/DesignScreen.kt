@@ -41,6 +41,7 @@ import app.andy.loadImageBitmap
 import app.andy.pickFiles
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.service.MirrorSession
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.FormRow
 import app.andy.ui.components.OutlinedButton
@@ -78,6 +79,7 @@ internal fun DesignScreen(
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("Design overlays") }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
+    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var connectResult by remember { mutableStateOf("") }
     var grid by remember { mutableStateOf(false) }
     var ruler by remember { mutableStateOf(false) }
@@ -104,6 +106,11 @@ internal fun DesignScreen(
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
+    LaunchedEffect(services.mirror, serial) {
+        services.mirror.session.collectLatest { session ->
+            mirrorSession = session?.takeIf { it.serial == serial }
+        }
+    }
     LaunchedEffect(serial) {
         if (serial != null) {
             val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
@@ -118,6 +125,7 @@ internal fun DesignScreen(
                 frame = frame,
                 frameFlow = frameFlow,
                 mirrorStatus = mirrorStatus,
+                mirrorSession = mirrorSession,
                 connectResult = connectResult,
                 modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight(),
                 showRuler = ruler,

@@ -1,5 +1,6 @@
 package app.andy.desktop
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
@@ -14,6 +15,12 @@ import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import app.andy.ui.shell.LocalWindowResizing
+import java.awt.AWTEvent
+import java.awt.Toolkit
+import java.awt.event.AWTEventListener
+import java.awt.event.ComponentEvent
+import kotlinx.coroutines.Job
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.AndyDestination
@@ -276,6 +283,30 @@ fun main() {
             title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
         ) {
+            var windowResizing by remember { mutableStateOf(false) }
+            var resizeSettleJob by remember { mutableStateOf<Job?>(null) }
+            DisposableEffect(window) {
+                val awtListener = AWTEventListener { event ->
+                    if (event.id == ComponentEvent.COMPONENT_RESIZED && event.source === window) {
+                        MirrorPresentationGuard.beginWindowResize()
+                        windowResizing = true
+                        resizeSettleJob?.cancel()
+                        resizeSettleJob = scope.launch {
+                            delay(350)
+                            windowResizing = false
+                            MirrorPresentationGuard.endWindowResize()
+                        }
+                    }
+                }
+                Toolkit.getDefaultToolkit().addAWTEventListener(awtListener, AWTEvent.COMPONENT_EVENT_MASK)
+                onDispose {
+                    Toolkit.getDefaultToolkit().removeAWTEventListener(awtListener)
+                    resizeSettleJob?.cancel()
+                    resizeSettleJob = null
+                    windowResizing = false
+                    MirrorPresentationGuard.endWindowResize()
+                }
+            }
             LaunchedEffect(visible) {
                 appFocus.visible = visible
                 if (visible) consumePendingOpen()
@@ -320,28 +351,30 @@ fun main() {
                     )
                 }
             }
-            AndyApp(
-                services = services,
-                requestedDestination = requestedDestination,
-                onDestinationConsumed = { requestedDestination = null },
-                requestedOpenAgentTask = requestedOpenAgentTask,
-                onOpenAgentTaskConsumed = { requestedOpenAgentTask = null },
-                requestPopOutMirror = requestPopOutMirror,
-                onPopOutMirrorRequestConsumed = { requestPopOutMirror = false },
-                onPopOutMirror = { serial, name ->
-                    if (serial != null && name != null) {
-                        togglePopOut(serial, name)
-                    }
-                },
-                onPopOutDevice = { targetId, displayName ->
-                    startPopOut(targetId, displayName)
-                },
-                // Devices handed off (Andy pop-out window OR Simulator.app): main view shows a
-                // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
-                // pop-outs of the Live device own the engine via the pop-out pool instead.
-                poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
-                contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
-            )
+            CompositionLocalProvider(LocalWindowResizing provides windowResizing) {
+                AndyApp(
+                    services = services,
+                    requestedDestination = requestedDestination,
+                    onDestinationConsumed = { requestedDestination = null },
+                    requestedOpenAgentTask = requestedOpenAgentTask,
+                    onOpenAgentTaskConsumed = { requestedOpenAgentTask = null },
+                    requestPopOutMirror = requestPopOutMirror,
+                    onPopOutMirrorRequestConsumed = { requestPopOutMirror = false },
+                    onPopOutMirror = { serial, name ->
+                        if (serial != null && name != null) {
+                            togglePopOut(serial, name)
+                        }
+                    },
+                    onPopOutDevice = { targetId, displayName ->
+                        startPopOut(targetId, displayName)
+                    },
+                    // Devices handed off (Andy pop-out window OR Simulator.app): main view shows a
+                    // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
+                    // pop-outs of the Live device own the engine via the pop-out pool instead.
+                    poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
+                    contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
+                )
+            }
         }
         val primaryMirrorSerial = services.mirror.session.collectAsState().value?.serial
         popOutWindows.values.forEach { popOut ->

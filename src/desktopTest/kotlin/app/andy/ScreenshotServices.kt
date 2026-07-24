@@ -460,6 +460,8 @@ internal object ScreenshotServices {
         override fun archive(taskId: String) = Unit
         override fun unarchive(taskId: String) = Unit
         override fun events(taskId: String) = MutableStateFlow(listOf<AgentEvent>(AgentEvent.UserMessage(now - 39_000, task.prompt), AgentEvent.ToolCall(now - 31_000, "rg", "Find validation reducer"), AgentEvent.AssistantText(now - 5_000, "Updated the reducer and added a focused test."), AgentEvent.TaskResult(now - 3_000, true, "Checkout validation is covered.", 0.18, inputTokens = 2420, outputTokens = 860, durationMs = 36_000)))
+        override fun sessionStatus(taskId: String) = MutableStateFlow(null)
+        override val sessionStatuses = MutableStateFlow(emptyMap<String, app.andy.model.AgentSessionStatus>())
         override fun interactiveResumeCommand(taskId: String) = "codex resume task-1"
         override suspend fun openInTerminal(taskId: String) = CommandResult.success()
         override suspend fun openSkill(path: String) = CommandResult.success()

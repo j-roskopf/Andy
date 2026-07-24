@@ -272,6 +272,8 @@ object UnavailableAgentRunService : AgentRunService {
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())
+    override fun sessionStatus(taskId: String) = MutableStateFlow(null)
+    override val sessionStatuses = MutableStateFlow(emptyMap<String, AgentSessionStatus>())
     override fun interactiveResumeCommand(taskId: String): String? = null
     override suspend fun openInTerminal(taskId: String) = unavailable()
     override suspend fun openSkill(path: String) = unavailable()

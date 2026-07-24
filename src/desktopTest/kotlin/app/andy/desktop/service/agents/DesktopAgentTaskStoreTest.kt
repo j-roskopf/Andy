@@ -36,6 +36,7 @@ import app.andy.model.ProjectWorkflowState
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
 class DesktopAgentTaskStoreTest {
@@ -145,11 +146,32 @@ class DesktopAgentTaskStoreTest {
             originDir = "/tmp",
             status = AgentTaskStatus.Running,
             createdAtMillis = 1,
+            startedAtMillis = 10,
         )
-        val queued = running.copy(id = "task-q", status = AgentTaskStatus.Queued)
+        val queued = running.copy(id = "task-q", status = AgentTaskStatus.Queued, startedAtMillis = null)
         store.save(AgentStoreState(tasks = listOf(running, queued)))
         val loaded = store.load()
         assertEquals(setOf(AgentTaskStatus.Unknown), loaded.tasks.map { it.status }.toSet())
+        assertTrue(loaded.tasks.all { it.finishedAtMillis != null })
+    }
+
+    @Test
+    fun pausedTasksRoundTripThroughStore() = withStore { store ->
+        val task = AgentTask(
+            id = "task-paused",
+            title = "idle chat",
+            prompt = "p",
+            agent = AgentKind.ClaudeCode,
+            cwd = "/tmp",
+            originDir = "/tmp",
+            status = AgentTaskStatus.Paused,
+            createdAtMillis = 1,
+            startedAtMillis = 10,
+            finishedAtMillis = 99,
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        val loaded = store.load()
+        assertEquals(listOf(task), loaded.tasks)
     }
 
     @Test
@@ -389,5 +411,53 @@ class DesktopAgentTaskStoreTest {
         )
         store.save(AgentStoreState(tasks = listOf(task)))
         assertEquals(true, store.load().tasks.single().archived)
+    }
+
+    @Test
+    fun refusesEmptySaveOverPopulatedStore() = withStore { store ->
+        val task = AgentTask(
+            id = "keep-me",
+            title = "important",
+            prompt = "p",
+            agent = AgentKind.Codex,
+            status = AgentTaskStatus.Completed,
+            createdAtMillis = 1,
+            // Pad so the on-disk file exceeds the empty-store guard.
+            completedResultText = "x".repeat(12_000),
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        store.save(AgentStoreState())
+        assertEquals(listOf(task.id), store.load().tasks.map { it.id })
+    }
+
+    @Test
+    fun loadRecoversFromBackupWhenPrimaryUnreadable() {
+        val dir = File.createTempFile("andy-agents", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            runBlocking {
+                val file = File(dir, "agents.toml")
+                val store = DesktopAgentTaskStore(file)
+                val task = AgentTask(
+                    id = "from-bak",
+                    title = "recovered",
+                    prompt = "p",
+                    agent = AgentKind.Codex,
+                    status = AgentTaskStatus.Completed,
+                    createdAtMillis = 7,
+                )
+                store.save(AgentStoreState(tasks = listOf(task)))
+                // Second save creates agents.toml.bak from the good primary.
+                store.save(AgentStoreState(tasks = listOf(task)))
+                file.writeText("this is not valid toml {{{")
+                val loaded = store.load()
+                assertEquals(listOf(task.id), loaded.tasks.map { it.id })
+                assertTrue(file.readText().contains("from-bak"))
+            }
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

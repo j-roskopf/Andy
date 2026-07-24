@@ -26,6 +26,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -108,19 +109,9 @@ class AgentRunEndToEndTest {
                     println("SKIP: ${agent.cliName} not logged in for headless use (error path verified)")
                     return@runBlocking
                 }
-                assertEquals(AgentTaskStatus.Completed, finished.status, "final text/events: ${events.takeLast(5)}")
-                if (agent != AgentKind.Antigravity) {
-                    assertNotNull(finished.vendorSessionId, "session id should be captured for resume")
-                }
-                val result = events.filterIsInstance<AgentEvent.TaskResult>().lastOrNull()
-                assertNotNull(result)
-                assertTrue(
-                    events.any { it is AgentEvent.AssistantText && it.text.contains("pong", ignoreCase = true) } ||
-                        result.finalText?.contains("pong", ignoreCase = true) == true,
-                    "expected pong in transcript",
-                )
-                val transcript = DesktopAgentTaskStore(File(dir, "agents.toml")).transcriptFile(task.id)
-                assertTrue(transcript.exists() && transcript.length() > 0, "raw transcript should be persisted")
+                assertEquals(AgentTaskStatus.Completed, finished.status, "events: ${events.takeLast(5)}")
+                val launchLog = DesktopAgentTaskStore(File(dir, "agents.toml")).launchLogFile(task.id)
+                assertTrue(launchLog.exists() && launchLog.length() > 0, "launch diagnostics should be persisted")
             }
         } finally {
             scope.cancel()
@@ -179,9 +170,9 @@ class AgentRetryTest {
                     binaryOverrides = mapOf(AgentKind.Codex.cliName to trueBinary.absolutePath),
                 ),
             )
-            store.transcriptFile(task.id).apply {
-                parentFile.mkdirs()
-                writeText("old output\n")
+            store.taskDir(task.id).apply {
+                mkdirs()
+                resolve("legacy-artifact.txt").writeText("old output\n")
             }
 
             val service = DesktopAgentRunService(
@@ -213,7 +204,7 @@ class AgentRetryTest {
             assertNull(retried.vendorSessionId)
             assertNull(retried.errorMessage)
             assertNull(retried.totalCostUsd)
-            assertTrue(store.transcriptFile(task.id).readText().isBlank())
+            assertFalse(store.taskDir(task.id).resolve("legacy-artifact.txt").exists())
         } finally {
             scope.cancel()
             dir.deleteRecursively()
@@ -257,8 +248,7 @@ class AgentPlanHandoffTest {
                 createdAtMillis = 1,
                 finishedAtMillis = 2,
                 exitCode = 0,
-                changeBaselinePaths = listOf("stale-plan-baseline"),
-                hasChangeBaseline = true,
+                changeBaselineTree = "stale-plan-baseline-tree",
             )
             val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
             store.save(
@@ -300,8 +290,7 @@ class AgentPlanHandoffTest {
             assertEquals(planned.model, implementation.model)
             assertEquals(planned.skills, implementation.skills)
             assertEquals(planned.attachAndyMcp, implementation.attachAndyMcp)
-            assertTrue(!implementation.hasChangeBaseline)
-            assertTrue(implementation.changeBaselinePaths.isEmpty())
+            assertNull(implementation.changeBaselineTree)
             assertTrue(launched.implementationPrompt?.contains(planned.prompt) == true)
             assertTrue(launched.implementationPrompt.contains(completedPlan))
             assertTrue(!launched.implementationPrompt.contains("Plan mode is active"))
@@ -350,7 +339,7 @@ class AgentQueuedFollowUpTest {
                 ),
             )
             withTimeout(10_000) {
-                while (service.tasks.value.first { it.id == task.id }.vendorSessionId == null) delay(25)
+                while (service.tasks.value.first { it.id == task.id }.status != AgentTaskStatus.Running) delay(25)
             }
 
             service.queueFollowUp(task.id, "second message")
@@ -459,7 +448,7 @@ class CursorPlanBackfillTest {
                 cwd = dir.absolutePath,
                 originDir = dir.absolutePath,
                 planMode = true,
-                completedPlanText = oldPlan,
+                completedPlanText = null,
                 status = AgentTaskStatus.Completed,
                 workflowTaskId = "spec-ios",
                 workflowStage = ProjectWorkflowStage.Spec,
@@ -491,12 +480,8 @@ class CursorPlanBackfillTest {
                     projectWorkflows = mapOf(workflow.projectId to workflow),
                 ),
             )
-            store.transcriptFile(run.id).apply { parentFile.mkdirs() }.writeText(
-                """
-                {"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"# iOS Live Mirror\n\n- Keep Android and iOS sessions independent."},"result":{"success":{}}}}}
-                {"type":"result","subtype":"success","result":"$oldPlan"}
-                """.trimIndent() + "\n",
-            )
+            val artifactDir = AgentWorkflowArtifacts.dirFor(dir, run.id).apply { mkdirs() }
+            File(artifactDir, "plan.md").writeText(recoveredPlan)
 
             val service = DesktopAgentRunService(
                 scope = scope,
@@ -536,91 +521,70 @@ class CursorPlanBackfillTest {
 
 private class UserInputTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
-    override val supportsHeadlessResume = true
-    override val supportsStreamJson = false
 
-    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
-        listOf(binary, "-c", "printf 'ask\\n'")
+    override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
+        val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).absolutePath
+        val question =
+            """{"questions":[{"id":"platform","question":"Which platform?","options":[{"label":"Desktop"},{"label":"Desktop + web"}]}]}"""
+        return listOf(
+            binary,
+            "-c",
+            "mkdir -p ${shellQuote(artifactDir)} && printf %s ${shellQuote(question)} > ${shellQuote("$artifactDir/question.json")} && sleep 2",
+        )
+    }
 
-    override fun buildResumeCommand(
+    override fun buildInteractiveResumeCommand(
         binary: String,
         task: AgentTask,
-        followUp: String,
-        imagePaths: List<String>,
         mcpUrl: String?,
-    ): List<String> = listOf(binary, "-c", "printf 'resumed\\n'")
+        followUp: String?,
+        followUpImagePaths: List<String>,
+    ): List<String> =
+        listOf(binary, "-c", "printf 'planned for desktop\\n'")
 
-    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
-
-    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> = when (line) {
-        "ask" -> listOf(
-            AgentEvent.SessionStarted(nowMillis, "user-input-session", null),
-            AgentEvent.AssistantText(
-                nowMillis,
-                "<andy_user_input>{\"questions\":[{\"id\":\"platform\",\"question\":\"Which platform?\",\"options\":[{\"label\":\"Desktop\"},{\"label\":\"Desktop + web\"}]}]}</andy_user_input>",
-            ),
-            AgentEvent.TaskResult(nowMillis, success = true, finalText = "asked"),
-        )
-        "resumed" -> listOf(
-            AgentEvent.AssistantText(nowMillis, "planned for desktop"),
-            AgentEvent.TaskResult(nowMillis, success = true, finalText = "planned for desktop"),
-        )
-        else -> emptyList()
-    }
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
 }
 
 private class QueueTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
-    override val supportsHeadlessResume = true
-    override val supportsStreamJson = false
 
-    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
-        listOf(binary, "-c", "printf 'session\\n'; sleep 1")
+    override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
+        listOf(binary, "-c", "sleep 1")
 
-    override fun buildResumeCommand(
+    override fun buildInteractiveResumeCommand(
         binary: String,
         task: AgentTask,
-        followUp: String,
-        imagePaths: List<String>,
         mcpUrl: String?,
-    ): List<String> = listOf(binary, "-c", "printf 'resumed\\n'")
+        followUp: String?,
+        followUpImagePaths: List<String>,
+    ): List<String> =
+        listOf(binary, "-c", "printf 'queued response\\n'")
 
-    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
-
-    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> = when (line) {
-        "session" -> listOf(AgentEvent.SessionStarted(nowMillis, "queue-test-session", null))
-        "resumed" -> listOf(AgentEvent.AssistantText(nowMillis, "queued response"))
-        else -> emptyList()
-    }
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
 }
 
 private class PlanHandoffTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
-    override val supportsHeadlessResume = true
-    override val supportsStreamJson = false
     val freshTasks = mutableListOf<AgentTask>()
     var resumeCalls = 0
 
-    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
+    override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
         freshTasks += task
         return listOf(binary, "-c", "printf 'implementation complete\\n'")
     }
 
-    override fun buildResumeCommand(
+    override fun buildInteractiveResumeCommand(
         binary: String,
         task: AgentTask,
-        followUp: String,
-        imagePaths: List<String>,
         mcpUrl: String?,
+        followUp: String?,
+        followUpImagePaths: List<String>,
     ): List<String> {
         resumeCalls += 1
         return listOf(binary, "-c", "printf 'resumed\\n'")
     }
 
-    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
-
-    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> =
-        listOf(AgentEvent.AssistantText(nowMillis, line))
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
 }
 
 private class FakeMcp : McpServerService {

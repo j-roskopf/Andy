@@ -25,3 +25,4 @@ test-results/
 iosApp/Vendor/GoogleCastSDK/
 .vercel
 .env*
+.andy/

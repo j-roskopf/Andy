@@ -1,19 +1,21 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
-import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
-import app.andy.model.estimatedTokenCostUsd
+import app.andy.model.followUpCliPayload
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertIs
-import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-private fun task(agent: AgentKind, sessionId: String? = null, autonomy: AgentAutonomy = AgentAutonomy.Standard) = AgentTask(
+private fun task(
+    agent: AgentKind,
+    sessionId: String? = null,
+    autonomy: AgentAutonomy = AgentAutonomy.Standard,
+) = AgentTask(
     id = "task-abc123",
     title = "test",
     prompt = "do the thing",
@@ -31,532 +33,433 @@ private fun implementationTask(agent: AgentKind): AgentTask = task(agent, autono
     implementationPrompt = "Begin implementation. Implement the completed plan.",
 )
 
-class ClaudeCodeAdapterTest {
+class ClaudeCodeInteractiveAdapterTest {
     private val adapter = ClaudeCodeAdapter()
 
     @Test
-    fun buildsHeadlessCommandWithSessionAndPermissionMode() {
-        val argv = adapter.buildCommand("/bin/claude", task(AgentKind.ClaudeCode, sessionId = "sid-1"), mcpUrl = null)
+    fun interactiveCommandHasNoHeadlessFlagsAndLeavesPromptForPty() {
+        val argv = adapter.buildInteractiveCommand("/bin/claude", task(AgentKind.ClaudeCode), mcpUrl = null)
         assertEquals("/bin/claude", argv.first())
-        assertTrue("--session-id" in argv && "sid-1" in argv)
+        assertTrue("-p" !in argv)
+        assertTrue("stream-json" !in argv)
         assertTrue("acceptEdits" in argv)
         assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
     }
 
     @Test
     fun fullAutonomySkipsPermissions() {
-        val argv = adapter.buildCommand("/bin/claude", task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full), mcpUrl = null)
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full),
+            mcpUrl = null,
+        )
         assertTrue("--dangerously-skip-permissions" in argv)
         assertTrue("--permission-mode" !in argv)
     }
 
     @Test
-    fun explicitPermissionModeOverridesAutonomy() {
-        val argv = adapter.buildCommand(
+    fun scratchWorkspaceSkipsPermissionsForFullAutonomy() {
+        val scratch = AgentScratchWorkspace.path().absolutePath
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full).copy(cwd = scratch),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun scratchWorkspaceSkipsPermissionsForExplicitBypassSandbox() {
+        val scratch = AgentScratchWorkspace.path().absolutePath
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(cwd = scratch, sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun explicitSandboxModeOverridesAutonomy() {
+        val argv = adapter.buildInteractiveCommand(
             "/bin/claude",
             task(AgentKind.ClaudeCode).copy(sandboxMode = AgentSandboxMode.None),
             mcpUrl = null,
         )
         assertTrue("--dangerously-skip-permissions" in argv)
-        assertTrue("--permission-mode" !in argv)
     }
 
     @Test
-    fun sendsSelectedModelAndEffort() {
-        val configured = task(AgentKind.ClaudeCode).copy(model = "opus", reasoningEffort = AgentReasoningEffort.Max)
-        val argv = adapter.buildCommand("/bin/claude", configured, mcpUrl = null)
+    fun sendsSelectedModelEffortBudgetAndMcp() {
+        val configured = task(AgentKind.ClaudeCode).copy(
+            model = "opus",
+            reasoningEffort = AgentReasoningEffort.Max,
+            maxBudgetUsd = 12.5,
+        )
+        val argv = adapter.buildInteractiveCommand("/bin/claude", configured, mcpUrl = "http://127.0.0.1:8565/mcp")
         assertTrue("--model" in argv && "opus" in argv)
         assertTrue("--effort" in argv && "max" in argv)
+        assertTrue("--max-budget-usd" in argv && "12.5" in argv)
+        assertTrue("--mcp-config" in argv)
+        assertTrue(argv.any { it.contains("http://127.0.0.1:8565/mcp") })
     }
 
     @Test
     fun planModeOverridesUnsafePermissionChoices() {
-        val argv = adapter.buildCommand(
+        val argv = adapter.buildInteractiveCommand(
             "/bin/claude",
             task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full).copy(planMode = true),
             mcpUrl = null,
         )
-
         assertTrue("--permission-mode" in argv && "plan" in argv)
         assertTrue("--dangerously-skip-permissions" !in argv)
     }
 
     @Test
-    fun implementationHandoffUsesWritableFreshCommandWithoutPlanInstructions() {
-        val argv = adapter.buildCommand("/bin/claude", implementationTask(AgentKind.ClaudeCode), mcpUrl = null)
-
+    fun implementationHandoffUsesWritableFreshCommand() {
+        val argv = adapter.buildInteractiveCommand("/bin/claude", implementationTask(AgentKind.ClaudeCode), mcpUrl = null)
         assertTrue("acceptEdits" in argv)
         assertTrue("plan" !in argv)
-        assertTrue(!argv.last().contains("Plan mode is active"))
+        assertTrue(argv.none { it.contains("Plan mode is active") })
     }
 
     @Test
-    fun tellsTextOnlyCliWhereAttachedImagesLive() {
+    fun attachedImagesAreNotForcedIntoArgv() {
         val withImage = task(AgentKind.ClaudeCode).copy(imagePaths = listOf("/tmp/mockup.png"))
-        val argv = adapter.buildCommand("/bin/claude", withImage, mcpUrl = null)
-        assertTrue(argv.last().contains("Attached image file"))
+        val argv = adapter.buildInteractiveCommand("/bin/claude", withImage, mcpUrl = null)
+        // Image paths are described inside the prompt text (text-only CLIs).
         assertTrue(argv.last().contains("/tmp/mockup.png"))
+        assertTrue(argv.last().contains("Attached image file"))
     }
 
     @Test
-    fun parsesPlainTextStartupErrors() {
-        val events = adapter.parseLine("Error: Session ID abc is already in use.", 10)
-        val error = events.single() as AgentEvent.TaskError
-        assertEquals("Session ID abc is already in use.", error.message)
-    }
-
-    @Test
-    fun parsesInitAssistantAndResult() {
-        val init = adapter.parseLine("""{"type":"system","subtype":"init","session_id":"s-9","model":"claude-fable-5"}""", 1)
-        assertEquals("s-9", (init.single() as AgentEvent.SessionStarted).sessionId)
-
-        val assistant = adapter.parseLine(
-            """{"type":"assistant","message":{"content":[{"type":"text","text":"hello"},{"type":"tool_use","name":"Bash","input":{"command":"git status"}}]}}""",
-            2,
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.ClaudeCode, sessionId = "sid-1")
+        val followUp = baseTask.followUpCliPayload("continue", listOf("/tmp/screenshot.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
         )
-        assertEquals(2, assistant.size)
-        assertEquals("hello", (assistant[0] as AgentEvent.AssistantText).text)
-        val tool = assistant[1] as AgentEvent.ToolCall
-        assertEquals("Bash", tool.toolName)
-        assertEquals("git status", tool.summary)
-
-        val result = adapter.parseLine(
-            """{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.0421,"usage":{"input_tokens":10,"output_tokens":20},"duration_ms":1500}""",
-            3,
-        ).single() as AgentEvent.TaskResult
-        assertTrue(result.success)
-        assertEquals("done", result.finalText)
-        assertEquals(0.0421, result.costUsd)
-        assertEquals(10, result.inputTokens)
+        assertNotNull(argv)
+        assertTrue(argv!!.last().contains("/tmp/screenshot.png"))
+        assertTrue(argv.last().contains("Attached image file"))
     }
 
     @Test
-    fun parsesThinkingStreamDeltasAsThinking() {
-        val delta = adapter.parseLine(
-            """{"type":"thinking","subtype":"delta","text":"Checking the files...","session_id":"s-9"}""",
-            4,
-        ).single() as AgentEvent.Thinking
-
-        assertEquals("Checking the files...", delta.text)
-        assertTrue(delta.isStreamDelta)
+    fun resumeUsesSessionIdFlag() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" in argv!! && "sid-1" in argv)
+        assertTrue("-p" !in argv)
+        assertEquals("continue", argv.last())
     }
 
     @Test
-    fun compactsRateLimitJsonIntoAToolStyleEvent() {
-        val event = adapter.parseLine(
-            """{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","resetsAt":3600000,"overageDisabledReason":"org_level_disabled"}}""",
-            0,
-        ).single() as AgentEvent.ToolResult
-
-        assertEquals("rate limit", event.toolName)
-        assertTrue(event.summary.contains("Allowed"))
-        assertTrue(event.summary.contains("five hour window"))
-        assertTrue(!event.detail.contains("{"))
+    fun resumeWithoutSessionReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" !in argv!!)
+        val embedded = argv.last()
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("hello again"), embedded)
     }
 
     @Test
-    fun unparseableLinesBecomeRaw() {
-        val events = adapter.parseLine("plain text progress", 1)
-        assertIs<AgentEvent.Raw>(events.single())
-        assertTrue(adapter.parseLine("", 1).isEmpty())
-    }
-
-    @Test
-    fun errorResultIsNotSuccess() {
-        val result = adapter.parseLine("""{"type":"result","subtype":"error_during_execution","is_error":true}""", 1)
-            .single() as AgentEvent.TaskResult
-        assertTrue(!result.success)
+    fun interactiveResumeShellOneLinerQuotesSession() {
+        val quoted = adapter.interactiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+        )
+        assertTrue(quoted.contains("--resume"))
+        assertTrue(quoted.contains("sid-1"))
     }
 }
 
-class CodexAdapterTest {
+class CodexInteractiveAdapterTest {
     private val adapter = CodexAdapter()
 
     @Test
-    fun buildsExecCommandWithSandbox() {
-        val argv = adapter.buildCommand("/bin/codex", task(AgentKind.Codex), mcpUrl = null)
-        assertEquals(listOf("/bin/codex", "exec", "--json", "-C", "/tmp/repo", "--skip-git-repo-check", "--sandbox", "workspace-write", "do the thing"), argv)
+    fun interactiveCommandIsNotExecJson() {
+        val argv = adapter.buildInteractiveCommand("/bin/codex", task(AgentKind.Codex), mcpUrl = null)
+        assertEquals("/bin/codex", argv.first())
+        assertTrue("exec" !in argv)
+        assertTrue("--json" !in argv)
+        assertTrue("-C" in argv && "/tmp/repo" in argv)
+        assertTrue("--sandbox" in argv && "workspace-write" in argv)
+        assertEquals("do the thing", argv.last())
     }
 
     @Test
     fun explicitNoSandboxOverridesAutonomy() {
-        val configured = task(AgentKind.Codex).copy(sandboxMode = AgentSandboxMode.None)
-        val argv = adapter.buildCommand("/bin/codex", configured, mcpUrl = null)
-
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
         assertTrue("--dangerously-bypass-approvals-and-sandbox" in argv)
         assertTrue("--sandbox" !in argv)
     }
 
     @Test
-    fun noProjectContextDoesNotForceACurrentProjectDirectory() {
-        val unscoped = task(AgentKind.Codex).copy(cwd = null, originDir = null)
-        val argv = adapter.buildCommand("/bin/codex", unscoped, mcpUrl = null)
-        assertTrue("-C" !in argv)
-    }
-
-    @Test
-    fun resumeKeepsTheOriginalSandboxConfiguration() {
-        val argv = adapter.buildResumeCommand("/bin/codex", task(AgentKind.Codex, sessionId = "thread-1"), "continue", emptyList(), mcpUrl = null)
-            ?: error("Codex supports resume")
-
-        assertTrue("--sandbox" !in argv)
-        assertTrue("--dangerously-bypass-approvals-and-sandbox" !in argv)
-    }
-
-    @Test
-    fun planModeKeepsPlanInstructionsOnFollowUps() {
-        val argv = adapter.buildResumeCommand(
+    fun sendsAttachedImagesWithNativeFlag() {
+        val argv = adapter.buildInteractiveCommand(
             "/bin/codex",
-            task(AgentKind.Codex, sessionId = "thread-1").copy(planMode = true),
-            "continue",
-            emptyList(),
+            task(AgentKind.Codex).copy(imagePaths = listOf("/tmp/mockup.png")),
             mcpUrl = null,
-        ) ?: error("Codex supports resume")
-
-        assertTrue(argv.last().contains("Plan mode is active"))
-    }
-
-    @Test
-    fun parsesThreadShape() {
-        val started = adapter.parseLine("""{"type":"thread.started","thread_id":"t-42"}""", 1)
-        assertEquals("t-42", (started.single() as AgentEvent.SessionStarted).sessionId)
-
-        val message = adapter.parseLine("""{"type":"item.completed","item":{"type":"agent_message","text":"all set"}}""", 2)
-        assertEquals("all set", (message.single() as AgentEvent.AssistantText).text)
-
-        val command = adapter.parseLine("""{"type":"item.started","item":{"type":"command_execution","command":"ls -la"}}""", 3)
-        assertEquals("ls -la", (command.single() as AgentEvent.ToolCall).summary)
-
-        val done = adapter.parseLine("""{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":9}}""", 4)
-            .single() as AgentEvent.TaskResult
-        assertTrue(done.success)
-        assertEquals(9, done.outputTokens)
-    }
-
-    @Test
-    fun parsesContextWindowUsage() {
-        val context = adapter.parseLine(
-            """{"type":"token_count","info":{"total_token_usage":120000,"model_context_window":272000}}""",
-            5,
-        ).single() as AgentEvent.ContextUsage
-
-        assertEquals(120000, context.usedTokens)
-        assertEquals(272000, context.windowTokens)
-    }
-
-    @Test
-    fun estimatesCostWhenCodexReportsTokensButNotABilledTotal() {
-        val estimate = task(AgentKind.Codex).copy(model = "gpt-5.6-terra").estimatedTokenCostUsd(1_000_000, 1_000_000)
-        assertEquals(11.25, estimate)
-    }
-
-    @Test
-    fun parsesLegacyShape() {
-        val message = adapter.parseLine("""{"id":"1","msg":{"type":"agent_message","message":"legacy hello"}}""", 1)
-        assertEquals("legacy hello", (message.single() as AgentEvent.AssistantText).text)
-
-        val complete = adapter.parseLine("""{"id":"2","msg":{"type":"task_complete","last_agent_message":"bye"}}""", 2)
-            .single() as AgentEvent.TaskResult
-        assertEquals("bye", complete.finalText)
-    }
-
-    @Test
-    fun hidesKnownNonFatalCodexStartupDiagnostics() {
-        assertTrue(adapter.parseLine("Reading additional input from stdin...", 1).isEmpty())
-        assertTrue(
-            adapter.parseLine(
-                "2026-07-10T12:12:47Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { resource_metadata: \"https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/\" })",
-                1,
-            ).isEmpty(),
         )
+        assertTrue("--image" in argv && "/tmp/mockup.png" in argv)
     }
 
     @Test
-    fun resumeUsesThreadId() {
-        val argv = adapter.buildResumeCommand("/bin/codex", task(AgentKind.Codex, sessionId = "t-42"), "continue", imagePaths = emptyList(), mcpUrl = null)
-        assertEquals(listOf("/bin/codex", "exec", "resume", "--json", "--skip-git-repo-check", "t-42", "continue"), argv)
-    }
-
-    @Test
-    fun resumePreservesAndyMcpConfiguration() {
-        val argv = adapter.buildResumeCommand(
-            "/bin/codex",
-            task(AgentKind.Codex, sessionId = "t-42"),
-            "continue",
-            imagePaths = emptyList(),
-            mcpUrl = "http://127.0.0.1:8565/mcp",
-        ).orEmpty()
-
-        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp\"" in argv)
-    }
-
-    @Test
-    fun sendsSelectedModelAndReasoningEffort() {
-        val configured = task(AgentKind.Codex).copy(model = "gpt-5.6-terra", reasoningEffort = AgentReasoningEffort.High)
-        val argv = adapter.buildCommand("/bin/codex", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "gpt-5.6-terra" in argv)
-        assertTrue("model_reasoning_effort=\"high\"" in argv)
-    }
-
-    @Test
-    fun planModeUsesReadOnlySandboxAndPlanInstructions() {
-        val argv = adapter.buildCommand(
+    fun planModeUsesReadOnlySandbox() {
+        val argv = adapter.buildInteractiveCommand(
             "/bin/codex",
             task(AgentKind.Codex, autonomy = AgentAutonomy.Full).copy(planMode = true),
             mcpUrl = null,
         )
-
         assertTrue("--sandbox" in argv && "read-only" in argv)
         assertTrue(argv.last().contains("Plan mode is active"))
     }
 
     @Test
-    fun implementationHandoffStartsNewWritableExecInsteadOfResume() {
-        val argv = adapter.buildCommand("/bin/codex", implementationTask(AgentKind.Codex), mcpUrl = null)
-
-        assertEquals("exec", argv[1])
-        assertTrue("resume" !in argv)
-        assertTrue("--sandbox" in argv && "workspace-write" in argv)
-        assertTrue(!argv.last().contains("Plan mode is active"))
-    }
-
-    @Test
-    fun sendsAttachedImagesWithTheNativeCodexFlag() {
-        val withImage = task(AgentKind.Codex).copy(imagePaths = listOf("/tmp/mockup.png"))
-        val argv = adapter.buildCommand("/bin/codex", withImage, mcpUrl = null)
-        assertTrue("--image" in argv && "/tmp/mockup.png" in argv)
-    }
-
-    @Test
-    fun sendsFollowUpImagesWithTheNativeCodexFlag() {
-        val argv = adapter.buildResumeCommand(
+    fun resumeSendsAttachedImagesWithNativeFlag() {
+        val argv = adapter.buildInteractiveResumeCommand(
             "/bin/codex",
             task(AgentKind.Codex, sessionId = "t-42"),
-            "review this",
-            imagePaths = listOf("/tmp/follow-up.png"),
             mcpUrl = null,
+            followUp = "see attached",
+            followUpImagePaths = listOf("/tmp/mockup.png"),
+        )
+        assertNotNull(argv)
+        assertTrue("--image" in argv!! && "/tmp/mockup.png" in argv)
+    }
+
+    @Test
+    fun resumeUsesThreadSubcommand() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            mcpUrl = null,
+        )
+        assertNotNull(argv)
+        assertEquals(listOf("/bin/codex", "resume", "t-42"), argv.take(3))
+        assertTrue("exec" !in argv)
+    }
+
+    @Test
+    fun resumePreservesMcpConfiguration() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            mcpUrl = "http://127.0.0.1:8565/mcp",
         ).orEmpty()
-        assertTrue("--image" in argv && "/tmp/follow-up.png" in argv)
+        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp\"" in argv)
     }
 }
 
-class AntigravityAdapterTest {
-    private val adapter = AntigravityAdapter()
-
-    @Test
-    fun everyLineIsRaw() {
-        assertIs<AgentEvent.ToolResult>(adapter.parseLine("""{"type":"assistant"}""", 1).single())
-        assertIs<AgentEvent.Raw>(adapter.parseLine("thinking about it", 1).single())
-    }
-
-    @Test
-    fun autonomyMapsToModeFlags() {
-        val standard = adapter.buildCommand("/bin/agy", task(AgentKind.Antigravity), mcpUrl = null)
-        assertTrue("--mode" in standard && "accept-edits" in standard)
-        val full = adapter.buildCommand("/bin/agy", task(AgentKind.Antigravity, autonomy = AgentAutonomy.Full), mcpUrl = null)
-        assertTrue("--dangerously-skip-permissions" in full)
-        val readOnly = adapter.buildCommand("/bin/agy", task(AgentKind.Antigravity, autonomy = AgentAutonomy.ReadOnly), mcpUrl = null)
-        assertTrue("plan" in readOnly && "--sandbox" in readOnly)
-    }
-
-    @Test
-    fun explicitPermissionModeOverridesAutonomy() {
-        val argv = adapter.buildCommand(
-            "/bin/agy",
-            task(AgentKind.Antigravity).copy(sandboxMode = AgentSandboxMode.None),
-            mcpUrl = null,
-        )
-        assertTrue("--dangerously-skip-permissions" in argv)
-    }
-
-    @Test
-    fun selectedModelAndLevelBecomeAntigravityVariant() {
-        val legacy = task(AgentKind.Antigravity).copy(model = "Gemini 3.5 Flash", reasoningEffort = AgentReasoningEffort.High)
-        val legacyArgv = adapter.buildCommand("/bin/agy", legacy, mcpUrl = null)
-        assertTrue("--model" in legacyArgv && "Gemini 3.5 Flash (High)" in legacyArgv)
-
-        val slug = task(AgentKind.Antigravity).copy(model = "gemini-3.6-flash", reasoningEffort = AgentReasoningEffort.High)
-        val slugArgv = adapter.buildCommand("/bin/agy", slug, mcpUrl = null)
-        assertTrue("--model" in slugArgv && "gemini-3.6-flash-high" in slugArgv)
-    }
-
-    @Test
-    fun planModeOverridesUnsafePermissionChoices() {
-        val argv = adapter.buildCommand(
-            "/bin/agy",
-            task(AgentKind.Antigravity, autonomy = AgentAutonomy.Full).copy(planMode = true),
-            mcpUrl = null,
-        )
-
-        assertTrue("--mode" in argv && "plan" in argv)
-        assertTrue("--sandbox" in argv)
-        assertTrue("--dangerously-skip-permissions" !in argv)
-    }
-
-    @Test
-    fun implementationHandoffUsesAcceptEditsWithoutPlanInstructions() {
-        val argv = adapter.buildCommand("/bin/agy", implementationTask(AgentKind.Antigravity), mcpUrl = null)
-
-        assertTrue("accept-edits" in argv)
-        assertTrue("plan" !in argv)
-        assertTrue(!argv.any { it.contains("Plan mode is active") })
-    }
-}
-
-class CursorAdapterTest {
+class CursorInteractiveAdapterTest {
     private val adapter = CursorAdapter()
 
     @Test
-    fun sendsTheSelectedFastReasoningVariant() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "cursor-grok-4.5",
-            reasoningEffort = AgentReasoningEffort.High,
-            fastMode = true,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "cursor-grok-4.5-high-fast" in argv)
+    fun interactiveCommandHasNoHeadlessFlags() {
+        val argv = adapter.buildInteractiveCommand("/bin/cursor-agent", task(AgentKind.Cursor), mcpUrl = null)
+        assertEquals("/bin/cursor-agent", argv.first())
+        assertTrue("-p" !in argv)
+        assertTrue("stream-json" !in argv)
+        assertEquals("do the thing", argv.last())
     }
 
     @Test
-    fun migratesLegacyCursorDisplayNameToCliSlug() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "Grok 4.5",
-            reasoningEffort = AgentReasoningEffort.Medium,
-            fastMode = false,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "cursor-grok-4.5-medium" in argv)
-    }
-
-    @Test
-    fun defaultsGrokEffortWhenUnset() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "cursor-grok-4.5",
-            reasoningEffort = null,
-            fastMode = false,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "cursor-grok-4.5-high" in argv)
-        assertTrue("cursor-grok-4.5" !in argv.filter { it.startsWith("cursor-grok") })
-    }
-
-    @Test
-    fun composerWithoutEffortDoesNotAppendSuffix() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "composer-2.5",
-            reasoningEffort = null,
-            fastMode = true,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "composer-2.5-fast" in argv)
-    }
-
-    @Test
-    fun dropsPersistedFastModeWhenCatalogNoLongerSupportsIt() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "Gemini 3.1 Pro",
-            reasoningEffort = null,
-            fastMode = true,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "gemini-3.1-pro" in argv)
-        assertTrue("gemini-3.1-pro-fast" !in argv)
-    }
-
-    @Test
-    fun customCursorSlugDoesNotAppendFastSuffix() {
-        val configured = task(AgentKind.Cursor).copy(
-            model = "my-custom-model",
-            reasoningEffort = null,
-            fastMode = true,
-        )
-        val argv = adapter.buildCommand("/bin/cursor-agent", configured, mcpUrl = null)
-        assertTrue("--model" in argv && "my-custom-model" in argv)
-        assertTrue("my-custom-model-fast" !in argv)
-    }
-
-    @Test
-    fun explicitSandboxModeUsesCursorSandboxFlags() {
-        val disabled = adapter.buildCommand(
-            "/bin/cursor-agent",
-            task(AgentKind.Cursor).copy(sandboxMode = AgentSandboxMode.None),
-            mcpUrl = null,
-        )
-        assertTrue("--sandbox" in disabled && "disabled" in disabled)
-
-        val readOnly = adapter.buildCommand(
-            "/bin/cursor-agent",
-            task(AgentKind.Cursor).copy(sandboxMode = AgentSandboxMode.ReadOnly),
-            mcpUrl = null,
-        )
-        assertTrue("--mode" in readOnly && "plan" in readOnly)
-        assertTrue("--sandbox" in readOnly && "enabled" in readOnly)
-    }
-
-    @Test
-    fun planModeOverridesFullAutonomy() {
-        val argv = adapter.buildCommand(
+    fun planModeUsesPlanSandboxFlags() {
+        val argv = adapter.buildInteractiveCommand(
             "/bin/cursor-agent",
             task(AgentKind.Cursor, autonomy = AgentAutonomy.Full).copy(planMode = true),
             mcpUrl = null,
         )
-
         assertTrue("--mode" in argv && "plan" in argv)
         assertTrue("--sandbox" in argv && "enabled" in argv)
         assertTrue("--force" !in argv)
     }
 
     @Test
-    fun implementationHandoffUsesWritableSandboxWithoutPlanInstructions() {
-        val argv = adapter.buildCommand("/bin/cursor-agent", implementationTask(AgentKind.Cursor), mcpUrl = null)
-
-        assertTrue("--sandbox" in argv && "enabled" in argv)
-        assertTrue("plan" !in argv)
-        assertTrue(!argv.last().contains("Plan mode is active"))
+    fun fullAutonomyAddsForceWhenNotPlanning() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, autonomy = AgentAutonomy.Full),
+            mcpUrl = null,
+        )
+        assertTrue("--force" in argv)
     }
 
     @Test
-    fun parsesNestedToolCallStartedEvents() {
-        val events = adapter.parseLine(
-            """
-            {"type":"tool_call","subtype":"started","call_id":"toolu_01","tool_call":{"readToolCall":{"args":{"path":"/tmp/test.txt"}}},"session_id":"s-1"}
-            """.trimIndent(),
-            1,
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.Cursor, sessionId = "chat-9")
+        val followUp = baseTask.followUpCliPayload("hello again", listOf("/tmp/ui.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
         )
-        val tool = events.single() as AgentEvent.ToolCall
-        assertEquals("Read", tool.toolName)
-        assertEquals("/tmp/test.txt", tool.summary)
-        assertEquals("/tmp/test.txt", tool.detail)
+        assertNotNull(argv)
+        assertTrue(argv!!.last().contains("/tmp/ui.png"))
+        assertTrue(argv.last().contains("Attached image file"))
     }
 
     @Test
-    fun parsesNestedToolCallCompletedEvents() {
-        val events = adapter.parseLine(
-            """
-            {"type":"tool_call","subtype":"completed","call_id":"toolu_01","tool_call":{"shellToolCall":{"args":{"command":"ls -la"},"result":{"success":{"stdout":"total 0","stderr":"","exitCode":0}}}},"session_id":"s-1"}
-            """.trimIndent(),
-            2,
+    fun resumeUsesChatId() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, sessionId = "chat-9"),
+            mcpUrl = null,
+            followUp = "hello again",
         )
-        val result = events.single() as AgentEvent.ToolResult
-        assertEquals("Shell", result.toolName)
-        assertEquals("total 0", result.summary)
-        assertEquals("total 0", result.detail)
-        assertTrue(!result.isError)
+        assertNotNull(argv)
+        assertTrue("--resume" in argv!! && "chat-9" in argv)
+        assertEquals("hello again", argv.last())
     }
 
     @Test
-    fun extractsThePlanFromASuccessfulCreatePlanToolCompletion() {
-        val plan = successfulCursorPlanText(
-            """
-            {"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"# iOS Live Mirror\n\n- Reuse the existing Live destination."},"result":{"success":{}}}}}
-            """.trimIndent(),
+    fun freshInteractiveCommandResumesAllocatedChatId() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, sessionId = "chat-new"),
+            mcpUrl = null,
         )
+        assertTrue("--resume" in argv && "chat-new" in argv)
+        assertEquals("do the thing", argv.last())
+    }
 
-        assertEquals("# iOS Live Mirror\n\n- Reuse the existing Live destination.", plan)
-        assertNull(
-            successfulCursorPlanText(
-                """{"type":"tool_call","subtype":"completed","tool_call":{"createPlanToolCall":{"args":{"plan":"discard me"},"result":{"error":{"message":"failed"}}}}}""",
-            ),
+    @Test
+    fun resumeWithoutChatIdReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor).copy(prompt = "what is the current timestamp"),
+            mcpUrl = null,
+            followUp = "hello again",
         )
+        assertNotNull(argv)
+        assertTrue("--resume" !in argv!!)
+        val embedded = argv.last()
+        assertTrue(embedded.contains("what is the current timestamp"), embedded)
+        assertTrue(embedded.contains("hello again"), embedded)
+    }
+}
+
+class AntigravityInteractiveAdapterTest {
+    private val adapter = AntigravityAdapter()
+
+    @Test
+    fun interactiveCommandHasNoPrintFlag() {
+        val argv = adapter.buildInteractiveCommand("/bin/agy", task(AgentKind.Antigravity), mcpUrl = null)
+        assertEquals("/bin/agy", argv.first())
+        assertTrue("-p" !in argv)
+        assertTrue("--print" !in argv)
+        assertTrue("--mode" in argv && "accept-edits" in argv)
+        assertTrue("--prompt-interactive" in argv)
+        assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun modelFlagIncludesRequiredEffort() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(model = "gemini-3.6-flash"),
+            mcpUrl = null,
+        )
+        assertTrue("--model" in argv && "gemini-3.6-flash" in argv)
+        assertTrue("--effort" in argv && "high" in argv)
+    }
+
+    @Test
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.Antigravity).copy(prompt = "original ask")
+        val followUp = baseTask.followUpCliPayload("what time is it", listOf("/tmp/mockup.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
+        )
+        assertNotNull(argv)
+        val embedded = argv!![argv.indexOf("--prompt-interactive") + 1]
+        assertTrue(embedded.contains("/tmp/mockup.png"), embedded)
+        assertTrue(embedded.contains("Attached image file"), embedded)
+    }
+
+    @Test
+    fun resumeUsesConversationIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(vendorSessionId = "conv-123", prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "what time is it",
+        )
+        // Stored id is untrusted without a transcript/history match for "original ask".
+        assertNotNull(argv)
+        assertTrue("--continue" !in argv!!)
+        assertTrue("--prompt-interactive" in argv)
+        val promptIdx = argv.indexOf("--prompt-interactive")
+        val embedded = argv[promptIdx + 1]
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("what time is it"), embedded)
+        assertTrue("--conversation" !in argv)
+    }
+
+    @Test
+    fun resumeWithoutConversationIdReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(prompt = "what is the current timestamp"),
+            mcpUrl = null,
+            followUp = "hello",
+        )
+        assertNotNull(argv)
+        assertTrue("--continue" !in argv!!)
+        assertTrue("--conversation" !in argv)
+        assertTrue("--prompt-interactive" in argv)
+        val embedded = argv[argv.indexOf("--prompt-interactive") + 1]
+        assertTrue(embedded.contains("what is the current timestamp"), embedded)
+        assertTrue(embedded.contains("hello"), embedded)
+    }
+
+    @Test
+    fun resumePromptHelperKeepsFollowUpOnlyWhenBound() {
+        val task = task(AgentKind.Antigravity).copy(prompt = "original")
+        assertEquals(
+            "follow",
+            AntigravityAdapter.resumePrompt(task, "follow", boundToConversation = true),
+        )
+        val unbound = AntigravityAdapter.resumePrompt(task, "follow", boundToConversation = false)
+        assertNotNull(unbound)
+        assertTrue(unbound!!.contains("original"))
+        assertTrue(unbound.contains("follow"))
+    }
+
+    @Test
+    fun interactiveResumeShellOneLinerOmitsUntrustedConversation() {
+        val quoted = adapter.interactiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(vendorSessionId = "conv-9", prompt = "never sent"),
+        )
+        // Unverified stored ids must not appear in the escape-hatch one-liner.
+        assertTrue("--conversation" !in quoted)
+        assertTrue("--continue" !in quoted)
     }
 }

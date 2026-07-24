@@ -63,6 +63,8 @@ internal object GpuMirrorHostRegistry {
         }
     }
 
+    fun allPresenters(): List<GpuMirrorPresenter> = presentersByHost.values.distinct()
+
     /** Test-only snapshot of registered hosts. */
     internal fun registeredHostsForTests(): List<Canvas> = presentersByHost.keys.toList()
 }

@@ -9,3 +9,6 @@ import androidx.compose.runtime.compositionLocalOf
  * JPanel above the menu. Callers may narrow this (e.g. only right-docked terminals).
  */
 internal val LocalSuppressHeavyweightSurfaces = compositionLocalOf { false }
+
+/** True while the main Andy window is actively being resized (desktop only). */
+internal val LocalWindowResizing = compositionLocalOf { false }

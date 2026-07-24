@@ -580,11 +580,9 @@ static void apply_presenter_frame(GpuPresenter *presenter) {
 }
 
 static void schedule_presenter_geometry(GpuPresenter *presenter) {
-    if ([NSThread isMainThread]) {
-        presenter->geometry_scheduled = false;
-        apply_presenter_frame(presenter);
-        return;
-    }
+    // Always coalesce onto the next main-queue pass. AWT delivers resize callbacks on the EDT
+    // (main thread); calling windowNumberAtPoint / addChildWindow / setFrame synchronously inside
+    // componentResized deadlocks or re-enters the event loop and freezes the whole JVM UI.
     if (presenter->geometry_scheduled) return;
     presenter->geometry_scheduled = true;
     dispatch_async(dispatch_get_main_queue(), ^{

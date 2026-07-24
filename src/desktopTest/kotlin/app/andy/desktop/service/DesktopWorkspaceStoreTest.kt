@@ -99,4 +99,45 @@ class DesktopWorkspaceStoreTest {
         )
         assertEquals("Files", DesktopWorkspaceStore(file).load().filesTab)
     }
+
+    @Test
+    fun roundTripsTerminalAppearanceAndFallsBackForInvalidValues() = runBlocking {
+        val file = createTempDirectory("andy-workspace-terminal").toFile().resolve("workspace.properties")
+        val saved = WorkspaceState(
+            terminalThemeId = "light",
+            terminalForegroundHex = "#1A1814",
+            terminalBackgroundHex = "#F7F4EC",
+            terminalSelectionFgHex = "#1A1814",
+            terminalSelectionBgHex = "#B8D0F0",
+            terminalFoundFgHex = "#1A1814",
+            terminalFoundBgHex = "#FFE066",
+            terminalHyperlinkFgHex = "#0B57D0",
+            terminalHyperlinkBgHex = "#F7F4EC",
+            terminalUseInverseSelection = false,
+            terminalColorPaletteId = "windows",
+            terminalFontFamilyId = "jetbrains-mono",
+            terminalFontSize = 16f,
+        )
+        DesktopWorkspaceStore(file).save(saved)
+        assertEquals(saved, DesktopWorkspaceStore(file).load())
+
+        file.writeText(file.readText().replace("terminalThemeId=light", "terminalThemeId=nope"))
+        assertEquals("nope", DesktopWorkspaceStore(file).load().terminalThemeId)
+
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                terminalThemeId = "custom",
+                terminalForegroundHex = "garbage",
+                terminalColorPaletteId = "nope",
+                terminalFontFamilyId = "comic",
+                terminalFontSize = 15.6f,
+            ),
+        )
+        val coerced = DesktopWorkspaceStore(file).load()
+        assertEquals("custom", coerced.terminalThemeId)
+        assertEquals("#E4DED0", coerced.terminalForegroundHex)
+        assertEquals("xterm", coerced.terminalColorPaletteId)
+        assertEquals("default", coerced.terminalFontFamilyId)
+        assertEquals(16f, coerced.terminalFontSize)
+    }
 }

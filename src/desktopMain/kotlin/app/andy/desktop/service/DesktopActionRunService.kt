@@ -4,11 +4,12 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
+import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.service.ActionRunService
+import app.andy.terminal.createAndyJediTermWidget
 import com.jediterm.core.util.TermSize
 import com.jediterm.terminal.ProcessTtyConnector
 import com.jediterm.terminal.ui.JediTermWidget
-import com.jediterm.terminal.ui.settings.DefaultSettingsProvider
 import com.pty4j.PtyProcess
 import com.pty4j.PtyProcessBuilder
 import com.pty4j.WinSize
@@ -23,11 +24,10 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.SwingUtilities
-import com.jediterm.terminal.TerminalColor
-import com.jediterm.terminal.TextStyle
 
 class DesktopActionRunService(
     private val scope: CoroutineScope,
+    private val terminalAppearance: () -> TerminalAppearanceSnapshot = { TerminalAppearanceSnapshot() },
 ) : ActionRunService {
     private data class RunHandle(
         val process: PtyProcess?,
@@ -98,8 +98,9 @@ class DesktopActionRunService(
                 .setUseWinConPty(true)
                 .start()
             val connector = PtyTtyConnector(process, command)
+            val appearance = terminalAppearance()
             val terminal = onSwingEdt {
-                JediTermWidget(120, 32, AndyTerminalSettingsProvider()).apply {
+                createAndyJediTermWidget(120, 32, appearance).apply {
                     ttyConnector = connector
                     start()
                 }
@@ -223,15 +224,4 @@ private class PtyTtyConnector(
     override fun isConnected(): Boolean = process.isAlive
 
     override fun getName(): String = "Local"
-}
-
-private class AndyTerminalSettingsProvider : DefaultSettingsProvider() {
-    @Suppress("OVERRIDE_DEPRECATION")
-    @Deprecated("JediTerm still reads this method when it creates the terminal style.")
-    override fun getDefaultStyle(): TextStyle = TextStyle(
-        TerminalColor.rgb(228, 222, 208),
-        TerminalColor.rgb(17, 16, 13),
-    )
-
-    override fun getTerminalFontSize(): Float = 13f
 }
