@@ -8,14 +8,10 @@ import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
 import org.fife.ui.rtextarea.RTextScrollPane
 import java.awt.Font
-import java.awt.Rectangle
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
-import javax.swing.JButton
-import javax.swing.JScrollBar
 import javax.swing.JScrollPane
 import javax.swing.KeyStroke
-import javax.swing.plaf.basic.BasicScrollBarUI
 
 @Composable
 actual fun BugLogcatTextSurface(
@@ -65,8 +61,8 @@ private class BugLogcatPanel : RTextScrollPane() {
         border = null
         verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
         horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
-        verticalScrollBar.applyAndyTheme()
-        horizontalScrollBar.applyAndyTheme()
+        verticalScrollBar.applyAndyScrollTheme(java.awt.Color(0x11100D))
+        horizontalScrollBar.applyAndyScrollTheme(java.awt.Color(0x11100D))
     }
 
     fun updateText(value: String) {
@@ -74,46 +70,5 @@ private class BugLogcatPanel : RTextScrollPane() {
         val caret = editor.caretPosition.coerceAtMost(value.length)
         editor.text = value
         editor.caretPosition = caret
-    }
-}
-
-private fun JScrollBar.applyAndyTheme() {
-    unitIncrement = 20
-    blockIncrement = 160
-    background = java.awt.Color(0x11100D)
-    ui = object : BasicScrollBarUI() {
-        private val thumb = java.awt.Color(0x514D44)
-        private val thumbHover = java.awt.Color(0xD18A4B)
-        private val track = java.awt.Color(0x11100D)
-
-        override fun configureScrollBarColors() {
-            thumbColor = thumb
-            thumbHighlightColor = thumb
-            thumbDarkShadowColor = thumb
-            thumbLightShadowColor = thumb
-            trackColor = track
-            trackHighlightColor = track
-        }
-
-        override fun paintThumb(g: java.awt.Graphics, c: javax.swing.JComponent, thumbBounds: Rectangle) {
-            if (thumbBounds.isEmpty || !scrollbar.isEnabled) return
-            val g2 = g.create() as java.awt.Graphics2D
-            g2.color = if (isThumbRollover) thumbHover else thumb
-            g2.fillRoundRect(thumbBounds.x + 2, thumbBounds.y + 2, thumbBounds.width - 4, thumbBounds.height - 4, 8, 8)
-            g2.dispose()
-        }
-
-        override fun paintTrack(g: java.awt.Graphics, c: javax.swing.JComponent, trackBounds: Rectangle) {
-            g.color = track
-            g.fillRect(trackBounds.x, trackBounds.y, trackBounds.width, trackBounds.height)
-        }
-
-        override fun createDecreaseButton(orientation: Int): JButton = invisibleButton()
-        override fun createIncreaseButton(orientation: Int): JButton = invisibleButton()
-        private fun invisibleButton() = JButton().apply {
-            preferredSize = java.awt.Dimension(0, 0)
-            minimumSize = java.awt.Dimension(0, 0)
-            maximumSize = java.awt.Dimension(0, 0)
-        }
     }
 }

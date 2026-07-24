@@ -1,6 +1,5 @@
 package app.andy.desktop.service.agents
 
-import app.andy.domain.diffForNewFile
 import app.andy.domain.parseUnifiedDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
@@ -46,53 +45,62 @@ class WorktreeManager(
         return if (parts.isEmpty()) "no changes yet" else parts.joinToString("\n\n")
     }
 
-    /** Records local changes that predate an agent task so they are never attributed to it later. */
-    fun captureChangeBaseline(dir: String): List<String>? {
-        if (!isGitRepo(dir)) return null
-        return (changedPaths(dir) + untrackedPaths(dir)).distinct().sorted()
+    /**
+     * Snapshots the full working-tree state (tracked + untracked, respecting .gitignore) as a git
+     * tree object, without touching HEAD, the branch, or the real index. Used as a content-addressed
+     * baseline so later diffs can tell "unchanged since baseline" apart from "further edited during
+     * this task", even for files that were already dirty when the baseline was taken.
+     */
+    private fun snapshotTree(dir: String): String? {
+        val tmpIndex = File.createTempFile("andy-snapshot-", ".idx").apply { delete() }
+        return try {
+            val env = mapOf("GIT_INDEX_FILE" to tmpIndex.absolutePath)
+            if (git(dir, listOf("add", "-A"), env).exitCode != 0) return null
+            val writeTree = git(dir, listOf("write-tree"), env)
+            if (writeTree.exitCode != 0) return null
+            writeTree.output.trim().takeIf { it.isNotBlank() }
+        } finally {
+            tmpIndex.delete()
+        }
     }
 
-    fun changeSummary(dir: String, baselinePaths: List<String>): AgentChangeSummary? {
+    /** Records the full working-tree state before an agent task starts, as a diffable baseline. */
+    fun captureChangeBaseline(dir: String): String? {
         if (!isGitRepo(dir)) return null
-        val ignored = baselinePaths.toSet()
-        val changes = linkedMapOf<String, AgentFileChange>()
-        val numstat = git(dir, "diff", "--numstat", "--no-renames", "HEAD")
-        if (numstat.exitCode == 0) {
-            numstat.output.lineSequence().forEach { line ->
-                val fields = line.split('\t', limit = 3)
-                if (fields.size != 3 || fields[2] in ignored) return@forEach
-                changes[fields[2]] = AgentFileChange(
-                    path = fields[2],
-                    additions = fields[0].toIntOrNull() ?: 0,
-                    deletions = fields[1].toIntOrNull() ?: 0,
-                )
-            }
-        }
-        untrackedPaths(dir).filterNot { it in ignored || it in changes }.forEach { path ->
-            val lines = runCatching { File(dir, path).useLines { it.count() } }.getOrDefault(0)
-            changes[path] = AgentFileChange(path, additions = lines, deletions = 0)
-        }
-        return AgentChangeSummary(changes.values.sortedBy { it.path })
+        return snapshotTree(dir)
+    }
+
+    fun changeSummary(dir: String, baselineTree: String?): AgentChangeSummary? {
+        if (!isGitRepo(dir) || baselineTree == null) return null
+        val currentTree = snapshotTree(dir) ?: return null
+        if (currentTree == baselineTree) return AgentChangeSummary(emptyList())
+        val numstat = git(dir, "diff", "--numstat", "--no-renames", baselineTree, currentTree)
+        if (numstat.exitCode != 0) return null
+        val changes = numstat.output.lineSequence().mapNotNull { line ->
+            val fields = line.split('\t', limit = 3)
+            if (fields.size != 3) return@mapNotNull null
+            AgentFileChange(
+                path = fields[2],
+                additions = fields[0].toIntOrNull() ?: 0,
+                deletions = fields[1].toIntOrNull() ?: 0,
+            )
+        }.sortedBy { it.path }.toList()
+        return AgentChangeSummary(changes)
     }
 
     /** Captures a task's completed change set before later work in the repository can alter it. */
-    fun changeSnapshot(dir: String, baselinePaths: List<String>): AgentThreadChangeSnapshot? {
-        val summary = changeSummary(dir, baselinePaths) ?: return null
+    fun changeSnapshot(dir: String, baselineTree: String?): AgentThreadChangeSnapshot? {
+        val summary = changeSummary(dir, baselineTree) ?: return null
         val diffs = summary.files.associate { change ->
-            change.path to (fileDiff(dir, change.path) ?: AgentFileDiff(path = change.path, lines = emptyList()))
+            change.path to (fileDiff(dir, change.path, baselineTree) ?: AgentFileDiff(path = change.path, lines = emptyList()))
         }
         return AgentThreadChangeSnapshot(summary = summary, diffs = diffs)
     }
 
-    /** Unified diff for a single path relative to [dir], for inline review. */
-    fun fileDiff(dir: String, relativePath: String): AgentFileDiff? {
-        if (!isGitRepo(dir) || relativePath.isBlank()) return null
-        if (relativePath in untrackedPaths(dir)) {
-            val file = File(dir, relativePath)
-            if (!file.isFile) return AgentFileDiff(path = relativePath, lines = emptyList(), isNewFile = true)
-            val content = runCatching { file.readText() }.getOrElse { return null }
-            return diffForNewFile(relativePath, content)
-        }
+    /** Unified diff for a single path relative to [dir] and [baselineTree], for inline review. */
+    fun fileDiff(dir: String, relativePath: String, baselineTree: String?): AgentFileDiff? {
+        if (!isGitRepo(dir) || relativePath.isBlank() || baselineTree == null) return null
+        val currentTree = snapshotTree(dir) ?: return null
         val result = git(
             dir,
             "diff",
@@ -100,7 +108,8 @@ class WorktreeManager(
             "--no-ext-diff",
             "--no-renames",
             "-U3",
-            "HEAD",
+            baselineTree,
+            currentTree,
             "--",
             relativePath,
         )
@@ -123,14 +132,12 @@ class WorktreeManager(
 
     private data class GitResult(val exitCode: Int, val output: String)
 
-    private fun changedPaths(dir: String): List<String> = git(dir, "diff", "--name-only", "--no-renames", "HEAD")
-        .output.lineSequence().filter { it.isNotBlank() }.toList()
+    private fun git(dir: String, vararg args: String): GitResult = git(dir, args.toList(), emptyMap())
 
-    private fun untrackedPaths(dir: String): List<String> = git(dir, "ls-files", "--others", "--exclude-standard")
-        .output.lineSequence().filter { it.isNotBlank() }.toList()
-
-    private fun git(dir: String, vararg args: String): GitResult = runCatching {
-        val process = ProcessBuilder(listOf("git", "-C", dir) + args).redirectErrorStream(true).start()
+    private fun git(dir: String, args: List<String>, env: Map<String, String>): GitResult = runCatching {
+        val process = ProcessBuilder(listOf("git", "-C", dir) + args).redirectErrorStream(true)
+            .apply { environment().putAll(env) }
+            .start()
         val output = readOutputWithin(process, timeoutSeconds = 30)
         if (output == null) {
             return GitResult(-1, "git timed out")

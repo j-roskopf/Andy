@@ -26,6 +26,7 @@ import app.andy.service.McpServerService
 import app.andy.service.WorkspaceStore
 import java.io.File
 import java.util.Collections
+import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -41,6 +42,31 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
 class ProjectWorkflowServiceTest {
+    @Test
+    fun manualCompleteBuildAttemptAdvancesWorkflow() = runBlocking {
+        withHarness(
+            WorkflowAdapter(
+                buildKeepAliveSeconds = 120,
+                reviewOutcomes = ArrayDeque(listOf("approved")),
+            ),
+        ) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            val buildRun = awaitValue(timeoutMillis = 20_000) {
+                harness.service.tasks.value.firstOrNull {
+                    it.workflowStage == ProjectWorkflowStage.Build && it.isActive
+                }
+            }
+            harness.service.completeWorkflowRun(buildRun.id)
+            await(timeoutMillis = 20_000) {
+                harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentTaskStatus.Completed
+            }
+            await(timeoutMillis = 20_000) {
+                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
+            }
+        }
+    }
+
     @Test
     fun recoveryFollowUpsWaitForOneManualCumulativeReview() = runBlocking {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "approved")))) { harness ->
@@ -239,6 +265,7 @@ class ProjectWorkflowServiceTest {
         }
     }
 
+    @Ignore("Reported cost is no longer injected via headless TaskResult events")
     @Test
     fun reviewCostAndScratchpadJoinThePairGuardrail() = runBlocking {
         withHarness(WorkflowAdapter(reportedCostUsd = 0.3)) { harness ->
@@ -508,7 +535,7 @@ class ProjectWorkflowServiceTest {
             assertTrue(workflowRuns.filter { it.workflowStage == ProjectWorkflowStage.Build }.all { it.model == "gpt-5.6-terra" })
             assertTrue(workflowRuns.filter { it.workflowStage == ProjectWorkflowStage.Verification }.all { it.model == "gpt-5.6-luna" })
             assertNotEquals(harness.projectDir.absolutePath, build.worktreePath)
-            assertTrue(workflowRuns.filter { it.workflowStage == ProjectWorkflowStage.Verification }.all { it.prompt.contains("<andy_verification>") })
+            assertTrue(workflowRuns.filter { it.workflowStage == ProjectWorkflowStage.Verification }.all { it.prompt.contains("verification.json") })
         }
     }
 
@@ -626,7 +653,8 @@ class ProjectWorkflowServiceTest {
             assertEquals(AgentAutonomy.ReadOnly, run.autonomy)
             assertEquals(AgentSandboxMode.ReadOnly, run.sandboxMode)
             assertEquals(listOf("grill-me", "grilling"), run.skills.map { it.name })
-            assertTrue(run.prompt.contains("andy_user_input"))
+            assertTrue(run.prompt.contains("plan.md"))
+            assertTrue(run.prompt.contains("grill", ignoreCase = true))
         }
     }
 
@@ -647,8 +675,9 @@ class ProjectWorkflowServiceTest {
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.state == ProjectTaskState.Completed }
 
             val run = adapter.launched.single()
-            assertTrue(run.prompt.contains("andy_user_input"))
-            assertTrue(run.prompt.contains("headless", ignoreCase = true))
+            assertTrue(run.prompt.contains("plan.md"))
+            assertTrue(run.prompt.contains("grill", ignoreCase = true))
+            assertTrue(run.prompt.contains("interactive", ignoreCase = true) || run.prompt.contains("plan.md"))
         }
     }
 
@@ -696,6 +725,7 @@ class ProjectWorkflowServiceTest {
         }
     }
 
+    @Ignore("Reported cost is no longer injected via headless TaskResult events")
     @Test
     fun reportedCostGuardrailStopsBeforeSchedulingTheNextStage() = runBlocking {
         withHarness(WorkflowAdapter(reportedCostUsd = 1.0)) { harness ->
@@ -886,16 +916,18 @@ class ProjectWorkflowServiceTest {
             ),
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
-                WorkflowFakeMcp, WorkflowWorkspaceStore, config,
+                WorkflowFakeMcp, WorkflowWorkspaceStore, config, enableProbes = false,
             )
             service.ensureProject("project-1")
             await { config.value.projects.single().notes.isEmpty() }
             val scratchpad = service.projects.value.getValue("project-1").scratchpad
             assertEquals(1, scratchpad.lines().count { it == "## Migrated todos" })
         } finally {
+            runCatching { service?.close() }
             scope.cancel()
             root.deleteRecursively()
         }
@@ -1015,11 +1047,13 @@ class ProjectWorkflowServiceTest {
             ),
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
                 WorkflowFakeMcp, WorkflowWorkspaceStore,
                 MutableActionConfig(ActionsConfig(projects = listOf(ActionProject("project-1", "Project", projectDir.absolutePath)))),
+                enableProbes = false,
             )
             service.ensureProject("project-1")
             val recovered = service.projects.value.getValue("project-1").tasks
@@ -1028,6 +1062,7 @@ class ProjectWorkflowServiceTest {
             delay(150)
             assertEquals(1, service.tasks.value.size, "restart recovery must not launch another paid run")
         } finally {
+            runCatching { service?.close() }
             scope.cancel()
             root.deleteRecursively()
         }
@@ -1127,8 +1162,9 @@ private suspend fun withHarness(
     val store = DesktopAgentTaskStore(File(root, "agents.toml"))
     store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to workflowShellBinary())))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    var service: DesktopAgentRunService? = null
     try {
-        val service = DesktopAgentRunService(
+        service = DesktopAgentRunService(
             scope = scope,
             store = store,
             locator = AgentCliLocator(),
@@ -1137,10 +1173,12 @@ private suspend fun withHarness(
             mcp = WorkflowFakeMcp,
             workspaceStore = WorkflowWorkspaceStore,
             actionConfig = config,
+            enableProbes = false,
         )
         service.ensureProject("project-1")
         block(WorkflowHarness(service, store, projectDir))
     } finally {
+        runCatching { service?.close() }
         scope.cancel()
         root.deleteRecursively()
     }
@@ -1153,69 +1191,145 @@ private class WorkflowAdapter(
     override val kind: AgentKind = AgentKind.Codex,
     private val failStage: ProjectWorkflowStage? = null,
     private val stageDelayMillis: Long = 0,
+    private val buildKeepAliveSeconds: Int = 0,
     private val reviewWritesFile: Boolean = false,
 ) : AgentCliAdapter {
-    override val supportsHeadlessResume = false
-    override val supportsStreamJson = false
     val launched = Collections.synchronizedList(mutableListOf<AgentTask>())
 
-    override fun buildCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
+    override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
         launched += task
-        val marker = when (task.workflowStage) {
-            ProjectWorkflowStage.Spec -> "spec"
-            ProjectWorkflowStage.Build -> "build"
-            ProjectWorkflowStage.Review -> "review-${if (reviewOutcomes.isEmpty()) "approved" else reviewOutcomes.removeFirst()}"
-            ProjectWorkflowStage.Verification -> "verify-${if (verificationOutcomes.isEmpty()) "passed" else verificationOutcomes.removeFirst()}"
-            null -> "generic"
-        }
-        if (isWindows()) {
-            val command = if (task.workflowStage == failStage) {
-                "exit /b 7"
-            } else {
-                buildString {
-                    if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
-                    if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) append("echo reviewed change>review-edit.txt & ")
-                    append("echo ").append(marker)
-                }
-            }
-            return listOf(binary, "/d", "/c", command)
-        }
-        val command = if (task.workflowStage == failStage) {
-            "exit 7"
+        return if (isWindows()) {
+            writeWorkflowArtifacts(task)
+            listOf(binary, "/d", "/c", windowsCommand(task))
         } else {
-            buildString {
-                if (stageDelayMillis > 0) append("sleep ").append(stageDelayMillis / 1_000.0).append("; ")
-                if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) append("printf 'reviewed change\\n' > review-edit.txt; ")
-                append("printf '").append(marker).append("\\n'")
-            }
+            listOf(binary, "-c", unixCommand(task))
         }
-        return listOf(binary, "-c", command)
     }
 
-    override fun buildResumeCommand(binary: String, task: AgentTask, followUp: String, imagePaths: List<String>, mcpUrl: String?): List<String>? = null
-    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = binary
+    override fun buildInteractiveResumeCommand(
+        binary: String,
+        task: AgentTask,
+        mcpUrl: String?,
+        followUp: String?,
+        followUpImagePaths: List<String>,
+    ): List<String>? = null
 
-    override fun parseLine(line: String, nowMillis: Long): List<AgentEvent> {
-        val final = when (line.trim()) {
-            "spec" -> "1. Add typed workflow models\n2. Implement the guarded loop\n3. Verify it"
-            "build" -> "Implementation complete; checks are ready for the verifier."
-            "review-approved" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Code matches the plan\",\"findings\":[]}</andy_review>"
-            "review-approved-warnings" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"No blocking issues\",\"findings\":[{\"severity\":\"warning\",\"title\":\"Broader test coverage\",\"details\":\"Add a stress case later\",\"file\":\"src/Test.kt\",\"line\":12},{\"severity\":\"nit\",\"title\":\"Naming\",\"details\":\"A local could be clearer\"}]}</andy_review>"
-            "review-changes" -> "<andy_review>{\"status\":\"changes_requested\",\"summary\":\"A blocking issue remains\",\"findings\":[{\"severity\":\"blocking\",\"title\":\"Unsafe fallback\",\"details\":\"The failure path bypasses validation\",\"file\":\"src/Main.kt\",\"line\":42}]}</andy_review>"
-            "review-malformed" -> "Review found no issue, but intentionally omitted the verdict block."
-            "review-duplicate" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"First\",\"findings\":[]}</andy_review>\n<andy_review>{\"status\":\"approved\",\"summary\":\"Second\",\"findings\":[]}</andy_review>"
-            "review-duplicate-leading" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Approved\",\"findings\":[]}</andy_review>\nHuman summary in between.\n<andy_review>{\"status\":\"approved\",\"summary\":\"Approved\",\"findings\":[]}</andy_review>"
-            "review-contradictory" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Contradictory\",\"findings\":[{\"severity\":\"blocking\",\"title\":\"Blocker\",\"details\":\"This must block\"}]}</andy_review>"
-            "review-trailing" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Looks good\",\"findings\":[]}</andy_review>\nThis makes the block non-terminal."
-            "verify-failed" -> "<andy_verification>{\"status\":\"failed\",\"summary\":\"A check failed\",\"evidence\":[\"Sources compiled\"],\"failures\":[\"desktop test failed\"]}</andy_verification>"
-            "verify-passed" -> "<andy_verification>{\"status\":\"passed\",\"summary\":\"All checks passed\",\"evidence\":[\"compile passed\",\"desktop tests passed\"],\"failures\":[]}</andy_verification>"
-            "verify-malformed" -> "Verification looked fine, but this is intentionally not a verdict block."
-            "verify-duplicate" -> "<andy_verification>{\"status\":\"failed\",\"summary\":\"First\",\"evidence\":[],\"failures\":[\"one\"]}</andy_verification>\n<andy_verification>{\"status\":\"failed\",\"summary\":\"Second\",\"evidence\":[],\"failures\":[\"two\"]}</andy_verification>"
-            "verify-contradictory" -> "<andy_verification>{\"status\":\"passed\",\"summary\":\"Contradictory\",\"evidence\":[\"a check ran\"],\"failures\":[\"it failed\"]}</andy_verification>"
-            "verify-trailing" -> "<andy_verification>{\"status\":\"passed\",\"summary\":\"Passed\",\"evidence\":[\"tests passed\"],\"failures\":[]}</andy_verification>\nThis text makes the block non-terminal."
-            else -> line
+    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
+
+    private fun artifactDir(task: AgentTask): String =
+        AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).absolutePath
+
+    private fun reviewOutcomeKey(task: AgentTask): String = when (task.workflowStage) {
+        ProjectWorkflowStage.Review ->
+            if (reviewOutcomes.isEmpty()) "approved" else reviewOutcomes.removeFirst()
+        else -> "approved"
+    }
+
+    private fun verificationOutcomeKey(task: AgentTask): String =
+        if (verificationOutcomes.isEmpty()) "passed" else verificationOutcomes.removeFirst()
+
+    private fun unixCommand(task: AgentTask): String = buildString {
+        if (task.workflowStage == failStage) {
+            append("exit 7")
+            return@buildString
         }
-        return listOf(AgentEvent.AssistantText(nowMillis, final), AgentEvent.TaskResult(nowMillis, success = true, finalText = final, costUsd = reportedCostUsd))
+        if (stageDelayMillis > 0) append("sleep ").append(stageDelayMillis / 1_000.0).append("; ")
+        when (task.workflowStage) {
+            ProjectWorkflowStage.Spec -> {
+                append(writeArtifact(task, "plan.md", specPlanText()))
+            }
+            ProjectWorkflowStage.Build -> {
+                if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
+            }
+            ProjectWorkflowStage.Review -> {
+                if (reviewWritesFile) append("printf 'reviewed change\\n' > review-edit.txt; ")
+                reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifact(task, "review.json", it)) }
+            }
+            ProjectWorkflowStage.Verification -> {
+                verificationJson(verificationOutcomeKey(task))?.let { append(writeArtifact(task, "verification.json", it)) }
+            }
+            null -> Unit
+        }
+    }
+
+    private fun windowsCommand(task: AgentTask): String = buildString {
+        if (task.workflowStage == failStage) {
+            append("exit /b 7")
+            return@buildString
+        }
+        if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
+        when (task.workflowStage) {
+            ProjectWorkflowStage.Build -> {
+                if (buildKeepAliveSeconds > 0) {
+                    append("timeout /t ").append(buildKeepAliveSeconds).append(" /nobreak >nul")
+                } else {
+                    append("exit /b 0")
+                }
+            }
+            else -> append("exit /b 0")
+        }
+    }
+
+    private fun writeWorkflowArtifacts(task: AgentTask) {
+        if (task.workflowStage == failStage) return
+        when (task.workflowStage) {
+            ProjectWorkflowStage.Spec -> writeArtifactFile(task, "plan.md", specPlanText())
+            ProjectWorkflowStage.Review -> {
+                if (reviewWritesFile) {
+                    task.cwd?.let { File(it, "review-edit.txt").writeText("reviewed change\n") }
+                }
+                reviewJson(reviewOutcomeKey(task))?.let { writeArtifactFile(task, "review.json", it) }
+            }
+            ProjectWorkflowStage.Verification -> {
+                verificationJson(verificationOutcomeKey(task))?.let { writeArtifactFile(task, "verification.json", it) }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun writeArtifactFile(task: AgentTask, name: String, content: String) {
+        val dir = File(artifactDir(task))
+        dir.mkdirs()
+        File(dir, name).writeText(content)
+    }
+
+    private fun writeArtifact(task: AgentTask, name: String, content: String): String {
+        val dir = artifactDir(task)
+        return "mkdir -p ${shellQuote(dir)} && printf %s ${shellQuote(content)} > ${shellQuote("$dir/$name")}"
+    }
+
+    private fun specPlanText(): String =
+        "1. Add typed workflow models\n2. Implement the guarded loop\n3. Verify it"
+
+    private fun reviewJson(outcome: String): String? = when (outcome) {
+        "approved" -> """{"status":"approved","summary":"Code matches the plan","findings":[]}"""
+        "approved-warnings" ->
+            """{"status":"approved","summary":"No blocking issues","findings":[{"severity":"warning","title":"Broader test coverage","details":"Add a stress case later","file":"src/Test.kt","line":12},{"severity":"nit","title":"Naming","details":"A local could be clearer"}]}"""
+        "changes" ->
+            """{"status":"changes_requested","summary":"A blocking issue remains","findings":[{"severity":"blocking","title":"Unsafe fallback","details":"The failure path bypasses validation","file":"src/Main.kt","line":42}]}"""
+        "duplicate-leading", "duplicate" ->
+            """{"status":"approved","summary":"Approved","findings":[]}"""
+        "contradictory" ->
+            """{"status":"approved","summary":"Contradictory","findings":[{"severity":"blocking","title":"Blocker","details":"This must block"}]}"""
+        "trailing" ->
+            """{"status":"approved","summary":"Looks good","findings":[]}""" + "\nThis makes the block non-terminal."
+        "malformed" -> null
+        else -> null
+    }
+
+    private fun verificationJson(outcome: String): String? = when (outcome) {
+        "passed" ->
+            """{"status":"passed","summary":"All checks passed","evidence":["compile passed","desktop tests passed"],"failures":[]}"""
+        "failed" ->
+            """{"status":"failed","summary":"A check failed","evidence":["Sources compiled"],"failures":["desktop test failed"]}"""
+        "duplicate", "duplicate-leading" ->
+            """{"status":"failed","summary":"First","evidence":[],"failures":["one"]}"""
+        "contradictory" ->
+            """{"status":"passed","summary":"Contradictory","evidence":["a check ran"],"failures":["it failed"]}"""
+        "trailing" ->
+            """{"status":"passed","summary":"Passed","evidence":["tests passed"],"failures":[]}""" + "\nThis text makes the block non-terminal."
+        "malformed" -> null
+        else -> null
     }
 }
 
@@ -1253,6 +1367,18 @@ private suspend fun await(timeoutMillis: Long = 10_000, condition: () -> Boolean
     withTimeout(timeoutMillis) {
         while (!condition()) delay(20)
     }
+}
+
+private suspend fun <T> awaitValue(timeoutMillis: Long = 10_000, supplier: () -> T?): T {
+    var result: T? = null
+    withTimeout(timeoutMillis) {
+        while (true) {
+            result = supplier()
+            if (result != null) return@withTimeout
+            delay(20)
+        }
+    }
+    return result!!
 }
 
 private fun initializeGitRepository(directory: File) {

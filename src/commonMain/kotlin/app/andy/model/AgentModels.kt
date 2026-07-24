@@ -217,6 +217,11 @@ enum class AgentTaskStatus {
     Running,
     /** The agent stopped at an explicit decision point and is awaiting a response in Andy. */
     WaitingForInput,
+    /**
+     * Interactive session was idle at a prompt when the app quit; the turn finished
+     * and the chat can be resumed interactively.
+     */
+    Paused,
     Completed,
     Failed,
     Stopped,
@@ -294,9 +299,8 @@ data class AgentTask(
     /** An explicit decision checkpoint that must be answered before this task can continue. */
     val userInputRequest: AgentUserInputRequest? = null,
     val maxBudgetUsd: Double? = null,
-    /** Files already changed when the task began; excluded from its change summary. */
-    val changeBaselinePaths: List<String> = emptyList(),
-    val hasChangeBaseline: Boolean = false,
+    /** Git tree hash snapshotting the full working tree when the task began; changes are diffed against it. */
+    val changeBaselineTree: String? = null,
     /** Immutable repository changes captured when this chat last finished. */
     val completedChanges: AgentThreadChangeSnapshot? = null,
     val status: AgentTaskStatus = AgentTaskStatus.Queued,
@@ -624,6 +628,17 @@ fun promptWithImageHints(text: String, imagePaths: List<String>): String = if (i
     }.trimEnd()
 }
 
+/** Inline image paths for typing into a live PTY where multiline paste needs two Enters. */
+fun promptWithInlineImageHints(text: String, imagePaths: List<String>): String = if (imagePaths.isEmpty()) {
+    text
+} else {
+    val paths = imagePaths.joinToString(", ")
+    when {
+        text.isBlank() -> "Attached image files (inspect as part of the task): $paths"
+        else -> "$text — attached image files (inspect as part of the task): $paths"
+    }
+}
+
 /** Gives provider CLIs a concrete, portable pointer to the selected local instructions. */
 fun promptWithSkillHints(text: String, skills: List<AgentSkill>): String = if (skills.isEmpty()) {
     text
@@ -655,6 +670,46 @@ fun AgentTask.promptForCli(): String = promptWithImageHints(
 
 fun AgentTask.followUpPromptForCli(text: String, imagePaths: List<String>): String = promptWithImageHints(
     promptWithPlanModeHint(text, planMode),
+    imagePaths,
+)
+
+/** Prompt and native image argv for a follow-up turn. */
+data class FollowUpCliPayload(
+    val prompt: String,
+    val imagePaths: List<String> = emptyList(),
+)
+
+/**
+ * Formats a follow-up for provider CLIs. Text-only CLIs receive file paths in the
+ * prompt; Codex receives them separately for native `--image` flags.
+ */
+fun AgentTask.followUpCliPayload(
+    text: String,
+    imagePaths: List<String>,
+    skills: List<AgentSkill> = emptyList(),
+): FollowUpCliPayload {
+    val enriched = promptWithGoalHint(promptWithSkillHints(text, skills), goal)
+    return when (agent) {
+        AgentKind.Codex -> FollowUpCliPayload(
+            prompt = promptWithPlanModeHint(enriched, planMode),
+            imagePaths = imagePaths,
+        )
+        else -> FollowUpCliPayload(
+            prompt = followUpPromptForCli(enriched, imagePaths),
+        )
+    }
+}
+
+/** Compact prompt for typing into a live interactive PTY from Andy's composer. */
+fun AgentTask.followUpPromptForLiveTerminal(
+    text: String,
+    imagePaths: List<String>,
+    skills: List<AgentSkill> = emptyList(),
+): String = promptWithInlineImageHints(
+    followUpPromptForCli(
+        promptWithGoalHint(promptWithSkillHints(text, skills), goal),
+        emptyList(),
+    ),
     imagePaths,
 )
 

@@ -20,7 +20,6 @@ class DesktopWorkspaceStoreTest {
             agentNotificationTiming = AgentNotificationTiming.Always,
             agentNotificationSoundId = "ping",
             tintId = "violet",
-            compactToolCalls = false,
         )
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
@@ -63,9 +62,6 @@ class DesktopWorkspaceStoreTest {
         file.writeText(file.readText().replace("editorSyntaxThemeId=monokai", "editorSyntaxThemeId=not-a-theme"))
         assertEquals("andy", DesktopWorkspaceStore(file).load().editorSyntaxThemeId)
 
-        file.writeText(file.readText().replace("compactToolCalls=false", "compactToolCalls=not-a-bool"))
-        assertEquals(true, DesktopWorkspaceStore(file).load().compactToolCalls)
-
         DesktopWorkspaceStore(file).save(
             saved.copy(
                 tracingPresetId = "battery",
@@ -98,5 +94,45 @@ class DesktopWorkspaceStoreTest {
             },
         )
         assertEquals("Files", DesktopWorkspaceStore(file).load().filesTab)
+    }
+
+    @Test
+    fun roundTripsTerminalAppearanceAndCoercesLegacyThemeIds() = runBlocking {
+        val file = createTempDirectory("andy-workspace-terminal").toFile().resolve("workspace.properties")
+        val saved = WorkspaceState(
+            terminalThemeId = "nord",
+            terminalForegroundHex = "#1A1814",
+            terminalBackgroundHex = "#F7F4EC",
+            terminalSelectionFgHex = "#1A1814",
+            terminalSelectionBgHex = "#B8D0F0",
+            terminalFoundFgHex = "#1A1814",
+            terminalFoundBgHex = "#FFE066",
+            terminalHyperlinkFgHex = "#0B57D0",
+            terminalHyperlinkBgHex = "#F7F4EC",
+            terminalUseInverseSelection = false,
+            terminalColorPaletteId = "windows",
+            terminalFontFamilyId = "jetbrains-mono",
+            terminalFontSize = 16f,
+        )
+        DesktopWorkspaceStore(file).save(saved)
+        assertEquals(saved, DesktopWorkspaceStore(file).load())
+
+        // Legacy / unknown theme ids coerce to KetraTerm One Dark on load.
+        file.writeText(file.readText().replace("terminalThemeId=nord", "terminalThemeId=andy"))
+        assertEquals("one-dark", DesktopWorkspaceStore(file).load().terminalThemeId)
+
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                terminalThemeId = "custom",
+                terminalForegroundHex = "garbage",
+                terminalFontFamilyId = "comic",
+                terminalFontSize = 15.6f,
+            ),
+        )
+        val coerced = DesktopWorkspaceStore(file).load()
+        assertEquals("one-dark", coerced.terminalThemeId)
+        assertEquals("#ABB2BF", coerced.terminalForegroundHex)
+        assertEquals("default", coerced.terminalFontFamilyId)
+        assertEquals(16f, coerced.terminalFontSize)
     }
 }

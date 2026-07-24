@@ -51,6 +51,7 @@ import app.andy.model.PerformanceTab
 import app.andy.model.ProxyStartOptions
 import app.andy.model.AgentTask
 import app.andy.model.RunningAction
+import app.andy.ui.agents.isSessionWorking
 import app.andy.service.AvailableUpdate
 import app.andy.ui.network.shouldAutoStartProxy
 import app.andy.ui.performance.PerformanceScreen
@@ -96,6 +97,11 @@ internal fun AndyShell(
         services.agentRuns.tasks.collectAsState()
     } else {
         remember { mutableStateOf(emptyList<AgentTask>()) }
+    }
+    val sessionStatuses by if (capabilities.hostAutomation) {
+        services.agentRuns.sessionStatuses.collectAsState()
+    } else {
+        remember { mutableStateOf(emptyMap()) }
     }
     val pendingUpdateInstallConfirmation by if (capabilities.updates) {
         services.updates.pendingInstallConfirmation.collectAsState()
@@ -203,7 +209,11 @@ internal fun AndyShell(
         tintId = state.workspaceState.tintId,
         surfaceModeId = state.workspaceState.surfaceModeId,
     ) {
-    CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides state.chromeMenuExpanded) {
+    CompositionLocalProvider(
+        // Keep SwingPanel mounted during window resize; MirrorPresentationGuard blocks geometry
+        // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
+        LocalSuppressHeavyweightSurfaces provides state.chromeMenuExpanded,
+    ) {
     Box(
         Modifier.fillMaxSize()
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
@@ -219,7 +229,9 @@ internal fun AndyShell(
                 // the standalone Agent destination.
                 hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
                 hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
-                hasActiveProjectAgentTasks = agentTasks.any { it.isActive && it.projectId != null },
+                hasActiveProjectAgentTasks = agentTasks.any { task ->
+                    task.projectId != null && isSessionWorking(task.isActive, sessionStatuses[task.id])
+                },
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },
@@ -302,7 +314,6 @@ internal fun AndyShell(
                             requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
                             requestedProjectId = requestedOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
-                            compactToolCalls = state.workspaceState.compactToolCalls,
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
@@ -313,7 +324,6 @@ internal fun AndyShell(
                             services = services, active = agentsActive,
                             requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = onOpenAgentTaskConsumed,
-                            compactToolCalls = state.workspaceState.compactToolCalls,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {

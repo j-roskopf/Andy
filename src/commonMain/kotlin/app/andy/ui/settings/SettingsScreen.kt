@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -57,6 +58,8 @@ import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.TerminalFontFamily
+import app.andy.model.TerminalThemePreset
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.McpServerService
@@ -86,7 +89,7 @@ private enum class DesktopSettingsCategory(
     val label: String,
     val subtitle: String,
 ) {
-    Appearance("Appearance", "Tint, background, and editor theme"),
+    Appearance("Appearance", "Tint, background, editor, and terminal"),
     Agents("Agents", "Transcript and notification preferences"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
@@ -97,8 +100,7 @@ private enum class WebSettingsCategory(
     val label: String,
     val subtitle: String,
 ) {
-    Appearance("Appearance", "Tint, background, and editor theme"),
-    Agents("Agents", "How tool activity appears in chats"),
+    Appearance("Appearance", "Tint, background, editor, and terminal"),
     Connection("Connection", "ADB WebSocket and WebUSB"),
     Data("Data", "Browser storage and authorization"),
     About("About", "Origins and platform support"),
@@ -133,7 +135,6 @@ internal fun SettingsScreen(
         when (category) {
             DesktopSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
             DesktopSettingsCategory.Agents -> {
-                AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -458,6 +459,112 @@ private fun AppearancePanel(
             modifier = Modifier.fillMaxWidth(),
         )
     }
+    TerminalAppearancePanel(workspace, update)
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TerminalAppearancePanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val selectedPresetId = TerminalThemePreset.fromId(workspace.terminalThemeId).id
+    val selectedFont = TerminalFontFamily.fromId(workspace.terminalFontFamilyId)
+    val selectedSize = TerminalThemePreset.coerceFontSize(workspace.terminalFontSize)
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Terminal",
+            description = "KetraTerm theme and font for agent and project terminals. Changes apply to new and live sessions.",
+        )
+
+        Text("Theme", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalThemePreset.entries.forEach { preset ->
+                SettingsChoicePill(
+                    label = preset.label,
+                    selected = preset.id == selectedPresetId,
+                    contentDescription = "${preset.label} terminal theme",
+                    onClick = { update { preset.applyTo(it) } },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Font", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalFontFamily.entries.forEach { font ->
+                SettingsChoicePill(
+                    label = font.label,
+                    selected = font == selectedFont,
+                    contentDescription = "${font.label} terminal font",
+                    onClick = { update { it.copy(terminalFontFamilyId = font.id) } },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Font size", color = TextSecondary, fontSize = 12.sp)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TerminalThemePreset.FontSizes.forEach { size ->
+                SettingsChoicePill(
+                    label = size.toInt().toString(),
+                    selected = size == selectedSize,
+                    contentDescription = "Terminal font size ${size.toInt()}",
+                    onClick = { update { it.copy(terminalFontSize = size) } },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Preview", color = TextSecondary, fontSize = 12.sp)
+        TerminalThemePreview(
+            terminalThemeId = workspace.terminalThemeId,
+            fontFamilyId = workspace.terminalFontFamilyId,
+            fontSize = workspace.terminalFontSize,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun SettingsChoicePill(
+    label: String,
+    selected: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
+        ),
+        modifier = Modifier
+            .background(
+                if (selected) AndyColors.OrangeSubtle else PanelSoft,
+                RoundedCornerShape(AndyRadius.R3),
+            )
+            .border(
+                1.dp,
+                if (selected) AndyColors.OrangeBorder else Border,
+                RoundedCornerShape(AndyRadius.R3),
+            )
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+    }
 }
 
 @Composable
@@ -494,36 +601,6 @@ private fun OnboardingPanel(
     }
 }
 
-@Composable
-private fun AgentTranscriptPanel(
-    workspace: WorkspaceState,
-    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
-) {
-    PanelCard {
-        SettingsSectionHeader(
-            title = "Transcript",
-            description = "Control how tool activity appears in agent chats.",
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Checkbox(
-                checked = workspace.compactToolCalls,
-                onCheckedChange = { checked -> update { it.copy(compactToolCalls = checked) } },
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Compact tool calls", color = TextPrimary, fontSize = 13.sp)
-                Text(
-                    "Collapse consecutive tools into one expandable line. Uncheck to show each tool call on its own row.",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun AgentNotificationsPanel(
@@ -864,7 +941,6 @@ private fun WebSettingsScreen(
     ) {
         when (category) {
             WebSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
-            WebSettingsCategory.Agents -> AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
             WebSettingsCategory.Connection -> {
                 PanelCard {
                     SettingsSectionHeader(

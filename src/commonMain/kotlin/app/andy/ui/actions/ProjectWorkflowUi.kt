@@ -74,6 +74,7 @@ import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectVerificationStatus
+import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.defaultSandboxMode
 import app.andy.model.grillMeInstallCommand
@@ -485,9 +486,21 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
         val runIds = (build.attempts + review?.attempts.orEmpty() + verification?.attempts.orEmpty()).map { it.runId }.toSet()
         runs.filter { it.id in runIds }.sumOf { it.totalCostUsd ?: 0.0 }
     }
+    val activeBuildRun = remember(build, runs) {
+        build.attempts
+            .filter { it.stage == ProjectWorkflowStage.Build }
+            .maxByOrNull { it.createdAtMillis }
+            ?.let { attempt -> runs.firstOrNull { it.id == attempt.runId } }
+            ?.takeIf { it.isActive && it.workflowStage == ProjectWorkflowStage.Build }
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         when {
             build.isActive || review?.isActive == true || verification?.isActive == true -> {
+                activeBuildRun?.let { run ->
+                    OutlinedButton(onClick = { services.agentRuns.completeWorkflowRun(run.id) }) {
+                        Text("Mark build complete")
+                    }
+                }
                 OutlinedButton(onClick = { services.projectWorkflows.pauseBuildPair(build.id) }) { Text("Pause after current") }
                 OutlinedButton(onClick = { services.projectWorkflows.stopBuildPair(build.id) }) { Text("Stop current", color = Red) }
             }

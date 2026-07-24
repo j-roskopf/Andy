@@ -25,7 +25,7 @@ class AgentAttentionCoordinatorTest {
         fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.Completed)))
         fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.Failed)))
 
-        assertEquals(listOf("Completed", "Failed"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("Done", "Failed"), fixture.notifications.events.map { it.kind.name })
         assertEquals(listOf("chime", "chime"), fixture.sounds.played)
     }
 
@@ -40,7 +40,7 @@ class AgentAttentionCoordinatorTest {
         fixture.workspace = fixture.workspace.copy(agentNotificationTiming = AgentNotificationTiming.Always)
         fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.Running)))
         fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.WaitingForInput)))
-        assertEquals(listOf("NeedsInput"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("Blocked"), fixture.notifications.events.map { it.kind.name })
         assertEquals(listOf("chime"), fixture.sounds.played)
     }
 

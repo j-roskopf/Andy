@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
+import app.andy.service.MirrorSession
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -27,10 +28,16 @@ internal fun DeviceLivePanel(
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
+    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var connectResult by remember { mutableStateOf("") }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     LaunchedEffect(services.mirror) {
         services.mirror.status.collectLatest { mirrorStatus = it }
+    }
+    LaunchedEffect(services.mirror, serial) {
+        services.mirror.session.collectLatest { session ->
+            mirrorSession = session?.takeIf { it.serial == serial }
+        }
     }
     fun connect() {
         if (serial != null) {
@@ -61,6 +68,7 @@ internal fun DeviceLivePanel(
             frame = frame,
             frameFlow = frameFlow,
             mirrorStatus = mirrorStatus,
+            mirrorSession = mirrorSession,
             connectResult = connectResult,
             modifier = modifier,
             showChromeControls = showChromeControls,

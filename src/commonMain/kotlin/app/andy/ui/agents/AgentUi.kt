@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
@@ -21,7 +22,9 @@ import app.andy.andy.generated.resources.agent_antigravity
 import app.andy.andy.generated.resources.agent_claude
 import app.andy.andy.generated.resources.agent_codex
 import app.andy.andy.generated.resources.agent_cursor
+import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
+import app.andy.model.AgentSessionStatus
 import app.andy.model.AgentTaskStatus
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
@@ -53,6 +56,7 @@ internal fun agentStatusColor(status: AgentTaskStatus): Color = when (status) {
     AgentTaskStatus.Running -> Green
     AgentTaskStatus.Queued -> Cyan
     AgentTaskStatus.WaitingForInput -> Rust
+    AgentTaskStatus.Paused -> Cyan
     AgentTaskStatus.Completed -> Cyan
     AgentTaskStatus.Failed -> Red
     AgentTaskStatus.Stopped -> Rust
@@ -61,8 +65,27 @@ internal fun agentStatusColor(status: AgentTaskStatus): Color = when (status) {
 
 internal fun agentStatusLabel(status: AgentTaskStatus): String = when (status) {
     AgentTaskStatus.Unknown -> "interrupted"
+    AgentTaskStatus.Paused -> "idle"
     AgentTaskStatus.WaitingForInput -> "needs your input"
     else -> status.name.lowercase()
+}
+
+internal fun agentSessionStatusColor(status: AgentSessionStatus): Color = when (status) {
+    AgentSessionStatus.Working -> Green
+    AgentSessionStatus.Idle -> Cyan
+    AgentSessionStatus.Blocked -> Rust
+    AgentSessionStatus.Done -> Cyan
+}
+
+internal fun agentSessionStatusLabel(status: AgentSessionStatus): String = status.name.lowercase()
+
+@Composable
+internal fun SessionStatusDot(status: AgentSessionStatus, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(6.dp)
+            .background(agentSessionStatusColor(status), CircleShape),
+    )
 }
 
 @Composable
@@ -129,6 +152,35 @@ internal fun formatElapsed(startMillis: Long?, endMillis: Long?, nowMillis: Long
         minutes > 0 -> "${minutes}m ${seconds.pad()}s"
         else -> "${seconds}s"
     }
+}
+
+/** True while the card timer should keep ticking with wall clock. */
+internal fun isElapsedLive(isActive: Boolean, sessionStatus: AgentSessionStatus?): Boolean =
+    isActive && sessionStatus != AgentSessionStatus.Done && sessionStatus != AgentSessionStatus.Idle
+
+/** True while the session sidebar/header should show a live activity spinner. */
+internal fun isSessionWorking(isActive: Boolean, sessionStatus: AgentSessionStatus?): Boolean =
+    isActive && sessionStatus != AgentSessionStatus.Idle &&
+        sessionStatus != AgentSessionStatus.Done &&
+        sessionStatus != AgentSessionStatus.Blocked
+
+/**
+ * End timestamp for [formatElapsed]. Keeps counting only while [isElapsedLive];
+ * otherwise freezes at [finishedAtMillis] or the first non-live observation.
+ */
+@Composable
+internal fun rememberElapsedEndMillis(
+    taskId: String,
+    finishedAtMillis: Long?,
+    isActive: Boolean,
+    sessionStatus: AgentSessionStatus?,
+): Long? {
+    val live = isElapsedLive(isActive, sessionStatus)
+    val shouldFreeze = finishedAtMillis == null && !live
+    val frozenAt = remember(taskId, shouldFreeze) {
+        if (shouldFreeze) currentTimeMillis() else null
+    }
+    return finishedAtMillis ?: frozenAt
 }
 
 private fun Long.pad(): String = if (this < 10) "0$this" else toString()

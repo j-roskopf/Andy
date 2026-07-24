@@ -38,7 +38,7 @@ class AgentTranscriptTest {
             AgentEvent.AssistantText(atMillis = 5, text = "Done."),
         )
 
-        val items = transcriptDisplayItems(events, compactToolCalls = true)
+        val items = transcriptDisplayItems(events)
 
         assertEquals(3, items.size)
         assertIs<TranscriptDisplayItem.Event>(items[0])
@@ -55,24 +55,11 @@ class AgentTranscriptTest {
             AgentEvent.AssistantText(atMillis = 2, text = "Looks good."),
         )
 
-        val items = transcriptDisplayItems(events, compactToolCalls = true)
+        val items = transcriptDisplayItems(events)
 
         assertEquals(2, items.size)
         assertIs<TranscriptDisplayItem.Event>(items[0])
         assertTrue(items[0] is TranscriptDisplayItem.Event && (items[0] as TranscriptDisplayItem.Event).event is AgentEvent.ToolCall)
-    }
-
-    @Test
-    fun disabledCompactKeepsEachToolAsItsOwnRow() {
-        val events = listOf(
-            AgentEvent.ToolCall(atMillis = 1, toolName = "Grep", summary = "a"),
-            AgentEvent.ToolCall(atMillis = 2, toolName = "Todo", summary = "b"),
-        )
-
-        val items = transcriptDisplayItems(events, compactToolCalls = false)
-
-        assertEquals(2, items.size)
-        assertTrue(items.all { it is TranscriptDisplayItem.Event })
     }
 
     @Test

@@ -26,10 +26,9 @@ class GrillMeInstallCommandTest {
     }
 
     @Test
-    fun headlessPromptUsesAndyDecisionCheckpoints() {
-        val prompt = grillMeHeadlessPromptAddendum()
-        assertTrue("andy_user_input" in prompt)
-        assertTrue("/grilling" in prompt)
-        assertTrue("headless" in prompt.lowercase())
+    fun interactivePromptMentionsInterviewAndPlan() {
+        val prompt = grillMeInteractivePromptAddendum(".andy/<taskId>")
+        assertTrue("interview" in prompt)
+        assertTrue("plan.md" in prompt)
     }
 }

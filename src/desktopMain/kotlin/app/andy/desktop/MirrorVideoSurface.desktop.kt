@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorTouchAction
+import app.andy.desktop.MirrorPresentationGuard
 import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
 import app.andy.desktop.service.mirror.GpuMirrorJni
 import app.andy.desktop.service.mirror.GpuMirrorPresenter
@@ -253,7 +254,7 @@ private class MirrorPanel(
     }
 
     private fun attachGpuPresentationIfReady() {
-        if (!prefersGpuHub()) return
+        if (MirrorPresentationGuard.suppressingGeometry || !prefersGpuHub()) return
         val presenter = ensureGpuPresenter() ?: return
         if (presenter.isAttachedTo(this)) {
             presenter.updateGeometry(this)
@@ -262,11 +263,20 @@ private class MirrorPanel(
         presenter.attach(this, fillNativePresentationHost)
     }
 
+    private var presentationGeometryPending = false
+
     private fun updatePresentationGeometry() {
-        if (usesGpuHub()) {
-            gpuPresenter?.updateGeometry(this)
-        } else if (hostsNativePresentation) {
-            NativeMirrorJni.updateMetalLayerGeometry(this)
+        if (MirrorPresentationGuard.suppressingGeometry || occluded || !hostsNativePresentation) return
+        if (presentationGeometryPending) return
+        presentationGeometryPending = true
+        SwingUtilities.invokeLater {
+            presentationGeometryPending = false
+            if (!isDisplayable || occluded || !hostsNativePresentation) return@invokeLater
+            if (usesGpuHub()) {
+                gpuPresenter?.updateGeometry(this)
+            } else {
+                NativeMirrorJni.updateMetalLayerGeometry(this)
+            }
         }
     }
 
@@ -414,8 +424,6 @@ private class MirrorPanel(
         })
     }
 
-    private var ancestorMoveListener: ComponentAdapter? = null
-
     override fun addNotify() {
         super.addNotify()
         if (hostsNativePresentation) {
@@ -430,29 +438,12 @@ private class MirrorPanel(
                 NativeMirrorHostRegistry.register(this)
             }
         }
-        val window = SwingUtilities.getWindowAncestor(this)
-        ancestorMoveListener = object : ComponentAdapter() {
-            override fun componentMoved(event: ComponentEvent) {
-                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
-            }
-
-            override fun componentResized(event: ComponentEvent) {
-                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
-            }
-
-            override fun componentShown(event: ComponentEvent) {
-                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
-            }
-        }.also { window?.addComponentListener(it) }
     }
 
     override fun removeNotify() {
         // Teardown runs before Canvas loses its heavyweight peer. Unregister first so a sibling
         // Live/pop-out host can reclaim the Metal presenter instead of destroying the session.
-        ancestorMoveListener?.let { listener ->
-            SwingUtilities.getWindowAncestor(this)?.removeComponentListener(listener)
-        }
-        ancestorMoveListener = null
+        presentationGeometryPending = false
         if (hostsNativePresentation) {
             if (prefersGpuHub()) {
                 gpuPresenter?.close()

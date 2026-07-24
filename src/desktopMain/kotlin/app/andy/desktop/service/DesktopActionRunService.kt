@@ -4,34 +4,32 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
+import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.service.ActionRunService
-import com.jediterm.core.util.TermSize
-import com.jediterm.terminal.ProcessTtyConnector
-import com.jediterm.terminal.ui.JediTermWidget
-import com.jediterm.terminal.ui.settings.DefaultSettingsProvider
-import com.pty4j.PtyProcess
-import com.pty4j.PtyProcessBuilder
-import com.pty4j.WinSize
+import app.andy.terminal.KetraTermBackend
+import app.andy.terminal.TerminalLaunchRequest
+import app.andy.terminal.TerminalSession
+import app.andy.terminal.TerminalSessions
+import app.andy.terminal.buildTerminalLaunchEnvironment
+import io.github.ketraterm.ui.swing.api.SwingTerminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
-import javax.swing.SwingUtilities
-import com.jediterm.terminal.TerminalColor
-import com.jediterm.terminal.TextStyle
 
 class DesktopActionRunService(
     private val scope: CoroutineScope,
+    private val terminalAppearance: () -> TerminalAppearanceSnapshot = { TerminalAppearanceSnapshot() },
 ) : ActionRunService {
     private data class RunHandle(
-        val process: PtyProcess?,
-        val terminal: JediTermWidget?,
+        val session: TerminalSession?,
+        val terminal: SwingTerminal?,
     )
 
     private val nextRun = AtomicInteger(1)
@@ -41,7 +39,9 @@ class DesktopActionRunService(
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
-            handles.values.forEach { handle -> handle.process?.let(::killTree) }
+            handles.values.forEach { handle ->
+                runCatching { handle.session?.close() }
+            }
         })
     }
 
@@ -80,46 +80,42 @@ class DesktopActionRunService(
 
         runCatching {
             val command = persistentShellCommand()
-            val environment = HashMap(System.getenv()).apply {
-                putAll(project.env)
-                putAll(action.env)
-                put("TERM", "xterm-256color")
-                if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
-                    put("LC_CTYPE", "UTF-8")
-                }
-            }
-            val process = PtyProcessBuilder()
-                .setDirectory(cwd)
-                .setCommand(command.toTypedArray())
-                .setEnvironment(environment)
-                .setInitialColumns(120)
-                .setInitialRows(32)
-                .setConsole(false)
-                .setUseWinConPty(true)
-                .start()
-            val connector = PtyTtyConnector(process, command)
-            val terminal = onSwingEdt {
-                JediTermWidget(120, 32, AndyTerminalSettingsProvider()).apply {
-                    ttyConnector = connector
-                    start()
-                }
-            }
-            process to terminal
+            val environment = buildTerminalLaunchEnvironment(
+                project.env + action.env,
+            )
+            val session = TerminalSessions.create(
+                TerminalLaunchRequest(
+                    sessionId = runId,
+                    argv = command,
+                    cwd = cwd,
+                    env = environment,
+                    appearance = terminalAppearance(),
+                ),
+            )
+            val terminal = (session as? KetraTermBackend)?.swingTerminal()
+                ?: error("terminal widget missing after start")
+            session to terminal
         }.fold(
-            onSuccess = { (process, terminal) ->
-                val handle = RunHandle(process, terminal)
+            onSuccess = { (session, terminal) ->
+                val handle = RunHandle(session, terminal)
                 handles[runId] = handle
                 initialCommand?.let { command ->
                     scope.launch(Dispatchers.IO) {
-                        runCatching { terminal.ttyConnector.write("$command\r") }
+                        runCatching { session.writeText("$command\r") }
                     }
                 }
                 scope.launch(Dispatchers.IO) {
-                    val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
-                    markComplete(runId, if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed, exitCode)
+                    val exitCode = runCatching {
+                        session.exitCode.first { it != null }
+                    }.getOrNull() ?: -1
+                    markComplete(
+                        runId,
+                        if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed,
+                        exitCode,
+                    )
                 }
             },
-            onFailure = { error ->
+            onFailure = {
                 markComplete(runId, ActionRunStatus.Failed, null)
                 handles[runId] = RunHandle(null, null)
             },
@@ -130,8 +126,7 @@ class DesktopActionRunService(
     override fun stop(runId: String) {
         val handle = handles[runId] ?: return
         scope.launch(Dispatchers.IO) {
-            handle.terminal?.let(::closeTerminal)
-            handle.process?.let(::killTree)
+            runCatching { handle.session?.close() }
             markComplete(runId, ActionRunStatus.Stopped, null)
         }
     }
@@ -139,13 +134,27 @@ class DesktopActionRunService(
     override fun clear(runId: String) {
         val handle = handles.remove(runId)
         scope.launch(Dispatchers.IO) {
-            handle?.terminal?.let(::closeTerminal)
-            handle?.process?.takeIf { it.isAlive }?.let(::killTree)
+            runCatching { handle?.session?.close() }
         }
         _running.update { runs -> runs.filterNot { it.runId == runId } }
     }
 
-    internal fun terminalWidget(runId: String): JediTermWidget? = handles[runId]?.terminal
+    internal fun terminalWidget(runId: String): SwingTerminal? = handles[runId]?.terminal
+
+    internal fun writeToTerminal(runId: String, text: String) {
+        handles[runId]?.session?.writeText(text)
+    }
+
+    internal fun bufferSnapshot(runId: String): String =
+        handles[runId]?.session?.bufferSnapshot().orEmpty()
+
+    /** Push latest Settings appearance into live project terminals. */
+    fun reloadAppearance() {
+        val appearance = terminalAppearance()
+        handles.values.forEach { handle ->
+            (handle.session as? KetraTermBackend)?.updateAppearance(appearance)
+        }
+    }
 
     private fun markComplete(runId: String, status: ActionRunStatus, exitCode: Int?) {
         _running.update { runs ->
@@ -179,59 +188,4 @@ class DesktopActionRunService(
             else -> File(project.contextDir, override).path
         }
     }
-
-    private fun killTree(process: Process) {
-        // Pty4J intentionally does not expose a Java ProcessHandle, so its
-        // descendants() implementation throws on Unix. Destroying the PTY
-        // process closes the terminal session and sends the shell its signal.
-        if (process is PtyProcess) {
-            process.destroy()
-            if (!process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly()
-            }
-            return
-        }
-        val descendants = process.descendants().toList().asReversed()
-        descendants.forEach { it.destroy() }
-        process.destroy()
-        if (!process.waitFor(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-            descendants.filter { it.isAlive }.forEach { it.destroyForcibly() }
-            process.destroyForcibly()
-        }
-    }
-
-    private fun closeTerminal(terminal: JediTermWidget) {
-        onSwingEdt { terminal.close() }
-    }
-
-    private fun <T> onSwingEdt(block: () -> T): T {
-        if (SwingUtilities.isEventDispatchThread()) return block()
-        var result: Result<T>? = null
-        SwingUtilities.invokeAndWait { result = runCatching(block) }
-        return result!!.getOrThrow()
-    }
-}
-
-private class PtyTtyConnector(
-    private val process: PtyProcess,
-    commandLine: List<String>,
-) : ProcessTtyConnector(process, StandardCharsets.UTF_8, commandLine) {
-    override fun resize(termSize: TermSize) {
-        if (isConnected) process.setWinSize(WinSize(termSize.columns, termSize.rows))
-    }
-
-    override fun isConnected(): Boolean = process.isAlive
-
-    override fun getName(): String = "Local"
-}
-
-private class AndyTerminalSettingsProvider : DefaultSettingsProvider() {
-    @Suppress("OVERRIDE_DEPRECATION")
-    @Deprecated("JediTerm still reads this method when it creates the terminal style.")
-    override fun getDefaultStyle(): TextStyle = TextStyle(
-        TerminalColor.rgb(228, 222, 208),
-        TerminalColor.rgb(17, 16, 13),
-    )
-
-    override fun getTerminalFontSize(): Float = 13f
 }

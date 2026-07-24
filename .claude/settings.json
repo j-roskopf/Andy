@@ -1,0 +1,34 @@
+{
+    "hooks": {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' done"
+                    }
+                ]
+            }
+        ],
+        "SubagentStop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' done"
+                    }
+                ]
+            }
+        ],
+        "Notification": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' blocked"
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -942,7 +942,7 @@ private fun AgentTaskComposerFields(
             } else {
                 Text("Context (optional)", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("no context", !state.usesCustomDirectory, Cyan) { state.usesCustomDirectory = false }
+                    FilterPill("Andy scratch", !state.usesCustomDirectory, Cyan) { state.usesCustomDirectory = false }
                     FilterPill("custom dir", state.usesCustomDirectory, Cyan) {
                         state.usesCustomDirectory = true
                     }

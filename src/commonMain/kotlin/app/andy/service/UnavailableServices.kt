@@ -260,6 +260,7 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask = error(BrowserUnavailable)
     override suspend fun startImplementation(taskId: String) = Unit
     override fun stop(taskId: String) = Unit
+    override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
@@ -272,6 +273,8 @@ object UnavailableAgentRunService : AgentRunService {
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())
+    override fun sessionStatus(taskId: String) = MutableStateFlow(null)
+    override val sessionStatuses = MutableStateFlow(emptyMap<String, AgentSessionStatus>())
     override fun interactiveResumeCommand(taskId: String): String? = null
     override suspend fun openInTerminal(taskId: String) = unavailable()
     override suspend fun openSkill(path: String) = unavailable()

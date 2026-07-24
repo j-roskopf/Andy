@@ -5,16 +5,16 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
-import app.andy.model.grillMeHeadlessPromptAddendum
+import app.andy.model.andyQuestionArtifactHint
 import app.andy.model.isGrillMeSkillName
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
-import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaSource
 import app.andy.model.AgentQuotaAccess
+import app.andy.model.AgentSessionStatus
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -22,6 +22,7 @@ import app.andy.model.AgentTaskStatus
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentSandboxMode
+import app.andy.model.grillMeInteractivePromptAddendum
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectPlanSnapshot
@@ -40,10 +41,13 @@ import app.andy.model.ProjectVerificationVerdict
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.toProjectProfile
-import app.andy.model.estimatedTokenCostUsd
-import app.andy.model.promptWithGoalHint
-import app.andy.model.promptWithSkillHints
+import app.andy.model.followUpCliPayload
+import app.andy.model.followUpPromptForLiveTerminal
+import app.andy.model.promptForCli
 import app.andy.model.providerDefaults
+import app.andy.desktop.service.DesktopWorkspaceStore
+import app.andy.model.TerminalAppearanceSnapshot
+import app.andy.model.toTerminalAppearance
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
 import app.andy.service.AgentRunService
@@ -68,23 +72,20 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.io.FileOutputStream
-import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val MAX_EVENTS_IN_MEMORY = 3000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
 private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
+private val CursorChatIdRegex = Regex(
+    """[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}""",
+)
 
 class DesktopAgentRunService(
     private val scope: CoroutineScope,
@@ -95,11 +96,22 @@ class DesktopAgentRunService(
     private val mcp: McpServerService,
     private val workspaceStore: WorkspaceStore,
     private val actionConfig: ActionConfigStore,
+    private val enableProbes: Boolean = true,
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
-        @Volatile var process: Process? = null,
         @Volatile var job: Job? = null,
         @Volatile var stopRequested: Boolean = false,
+    )
+
+    private val terminals = AgentTerminalManager(
+        scope = scope,
+        terminalAppearance = {
+            when (val ws = workspaceStore) {
+                is DesktopWorkspaceStore -> ws.state.value.toTerminalAppearance()
+                else -> TerminalAppearanceSnapshot()
+            }
+        },
+        scrollbackFile = { id -> store.scrollbackFile(id) },
     )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -132,8 +144,8 @@ class DesktopAgentRunService(
     private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
+    private val seenSessionIds = ConcurrentHashMap.newKeySet<String>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
-    private val historyLoaded = ConcurrentHashMap.newKeySet<String>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
     private val persistMutex = Mutex()
@@ -147,7 +159,8 @@ class DesktopAgentRunService(
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
-            handles.values.forEach { handle -> handle.process?.let(::killTree) }
+            snapshotActiveTasksBeforeShutdown()
+            handles.keys.toList().forEach(terminals::stop)
         })
         scope.launch {
             val state = store.load()
@@ -160,22 +173,44 @@ class DesktopAgentRunService(
             _lastUsedAgent.value = state.lastUsedAgent
                 ?: state.tasks.maxByOrNull { it.createdAtMillis }?.agent
             storedMaxConcurrent = state.maxConcurrent
+            legacyTranscriptChatsArchived = state.legacyTranscriptChatsArchived
             slots = Semaphore(state.maxConcurrent)
             _tasks.value = state.tasks
             _projects.value = recoverInterruptedWorkflows(state.projectWorkflows, state.tasks)
                 .mapValues { (_, workflow) -> workflow.withMissingProfiles() }
             migrateLegacyProjectNotes()
+            archiveLegacyTranscriptChats()
             backfillCursorPlansFromTranscripts()
             ready.complete(Unit)
-            scope.launch(Dispatchers.IO) { restoreProviderQuotas(state.tasks) }
             refreshCliStatuses()
-            refreshProviderQuotas()
-            while (isActive) {
-                delay(PROVIDER_QUOTA_REFRESH_MILLIS)
+            if (enableProbes) {
                 refreshProviderQuotas()
+                while (isActive) {
+                    delay(PROVIDER_QUOTA_REFRESH_MILLIS)
+                    refreshProviderQuotas()
+                }
             }
         }
     }
+
+    internal fun terminalWidget(taskId: String) = terminals.terminalWidget(taskId)
+
+    /** Push latest Settings terminal appearance into live agent sessions. */
+    internal fun reloadTerminalAppearance() = terminals.reloadAppearance()
+
+    /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the SwingPanel mounts when the PTY appears. */
+    internal val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
+
+    internal val attachedTerminalTaskIds: StateFlow<Set<String>> get() = terminals.attachedTaskIds
+
+    /** Cumulative scrollback file for finished-chat replay (may not exist yet). */
+    internal fun scrollbackFile(taskId: String): File = store.scrollbackFile(taskId)
+
+    internal fun hasScrollback(taskId: String): Boolean = terminals.hasScrollback(taskId)
+
+    override fun sessionStatus(taskId: String): StateFlow<AgentSessionStatus?> = terminals.statusFlow(taskId)
+
+    override val sessionStatuses: StateFlow<Map<String, AgentSessionStatus>> = terminals.sessionStatuses
 
     override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
         val normalizedDirectory = directory
@@ -273,7 +308,8 @@ class DesktopAgentRunService(
         val grillSkills = installedSkills.filter { isGrillMeSkillName(it.name) }
         val scratchpad = project.scratchpad.takeIf { spec.includeScratchpad && it.isNotBlank() }
         val attempt = spec.attempts.count { it.stage == ProjectWorkflowStage.Spec } + 1
-        val prompt = specPrompt(spec, scratchpad, revisionRequest)
+        val runId = newAgentTaskId()
+        val prompt = specPrompt(spec, scratchpad, revisionRequest, runId)
         updateProjectTask(taskId) { it.copy(state = ProjectTaskState.Queued, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
         persist()
         val run = createAndStart(
@@ -289,6 +325,7 @@ class DesktopAgentRunService(
                 stage = ProjectWorkflowStage.Spec,
                 attempt = attempt,
             ),
+            taskId = runId,
         )
         appendAttempt(spec.id, run, ProjectWorkflowStage.Spec, attempt, prompt, spec.profile, scratchpad)
         reconcileWorkflowRun(run.id)
@@ -684,7 +721,9 @@ class DesktopAgentRunService(
         persist()
     }
 
-    override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
+    override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask = createAndStart(draft, taskId = null)
+
+    private suspend fun createAndStart(draft: AgentTaskDraft, taskId: String?): AgentTask {
         ready.await()
         _providerDefaults.update { it + (draft.agent to draft.providerDefaults()) }
         _lastUsedAgent.value = draft.agent
@@ -695,14 +734,17 @@ class DesktopAgentRunService(
                 .mapTo(mutableSetOf()) { it.path }
         }
         val now = System.currentTimeMillis()
-        val id = "task-" + UUID.randomUUID().toString().replace("-", "").take(10)
+        val id = taskId ?: newAgentTaskId()
+        val resolvedCwd = withContext(Dispatchers.IO) {
+            AgentScratchWorkspace.resolveCwd(draft.existingWorktreePath ?: draft.directory)
+        }
         var task = AgentTask(
             id = id,
             title = draft.title.ifBlank { draft.prompt.truncateForSummary(60) },
             prompt = draft.prompt,
             agent = draft.agent,
             projectId = draft.projectId,
-            cwd = draft.existingWorktreePath ?: draft.directory,
+            cwd = resolvedCwd,
             originDir = draft.directory,
             useWorktree = draft.useWorktree,
             worktreePath = draft.existingWorktreePath,
@@ -723,9 +765,7 @@ class DesktopAgentRunService(
             goal = draft.goal,
             maxBudgetUsd = draft.maxBudgetUsd,
             status = AgentTaskStatus.Queued,
-            // Claude accepts a caller-assigned session id; pre-assigning means resume
-            // works even when output parsing fails mid-run.
-            vendorSessionId = if (draft.agent == AgentKind.ClaudeCode) UUID.randomUUID().toString() else null,
+            vendorSessionId = null,
             createdAtMillis = now,
         )
 
@@ -773,38 +813,87 @@ class DesktopAgentRunService(
 
         task.cwd?.let { cwd ->
             withContext(Dispatchers.IO) { worktrees.captureChangeBaseline(cwd) }?.let { baseline ->
-                task = task.copy(changeBaselinePaths = baseline, hasChangeBaseline = true)
+                task = task.copy(changeBaselineTree = baseline)
             }
         }
 
         upsertTask(task)
         persist()
-        launchRun(task) { adapter, resolvedBinary, mcpUrl ->
-            adapter.buildCommand(resolvedBinary, currentTask(task.id) ?: task, mcpUrl)
+        val adapter = adapters.getValue(task.agent)
+        val initialPrompt = task.promptForCli().takeIf { it.isNotBlank() }
+        // Prefer argv/flag delivery when the CLI supports it (agy --prompt-interactive,
+        // claude/codex/cursor positional). PTY typing is a fragile fallback.
+        val writeAfterStart = initialPrompt.takeUnless { adapter.embedsInitialPrompt }
+        // Do not await the PTY on the caller's dispatcher (often Main/EDT). KetraTerm
+        // creates the SwingTerminal via invokeAndWait — awaiting here can deadlock the EDT
+        // and leave the UI stuck on "Starting terminal…" even after the session is Idle.
+        launchRun(task, writeAfterStart = writeAfterStart) { nextAdapter, resolvedBinary, mcpUrl ->
+            nextAdapter.buildInteractiveCommand(resolvedBinary, currentTask(task.id) ?: task, mcpUrl)
         }
         return task
     }
 
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
         val task = currentTask(taskId) ?: return
-        // A decision checkpoint has structured answers and must be resolved by
-        // its chooser so a freeform chat message cannot leave stale UI behind.
         if (task.userInputRequest != null) return
-        if (task.isActive) return
         val adapter = adapters[task.agent] ?: return
-        if (!adapter.supportsHeadlessResume || task.vendorSessionId == null) return
 
         _lastUsedAgent.value = task.agent
 
-        val now = System.currentTimeMillis()
         val skillDirectory = task.worktreePath ?: task.cwd
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
-        val followUpForCli = promptWithGoalHint(promptWithSkillHints(followUp, selectedSkills), task.goal)
+        val followUpCli = task.followUpCliPayload(followUp, imagePaths, selectedSkills)
+        val followUpForCli = followUpCli.prompt
+        val followUpImagePathsForCli = followUpCli.imagePaths
+
+        if (terminals.isAlive(taskId)) {
+            val now = System.currentTimeMillis()
+            appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths)))
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentTaskStatus.Running,
+                    exitCode = null,
+                    errorMessage = null,
+                    finishedAtMillis = null,
+                    unread = false,
+                )
+            }
+            terminals.write(taskId, task.followUpPromptForLiveTerminal(followUp, imagePaths, selectedSkills))
+            scope.launch { persist() }
+            return
+        }
+
+        if (task.isActive) return
+        // Only keep a stored agy conversation id when we can prove it belongs to
+        // this Andy task (history/transcript contains the original prompt).
+        val resolvedAgyId = if (task.agent == AgentKind.Antigravity) {
+            AntigravityConversationIds.resolveForTask(task)
+        } else {
+            task.vendorSessionId
+        }
+        if (task.agent == AgentKind.Antigravity && task.vendorSessionId != resolvedAgyId) {
+            updateTask(taskId) { it.copy(vendorSessionId = resolvedAgyId) }
+        }
+        val taskForResume = if (resolvedAgyId != task.vendorSessionId) {
+            task.copy(vendorSessionId = resolvedAgyId)
+        } else {
+            task
+        }
+        val resumeArgv = runCatching {
+            adapter.buildInteractiveResumeCommand(
+                binaryFor(task.agent) ?: return,
+                taskForResume,
+                null,
+                followUpForCli,
+                followUpImagePathsForCli,
+            )
+        }.getOrNull()
+
+        val now = System.currentTimeMillis()
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths)))
-        writeAndyTranscriptLine(taskId, followUp, selectedSkills, now, imagePaths)
-        val queued = task.copy(
+        val queued = taskForResume.copy(
             status = AgentTaskStatus.Queued,
             exitCode = null,
             errorMessage = null,
@@ -812,10 +901,46 @@ class DesktopAgentRunService(
             unread = false,
         )
         upsertTask(queued)
-        scope.launch { persist() }
-        launchRun(queued) { resumeAdapter, binary, mcpUrl ->
-            resumeAdapter.buildResumeCommand(binary, currentTask(taskId) ?: queued, followUpForCli, imagePaths, mcpUrl)
-                ?: error("resume not supported")
+        scope.launch {
+            persist()
+            if (resumeArgv == null) {
+                // Provider cannot resume (missing vendor session). Start a fresh
+                // interactive session that still includes the original Andy prompt.
+                val seeded = composeResumePrompt(
+                    originalPrompt = queued.promptForCli(),
+                    followUp = followUpForCli,
+                    boundToConversation = false,
+                ) ?: followUpForCli
+                val writeAfterStart = seeded.takeUnless { adapter.embedsInitialPrompt }
+                launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { nextAdapter, binary, mcpUrl ->
+                    val current = currentTask(taskId) ?: queued
+                    nextAdapter.buildInteractiveCommand(
+                        binary,
+                        current.copy(
+                            prompt = seeded,
+                            imagePaths = if (current.agent == AgentKind.Codex) {
+                                (current.imagePaths + followUpImagePathsForCli).distinct()
+                            } else {
+                                current.imagePaths
+                            },
+                        ),
+                        mcpUrl,
+                    )
+                }
+                return@launch
+            }
+            // Await the PTY so the detail pane remounts the live terminal instead of
+            // staying on the "session ended" placeholder until a manual refresh.
+            val writeAfterStart = followUpForCli.takeUnless { adapter.embedsResumePrompt }
+            launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { resumeAdapter, binary, mcpUrl ->
+                resumeAdapter.buildInteractiveResumeCommand(
+                    binary,
+                    currentTask(taskId) ?: queued,
+                    mcpUrl,
+                    followUpForCli,
+                    followUpImagePathsForCli,
+                ) ?: error("interactive resume not supported")
+            }
         }
     }
 
@@ -831,42 +956,44 @@ class DesktopAgentRunService(
         val response = request.responseForAgent(normalizedAnswers)
         val now = System.currentTimeMillis()
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, response)))
-        writeAndyTranscriptLine(taskId, response, emptyList(), now)
 
-        val adapter = adapters[task.agent] ?: return
-        val canResume = adapter.supportsHeadlessResume && task.vendorSessionId != null
-        val next = if (canResume) {
-            task.copy(
-                status = AgentTaskStatus.Queued,
-                userInputRequest = null,
-                exitCode = null,
-                errorMessage = null,
-                finishedAtMillis = null,
-                unread = false,
-            )
-        } else {
-            val priorPrompt = task.continuationPrompt ?: task.implementationPrompt ?: task.prompt
-            task.copy(
-                status = AgentTaskStatus.Queued,
-                userInputRequest = null,
-                continuationPrompt = "$priorPrompt\n\nDecision checkpoint answers:\n$response",
-                exitCode = null,
-                errorMessage = null,
-                finishedAtMillis = null,
-                unread = false,
-            )
+        terminals.get(taskId)?.artifacts?.writeAnswer(response)
+
+        if (terminals.isAlive(taskId)) {
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentTaskStatus.Running,
+                    userInputRequest = null,
+                    exitCode = null,
+                    errorMessage = null,
+                    finishedAtMillis = null,
+                    unread = false,
+                )
+            }
+            terminals.write(taskId, response)
+            scope.launch { persist() }
+            return
         }
+
+        val next = task.copy(
+            status = AgentTaskStatus.Queued,
+            userInputRequest = null,
+            exitCode = null,
+            errorMessage = null,
+            finishedAtMillis = null,
+            unread = false,
+        )
         upsertTask(next)
         scope.launch { persist() }
-        if (canResume) {
-            launchRun(next) { resumeAdapter, binary, mcpUrl ->
-                resumeAdapter.buildResumeCommand(binary, currentTask(taskId) ?: next, response, emptyList(), mcpUrl)
-                    ?: error("resume not supported")
-            }
-        } else {
-            launchRun(next) { nextAdapter, binary, mcpUrl ->
-                nextAdapter.buildCommand(binary, currentTask(taskId) ?: next, mcpUrl)
-            }
+        val adapter = adapters.getValue(task.agent)
+        val writeAfterStart = response.takeUnless { adapter.embedsResumePrompt }
+        launchRun(next, writeAfterStart = writeAfterStart) { resumeAdapter, binary, mcpUrl ->
+            resumeAdapter.buildInteractiveResumeCommand(
+                binary,
+                currentTask(taskId) ?: next,
+                mcpUrl,
+                response,
+            ) ?: error("interactive resume not supported")
         }
     }
 
@@ -886,9 +1013,7 @@ class DesktopAgentRunService(
             planMode = false,
             sandboxMode = AgentSandboxMode.WorkspaceWrite,
             implementationPrompt = implementationPrompt,
-            // A handoff intentionally starts a new provider thread. Claude requires a
-            // caller-assigned id while the other CLIs report one after startup.
-            vendorSessionId = if (task.agent == AgentKind.ClaudeCode) UUID.randomUUID().toString() else null,
+            vendorSessionId = null,
             status = AgentTaskStatus.Queued,
             startedAtMillis = null,
             finishedAtMillis = null,
@@ -900,24 +1025,26 @@ class DesktopAgentRunService(
             outputTokens = null,
             contextTokens = null,
             contextWindowTokens = null,
-            changeBaselinePaths = implementationBaseline.orEmpty(),
-            hasChangeBaseline = implementationBaseline != null,
+            changeBaselineTree = implementationBaseline,
             completedChanges = null,
             unread = false,
         )
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, implementationPrompt, task.skills)))
-        writeAndyTranscriptLine(taskId, implementationPrompt, task.skills, now)
         upsertTask(implementationTask)
         persist()
-        launchRun(implementationTask) { adapter, binary, mcpUrl ->
-            adapter.buildCommand(binary, currentTask(taskId) ?: implementationTask, mcpUrl)
+        launchRunAwaitingTerminal(
+            implementationTask,
+            writeAfterStart = implementationTask.promptForCli()
+                .takeIf { it.isNotBlank() }
+                .takeUnless { adapters.getValue(implementationTask.agent).embedsInitialPrompt },
+        ) { adapter, binary, mcpUrl ->
+            adapter.buildInteractiveCommand(binary, currentTask(taskId) ?: implementationTask, mcpUrl)
         }
     }
 
     override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
         val task = currentTask(taskId) ?: return
-        val adapter = adapters[task.agent] ?: return
-        if (!task.isActive || !adapter.supportsHeadlessResume || task.vendorSessionId == null) return
+        if (!task.isActive && !terminals.isAlive(taskId)) return
 
         val text = followUp.trim()
         if (text.isBlank() && imagePaths.isEmpty()) return
@@ -925,18 +1052,24 @@ class DesktopAgentRunService(
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
+        val followUpCli = task.followUpCliPayload(text, imagePaths, selectedSkills)
+        val followUpForCli = followUpCli.prompt
+
+        if (terminals.isAlive(taskId)) {
+            val now = System.currentTimeMillis()
+            appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths)))
+            terminals.write(taskId, task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills))
+            return
+        }
+
         updateTask(taskId) { current ->
-            if (!current.isActive) {
-                current
-            } else {
-                current.copy(
-                    queuedFollowUps = current.queuedFollowUps + AgentQueuedFollowUp(
-                        text = text,
-                        imagePaths = imagePaths,
-                        skills = selectedSkills,
-                    ),
-                )
-            }
+            current.copy(
+                queuedFollowUps = current.queuedFollowUps + AgentQueuedFollowUp(
+                    text = text,
+                    imagePaths = imagePaths,
+                    skills = selectedSkills,
+                ),
+            )
         }
         scope.launch { persist() }
     }
@@ -961,7 +1094,7 @@ class DesktopAgentRunService(
         // resume. In particular, Claude needs a new caller-assigned session id.
         val retried = task.copy(
             status = AgentTaskStatus.Queued,
-            vendorSessionId = if (task.agent == AgentKind.ClaudeCode) UUID.randomUUID().toString() else null,
+            vendorSessionId = null,
             startedAtMillis = null,
             finishedAtMillis = null,
             exitCode = null,
@@ -974,13 +1107,17 @@ class DesktopAgentRunService(
             contextWindowTokens = null,
             unread = false,
         )
-        store.deleteTranscript(taskId)
+        store.deleteTaskArtifacts(taskId)
         eventFlows[taskId]?.value = emptyList()
-        historyLoaded.remove(taskId)
         upsertTask(retried)
         persist()
-        launchRun(retried) { adapter, resolvedBinary, mcpUrl ->
-            adapter.buildCommand(resolvedBinary, currentTask(taskId) ?: retried, mcpUrl)
+        launchRunAwaitingTerminal(
+            retried,
+            writeAfterStart = retried.promptForCli()
+                .takeIf { it.isNotBlank() }
+                .takeUnless { adapters.getValue(retried.agent).embedsInitialPrompt },
+        ) { adapter, resolvedBinary, mcpUrl ->
+            adapter.buildInteractiveCommand(resolvedBinary, currentTask(taskId) ?: retried, mcpUrl)
         }
     }
 
@@ -992,22 +1129,55 @@ class DesktopAgentRunService(
         scope.launch { persist() }
     }
 
-    private fun launchRun(task: AgentTask, argvBuilder: (AgentCliAdapter, String, String?) -> List<String>) {
+    private fun newAgentTaskId(): String = "task-" + UUID.randomUUID().toString().replace("-", "").take(10)
+
+    /**
+     * Starts the agent PTY in the background. When [awaitTerminal] is true, blocks
+     * until the SwingTerminal exists so the detail pane can mount it on first paint.
+     */
+    private fun launchRun(
+        task: AgentTask,
+        writeAfterStart: String? = null,
+        argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
+    ): CompletableDeferred<Boolean> {
         val handle = TaskHandle()
         handles[task.id] = handle
+        val terminalReady = CompletableDeferred<Boolean>()
         handle.job = scope.launch(Dispatchers.IO) {
             ready.await()
             slots.withPermit {
-                if (handle.stopRequested) return@withPermit
-                runProcess(task.id, handle, argvBuilder)
+                if (handle.stopRequested) {
+                    terminalReady.complete(false)
+                    return@withPermit
+                }
+                runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
+                    terminalReady.complete(true)
+                })
             }
         }
+        handle.job?.invokeOnCompletion {
+            if (!terminalReady.isCompleted) terminalReady.complete(false)
+        }
+        return terminalReady
+    }
+
+    private suspend fun launchRunAwaitingTerminal(
+        task: AgentTask,
+        writeAfterStart: String? = null,
+        argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
+    ) {
+        // Await only when not on the UI/EDT thread. createAndStart intentionally
+        // skips this so Compose Main never blocks across KetraTerm's invokeAndWait.
+        val terminalReady = launchRun(task, writeAfterStart, argvBuilder)
+        withTimeoutOrNull(20_000) { terminalReady.await() }
     }
 
     private suspend fun runProcess(
         taskId: String,
         handle: TaskHandle,
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
+        writeAfterStart: String? = null,
+        onTerminalStarted: () -> Unit = {},
     ) {
         val task = currentTask(taskId) ?: return
         val adapter = adapters.getValue(task.agent)
@@ -1015,6 +1185,10 @@ class DesktopAgentRunService(
         if (binary == null) {
             finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = unavailableCliMessage(task.agent))
             return
+        }
+
+        if (task.agent == AgentKind.Cursor) {
+            ensureCursorVendorSession(taskId, binary, task.cwd)
         }
 
         val mcpUrl = if (task.attachAndyMcp) {
@@ -1032,211 +1206,169 @@ class DesktopAgentRunService(
         val projectEnv = task.projectId?.let { projectId ->
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
+        val env = buildAgentLaunchEnvironment(projectEnv)
 
         updateTask(taskId) { it.copy(status = AgentTaskStatus.Running, startedAtMillis = System.currentTimeMillis()) }
         persist()
         reconcileWorkflowRun(taskId)
 
-        val process = runCatching {
-            ProcessBuilder(argv)
-                .redirectErrorStream(true)
-                // Agent CLIs block (codex) or stall (claude) reading an open stdin pipe.
-                .redirectInput(nullInputFile())
-                .apply {
-                    task.cwd?.let { directory(File(it)) }
-                    // IDE terminals and local LLM proxies inject env that breaks vendor CLIs
-                    // (Cursor NODE_OPTIONS bootloaders, ANTHROPIC_BASE_URL → Ollama, etc.).
-                    // Scrub those first; project env can intentionally put them back.
-                    scrubInheritedAgentEnvironment(environment())
-                    environment().putAll(projectEnv)
-                }
-                .start()
+        if (handle.stopRequested) {
+            finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
+            return
+        }
+
+        val agyBeforeConversationId = if (task.agent == AgentKind.Antigravity) {
+            AntigravityConversationIds.lastForWorkspace(task.cwd)
+        } else {
+            null
+        }
+        val agyLaunchStartedAt = System.currentTimeMillis()
+        val agyLaunchedPrompt = if (task.agent == AgentKind.Antigravity) {
+            promptFromInteractiveArgv(argv)
+        } else {
+            null
+        }
+
+        val terminalHandle = runCatching {
+            terminals.start(
+                task = currentTask(taskId) ?: task,
+                argv = argv,
+                env = env,
+                isTabSeen = { taskId in seenSessionIds },
+            )
         }.getOrElse { error ->
             finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to start: ${error.message}")
             return
         }
         writeLaunchDiagnostics(taskId, binary, argv, projectEnv)
-        handle.process = process
+        onTerminalStarted()
+
+        if (task.agent == AgentKind.Antigravity) {
+            scope.launch(Dispatchers.IO) {
+                captureAntigravityConversationId(
+                    taskId = taskId,
+                    cwd = task.cwd,
+                    before = agyBeforeConversationId,
+                    launchedPrompt = agyLaunchedPrompt,
+                    startedAtMillis = agyLaunchStartedAt,
+                )
+            }
+        }
+
+        // Submit the first turn only after the interactive TUI is accepting input.
+        // A fixed delay races the splash screen and drops the prompt (esp. agy).
+        writeAfterStart?.takeIf { it.isNotBlank() }?.let { text ->
+            writeInitialPromptWhenReady(taskId, handle, text)
+        }
+
         if (handle.stopRequested) {
-            killTree(process)
+            terminals.stop(taskId)
             finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
             return
         }
 
-        var lastResult: AgentEvent.TaskResult? = null
-        var lastError: String? = null
-        var lastAssistantText: String? = null
-        var requestedInput: AgentUserInputRequest? = null
-        val turnAssistantText = StringBuilder()
-        val rawTail = ArrayDeque<String>()
-        val rawPlanOutput = StringBuilder()
-        var structuredPlanText: String? = null
-
-        val transcript = store.transcriptFile(taskId)
-        transcript.parentFile?.mkdirs()
-        FileOutputStream(transcript, true).bufferedWriter(StandardCharsets.UTF_8).use { writer ->
-            runCatching {
-                process.inputStream.bufferedReader().useLines { lines ->
-                    val batch = mutableListOf<AgentEvent>()
-                    var lastFlush = System.currentTimeMillis()
-                    fun flush() {
-                        if (batch.isEmpty()) return
-                        appendEvents(taskId, batch.toList())
-                        batch.clear()
-                        writer.flush()
-                        lastFlush = System.currentTimeMillis()
-                    }
-                    for (line in lines) {
-                        writer.appendLine(line)
-                        if (task.planMode) {
-                            rawPlanOutput.appendLine(line)
-                            successfulCursorPlanText(line)?.let { structuredPlanText = it }
+        val outcomeHandled = AtomicBoolean(false)
+        val artifacts = terminalHandle.artifacts
+        val sessionMonitorJob = scope.launch {
+            var sawWorking = false
+            terminalHandle.statusTracker.status.collect { status ->
+                if (outcomeHandled.get()) return@collect
+                if (status == AgentSessionStatus.Working) sawWorking = true
+                val current = currentTask(taskId) ?: return@collect
+                if (current.workflowStage != ProjectWorkflowStage.Build) return@collect
+                val scrollback = terminals.bufferSnapshot(taskId)
+                if (
+                    !inferWorkflowBuildTurnComplete(
+                        agent = current.agent,
+                        artifactDir = terminalHandle.artifactDir,
+                        scrollback = scrollback,
+                        liveSessionStatus = status,
+                        sawWorking = sawWorking,
+                    )
+                ) {
+                    return@collect
+                }
+                outcomeHandled.set(true)
+                terminalHandle.statusTracker.markPhaseFinished()
+                terminals.stop(taskId)
+                finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+            }
+        }
+        val monitorJob = scope.launch {
+            artifacts.events.collect { event ->
+                if (outcomeHandled.get()) return@collect
+                when (event) {
+                    is AgentWorkflowArtifacts.Event.PlanReady -> {
+                        updateTask(taskId) { current -> current.copy(completedPlanText = event.text) }
+                        terminalHandle.statusTracker.markPhaseFinished()
+                        val current = currentTask(taskId) ?: return@collect
+                        if (current.planMode || current.workflowStage == ProjectWorkflowStage.Spec) {
+                            outcomeHandled.set(true)
+                            terminals.stop(taskId)
+                            finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
                         }
-                        val now = System.currentTimeMillis()
-                        val events = runCatching { adapter.parseLine(line, now) }
-                            .getOrElse { listOf(AgentEvent.Raw(now, line)) }
-                            .mapNotNull { event ->
-                                val parsed = when (event) {
-                                    is AgentEvent.AssistantText -> {
-                                        if (event.isStreamDelta) {
-                                            turnAssistantText.append(event.text)
-                                        } else {
-                                            if (turnAssistantText.isNotEmpty()) turnAssistantText.append("\n\n")
-                                            turnAssistantText.append(event.text)
-                                        }
-                                        parseAgentUserInput(turnAssistantText.toString())
-                                    }
-                                    is AgentEvent.TaskResult -> parseAgentUserInputFromSources(event.finalText, turnAssistantText.toString())
-                                    is AgentEvent.Raw -> parseAgentUserInput(event.line)
-                                    else -> null
-                                }
-                                if (parsed == null) {
-                                    when (event) {
-                                        is AgentEvent.AssistantText -> {
-                                            if (containsPartialAgentUserInputMarkup(turnAssistantText.toString())) null else event
-                                        }
-                                        else -> event
-                                    }
-                                } else {
-                                    if (requestedInput == null) requestedInput = parsed.request
-                                    when (event) {
-                                        is AgentEvent.AssistantText -> when {
-                                            parsed.visibleText.isBlank() -> null
-                                            event.isStreamDelta -> null
-                                            else -> event.copy(text = parsed.visibleText, isStreamDelta = false)
-                                        }
-                                        is AgentEvent.TaskResult -> event.copy(finalText = parsed.visibleText.takeIf { it.isNotBlank() })
-                                        is AgentEvent.Raw -> event.copy(line = parsed.visibleText).takeIf { it.line.isNotBlank() }
-                                        else -> event
-                                    }
-                                }
-                            }
-                            .withEstimatedCosts(currentTask(taskId) ?: task)
-                        for (event in events) {
-                            when (event) {
-                                is AgentEvent.SessionStarted -> event.sessionId?.let { sessionId ->
-                                    updateTask(taskId) { current ->
-                                        if (current.vendorSessionId == null) current.copy(vendorSessionId = sessionId) else current
-                                    }
-                                }
-                                is AgentEvent.TaskResult -> lastResult = event
-                                is AgentEvent.ContextUsage -> updateTask(taskId) { current ->
-                                    current.copy(
-                                        contextTokens = event.usedTokens ?: current.contextTokens,
-                                        contextWindowTokens = event.windowTokens ?: current.contextWindowTokens,
-                                    )
-                                }
-                                is AgentEvent.ToolResult -> event.quotaWindows.takeIf { it.isNotEmpty() }?.let { windows ->
-                                    updateQuota(task.agent, windows, event.atMillis)
-                                }
-                                is AgentEvent.TaskError -> lastError = event.message
-                                is AgentEvent.AssistantText -> {
-                                    lastAssistantText = if (event.isStreamDelta) {
-                                        lastAssistantText.orEmpty() + event.text
-                                    } else {
-                                        event.text
-                                    }
-                                }
-                                is AgentEvent.Raw -> {
-                                    rawTail.addLast(event.line)
-                                    if (rawTail.size > 20) rawTail.removeFirst()
-                                }
-                                else -> Unit
-                            }
-                        }
-                        // The CLI's normal terminal event would look like a completed
-                        // task while Andy is showing an unanswered checkpoint.
-                        batch += if (requestedInput == null) events else events.filterNot { it is AgentEvent.TaskResult }
-                        if (batch.size >= 64 || System.currentTimeMillis() - lastFlush >= 100) flush()
                     }
-                    flush()
+                    is AgentWorkflowArtifacts.Event.ReviewReady -> {
+                        updateTask(taskId) { current -> current.copy(completedResultText = event.json) }
+                        terminalHandle.statusTracker.markPhaseFinished()
+                        outcomeHandled.set(true)
+                        terminals.stop(taskId)
+                        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                    }
+                    is AgentWorkflowArtifacts.Event.VerificationReady -> {
+                        updateTask(taskId) { current -> current.copy(completedResultText = event.json) }
+                        terminalHandle.statusTracker.markPhaseFinished()
+                        outcomeHandled.set(true)
+                        terminals.stop(taskId)
+                        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                    }
+                    is AgentWorkflowArtifacts.Event.QuestionReady -> {
+                        waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
+                    }
                 }
             }
         }
 
-        if (requestedInput == null && turnAssistantText.isNotEmpty()) {
-            parseAgentUserInputFromSources(turnAssistantText.toString())?.let { requestedInput = it.request }
-        }
+        val exitCode = terminals.awaitExit(taskId)
+        monitorJob.cancel()
+        sessionMonitorJob.cancel()
 
-        val exitCode = runCatching { process.waitFor() }.getOrElse { -1 }
-        val result = lastResult
-        val waitingForInput = requestedInput?.takeIf { exitCode == 0 && lastError == null && !handle.stopRequested }
+        if (outcomeHandled.get()) return
+        if (currentTask(taskId)?.status == AgentTaskStatus.WaitingForInput) return
+
+        val current = currentTask(taskId) ?: return
+        val planFromDisk = artifacts.planFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        val reviewFromDisk = artifacts.reviewFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        val verificationFromDisk = artifacts.verificationFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+
         val status = when {
             handle.stopRequested -> AgentTaskStatus.Stopped
-            waitingForInput != null -> AgentTaskStatus.WaitingForInput
-            exitCode == 0 && result?.success != false && lastError == null -> AgentTaskStatus.Completed
+            exitCode == 0 -> AgentTaskStatus.Completed
             else -> AgentTaskStatus.Failed
         }
-        val fallbackText = lastAssistantText ?: rawTail.joinToString("\n").takeIf { it.isNotBlank() }
-        val completedPlanText = if (status == AgentTaskStatus.Completed && task.planMode) {
-            agentPlanTextCandidate(structuredPlanText)
-                ?: agentPlanTextCandidate(result?.finalText)
-                ?: agentPlanTextCandidate(lastAssistantText)
-                ?: agentPlanTextCandidate(turnAssistantText.toString())
-                ?: agentPlanTextCandidate(rawPlanOutput.toString())
-                ?: agentPlanTextCandidate(fallbackText)
+        val completedPlanText = if (status == AgentTaskStatus.Completed && current.planMode) {
+            planFromDisk ?: current.completedPlanText
         } else {
             null
         }
-        if (result == null && status != AgentTaskStatus.Stopped && status != AgentTaskStatus.WaitingForInput) {
-            // Adapters without structured output (or failed runs) still get a terminal event.
-            appendEvents(
-                taskId,
-                listOf(
-                    AgentEvent.TaskResult(
-                        atMillis = System.currentTimeMillis(),
-                        success = status == AgentTaskStatus.Completed,
-                        finalText = fallbackText,
-                    ),
-                ),
-            )
+        val completedResultText = when {
+            reviewFromDisk != null -> reviewFromDisk
+            verificationFromDisk != null -> verificationFromDisk
+            status == AgentTaskStatus.Completed -> current.completedResultText
+            else -> current.completedResultText
         }
-        updateTask(taskId) { current ->
-            current.copy(
-                totalCostUsd = result?.costUsd ?: current.totalCostUsd,
-                costIsEstimated = result?.costIsEstimated ?: current.costIsEstimated,
-                inputTokens = result?.inputTokens ?: current.inputTokens,
-                outputTokens = result?.outputTokens ?: current.outputTokens,
-                completedPlanText = completedPlanText ?: current.completedPlanText,
-                completedResultText = if (status == AgentTaskStatus.WaitingForInput) {
-                    current.completedResultText
-                } else {
-                    result?.finalText?.takeIf { it.isNotBlank() }
-                        ?: fallbackText
-                        ?: current.completedResultText
-                },
+        updateTask(taskId) { task ->
+            task.copy(
+                completedPlanText = completedPlanText ?: task.completedPlanText,
+                completedResultText = completedResultText ?: task.completedResultText,
             )
-        }
-        if (waitingForInput != null) {
-            waitForUserInput(taskId, waitingForInput, exitCode)
-            return
         }
         val failureError = if (status == AgentTaskStatus.Failed) {
             agentFailureMessage(
-                lastError = lastError,
-                authHint = authFailureHint(fallbackText, taskId),
-                result = result,
-                fallbackText = fallbackText,
+                lastError = null,
+                authHint = null,
+                result = null,
+                fallbackText = null,
                 exitCode = exitCode,
             )
         } else {
@@ -1248,11 +1380,9 @@ class DesktopAgentRunService(
                 buildString {
                     appendLine("exitCode=$exitCode")
                     appendLine("error=$failureError")
-                    appendLine("resultSuccess=${result?.success}")
-                    appendLine("resultText=${result?.finalText.orEmpty().take(2000)}")
-                    appendLine("fallbackText=${fallbackText.orEmpty().take(2000)}")
-                    appendLine("rawTail:")
-                    rawTail.forEach { appendLine(it.take(500)) }
+                    appendLine("planFromDisk=${planFromDisk.orEmpty().take(500)}")
+                    appendLine("reviewFromDisk=${reviewFromDisk.orEmpty().take(500)}")
+                    appendLine("verificationFromDisk=${verificationFromDisk.orEmpty().take(500)}")
                 },
             )
         }
@@ -1264,9 +1394,144 @@ class DesktopAgentRunService(
         )
     }
 
-    private fun waitForUserInput(taskId: String, request: AgentUserInputRequest, exitCode: Int) {
+    private suspend fun ensureCursorVendorSession(taskId: String, binary: String, cwd: String?) {
+        val current = currentTask(taskId) ?: return
+        if (!current.vendorSessionId.isNullOrBlank()) return
+        val chatId = withContext(Dispatchers.IO) { createCursorChatId(binary, cwd) } ?: return
+        updateTask(taskId) { it.copy(vendorSessionId = chatId) }
+        appendLaunchDiagnostics(taskId, "vendorSessionId=$chatId source=create-chat\n")
+        persist()
+    }
+
+    private fun createCursorChatId(binary: String, cwd: String?): String? = runCatching {
+        val pb = ProcessBuilder(binary, "create-chat").redirectErrorStream(true)
+        val workDir = cwd?.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isDirectory }
+            ?: AgentScratchWorkspace.ensure()
+        pb.directory(workDir)
+        val process = pb.start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        val finished = process.waitFor(20, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroyForcibly()
+            return@runCatching null
+        }
+        if (process.exitValue() != 0) return@runCatching null
+        CursorChatIdRegex.find(output)?.value
+    }.getOrNull()
+
+    private fun promptFromInteractiveArgv(argv: List<String>): String? {
+        val idx = argv.indexOfFirst { it == "--prompt-interactive" || it == "-i" }
+        if (idx < 0 || idx + 1 >= argv.size) return null
+        return argv[idx + 1].trim().takeIf { it.isNotBlank() }
+    }
+
+    private fun captureAntigravityConversationId(
+        taskId: String,
+        cwd: String?,
+        before: String?,
+        launchedPrompt: String?,
+        startedAtMillis: Long,
+    ) {
+        val captured = AntigravityConversationIds.awaitNewConversationId(
+            cwd = cwd,
+            before = before,
+            launchedPrompt = launchedPrompt,
+            startedAtMillis = startedAtMillis,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
         updateTask(taskId) { task ->
-            if (task.status == AgentTaskStatus.Running) {
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured before=${before.orEmpty()} launchedPrompt=${launchedPrompt?.take(80).orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    /**
+     * Wait until the interactive TUI shows an input prompt, then type the first turn.
+     * Writing during splash (agy banner, model warnings) is silently discarded.
+     */
+    private suspend fun writeInitialPromptWhenReady(taskId: String, handle: TaskHandle, text: String) {
+        val deadline = System.currentTimeMillis() + 30_000
+        var sawOutput = false
+        var wrote = false
+        while (System.currentTimeMillis() < deadline) {
+            if (handle.stopRequested || !terminals.isAlive(taskId)) return
+            val buffer = terminals.bufferSnapshot(taskId)
+            if (buffer.isNotBlank()) sawOutput = true
+            val idle = terminals.statusFlow(taskId).value == AgentSessionStatus.Idle
+            if (sawOutput && (terminalLooksReadyForInput(buffer) || idle)) {
+                delay(300)
+                if (handle.stopRequested || !terminals.isAlive(taskId)) return
+                terminals.submitText(taskId, text.trimEnd('\r', '\n'))
+                wrote = true
+                appendLaunchDiagnostics(taskId, "initialPromptWritten=true readyIdle=$idle\n")
+                return
+            }
+            delay(150)
+        }
+        if (!wrote && !handle.stopRequested && terminals.isAlive(taskId)) {
+            appendLaunchDiagnostics(taskId, "initialPromptFallbackWrite=true\n")
+            terminals.submitText(taskId, text.trimEnd('\r', '\n'))
+        }
+    }
+
+    private fun terminalLooksReadyForInput(buffer: String): Boolean =
+        terminalBufferLooksReadyForInput(buffer)
+
+    private fun snapshotActiveTasksBeforeShutdown() {
+        val updated = _tasks.value.map { task ->
+            if (task.status != AgentTaskStatus.Running) return@map task
+            val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
+            val scrollback = terminals.bufferSnapshot(task.id).ifBlank {
+                store.scrollbackFile(task.id).takeIf { it.isFile }?.readText().orEmpty()
+            }
+            val liveStatus = terminals.liveSessionStatus(task.id)
+            when {
+                inferCompletedTurn(task.agent, artifactDir, scrollback, liveStatus) ->
+                    task.copy(
+                        status = AgentTaskStatus.Completed,
+                        exitCode = task.exitCode ?: 0,
+                        finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
+                        unread = true,
+                    )
+                inferPausedAtPrompt(task.agent, artifactDir, scrollback, liveStatus) ->
+                    task.copy(
+                        status = AgentTaskStatus.Paused,
+                        finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
+                    )
+                else -> task
+            }
+        }
+        _tasks.value = updated
+        persistSync()
+    }
+
+    private fun persistSync() {
+        store.saveSync(
+            AgentStoreState(
+                tasks = _tasks.value,
+                binaryOverrides = binaryOverrides,
+                providerDefaults = _providerDefaults.value,
+                quotaAccess = _quotaAccess.value,
+                lastUsedAgent = _lastUsedAgent.value,
+                maxConcurrent = storedMaxConcurrent,
+                projectWorkflows = _projects.value,
+                legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
+            ),
+        )
+    }
+
+    private fun waitForUserInput(
+        taskId: String,
+        request: AgentUserInputRequest,
+        exitCode: Int,
+        keepTerminal: Boolean = false,
+    ) {
+        updateTask(taskId) { task ->
+            if (task.status == AgentTaskStatus.Running || task.status == AgentTaskStatus.WaitingForInput) {
                 task.copy(
                     status = AgentTaskStatus.WaitingForInput,
                     userInputRequest = request,
@@ -1278,19 +1543,13 @@ class DesktopAgentRunService(
                 task
             }
         }
-        handles.remove(taskId)
+        if (!keepTerminal) {
+            handles.remove(taskId)
+        }
         scope.launch {
             persist()
             reconcileWorkflowRun(taskId)
         }
-    }
-
-    private fun authFailureHint(tail: String?, taskId: String): String? {
-        val text = tail?.lowercase() ?: return null
-        val authIndicators = listOf("not logged in", "please log in", "please run /login", "unauthorized", "authentication", "invalid api key", "login required")
-        if (authIndicators.none { it in text }) return null
-        val cli = currentTask(taskId)?.agent?.cliName ?: return null
-        return "Not logged in — run `$cli` in a terminal and sign in, then retry"
     }
 
     private fun implementationPromptFor(originalRequest: String, completedPlan: String): String = buildString {
@@ -1301,9 +1560,18 @@ class DesktopAgentRunService(
         append(completedPlan.trim())
     }
 
+    override fun completeWorkflowRun(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
+        handles[taskId]?.stopRequested = true
+        terminals.stop(taskId)
+        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+    }
+
     override fun stop(taskId: String) {
         val waiting = currentTask(taskId)?.takeIf { it.status == AgentTaskStatus.WaitingForInput }
         if (waiting != null) {
+            terminals.stop(taskId)
             updateTask(taskId) {
                 it.copy(
                     status = AgentTaskStatus.Stopped,
@@ -1318,15 +1586,14 @@ class DesktopAgentRunService(
             }
             return
         }
-        val handle = handles[taskId] ?: return
+        val handle = handles[taskId] ?: run {
+            terminals.stop(taskId)
+            return
+        }
         handle.stopRequested = true
         scope.launch(Dispatchers.IO) {
-            val process = handle.process
-            if (process != null) {
-                killTree(process)
-            } else {
-                // Still queued: cancel before it ever starts.
-                handle.job?.cancel()
+            terminals.stop(taskId)
+            if (handle.job?.isActive != true) {
                 finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
             }
         }
@@ -1338,10 +1605,10 @@ class DesktopAgentRunService(
             stop(taskId)
         }
         handles.remove(taskId)
+        terminals.clear(taskId)
         eventFlows.remove(taskId)
-        historyLoaded.remove(taskId)
         _tasks.update { list -> list.filterNot { it.id == taskId } }
-        store.deleteTranscript(taskId)
+        store.deleteTaskArtifacts(taskId)
         task.workflowTaskId?.let { projectTaskId -> detachDeletedWorkflowRun(projectTaskId, taskId) }
         val worktreePath = task.worktreePath
         if (removeWorktree && task.ownsWorktree && worktreePath != null) {
@@ -1380,35 +1647,8 @@ class DesktopAgentRunService(
     }
 
     override fun events(taskId: String): StateFlow<List<AgentEvent>> {
-        val task = currentTask(taskId) ?: return emptyEvents
-        val flow = eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }
-        if (!task.isActive && historyLoaded.add(taskId) && flow.value.isEmpty()) {
-            scope.launch(Dispatchers.IO) { loadHistoricalEvents(task, flow) }
-        }
-        return flow
-    }
-
-    private fun loadHistoricalEvents(task: AgentTask, flow: MutableStateFlow<List<AgentEvent>>) {
-        val file = store.transcriptFile(task.id)
-        if (!file.exists()) return
-        val adapter = adapters[task.agent] ?: return
-        val at = task.createdAtMillis
-        val events = mutableListOf<AgentEvent>()
-        runCatching {
-            file.useLines { lines ->
-                for (line in lines) {
-                    val andyMessage = parseAndyTranscriptLine(line)
-                    if (andyMessage != null) {
-                        events += andyMessage.copy(atMillis = andyMessage.atMillis.takeIf { it > 0 } ?: at)
-                    } else {
-                        events += runCatching { adapter.parseLine(line, at) }
-                            .getOrElse { listOf(AgentEvent.Raw(at, line)) }
-                            .withEstimatedCosts(task)
-                    }
-                }
-            }
-        }
-        flow.value = coalesceStreamDeltas(emptyList(), events).takeLast(MAX_EVENTS_IN_MEMORY)
+        currentTask(taskId) ?: return emptyEvents
+        return eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }
     }
 
     override fun interactiveResumeCommand(taskId: String): String? {
@@ -1468,22 +1708,23 @@ class DesktopAgentRunService(
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
         task.completedChanges?.let { return@withContext it.summary }
-        if (!task.hasChangeBaseline) return@withContext null
+        val baseline = task.changeBaselineTree ?: return@withContext null
         val cwd = task.cwd ?: return@withContext null
-        worktrees.changeSummary(cwd, task.changeBaselinePaths)
+        worktrees.changeSummary(cwd, baseline)
     }
 
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
         task.completedChanges?.diffs?.get(relativePath)?.let { return@withContext it }
         val cwd = task.cwd ?: return@withContext null
-        worktrees.fileDiff(cwd, relativePath)
+        worktrees.fileDiff(cwd, relativePath, task.changeBaselineTree)
     }
 
     override suspend fun refreshCliStatuses() {
         ready.await()
         val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
         _cliStatuses.value = statuses
+        if (!enableProbes) return
         val models = withContext(Dispatchers.IO) {
             statuses
                 .mapNotNull { status ->
@@ -1614,6 +1855,11 @@ class DesktopAgentRunService(
     private suspend fun projectDirectory(projectId: String): String? =
         runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.contextDir }.getOrNull()
 
+    fun close() {
+        terminals.stopAll()
+        handles.values.forEach { it.job?.cancel() }
+    }
+
     private fun projectTask(taskId: String): ProjectTask? =
         _projects.value.values.asSequence().flatMap { it.tasks.asSequence() }.firstOrNull { it.id == taskId }
 
@@ -1681,7 +1927,13 @@ class DesktopAgentRunService(
         workflowAttempt = attempt,
     )
 
-    private fun specPrompt(spec: ProjectTask, scratchpad: String?, revisionRequest: String?): String = buildString {
+    private fun specPrompt(
+        spec: ProjectTask,
+        scratchpad: String?,
+        revisionRequest: String?,
+        runTaskId: String,
+    ): String = buildString {
+        val artifactRelPath = ".andy/$runTaskId"
         append("Create a decision-complete implementation specification for this project task. Do not implement it.\n\n")
         append("Task:\n").append(spec.instructions.trim())
         spec.planVersions.lastOrNull()?.let { previous ->
@@ -1692,9 +1944,12 @@ class DesktopAgentRunService(
         }
         scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
         if (spec.grillMeEnabled) {
-            append("\n\n").append(grillMeHeadlessPromptAddendum())
+            append("\n\n").append(grillMeInteractivePromptAddendum(artifactRelPath))
         } else {
-            append("\n\nReturn the complete implementation plan as the final response, including interfaces, edge cases, and verification steps.")
+            append(
+                "\n\nWrite the complete implementation specification to `$artifactRelPath/plan.md`, " +
+                    "including interfaces, edge cases, and verification steps, then stop (exit the session).",
+            )
         }
     }
 
@@ -1750,8 +2005,10 @@ class DesktopAgentRunService(
         build: ProjectTask,
         buildRun: AgentTask,
         scratchpad: String?,
+        runTaskId: String,
         manualRecovery: Boolean = false,
     ): String = buildString {
+        val artifactRelPath = ".andy/$runTaskId"
         append("Review the current workspace as a blocking code-quality gate. Inspect the actual files and run useful checks. ")
         append("You may edit the workspace only when your configured autonomy and sandbox allow it.\n\n")
         if (manualRecovery) {
@@ -1772,10 +2029,11 @@ class DesktopAgentRunService(
         build.reviewInstructions.takeIf { it.isNotBlank() }?.let { append("\nCustom review instructions:\n").append(it.trim()) }
         scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
         append(
-            "\n\nEnd the final response with exactly one terminal machine-readable block and nothing after it:\n" +
-                "<andy_review>{\"status\":\"approved|changes_requested\",\"summary\":\"...\",\"findings\":[{\"severity\":\"blocking|warning|nit\",\"title\":\"...\",\"details\":\"...\",\"file\":\"optional\",\"line\":123}]}</andy_review>\n" +
-                "Approved forbids blocking findings. Changes requested requires at least one blocking finding.",
+            "\n\nWrite your review verdict to `$artifactRelPath/review.json` using this JSON schema, then stop (exit the session):\n" +
+                """{"status":"approved|changes_requested","summary":"...","findings":[{"severity":"blocking|warning|nit","title":"...","details":"...","file":"optional","line":123}]}""" +
+                "\nApproved forbids blocking findings. Changes requested requires at least one blocking finding.",
         )
+        append('\n').append(andyQuestionArtifactHint(artifactRelPath))
     }
 
     private fun verificationPrompt(
@@ -1784,7 +2042,9 @@ class DesktopAgentRunService(
         reviewRun: AgentTask?,
         reviewVerdict: ProjectReviewVerdict?,
         scratchpad: String?,
+        runTaskId: String,
     ): String = buildString {
+        val artifactRelPath = ".andy/$runTaskId"
         append("Verify the current workspace against the frozen plan and the explicit verification requirements. Inspect the actual files and run the relevant checks. Do not edit tracked source files.\n\n")
         append("Implementation plan:\n").append(build.planSnapshot?.text.orEmpty().trim())
         append("\n\nVerification requirements:\n").append(build.verificationInstructions.trim())
@@ -1807,10 +2067,11 @@ class DesktopAgentRunService(
         }
         scratchpad?.let { append("\n\nProject scratchpad snapshot:\n").append(it.trim()) }
         append(
-            "\n\nEnd the final response with exactly one machine-readable block and no second block:\n" +
-                "<andy_verification>{\"status\":\"passed|failed\",\"summary\":\"...\",\"evidence\":[\"...\"],\"failures\":[\"...\"]}</andy_verification>\n" +
-                "A passed result requires non-empty evidence and an empty failures list. A failed result requires at least one failure.",
+            "\n\nWrite your verification verdict to `$artifactRelPath/verification.json` using this JSON schema, then stop (exit the session):\n" +
+                """{"status":"passed|failed","summary":"...","evidence":["..."],"failures":["..."]}""" +
+                "\nA passed result requires non-empty evidence and an empty failures list. A failed result requires at least one failure.",
         )
+        append('\n').append(andyQuestionArtifactHint(artifactRelPath))
     }
 
     private suspend fun startBuildAttempt(buildTaskId: String) {
@@ -1943,7 +2204,8 @@ class DesktopAgentRunService(
         }
         val project = _projects.value[build.projectId] ?: return
         val scratchpad = project.scratchpad.takeIf { review.includeScratchpad && it.isNotBlank() }
-        val prompt = reviewPrompt(build, buildRun, scratchpad, manualRecovery)
+        val runId = newAgentTaskId()
+        val prompt = reviewPrompt(build, buildRun, scratchpad, runId, manualRecovery)
         val attempt = review.attempts.count { it.stage == ProjectWorkflowStage.Review } + 1
         val directory = projectDirectory(build.projectId)
         updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, reviewReopenedCompleted = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
@@ -1963,6 +2225,7 @@ class DesktopAgentRunService(
                 existingWorktreePath = build.worktreePath,
                 existingBranchName = build.branchName,
             ),
+            taskId = runId,
         )
         appendAttempt(
             review.id,
@@ -2031,7 +2294,8 @@ class DesktopAgentRunService(
             return
         }
         val reviewRun = reviewVerdict?.runId?.let(::currentTask)
-        val prompt = verificationPrompt(build, buildRun, reviewRun, reviewVerdict, scratchpad)
+        val runId = newAgentTaskId()
+        val prompt = verificationPrompt(build, buildRun, reviewRun, reviewVerdict, scratchpad, runId)
         val attempt = verification.attempts.count { it.stage == ProjectWorkflowStage.Verification } + 1
         val directory = projectDirectory(build.projectId)
         updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, updatedAtMillis = System.currentTimeMillis()) }
@@ -2050,6 +2314,7 @@ class DesktopAgentRunService(
                 existingWorktreePath = build.worktreePath,
                 existingBranchName = build.branchName,
             ),
+            taskId = runId,
         )
         appendAttempt(
             verification.id,
@@ -2096,6 +2361,7 @@ class DesktopAgentRunService(
                     AgentTaskStatus.Queued -> ProjectTaskState.Queued
                     AgentTaskStatus.Running -> ProjectTaskState.Running
                     AgentTaskStatus.WaitingForInput -> ProjectTaskState.Waiting
+                    AgentTaskStatus.Paused -> ProjectTaskState.Waiting
                     AgentTaskStatus.Completed -> ProjectTaskState.Waiting
                     else -> ProjectTaskState.NeedsAttention
                 },
@@ -2145,7 +2411,7 @@ class DesktopAgentRunService(
         val run = currentTask(runId) ?: return
         val projectTaskId = run.workflowTaskId ?: return
         val typedTask = projectTask(projectTaskId) ?: return
-        if (run.status == AgentTaskStatus.WaitingForInput) {
+        if (run.status == AgentTaskStatus.WaitingForInput || run.status == AgentTaskStatus.Paused) {
             updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.Waiting, lastError = null) }
             persist()
             return
@@ -2258,14 +2524,14 @@ class DesktopAgentRunService(
             return
         }
         val parsed = parseReviewVerdict(
-            text = run.completedResultText,
+            text = artifactTextForRun(run, "review.json") ?: run.completedResultText,
             runId = run.id,
             reviewedBuildRunId = reviewedBuildRunId,
             reviewGeneration = attempt.reviewGeneration,
             atMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
         )
         if (parsed == null) {
-            setPairAttention(build, "review did not return one valid terminal Andy review block")
+            setPairAttention(build, "review did not return one valid review.json artifact")
             persist()
             return
         }
@@ -2332,14 +2598,14 @@ class DesktopAgentRunService(
         val build = verification.linkedBuildTaskId?.let(::projectTask) ?: return
         val attempt = verification.attempts.firstOrNull { it.runId == run.id }
         val parsed = parseVerificationVerdict(
-            text = run.completedResultText,
+            text = artifactTextForRun(run, "verification.json") ?: run.completedResultText,
             runId = run.id,
             atMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
             reviewedBuildRunId = attempt?.reviewedBuildRunId,
             reviewGeneration = attempt?.reviewGeneration ?: 0,
         )
         if (parsed == null) {
-            setPairAttention(build, "verification did not return one valid Andy verdict block")
+            setPairAttention(build, "verification did not return one valid verification.json artifact")
             persist()
             return
         }
@@ -2372,6 +2638,11 @@ class DesktopAgentRunService(
         }
     }
 
+    private fun artifactTextForRun(run: AgentTask, fileName: String): String? {
+        val file = File(AgentWorkflowArtifacts.dirFor(run.cwd?.let(::File), run.id), fileName)
+        return file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+    }
+
     private fun parseReviewVerdict(
         text: String?,
         runId: String,
@@ -2379,40 +2650,26 @@ class DesktopAgentRunService(
         reviewGeneration: Int,
         atMillis: Long,
     ): ProjectReviewVerdict? {
-        val output = text.orEmpty().trimEnd()
+        val output = text.orEmpty().trim()
+        if (output.isNotBlank()) {
+            AgentWorkflowArtifacts.parseReviewJson(
+                raw = output,
+                runId = runId,
+                reviewedBuildRunId = reviewedBuildRunId,
+                reviewGeneration = reviewGeneration,
+                atMillis = atMillis,
+            )?.let { return it }
+        }
         val matches = REVIEW_BLOCK.findAll(output).toList()
         val terminal = matches.lastOrNull() ?: return null
         if (terminal.range.last != output.lastIndex) return null
-        return runCatching {
-            val value = Json.parseToJsonElement(terminal.groupValues[1]).jsonObject
-            val status = when (value["status"]?.jsonPrimitive?.content?.lowercase()) {
-                "approved" -> ProjectReviewStatus.Approved
-                "changes_requested" -> ProjectReviewStatus.ChangesRequested
-                else -> return null
-            }
-            val summary = value["summary"]?.jsonPrimitive?.content?.trim().orEmpty()
-            if (summary.isBlank()) return null
-            val findings = value["findings"]?.jsonArray?.map { element ->
-                val finding = element.jsonObject
-                val severity = when (finding["severity"]?.jsonPrimitive?.content?.lowercase()) {
-                    "blocking" -> ProjectReviewFindingSeverity.Blocking
-                    "warning" -> ProjectReviewFindingSeverity.Warning
-                    "nit" -> ProjectReviewFindingSeverity.Nit
-                    else -> return null
-                }
-                val title = finding["title"]?.jsonPrimitive?.content?.trim().orEmpty()
-                val details = finding["details"]?.jsonPrimitive?.content?.trim().orEmpty()
-                if (title.isBlank() || details.isBlank()) return null
-                val file = finding["file"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotBlank() }
-                val line = finding["line"]?.jsonPrimitive?.content?.toIntOrNull()
-                if (line != null && line <= 0) return null
-                ProjectReviewFinding(severity, title, details, file, line)
-            }.orEmpty()
-            val blocking = findings.count { it.severity == ProjectReviewFindingSeverity.Blocking }
-            if (status == ProjectReviewStatus.Approved && blocking > 0) return null
-            if (status == ProjectReviewStatus.ChangesRequested && blocking == 0) return null
-            ProjectReviewVerdict(status, summary, findings, runId, reviewedBuildRunId, reviewGeneration, atMillis)
-        }.getOrNull()
+        return AgentWorkflowArtifacts.parseReviewJson(
+            raw = terminal.groupValues[1],
+            runId = runId,
+            reviewedBuildRunId = reviewedBuildRunId,
+            reviewGeneration = reviewGeneration,
+            atMillis = atMillis,
+        )
     }
 
     private fun parseVerificationVerdict(
@@ -2422,26 +2679,26 @@ class DesktopAgentRunService(
         reviewedBuildRunId: String?,
         reviewGeneration: Int,
     ): ProjectVerificationVerdict? {
-        val output = text.orEmpty().trimEnd()
+        val output = text.orEmpty().trim()
+        if (output.isNotBlank()) {
+            AgentWorkflowArtifacts.parseVerificationJson(
+                raw = output,
+                runId = runId,
+                atMillis = atMillis,
+                reviewedBuildRunId = reviewedBuildRunId,
+                reviewGeneration = reviewGeneration,
+            )?.let { return it }
+        }
         val matches = VERIFICATION_BLOCK.findAll(output).toList()
         val terminal = matches.lastOrNull() ?: return null
         if (terminal.range.last != output.lastIndex) return null
-        return runCatching {
-            val value = Json.parseToJsonElement(terminal.groupValues[1]).jsonObject
-            val statusText = value["status"]?.jsonPrimitive?.content ?: return null
-            val status = when (statusText.lowercase()) {
-                "passed" -> ProjectVerificationStatus.Passed
-                "failed" -> ProjectVerificationStatus.Failed
-                else -> return null
-            }
-            val summary = value["summary"]?.jsonPrimitive?.content?.trim().orEmpty()
-            val evidence = value["evidence"]?.jsonArray?.map { it.jsonPrimitive.content.trim() }?.filter { it.isNotBlank() }.orEmpty()
-            val failures = value["failures"]?.jsonArray?.map { it.jsonPrimitive.content.trim() }?.filter { it.isNotBlank() }.orEmpty()
-            if (summary.isBlank()) return null
-            if (status == ProjectVerificationStatus.Passed && (evidence.isEmpty() || failures.isNotEmpty())) return null
-            if (status == ProjectVerificationStatus.Failed && failures.isEmpty()) return null
-            ProjectVerificationVerdict(status, summary, evidence, failures, runId, atMillis, reviewedBuildRunId, reviewGeneration)
-        }.getOrNull()
+        return AgentWorkflowArtifacts.parseVerificationJson(
+            raw = terminal.groupValues[1],
+            runId = runId,
+            atMillis = atMillis,
+            reviewedBuildRunId = reviewedBuildRunId,
+            reviewGeneration = reviewGeneration,
+        )
     }
 
     private fun latestCompletedBuildRun(build: ProjectTask): AgentTask? {
@@ -2565,20 +2822,58 @@ class DesktopAgentRunService(
         )
     }
 
-    /** Repairs Cursor plan-mode runs saved before structured `createPlan` output was retained. */
+    /**
+     * Hides pre-scrollback chats from the project sidebar. Those sessions only had
+     * legacy transcript.jsonl (already removed); scrollback.ansi is the replay source.
+     */
+    private suspend fun archiveLegacyTranscriptChats() {
+        if (legacyTranscriptChatsArchived) return
+        val candidates = withContext(Dispatchers.IO) {
+            _tasks.value.filter { task ->
+                !task.archived && !task.isActive && !store.scrollbackFile(task.id).isFile
+            }
+        }
+        if (candidates.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                val backupDir = File(
+                    store.storeFile.parentFile,
+                    "backups/pre-legacy-chat-archive-${System.currentTimeMillis()}",
+                )
+                backupDir.mkdirs()
+                store.storeFile.copyTo(File(backupDir, "agents.toml"), overwrite = true)
+                File(backupDir, "archived-task-ids.txt").writeText(
+                    candidates.joinToString("\n") { "${it.id}\t${it.title}" },
+                )
+            }
+            val archivedIds = candidates.map { it.id }.toSet()
+            _tasks.update { tasks ->
+                tasks.map { task ->
+                    if (task.id in archivedIds) task.copy(archived = true, unread = false) else task
+                }
+            }
+        }
+        legacyTranscriptChatsArchived = true
+        persist()
+    }
+
+    /** Repairs Cursor plan-mode runs saved before plan.md artifacts were retained. */
     private suspend fun backfillCursorPlansFromTranscripts() {
         val recoveredPlans = withContext(Dispatchers.IO) {
             _tasks.value.asSequence()
                 .filter { task ->
                     task.agent == AgentKind.Cursor &&
                         task.planMode &&
-                        task.status == AgentTaskStatus.Completed
+                        task.status == AgentTaskStatus.Completed &&
+                        task.completedPlanText.isNullOrBlank()
                 }
                 .mapNotNull { task ->
                     val plan = runCatching {
-                        store.transcriptFile(task.id).takeIf { it.isFile }?.useLines { lines ->
-                            lines.mapNotNull(::successfulCursorPlanText).lastOrNull()
-                        }
+                        AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
+                            .resolve("plan.md")
+                            .takeIf { it.isFile }
+                            ?.readText()
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() }
                     }.getOrNull()
                     plan?.let { task.id to it }
                 }
@@ -2622,93 +2917,12 @@ class DesktopAgentRunService(
     private fun appendEvents(taskId: String, events: List<AgentEvent>) {
         if (events.isEmpty()) return
         val flow = eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }
-        flow.update { existing ->
-            coalesceStreamDeltas(existing, events).takeLast(MAX_EVENTS_IN_MEMORY)
-        }
-    }
-
-    private fun updateQuota(agent: AgentKind, windows: List<app.andy.model.AgentQuotaWindow>, updatedAtMillis: Long) {
-        if (windows.isEmpty()) return
-        _providerQuotas.update { current ->
-            current + (agent to AgentProviderQuota(windows, updatedAtMillis, source = AgentQuotaSource.ProviderEvent))
-        }
-    }
-
-    /** Recover the latest CLI-emitted limit for each provider without touching provider credentials or network APIs. */
-    private fun restoreProviderQuotas(tasks: List<AgentTask>) {
-        val restored = linkedMapOf<AgentKind, AgentProviderQuota>()
-        tasks.sortedByDescending { it.createdAtMillis }.forEach { task ->
-            if (task.agent in restored) return@forEach
-            val adapter = adapters[task.agent] ?: return@forEach
-            val file = store.transcriptFile(task.id)
-            if (!file.isFile) return@forEach
-            var latest: Pair<List<app.andy.model.AgentQuotaWindow>, Long>? = null
-            runCatching {
-                file.useLines { lines ->
-                    lines.forEach { line ->
-                        adapter.parseLine(line, task.createdAtMillis)
-                            .filterIsInstance<AgentEvent.ToolResult>()
-                            .lastOrNull { it.quotaWindows.isNotEmpty() }
-                            ?.let { result -> latest = result.quotaWindows to result.atMillis }
-                    }
-                }
-            }
-            latest?.let { (windows, atMillis) ->
-                restored[task.agent] = AgentProviderQuota(windows, atMillis, source = AgentQuotaSource.ProviderEvent)
-            }
-        }
-        if (restored.isNotEmpty()) _providerQuotas.value = restored
-    }
-
-    private fun List<AgentEvent>.withEstimatedCosts(task: AgentTask): List<AgentEvent> = map { event ->
-        if (event !is AgentEvent.TaskResult || event.costUsd != null) return@map event
-        val estimate = task.estimatedTokenCostUsd(event.inputTokens, event.outputTokens) ?: return@map event
-        event.copy(costUsd = estimate, costIsEstimated = true)
-    }
-
-    private fun coalesceStreamDeltas(
-        existing: List<AgentEvent>,
-        incoming: List<AgentEvent>,
-    ): List<AgentEvent> = coalesceAgentStreamDeltas(existing, incoming)
-
-    private fun writeAndyTranscriptLine(
-        taskId: String,
-        userText: String,
-        skills: List<AgentSkill>,
-        atMillis: Long,
-        imagePaths: List<String> = emptyList(),
-    ) {
-        runCatching {
-            val file = store.transcriptFile(taskId)
-            file.parentFile?.mkdirs()
-            val line = buildJsonObject {
-                put("andyUserMessage", userText)
-                put("andySkillNames", skills.joinToString(SKILL_SEPARATOR) { it.name })
-                put("andySkillPaths", skills.joinToString(SKILL_SEPARATOR) { it.path })
-                put("andyImagePaths", imagePaths.joinToString(SKILL_SEPARATOR))
-                put("atMillis", atMillis)
-            }.toString()
-            file.appendText(line + "\n")
-        }
-    }
-
-    private fun parseAndyTranscriptLine(line: String): AgentEvent.UserMessage? {
-        if (!line.startsWith("{\"andyUserMessage\"")) return null
-        val objectValue = parseJsonObject(line) ?: return null
-        val text = objectValue.stringOrNull("andyUserMessage") ?: return null
-        val names = objectValue.stringOrNull("andySkillNames")?.split(SKILL_SEPARATOR).orEmpty()
-        val paths = objectValue.stringOrNull("andySkillPaths")?.split(SKILL_SEPARATOR).orEmpty()
-        val skills = names.zip(paths).filter { (_, path) -> path.isNotBlank() }.map { (name, path) ->
-            AgentSkill(name = name, description = "", path = path)
-        }
-        val imagePaths = objectValue.stringOrNull("andyImagePaths")
-            ?.split(SKILL_SEPARATOR)
-            .orEmpty()
-            .filter { it.isNotBlank() }
-        return AgentEvent.UserMessage(objectValue.longOrNull("atMillis") ?: 0L, text, skills, imagePaths)
+        flow.update { existing -> (existing + events).takeLast(MAX_EVENTS_IN_MEMORY) }
     }
 
     override fun markRead(taskId: String) {
+        seenSessionIds.add(taskId)
+        terminals.markSeen(taskId)
         val task = currentTask(taskId) ?: return
         if (!task.unread) return
         updateTask(taskId) { it.copy(unread = false) }
@@ -2738,8 +2952,9 @@ class DesktopAgentRunService(
 
     private fun finishTask(taskId: String, status: AgentTaskStatus, exitCode: Int?, error: String?) {
         val completedChanges = currentTask(taskId)?.let { task ->
-            task.cwd?.takeIf { task.hasChangeBaseline }?.let { cwd ->
-                worktrees.changeSnapshot(cwd, task.changeBaselinePaths)
+            val baseline = task.changeBaselineTree
+            task.cwd?.takeIf { baseline != null }?.let { cwd ->
+                worktrees.changeSnapshot(cwd, baseline)
             }
         }
         updateTask(taskId) { task ->
@@ -2780,6 +2995,7 @@ class DesktopAgentRunService(
                     lastUsedAgent = _lastUsedAgent.value,
                     maxConcurrent = storedMaxConcurrent,
                     projectWorkflows = _projects.value,
+                    legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
                 ),
             )
         }
@@ -2788,10 +3004,8 @@ class DesktopAgentRunService(
     @Volatile
     private var storedMaxConcurrent: Int = 8
 
-    private fun nullInputFile(): File {
-        val osName = System.getProperty("os.name")?.lowercase().orEmpty()
-        return File(if (osName.contains("win")) "NUL" else "/dev/null")
-    }
+    @Volatile
+    private var legacyTranscriptChatsArchived: Boolean = false
 
     private fun writeLaunchDiagnostics(
         taskId: String,
@@ -2800,7 +3014,7 @@ class DesktopAgentRunService(
         projectEnv: Map<String, String>,
     ) {
         runCatching {
-            val file = File(store.transcriptFile(taskId).parentFile, "launch.log")
+            val file = store.launchLogFile(taskId)
             file.parentFile?.mkdirs()
             file.writeText(
                 buildString {
@@ -2817,7 +3031,7 @@ class DesktopAgentRunService(
 
     private fun appendLaunchDiagnostics(taskId: String, text: String) {
         runCatching {
-            val file = File(store.transcriptFile(taskId).parentFile, "launch.log")
+            val file = store.launchLogFile(taskId)
             file.parentFile?.mkdirs()
             file.appendText("\n$text")
         }
@@ -2852,18 +3066,6 @@ class DesktopAgentRunService(
                 }
         }
         return discovered.values.sortedBy { it.name.lowercase() }
-    }
-
-    private fun killTree(process: Process) {
-        val descendants = process.descendants().toList().asReversed()
-        descendants.forEach { it.destroy() }
-        process.destroy()
-        process.waitFor(1500, TimeUnit.MILLISECONDS)
-        (descendants + process.descendants().toList())
-            .distinct()
-            .filter { it.isAlive }
-            .forEach { it.destroyForcibly() }
-        if (process.isAlive) process.destroyForcibly()
     }
 }
 
@@ -2905,22 +3107,6 @@ internal fun skillRootsFor(
         workspace?.let { File(it, ".agents/skills") },
         File(home, ".gemini/antigravity-cli/skills"),
     )
-}
-
-private const val SKILL_SEPARATOR = "\u001F"
-
-/**
- * Host shells (Cursor terminals, local LLM proxy setups) often export variables that
- * vendor agent CLIs interpret as authoritative API config. Clear the known offenders
- * before applying intentional per-project env.
- */
-internal fun scrubInheritedAgentEnvironment(env: MutableMap<String, String>) {
-    listOf(
-        "ANTHROPIC_BASE_URL",
-        "NODE_OPTIONS",
-        "VSCODE_INSPECTOR_OPTIONS",
-        "ELECTRON_RUN_AS_NODE",
-    ).forEach(env::remove)
 }
 
 internal fun agentFailureMessage(

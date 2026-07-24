@@ -263,7 +263,19 @@ interface WorkspaceStore {
     suspend fun save(state: WorkspaceState)
 }
 
-enum class AgentAttentionKind { Completed, NeedsInput, Failed }
+enum class AgentAttentionKind {
+    Completed,
+    NeedsInput,
+    Failed,
+    /** Embedded terminal is actively working (informational; not notified by default). */
+    Working,
+    /** Quiescent at a prompt. */
+    Idle,
+    /** Blocked on approval/question — fires OS notification (herdr parity). */
+    Blocked,
+    /** Phase/process finished while unseen — fires OS notification (herdr parity). */
+    Done,
+}
 
 data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
 data class OpenAgentTaskRequest(val taskId: String, val projectId: String?)
@@ -323,6 +335,8 @@ interface AgentRunService {
     /** Starts a fresh writable provider run from a completed plan-mode task. */
     suspend fun startImplementation(taskId: String)
     fun stop(taskId: String)
+    /** Manually completes an active workflow build run and advances the project workflow. */
+    fun completeWorkflowRun(taskId: String)
     /** Starts the failed task over with its original prompt and configuration. */
     suspend fun retry(taskId: String)
     fun resume(
@@ -353,8 +367,17 @@ interface AgentRunService {
     fun archive(taskId: String)
     /** Restores an archived chat to the default list. */
     fun unarchive(taskId: String)
+    /**
+     * Legacy structured transcript. Empty under the embedded-terminal model —
+     * the PTY buffer is the transcript. Kept for call-site compatibility during migration.
+     */
     fun events(taskId: String): StateFlow<List<AgentEvent>>
+    /** Live working/idle/blocked/done badge state for embedded sessions. */
+    fun sessionStatus(taskId: String): StateFlow<app.andy.model.AgentSessionStatus?>
+    /** Latest session badge per active task id (empty when no embedded session). */
+    val sessionStatuses: StateFlow<Map<String, app.andy.model.AgentSessionStatus>>
     fun interactiveResumeCommand(taskId: String): String?
+    /** @deprecated Prefer the embedded terminal pane; retained as a copy/paste escape hatch. */
     suspend fun openInTerminal(taskId: String): CommandResult
     suspend fun openSkill(path: String): CommandResult
     suspend fun worktreeDiffSummary(taskId: String): String?

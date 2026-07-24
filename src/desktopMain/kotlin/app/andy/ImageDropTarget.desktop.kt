@@ -9,11 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.awtTransferable
-import java.awt.datatransfer.DataFlavor
-import java.awt.Image
-import java.awt.image.BufferedImage
-import java.io.File
-import javax.imageio.ImageIO
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -41,23 +36,7 @@ actual fun Modifier.onImageFilesDropped(
 
             override fun onDrop(event: DragAndDropEvent): Boolean {
                 val transferable = event.awtTransferable
-                val files = runCatching {
-                    transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
-                }.getOrNull().orEmpty()
-                    .filterIsInstance<File>()
-                    .filter { file -> file.isFile && file.isSupportedImageFile() }
-                    .map { it.absolutePath }
-                val droppedImages = files.ifEmpty {
-                    if (transferable.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-                        (runCatching { transferable.getTransferData(DataFlavor.imageFlavor) as? Image }
-                            .getOrNull()
-                            ?.persistDroppedImage())
-                            ?.let(::listOf)
-                            .orEmpty()
-                    } else {
-                        emptyList()
-                    }
-                }
+                val droppedImages = transferable.droppedImagePaths()
                 if (droppedImages.isEmpty()) return false
                 onFiles(droppedImages)
                 onDragActiveChange(false)
@@ -67,30 +46,8 @@ actual fun Modifier.onImageFilesDropped(
     }
     return dragAndDropTarget(
         shouldStartDragAndDrop = { event ->
-            event.awtTransferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) ||
-                event.awtTransferable.isDataFlavorSupported(DataFlavor.imageFlavor)
+            event.awtTransferable.supportsImageDrop()
         },
         target = target,
     )
 }
-
-private fun File.isSupportedImageFile(): Boolean = extension.lowercase() in setOf(
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif",
-)
-
-private fun Image.persistDroppedImage(): String? = runCatching {
-    val buffered = if (this is BufferedImage) this else {
-        BufferedImage(getWidth(null), getHeight(null), BufferedImage.TYPE_INT_ARGB).also { converted ->
-            val graphics = converted.createGraphics()
-            try {
-                graphics.drawImage(this, 0, 0, null)
-            } finally {
-                graphics.dispose()
-            }
-        }
-    }
-    val directory = File(System.getProperty("user.home"), ".andy/agent-images").apply { mkdirs() }
-    val target = File.createTempFile("dropped-", ".png", directory)
-    check(ImageIO.write(buffered, "png", target)) { "PNG writer unavailable" }
-    target.absolutePath
-}.getOrNull()

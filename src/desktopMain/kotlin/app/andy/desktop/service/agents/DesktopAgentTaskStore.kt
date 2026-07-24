@@ -49,36 +49,81 @@ data class AgentStoreState(
     val lastUsedAgent: AgentKind? = null,
     val maxConcurrent: Int = 8,
     val projectWorkflows: Map<String, ProjectWorkflowState> = emptyMap(),
+    /** One-time migration: pre-scrollback chats archived on first launch after upgrade. */
+    val legacyTranscriptChatsArchived: Boolean = false,
 )
 
 class DesktopAgentTaskStore(
     private val file: File = File(System.getProperty("user.home"), ".andy/agents.toml"),
 ) {
+    val storeFile: File get() = file
     val transcriptsDir: File = File(file.parentFile, "agents")
 
-    fun transcriptFile(taskId: String): File = File(File(transcriptsDir, taskId), "transcript.jsonl")
+    fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
+
+    fun launchLogFile(taskId: String): File = File(taskDir(taskId), "launch.log")
+
+    /** Cumulative KetraTerm scrollback (ANSI) for finished-chat replay. */
+    fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext AgentStoreState()
-        runCatching {
-            Toml { ignoreUnknownKeys = true }.decodeFromString(AgentsFileDto.serializer(), file.readText()).toModel()
-        }.getOrElse {
-            file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
-            AgentStoreState()
+        val primary = runCatching {
+            Toml { ignoreUnknownKeys = true }
+                .decodeFromString(AgentsFileDto.serializer(), file.readText())
+                .toModel(::scrollbackFile)
         }
+        if (primary.isSuccess) return@withContext primary.getOrThrow()
+
+        // Snapshot the unreadable file, then try the last good backup before giving up.
+        runCatching { file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true) }
+        val backup = File(file.absolutePath + ".bak")
+        if (backup.isFile && backup.length() > 0L) {
+            runCatching {
+                Toml { ignoreUnknownKeys = true }
+                    .decodeFromString(AgentsFileDto.serializer(), backup.readText())
+                    .toModel(::scrollbackFile)
+            }.onSuccess { recovered ->
+                // Restore the primary file so the next launch does not depend on .bak.
+                runCatching {
+                    backup.copyTo(file, overwrite = true)
+                }
+                return@withContext recovered
+            }
+        }
+        AgentStoreState()
     }
 
     suspend fun save(state: AgentStoreState): Unit = withContext(Dispatchers.IO) {
+        saveSync(state)
+    }
+
+    fun saveSync(state: AgentStoreState) {
         file.parentFile?.mkdirs()
+        // Never clobber a populated store with an empty task list — that is almost
+        // always a failed-load recovery writing back, not an intentional wipe.
+        if (state.tasks.isEmpty() && file.isFile && file.length() > EMPTY_STORE_GUARD_BYTES) {
+            file.copyTo(File(file.absolutePath + ".pre-empty-save"), overwrite = true)
+            return
+        }
         if (file.exists()) {
             file.copyTo(File(file.absolutePath + ".bak"), overwrite = true)
         }
         val content = Toml.encodeToString(AgentsFileDto.serializer(), state.toFileDto())
-        file.writeText(content.trimEnd() + "\n")
+        val tmp = File(file.absolutePath + ".tmp")
+        tmp.writeText(content.trimEnd() + "\n")
+        if (!tmp.renameTo(file)) {
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
+        }
     }
 
-    suspend fun deleteTranscript(taskId: String): Unit = withContext(Dispatchers.IO) {
-        File(transcriptsDir, taskId).deleteRecursively()
+    suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
+        taskDir(taskId).deleteRecursively()
+    }
+
+    companion object {
+        private const val EMPTY_STORE_GUARD_BYTES = 10_000L
     }
 }
 
@@ -90,6 +135,7 @@ private data class AgentsFileDto(
     val providerDefaults: List<AgentProviderDefaultsDto> = emptyList(),
     val quotaAccess: AgentQuotaAccessDto = AgentQuotaAccessDto(),
     val lastUsedAgent: String = "",
+    val legacyTranscriptChatsArchived: Boolean = false,
     val tasks: List<AgentTaskDto> = emptyList(),
     val projectWorkflows: List<ProjectWorkflowDto> = emptyList(),
 )
@@ -149,8 +195,7 @@ private data class AgentTaskDto(
     val queuedFollowUpSkillPaths: List<String> = emptyList(),
     val userInputRequest: AgentUserInputRequestDto? = null,
     val maxBudgetUsd: Double = 0.0,
-    val changeBaselinePaths: List<String> = emptyList(),
-    val hasChangeBaseline: Boolean = false,
+    val changeBaselineTree: String? = null,
     val completedChanges: AgentThreadChangeSnapshotDto? = null,
     val status: String = AgentTaskStatus.Unknown.name,
     val vendorSessionId: String = "",
@@ -366,8 +411,8 @@ private data class DiffLineDto(
     val newLineNumber: Int? = null,
 )
 
-private fun AgentsFileDto.toModel(): AgentStoreState = AgentStoreState(
-    tasks = tasks.mapNotNull { it.toModel() },
+private fun AgentsFileDto.toModel(scrollbackFile: (String) -> File): AgentStoreState = AgentStoreState(
+    tasks = tasks.mapNotNull { it.toModel(scrollbackFile) },
     binaryOverrides = binaries,
     providerDefaults = providerDefaults.mapNotNull { it.toModel() }.toMap(),
     quotaAccess = AgentQuotaAccess(
@@ -378,6 +423,7 @@ private fun AgentsFileDto.toModel(): AgentStoreState = AgentStoreState(
     lastUsedAgent = AgentKind.entries.firstOrNull { it.name == lastUsedAgent },
     maxConcurrent = maxConcurrent.coerceIn(1, 64),
     projectWorkflows = projectWorkflows.map { it.toModel() }.associateBy { it.projectId },
+    legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
 )
 
 private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDefaults>? {
@@ -395,7 +441,7 @@ private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDef
     )
 }
 
-private fun AgentTaskDto.toModel(): AgentTask? {
+private fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? {
     val agentKind = AgentKind.entries.firstOrNull { it.name == agent } ?: return null
     val persistedStatus = AgentTaskStatus.entries.firstOrNull { it.name == status } ?: AgentTaskStatus.Unknown
     val legacyQueuedFollowUp = queuedFollowUp.takeIf { it.isNotBlank() || queuedFollowUpImagePaths.isNotEmpty() }?.let { text ->
@@ -407,7 +453,7 @@ private fun AgentTaskDto.toModel(): AgentTask? {
                 .map { (name, path) -> AgentSkill(name = name, description = "", path = path) },
         )
     }
-    return AgentTask(
+    val task = AgentTask(
         id = id,
         title = title,
         prompt = prompt,
@@ -451,15 +497,9 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         } + listOfNotNull(legacyQueuedFollowUp),
         userInputRequest = userInputRequest?.toModel(),
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
-        changeBaselinePaths = changeBaselinePaths,
-        hasChangeBaseline = hasChangeBaseline,
+        changeBaselineTree = changeBaselineTree,
         completedChanges = completedChanges?.toModel(),
-        // A task persisted as active belongs to a previous app run; its process is gone.
-        status = if (persistedStatus == AgentTaskStatus.Queued || persistedStatus == AgentTaskStatus.Running) {
-            AgentTaskStatus.Unknown
-        } else {
-            persistedStatus
-        },
+        status = persistedStatus,
         vendorSessionId = vendorSessionId.takeIf { it.isNotBlank() },
         createdAtMillis = createdAtMillis,
         startedAtMillis = startedAtMillis.takeIf { it > 0 },
@@ -475,12 +515,14 @@ private fun AgentTaskDto.toModel(): AgentTask? {
         unread = unread,
         archived = archived,
     )
+    return recoverInterruptedTaskStatus(task, scrollbackFile(id))
 }
 
 private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
     maxConcurrent = maxConcurrent,
     binaries = binaryOverrides,
     lastUsedAgent = lastUsedAgent?.name.orEmpty(),
+    legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
     providerDefaults = providerDefaults.entries.map { (agent, defaults) ->
         AgentProviderDefaultsDto(
             agent = agent.name,
@@ -541,8 +583,7 @@ private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             },
             userInputRequest = task.userInputRequest?.toDto(),
             maxBudgetUsd = task.maxBudgetUsd ?: 0.0,
-            changeBaselinePaths = task.changeBaselinePaths,
-            hasChangeBaseline = task.hasChangeBaseline,
+            changeBaselineTree = task.changeBaselineTree,
             completedChanges = task.completedChanges?.toDto(),
             status = task.status.name,
             vendorSessionId = task.vendorSessionId.orEmpty(),

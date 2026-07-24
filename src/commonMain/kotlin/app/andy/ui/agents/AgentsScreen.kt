@@ -79,7 +79,6 @@ private fun AgentCommandCenter(
     active: Boolean,
     requestedTaskId: String?,
     onRequestedTaskConsumed: () -> Unit,
-    compactToolCalls: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
@@ -151,11 +150,13 @@ private fun AgentCommandCenter(
                 }
                 if (inbox.isEmpty()) EmptyState(if (query.isBlank()) if (showArchived) "No archived tasks" else "No tasks yet" else "No matching tasks") else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
                     items(inbox, key = { it.id }) { task ->
+                        val sessionStatus by services.agentRuns.sessionStatus(task.id).collectAsState()
                         AgentTaskCard(
                             task,
                             null,
                             !composing && task.id == selected?.id,
                             nowMillis,
+                            sessionStatus = sessionStatus,
                             onClick = { selectedTaskId = task.id; composing = false; if (task.unread) services.agentRuns.markRead(task.id) },
                             onMarkUnread = { services.agentRuns.markUnread(task.id) },
                             onArchive = if (showArchived) {
@@ -180,7 +181,8 @@ private fun AgentCommandCenter(
                             onCancel = { composing = false },
                             onSubmit = { draft ->
                                 scope.launch {
-                                    selectedTaskId = services.agentRuns.createAndStart(draft).id
+                                    val task = services.agentRuns.createAndStart(draft)
+                                    selectedTaskId = task.id
                                     composing = false
                                 }
                             },
@@ -204,7 +206,6 @@ private fun AgentCommandCenter(
                                         }
                                     }
                                 },
-                                compactToolCalls = compactToolCalls,
                                 transcriptScrollMemory = transcriptScrollMemory,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -223,9 +224,8 @@ internal fun AgentsScreen(
     active: Boolean = true,
     requestedTaskId: String? = null,
     onRequestedTaskConsumed: () -> Unit = {},
-    compactToolCalls: Boolean = true,
 ) {
-    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, compactToolCalls)
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed)
 }
 
 @Composable
@@ -234,6 +234,7 @@ private fun AgentTaskCard(
     projectName: String?,
     selected: Boolean,
     nowMillis: Long,
+    sessionStatus: app.andy.model.AgentSessionStatus? = null,
     onClick: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
@@ -281,6 +282,9 @@ private fun AgentTaskCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (task.unread) UnreadDot()
+                    if (sessionStatus == app.andy.model.AgentSessionStatus.Blocked) {
+                        SessionStatusDot(sessionStatus)
+                    }
                     AgentBadge(task.agent)
                 }
                 Text(
@@ -293,7 +297,11 @@ private fun AgentTaskCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
+                if (sessionStatus != null && task.isActive) {
+                    StatusTag(agentSessionStatusLabel(sessionStatus), agentSessionStatusColor(sessionStatus))
+                } else {
+                    StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
+                }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -319,7 +327,13 @@ private fun AgentTaskCard(
                 if (task.useWorktree) {
                     Text("worktree", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 }
-                formatElapsed(task.startedAtMillis, task.finishedAtMillis, nowMillis)?.let {
+                val elapsedEnd = rememberElapsedEndMillis(
+                    taskId = task.id,
+                    finishedAtMillis = task.finishedAtMillis,
+                    isActive = task.isActive,
+                    sessionStatus = sessionStatus,
+                )
+                formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let {
                     Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 }
                 formatCost(task.totalCostUsd)?.let {

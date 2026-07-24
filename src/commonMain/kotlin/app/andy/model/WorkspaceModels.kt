@@ -45,6 +45,21 @@ data class WorkspaceState(
     val tintId: String = "andy-blue",
     val surfaceModeId: String = "tinted",
     val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,
+    /** KetraTerm built-in theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
+    val terminalThemeId: String = TerminalThemePreset.Default.id,
+    /** Legacy per-role hex fields — retained for properties compatibility; ignored at runtime. */
+    val terminalForegroundHex: String = "#ABB2BF",
+    val terminalBackgroundHex: String = "#1E2127",
+    val terminalSelectionFgHex: String = "#FFFFFF",
+    val terminalSelectionBgHex: String = "#404859",
+    val terminalFoundFgHex: String = "#1E2127",
+    val terminalFoundBgHex: String = "#E5C07B",
+    val terminalHyperlinkFgHex: String = "#61AFEF",
+    val terminalHyperlinkBgHex: String = "#1E2127",
+    val terminalUseInverseSelection: Boolean = false,
+    val terminalColorPaletteId: String = "xterm",
+    val terminalFontFamilyId: String = TerminalFontFamily.Default.id,
+    val terminalFontSize: Float = TerminalThemePreset.DefaultFontSize,
     val workspaceSidebarExpanded: Boolean = true,
     val workspaceStatusExpanded: Boolean = false,
     val projectsIntroductionCompleted: Boolean = false,
@@ -74,6 +89,4 @@ data class WorkspaceState(
     val agentIconBadgeEnabled: Boolean = true,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
-    /** Collapse consecutive tool calls into one expandable line in agent transcripts. */
-    val compactToolCalls: Boolean = true,
 )

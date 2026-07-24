@@ -20,12 +20,16 @@ import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.model.AgentKind
+import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
 import app.andy.service.AndyServices
 import app.andy.service.PlatformCapabilities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 fun createDesktopServices(): AndyServices = createDesktopRuntime().services
 
@@ -52,7 +56,10 @@ fun createDesktopRuntime(): DesktopRuntime {
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val actionConfig = DesktopActionConfigStore()
-    val actionRuns = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+    val actionRuns = DesktopActionRunService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        terminalAppearance = { store.state.value.toTerminalAppearance() },
+    )
 
     val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
     val intents = DesktopIntentService(runner, devices)
@@ -97,6 +104,17 @@ fun createDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         actionConfig = actionConfig,
     )
+
+    // Live sessions pick up KetraTerm theme/font changes from Settings.
+    updatesScope.launch {
+        store.state
+            .map { Triple(it.terminalThemeId, it.terminalFontFamilyId, it.terminalFontSize) }
+            .distinctUntilChanged()
+            .collect {
+                actionRuns.reloadAppearance()
+                agentRuns.reloadTerminalAppearance()
+            }
+    }
 
     val services = AndyServices(
         devices = devices,

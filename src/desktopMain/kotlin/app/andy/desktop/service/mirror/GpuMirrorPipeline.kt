@@ -1,5 +1,6 @@
 package app.andy.desktop.service.mirror
 
+import app.andy.desktop.MirrorPresentationGuard
 import app.andy.desktop.nsWindowNumber
 import java.awt.Canvas
 import java.awt.Component
@@ -171,6 +172,7 @@ internal class GpuMirrorPresenter internal constructor(
     }
 
     fun updateGeometry(component: Component) {
+        if (MirrorPresentationGuard.suppressingGeometry) return
         if (!component.isDisplayable) return
         if (geometryUpdateScheduled) return
         geometryUpdateScheduled = true

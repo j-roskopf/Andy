@@ -1,6 +1,7 @@
 package app.andy.ui.agents
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -41,7 +42,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,9 +96,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 private enum class DiffViewMode { Unified, Split }
 
@@ -109,13 +107,12 @@ internal fun AgentTaskDetail(
     nowMillis: Long,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
-    compactToolCalls: Boolean = true,
-    transcriptScrollMemory: TranscriptScrollMemory? = null,
+    @Suppress("UNUSED_PARAMETER") transcriptScrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val copyText = rememberCopyText()
-    val events by services.agentRuns.events(task.id).collectAsState()
+    val sessionStatus by services.agentRuns.sessionStatus(task.id).collectAsState()
     val skillDirectory = task.worktreePath ?: task.cwd
     val availableSkills by remember(task.agent, skillDirectory) {
         services.agentRuns.skills(task.agent, skillDirectory)
@@ -134,27 +131,16 @@ internal fun AgentTaskDetail(
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
-    // Completed chats: empty events first, then history + change summary load async.
-    // Don't pin the transcript until both have settled or we know they're empty.
-    var eventsReady by remember(task.id) { mutableStateOf(false) }
     LaunchedEffect(task.id, task.isActive, task.status) {
-        // Do not bounce ready→false on revisit; that let a prompt-only stub overwrite scroll memory.
         if (!task.isActive) {
-            if (events.isEmpty()) {
-                withTimeoutOrNull(3_000) {
-                    snapshotFlow { events }.first { it.isNotEmpty() }
-                }
-            }
             changeSummary = task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
             loadedFileDiffs = task.completedChanges?.diffs.orEmpty()
-            // Let the change-summary card compose before the transcript pins/reveals.
             withFrameMillis { }
             withFrameMillis { }
         } else {
             changeSummary = null
             loadedFileDiffs = emptyMap()
         }
-        eventsReady = true
     }
     LaunchedEffect(task.id, task.status) {
         if (task.worktreePath != null) {
@@ -164,7 +150,11 @@ internal fun AgentTaskDetail(
         loadingDiffPath = null
     }
 
-    val supportsResume = task.vendorSessionId != null && task.agent != AgentKind.Antigravity
+    val supportsResume = true
+    // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
+    // unless the user has staged images that should ship with the next composed message.
+    val terminalSessionActive = task.isActive || task.status == AgentTaskStatus.WaitingForInput
+    val showFollowUpComposer = supportsResume && (!terminalSessionActive || followUpImagePaths.isNotEmpty())
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val slashCommand = findActiveSlashCommand(followUp)
     val matchingCommands = slashCommand?.let { command ->
@@ -257,58 +247,60 @@ internal fun AgentTaskDetail(
                 fontSize = 11.sp,
             )
         }
-        AgentTranscript(
-            events,
-            isActive = task.isActive,
-            agentLabel = task.agent.label,
-            compactToolCalls = compactToolCalls,
-            headerContent = if (showHeader) {
-                {
-                    AgentTaskHeader(
-                        task = task,
-                        nowMillis = nowMillis,
-                        onStop = { services.agentRuns.stop(task.id) },
-                        onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
-                        onResume = { services.agentRuns.resume(task.id, "Continue where you left off.", emptyList(), emptyList()) },
-                        onDelete = { onDelete(task) },
-                        onCopyPrompt = { copyText(task.prompt) },
-                    )
-                }
-            } else {
-                null
+        if (task.status == AgentTaskStatus.Paused) {
+            Text(
+                "idle at prompt — continue interactively to send your next message",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+            )
+        }
+        if (showHeader) {
+            AgentTaskHeader(
+                task = task,
+                nowMillis = nowMillis,
+                sessionStatus = sessionStatus,
+                onStop = { services.agentRuns.stop(task.id) },
+                onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
+                    { services.agentRuns.completeWorkflowRun(task.id) }
+                } else {
+                    null
+                },
+                onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
+                onResume = { services.agentRuns.resume(task.id, "Continue where you left off.", emptyList(), emptyList()) },
+                onDelete = { onDelete(task) },
+                onCopyPrompt = { copyText(task.prompt) },
+            )
+        }
+        task.userInputRequest?.let { request ->
+            AgentUserInputCard(
+                request = request,
+                onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
+            )
+        }
+        AgentTerminalSurface(
+            services = services,
+            taskId = task.id,
+            sessionActive = terminalSessionActive,
+            onImagesStaged = { staged ->
+                followUpImagePaths = (followUpImagePaths + staged).distinct()
             },
-            pendingContent = task.userInputRequest?.let { request ->
-                {
-                    AgentUserInputCard(
-                        request = request,
-                        onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
-                    )
-                }
-            },
-            originalPrompt = task.prompt,
-            originalImagePaths = task.imagePaths,
-            completedContent = {
-                changeSummary?.takeIf { it.files.isNotEmpty() }?.let { summary ->
-                    AgentChangeSummaryCard(
-                        summary = summary,
-                        showAllFiles = showAllChangedFiles,
-                        onShowAllFilesChange = { showAllChangedFiles = it },
-                        expandedPath = expandedDiffPath,
-                        loadingPath = loadingDiffPath,
-                        diffs = loadedFileDiffs,
-                        viewMode = diffViewMode,
-                        onViewModeChange = { diffViewMode = it },
-                        onToggleFile = { path -> toggleFileDiff(path) },
-                        embedded = true,
-                    )
-                }
-            },
-            eventsReady = eventsReady,
-            onSkillOpen = { skill -> scope.launch { services.agentRuns.openSkill(skill.path) } },
-            restoreScrollKey = task.id,
-            scrollMemory = transcriptScrollMemory,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth().heightIn(min = 280.dp),
         )
+        changeSummary?.takeIf { it.files.isNotEmpty() }?.let { summary ->
+            AgentChangeSummaryCard(
+                summary = summary,
+                showAllFiles = showAllChangedFiles,
+                onShowAllFilesChange = { showAllChangedFiles = it },
+                expandedPath = expandedDiffPath,
+                loadingPath = loadingDiffPath,
+                diffs = loadedFileDiffs,
+                viewMode = diffViewMode,
+                onViewModeChange = { diffViewMode = it },
+                onToggleFile = { path -> toggleFileDiff(path) },
+                embedded = true,
+            )
+        }
 
         if (task.queuedFollowUps.isNotEmpty()) {
             Column(
@@ -383,7 +375,7 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (!task.isActive || supportsResume) {
+        if (showFollowUpComposer) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -392,7 +384,7 @@ internal fun AgentTaskDetail(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (supportsResume && task.userInputRequest == null) {
+                    if (task.userInputRequest == null) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             task.goal?.let { goal ->
                                 OutlinedButton(
@@ -480,12 +472,12 @@ internal fun AgentTaskDetail(
                                 visualTransformation = slashHighlight,
                                 placeholder = {
                                     Text(
-                                        if (followUpImageDragActive) {
-                                            "release to attach image"
-                                        } else if (task.isActive) {
-                                            "next message — type / for ${task.agent.label} commands or skills, enter to queue"
-                                        } else {
-                                            "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
+                                        when {
+                                            followUpImageDragActive -> "release to attach image"
+                                            terminalSessionActive && followUpImagePaths.isNotEmpty() ->
+                                                "add a message — staged images send with it, enter to submit"
+                                            else ->
+                                                "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
                                         },
                                         color = if (followUpImageDragActive) Cyan else TextSecondary,
                                         fontFamily = MonoFont,
@@ -553,7 +545,7 @@ internal fun AgentTaskDetail(
                             colors = primaryButtonColors(),
                             modifier = Modifier.height(36.dp),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                        ) { Text(if (task.isActive) "queue" else "send", fontSize = 11.sp) }
+                        ) { Text("send", fontSize = 11.sp) }
                     } else {
                         Spacer(Modifier.weight(1f))
                     }
@@ -628,16 +620,26 @@ internal fun AgentTaskDetail(
 private fun AgentTaskHeader(
     task: AgentTask,
     nowMillis: Long,
+    sessionStatus: app.andy.model.AgentSessionStatus? = null,
     onStop: () -> Unit,
+    onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
     onCopyPrompt: () -> Unit,
 ) {
+    var expanded by remember(task.id) { mutableStateOf(true) }
+    val elapsedEnd = rememberElapsedEndMillis(
+        taskId = task.id,
+        finishedAtMillis = task.finishedAtMillis,
+        isActive = task.isActive,
+        sessionStatus = sessionStatus,
+    )
     Column(
         Modifier.fillMaxWidth()
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+            .animateContentSize(tween(180))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -646,14 +648,32 @@ private fun AgentTaskHeader(
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            Text(
+                if (expanded) "v" else ">",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .width(10.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { expanded = !expanded },
+            )
             AgentBadge(task.agent)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { expanded = !expanded },
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(
                     task.prompt.ifBlank { task.title },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "${task.agent.label}  ${task.modelConfigurationLabel()}",
@@ -664,8 +684,23 @@ private fun AgentTaskHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
-            if (task.isActive || task.status == AgentTaskStatus.WaitingForInput) {
+            if (sessionStatus != null && task.isActive) {
+                StatusTag(agentSessionStatusLabel(sessionStatus), agentSessionStatusColor(sessionStatus))
+            } else {
+                StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
+            }
+            val terminalLive = task.isActive || task.status == AgentTaskStatus.WaitingForInput
+            if (!terminalLive) {
+                StatusTag("READ-ONLY", TextSecondary)
+            }
+            if (terminalLive) {
+                onCompleteBuild?.let { complete ->
+                    OutlinedButton(
+                        onClick = complete,
+                        modifier = Modifier.height(30.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    ) { Text("mark complete", fontSize = 11.sp) }
+                }
                 Button(
                     onClick = onStop,
                     colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
@@ -689,6 +724,14 @@ private fun AgentTaskHeader(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) { Text("resume", fontSize = 11.sp) }
             }
+            if (task.status == AgentTaskStatus.Paused) {
+                Button(
+                    onClick = onResume,
+                    colors = primaryButtonColors(),
+                    modifier = Modifier.height(30.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                ) { Text("continue", fontSize = 11.sp) }
+            }
             OutlinedButton(
                 onClick = onDelete,
                 modifier = Modifier.height(30.dp),
@@ -696,48 +739,56 @@ private fun AgentTaskHeader(
             ) { Text("delete", fontSize = 11.sp) }
         }
 
-        Text(
-            task.cwd ?: "no project context",
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-
-        task.goal?.let { goal ->
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, Green.copy(alpha = 0.38f), RoundedCornerShape(AndyRadius.R3))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-        }
-
-        AgentContextWindowIndicator(task)
-
-        HorizontalDivider(color = Border)
-
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(140)) + expandVertically(tween(180)),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(140)),
         ) {
-            OutlinedButton(
-                onClick = onCopyPrompt,
-                modifier = Modifier.height(30.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            ) { Text("copy prompt", fontSize = 10.sp) }
-            Spacer(Modifier.weight(1f))
-            formatElapsed(task.startedAtMillis, task.finishedAtMillis, nowMillis)?.let {
-                Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-            }
-            formatCost(task.totalCostUsd, task.costIsEstimated)?.let {
-                Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text(
+                    task.cwd ?: "no project context",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+
+                task.goal?.let { goal ->
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.R3))
+                            .border(1.dp, Green.copy(alpha = 0.38f), RoundedCornerShape(AndyRadius.R3))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                        Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+
+                AgentContextWindowIndicator(task)
+
+                HorizontalDivider(color = Border)
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onCopyPrompt,
+                        modifier = Modifier.height(30.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    ) { Text("copy prompt", fontSize = 10.sp) }
+                    Spacer(Modifier.weight(1f))
+                    formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let {
+                        Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                    }
+                    formatCost(task.totalCostUsd, task.costIsEstimated)?.let {
+                        Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                    }
+                }
             }
         }
     }
@@ -748,13 +799,10 @@ private fun AgentTaskHeader(
 private fun AgentContextWindowIndicator(task: AgentTask) {
     val liveContext = task.contextTokens
     val turnInput = task.inputTokens
-    val used = liveContext ?: turnInput
+    val used = liveContext ?: turnInput ?: return
     val capacity = task.contextWindowTokens
-    val fraction = used?.let { tokens ->
-        capacity?.takeIf { it > 0 }?.let { (tokens.toFloat() / it).coerceIn(0f, 1f) }
-    }
+    val fraction = capacity?.takeIf { it > 0 }?.let { (used.toFloat() / it).coerceIn(0f, 1f) }
     val color = when {
-        used == null -> TextSecondary
         fraction == null -> TextSecondary
         fraction >= 0.9f -> Red
         fraction >= 0.75f -> app.andy.ui.theme.Yellow
@@ -795,14 +843,11 @@ private fun AgentContextWindowIndicator(task: AgentTask) {
 internal fun agentContextWindowLabel(task: AgentTask): String {
     val liveContext = task.contextTokens
     val turnInput = task.inputTokens
-    val used = liveContext ?: turnInput
+    val used = liveContext ?: turnInput ?: return ""
     val capacity = task.contextWindowTokens
-    val fraction = used?.let { tokens ->
-        capacity?.takeIf { it > 0 }?.let { (tokens.toFloat() / it).coerceIn(0f, 1f) }
-    }
+    val fraction = capacity?.takeIf { it > 0 }?.let { (used.toFloat() / it).coerceIn(0f, 1f) }
     return buildString {
         when {
-            used == null -> append("context · awaiting provider count")
             capacity == null || capacity <= 0 -> {
                 append("context ")
                 append(formatCompactTokenCount(used))
