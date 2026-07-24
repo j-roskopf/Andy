@@ -25,6 +25,7 @@ import app.andy.service.CommandResult
 import app.andy.service.McpServerService
 import app.andy.service.WorkspaceStore
 import java.io.File
+import java.util.Base64
 import java.util.Collections
 import kotlin.test.Ignore
 import kotlin.test.Test
@@ -1260,7 +1261,9 @@ private class WorkflowAdapter(
         when (task.workflowStage) {
             ProjectWorkflowStage.Spec -> append(writeArtifactWindows(task, "plan.md", specPlanText()))
             ProjectWorkflowStage.Build -> {
-                if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
+                if (buildKeepAliveSeconds > 0) {
+                    append("timeout /t ").append(buildKeepAliveSeconds).append(" /nobreak >nul")
+                }
             }
             ProjectWorkflowStage.Review -> {
                 if (reviewWritesFile) append("echo reviewed change>review-edit.txt & ")
@@ -1281,7 +1284,9 @@ private class WorkflowAdapter(
     private fun writeArtifactWindows(task: AgentTask, name: String, content: String): String {
         val dir = artifactDir(task).replace('/', '\\')
         val file = "$dir\\$name"
-        return "if not exist \"$dir\" mkdir \"$dir\" & echo ${content.replace("\"", "\\\"")}>\"$file\""
+        val encoded = Base64.getEncoder().encodeToString(content.toByteArray(Charsets.UTF_8))
+        return "if not exist \"$dir\" mkdir \"$dir\" & powershell -NoProfile -Command " +
+            "\"[IO.File]::WriteAllBytes('$file', [Convert]::FromBase64String('$encoded'))\""
     }
 
     private fun specPlanText(): String =

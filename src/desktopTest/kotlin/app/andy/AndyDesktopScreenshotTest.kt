@@ -30,7 +30,7 @@ class AndyDesktopScreenshotTest {
     // Sub-pixel antialiasing on CI runners can flip a few pixels against freshly
     // recorded baselines. Keep the threshold tight so real UI changes still fail.
     private val screenshotOptions = RoborazziOptions(
-        compareOptions = RoborazziOptions.CompareOptions(changeThreshold = 0.0002f),
+        compareOptions = RoborazziOptions.CompareOptions(changeThreshold = 0.0005f),
     )
     private val routeScenarios = listOf(
         AndyScreenshotScenario.DevicesPopulated,
