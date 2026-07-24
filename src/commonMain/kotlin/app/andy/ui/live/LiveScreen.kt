@@ -427,13 +427,12 @@ internal fun LiveScreen(
                 }
             }
         } else {
-            // Andy pop-outs and Simulator.app handoff keep the Live session warm so presenters can
-            // remount without tearing SimulatorKit / scrcpy down (full reconnect often resumes black).
+            // When this device is mirrored elsewhere, do not disconnect the primary engine here.
+            // iOS Simulator handoff / shared-primary pop-outs keep Live's session warm; Android
+            // pop-outs of the Live device take over that engine into the pop-out pool instead.
             withContext(NonCancellable) {
                 services.bugs.stopCapture()
                 when {
-                    // Simulator.app handoff and Andy pop-outs both keep the Live session warm so
-                    // closing the external window can remount presenters without a black reconnect.
                     mirroredElsewhere -> Unit
                     else -> services.mirror.disconnect(immediate = false)
                 }

@@ -52,8 +52,13 @@ private data class MirrorPopOutWindow(
     val targetId: String,
     val displayName: String,
     val controlsVisible: Boolean = false,
-    /** Reuse the Live mirror session (GPU) while it still targets this device. */
+    /**
+     * Reuse the Live mirror session while it still targets this device (iOS / legacy Metal).
+     * Android pop-outs of the Live device take over the engine instead — see [startPopOut].
+     */
     val preferPrimaryMirror: Boolean = false,
+    /** Legacy single-overlay Metal: promote after taking over Live's Android session. */
+    val ownsLegacyMetal: Boolean = false,
 )
 
 fun main() {
@@ -113,13 +118,19 @@ fun main() {
                 runCatching { ProcessBuilder("open", "-a", "Simulator").start() }
             }
         }
-        fun addPopOutWindow(targetId: String, displayName: String, preferPrimaryMirror: Boolean) {
+        fun addPopOutWindow(
+            targetId: String,
+            displayName: String,
+            preferPrimaryMirror: Boolean,
+            ownsLegacyMetal: Boolean = false,
+        ) {
             if (targetId in popOutWindows) return
             popOutWindows = popOutWindows + (
                 targetId to MirrorPopOutWindow(
                     targetId = targetId,
                     displayName = displayName,
                     preferPrimaryMirror = preferPrimaryMirror,
+                    ownsLegacyMetal = ownsLegacyMetal,
                 )
                 )
         }
@@ -132,10 +143,23 @@ fun main() {
                 }
                 focusExternalDeviceApp(targetId)
             } else {
-                // Same device as Live → fan out a second GPU presenter from the primary session
-                // (Android allows only one scrcpy). Other devices get a dedicated pool engine.
-                val preferPrimary = services.mirror.session.value?.serial == targetId
-                addPopOutWindow(targetId, displayName, preferPrimaryMirror = preferPrimary)
+                val primaryOwns = services.mirror.session.value?.serial == targetId
+                val isAndroid = !IosTargetRegistry.isIosTarget(targetId)
+                if (isAndroid && primaryOwns) {
+                    // Move the live scrcpy owner into the pop-out pool before Live can switch
+                    // devices and tear it down. Android allows only one scrcpy per serial.
+                    popOutMirrorPool.takeOverPrimaryAndroid(targetId)
+                    addPopOutWindow(
+                        targetId,
+                        displayName,
+                        preferPrimaryMirror = false,
+                        ownsLegacyMetal = !GpuMirrorJni.isAvailable(),
+                    )
+                } else {
+                    // iOS (or Android not on Live): share primary while it still targets this
+                    // device, otherwise use a dedicated pool engine.
+                    addPopOutWindow(targetId, displayName, preferPrimaryMirror = primaryOwns)
+                }
             }
         }
         // Toggle used by the main Live pop-out button / hand-off placeholder.
@@ -313,8 +337,8 @@ fun main() {
                     startPopOut(targetId, displayName)
                 },
                 // Devices handed off (Andy pop-out window OR Simulator.app): main view shows a
-                // placeholder. The Live mirror session stays warm so closing the handoff remounts
-                // presenters instead of reconnecting into a black surface.
+                // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
+                // pop-outs of the Live device own the engine via the pop-out pool instead.
                 poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
                 contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
             )
@@ -345,7 +369,8 @@ fun main() {
                     // hub. Only let it run when the hub is unavailable (CPU fallback); with the hub
                     // active each pop-out renders through its own GpuMirrorPresenter.
                     PopOutMirrorPresentationEffect(
-                        ownsMetalPresentation = !GpuMirrorJni.isAvailable() && sharePrimary,
+                        ownsMetalPresentation = !GpuMirrorJni.isAvailable() &&
+                            (sharePrimary || popOut.ownsLegacyMetal),
                     )
                     MenuBar {
                         Menu("View") {

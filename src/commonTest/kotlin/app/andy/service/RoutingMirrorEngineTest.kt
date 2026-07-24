@@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RoutingMirrorEngineTest {
@@ -137,6 +138,29 @@ class RoutingMirrorEngineTest {
 
         assertEquals(1206, frame.width)
         assertEquals(2622, frame.height)
+    }
+
+    @Test
+    fun replaceAndroidEngineHandsLiveSessionToReplacementOwner() = runBlocking {
+        val android = TrackingMirrorEngine("android")
+        val ios = TrackingMirrorEngine("ios")
+        val routing = RoutingMirrorEngine(android, ios)
+
+        routing.connect("android-serial", MirrorVideoConfig())
+        assertEquals("android-serial", routing.session.value?.serial)
+
+        val fresh = TrackingMirrorEngine("fresh")
+        val previous = routing.replaceAndroidEngine(fresh)
+
+        assertSame(android, previous)
+        assertEquals(null, routing.session.value, "Primary routing must drop the transferred Android session")
+        assertEquals("android-serial", previous.session.value?.serial)
+        assertEquals(0, android.disconnectCount, "Replace must not tear down the live Android engine")
+
+        routing.connect("other-serial", MirrorVideoConfig())
+        assertEquals("other-serial", routing.session.value?.serial)
+        assertEquals(1, fresh.connectCount)
+        assertEquals("android-serial", previous.session.value?.serial)
     }
 
     @Test

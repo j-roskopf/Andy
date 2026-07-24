@@ -1,9 +1,5 @@
 package app.andy.desktop.service.mirror
 
-import app.andy.desktop.service.CommandRunner
-import app.andy.desktop.service.DesktopDeviceService
-import app.andy.desktop.service.ios.DesktopIosDeviceService
-import app.andy.desktop.service.ios.DesktopIosMirrorEngine
 import app.andy.service.MirrorEngine
 import app.andy.service.RoutingMirrorEngine
 
@@ -12,24 +8,38 @@ import app.andy.service.RoutingMirrorEngine
  *
  * Each engine drives its own [GpuMirrorPipeline] (keyed by serial in
  * [app.andy.desktop.service.mirror.GpuMirrorSessions]), so multiple *different* devices mirror on
- * the GPU simultaneously. A pop-out of the device already shown in the main Live pane instead
- * reuses the shared primary [RoutingMirrorEngine] (see `Main.kt`), fanning a second presenter out
- * of the same decoder rather than opening a second engine.
+ * the GPU simultaneously.
+ *
+ * Popping out the device currently shown in Live **takes over** that Android [DesktopMirrorEngine]
+ * (see [takeOverPrimaryAndroid]) so the running scrcpy session keeps feeding the pop-out while Live
+ * gets a fresh engine for the next device. Sharing the primary [RoutingMirrorEngine] after pop-out
+ * would black the window the moment Live connected elsewhere.
  */
 class DesktopPopOutMirrorPool(
-    private val runner: CommandRunner,
-    private val devices: DesktopDeviceService,
-    private val iosDevices: DesktopIosDeviceService,
+    private val primary: RoutingMirrorEngine,
+    private val newAndroid: () -> MirrorEngine,
+    private val newIos: () -> MirrorEngine,
 ) {
     private val engines = mutableMapOf<String, RoutingMirrorEngine>()
 
     fun acquire(targetId: String): MirrorEngine =
         engines.getOrPut(targetId) {
-            RoutingMirrorEngine(
-                DesktopMirrorEngine(runner, devices),
-                DesktopIosMirrorEngine(iosDevices),
-            )
+            RoutingMirrorEngine(newAndroid(), newIos())
         }
+
+    /**
+     * Moves Live's running Android mirror engine into the pop-out pool for [targetId] and installs
+     * a fresh Android engine on the primary. The scrcpy process and GPU pipeline stay alive on the
+     * transferred engine.
+     */
+    fun takeOverPrimaryAndroid(targetId: String): MirrorEngine {
+        engines[targetId]?.let { return it }
+        val liveAndroid = primary.replaceAndroidEngine(newAndroid())
+        (liveAndroid as? DesktopMirrorEngine)?.cancelPendingRelease()
+        val popOut = RoutingMirrorEngine(liveAndroid, newIos())
+        engines[targetId] = popOut
+        return popOut
+    }
 
     suspend fun release(targetId: String) {
         engines.remove(targetId)?.disconnect(immediate = true)

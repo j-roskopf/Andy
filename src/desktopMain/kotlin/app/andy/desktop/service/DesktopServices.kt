@@ -43,6 +43,11 @@ fun createDesktopRuntime(): DesktopRuntime {
     val androidMirror = DesktopMirrorEngine(runner, devices)
     val iosMirror = DesktopIosMirrorEngine(iosDevices)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
+    val popOutMirrors = DesktopPopOutMirrorPool(
+        primary = mirror,
+        newAndroid = { DesktopMirrorEngine(runner, devices) },
+        newIos = { DesktopIosMirrorEngine(iosDevices) },
+    )
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
@@ -92,8 +97,6 @@ fun createDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         actionConfig = actionConfig,
     )
-
-    val popOutMirrors = DesktopPopOutMirrorPool(runner, devices, iosDevices)
 
     val services = AndyServices(
         devices = devices,

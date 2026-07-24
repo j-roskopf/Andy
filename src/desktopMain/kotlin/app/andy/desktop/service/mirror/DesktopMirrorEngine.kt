@@ -411,9 +411,17 @@ class DesktopMirrorEngine(
         return CommandResult.success("Embedded mirror starting for $serial")
     }
 
-    override suspend fun disconnect(immediate: Boolean) {
+    /**
+     * Cancels a deferred [disconnect] teardown. Used when this engine is handed to a pop-out pool
+     * so a pending grace-period release cannot kill the transferred scrcpy session.
+     */
+    fun cancelPendingRelease() {
         pendingRelease?.cancel()
         pendingRelease = null
+    }
+
+    override suspend fun disconnect(immediate: Boolean) {
+        cancelPendingRelease()
         // Compose Desktop may retain a SwingPanel's native peer briefly after its screen leaves
         // composition. The Metal presenter is an independent AppKit surface, so hide it at the
         // session boundary rather than waiting for that peer's removeNotify callback.

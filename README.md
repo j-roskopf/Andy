@@ -7,9 +7,17 @@
 [![Featured in Android Weekly Issue #736](https://img.shields.io/badge/Featured%20in-Android%20Weekly%20Issue%20%23736-blue?logo=android&logoColor=white)](https://androidweekly.net/issues/issue-736)
 [![As Seen In - jetc.dev Newsletter Issue #323](https://img.shields.io/badge/As_Seen_In-jetc.dev_Newsletter_Issue_%23323-blue?logo=Jetpack+Compose&logoColor=white)](https://jetc.dev/issues/323.html)
 
-Andy is a desktop companion for Android developers. The desktop app is the
-recommended experience and includes the full feature set. A smaller subset of
-Andy is also available on the web at [andy.joetr.com](https://www.andy.joetr.com).
+Andy is a desktop helper for Android, Kotlin, and Compose Multiplatform
+developers. Use it to manage devices and emulators, mirror screens, inspect
+apps, and drive day-to-day mobile workflows from one place. The desktop app is
+the recommended experience and includes the full feature set. A smaller subset
+of Andy is also available on the web at
+[andy.joetr.com](https://www.andy.joetr.com).
+
+**Basic iOS Simulator support** is available on macOS: discover simulators,
+boot and shut them down, open Simulator.app, and stream a live mirror with
+touch input. Android remains the primary platform; iOS coverage is intentionally
+limited today.
 
 ## Download
 
@@ -20,6 +28,8 @@ Andy is also available on the web at [andy.joetr.com](https://www.andy.joetr.com
 ### Devices
 
 Discover connected Android devices and created emulators in one place. Search and filter by device type or API level, start emulators, jump into a live session, and stop running emulators without leaving Andy.
+
+On macOS, the Devices screen also lists iOS Simulators for basic management: boot, shut down, open in Simulator.app, and jump into Live.
 
 ### Virtual Device Creation
 
@@ -35,7 +45,9 @@ Save, restore, and delete emulator snapshots for any created AVD. This makes it 
 
 ### Live Mirror
 
-Stream a selected device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI.
+Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI.
+
+On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
 
 ### Pop-Out Mirror
 
@@ -75,7 +87,7 @@ Create ordered network rewrite rules that match URL patterns and optional HTTP m
 
 ### Projects
 
-Organize Android work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context.
+Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context.
 
 ### Agents
 
@@ -185,8 +197,9 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 ### Runtime Requirements
 
 - Android SDK platform tools for device and emulator access.
+- Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
-- scrcpy does not need to be installed separately for embedded mirroring; Andy bundles `scrcpy-server`.
+- scrcpy does not need to be installed separately for embedded Android mirroring; Andy bundles `scrcpy-server`.
 - Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
 
 ### Icon Attribution
