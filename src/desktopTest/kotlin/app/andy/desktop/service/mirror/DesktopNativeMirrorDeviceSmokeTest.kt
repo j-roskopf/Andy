@@ -10,13 +10,12 @@ import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorVideoConfig
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposePanel
 import java.awt.BorderLayout
-import java.awt.Rectangle
-import java.awt.Robot
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -46,18 +45,30 @@ class DesktopNativeMirrorDeviceSmokeTest {
     @Test
     fun videoToolboxMetalPresentsFramesFromConnectedDevice() = runBlocking {
         if (System.getenv("ANDY_DEVICE_NATIVE_SMOKE") != "1") return@runBlocking
-        if (!NativeMirrorJni.isAvailable()) return@runBlocking
+        val useGpuHub = GpuMirrorJni.isAvailable()
+        if (!useGpuHub && !NativeMirrorJni.isAvailable()) return@runBlocking
         // The in-process JAWT route is the supported accelerated path once Metal presents into
         // the realized Compose host (verified by the screen-capture check below).
-        if (!NativeMirrorJni.isEmbeddedPresentationSupported()) return@runBlocking
+        if (!useGpuHub && !NativeMirrorJni.isEmbeddedPresentationSupported()) return@runBlocking
+
+        val services = createDesktopServices()
+        val requestedSerial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
+        val device = services.devices.listDevices().firstOrNull {
+            it.state == DeviceConnectionState.Online && (requestedSerial == null || it.serial == requestedSerial)
+        } ?: error("No requested online Android device")
+        val streamKey = device.serial
 
         lateinit var frame: JFrame
+        val metadataFrames = MutableStateFlow(MirrorFrame(2, 2, IntArray(0), frameNumber = 1))
         SwingUtilities.invokeAndWait {
             val compose = ComposePanel().apply {
                 setContent {
                     MirrorVideoSurface(
-                        frame = MirrorFrame(2, 2, IntArray(4)),
+                        frames = metadataFrames,
+                        resetKey = streamKey,
                         modifier = Modifier.fillMaxSize(),
+                        nativePresentation = true,
+                        gpuMirrorStreamKey = streamKey.takeIf { useGpuHub },
                     )
                 }
             }
@@ -68,19 +79,21 @@ class DesktopNativeMirrorDeviceSmokeTest {
             frame.isVisible = true
         }
 
-        val hostDeadline = System.nanoTime() + 5_000_000_000L
-        var host = NativeMirrorHostRegistry.current()
-        while (host == null && System.nanoTime() < hostDeadline) {
-            Thread.sleep(20)
-            host = NativeMirrorHostRegistry.current()
+        val host = if (useGpuHub) {
+            // Pipeline is created on connect; surface attaches once the session key exists.
+            // Pre-create so Compose can register the presenter before scrcpy starts.
+            assertNotNull(GpuMirrorSessions.acquire(streamKey))
+            assertNotNull(awaitGpuMirrorHost(5_000), "Compose Live surface did not realize a GPU hub host")
+        } else {
+            val hostDeadline = System.nanoTime() + 5_000_000_000L
+            var legacyHost = NativeMirrorHostRegistry.current()
+            while (legacyHost == null && System.nanoTime() < hostDeadline) {
+                Thread.sleep(20)
+                legacyHost = NativeMirrorHostRegistry.current()
+            }
+            assertTrue(legacyHost != null, "Compose Live surface did not realize a native JAWT host")
+            legacyHost!!
         }
-        assertTrue(host != null, "Compose Live surface did not realize a native JAWT host")
-
-        val services = createDesktopServices()
-        val requestedSerial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
-        val device = services.devices.listDevices().firstOrNull {
-            it.state == DeviceConnectionState.Online && (requestedSerial == null || it.serial == requestedSerial)
-        } ?: error("No requested online Android device")
         if (System.getenv("ANDY_REQUIRE_MIRROR_TARGET") == "1") {
             val batterySaver = services.devices.shell(device.serial, listOf("settings", "get", "global", "low_power"))
             assertTrue(
@@ -129,6 +142,10 @@ class DesktopNativeMirrorDeviceSmokeTest {
                 height = probeRegion.height,
             )
             delay(1_000) // establish the dark probe baseline before injecting the first tap
+            assertTrue(
+                mirrorHostContainsNonBlackPixels(host),
+                "Metal completed frames but the realized Compose/JAWT host remained black before touch",
+            )
             val triggerMode = System.getenv("ANDY_DEVICE_MIRROR_LATENCY_TRIGGER")
             if (triggerMode == "probe_socket" && System.getenv("ANDY_REQUIRE_MIRROR_TARGET") == "1") {
                 error("The probe_socket trigger measures capture/encode only and cannot satisfy the input-to-present acceptance gate")
@@ -149,15 +166,23 @@ class DesktopNativeMirrorDeviceSmokeTest {
                     assertTrue(input.isSuccess, input.stderr.ifBlank { input.stdout })
                 }
                 delay(700)
+                assertTrue(
+                    mirrorHostContainsNonBlackPixels(host),
+                    "Android Live host went black after touch/tap #$it — Metal lost z-order or stopped presenting",
+                )
             }
             delay(1_500) // allow the last native stats window to publish
             assertTrue(
-                nativeMirrorHostContainsDevicePixels(host),
+                mirrorHostContainsNonBlackPixels(host),
                 "Metal completed frames but the realized Compose/JAWT host remained black",
             )
             val session = services.mirror.session.value ?: error("No native mirror session")
             assertEquals(MirrorBackendKind.NativeHardware, session.backend.kind, session.failureReason)
-            val presented = NativeMirrorJni.framesPresented()
+            val presented = if (useGpuHub) {
+                GpuMirrorSessions.get(streamKey)?.framesPresented() ?: 0L
+            } else {
+                NativeMirrorJni.framesPresented()
+            }
             // `framesPresented / wholeTestDuration` includes the deliberate between-tap and
             // post-tap settling delays. The renderer already publishes a rolling presentation
             // rate, which is the relevant 60 FPS acceptance signal.
@@ -179,28 +204,10 @@ class DesktopNativeMirrorDeviceSmokeTest {
         } finally {
             probeTrigger?.close()
             services.mirror.disconnect()
+            if (useGpuHub) GpuMirrorSessions.release(streamKey)
             SwingUtilities.invokeAndWait {
                 frame.dispose()
             }
-        }
-    }
-
-    /**
-     * Command-buffer completion only proves that Metal accepted work. Capture the actual
-     * on-screen Canvas so a layer with zero bounds, wrong z-order, or a black presentation
-     * cannot be reported as a healthy accelerated mirror.
-     */
-    private fun nativeMirrorHostContainsDevicePixels(host: java.awt.Canvas): Boolean {
-        val location = host.locationOnScreen
-        val image = Robot().createScreenCapture(Rectangle(location, host.size))
-        val pixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
-        return pixels.any { pixel ->
-            val red = pixel ushr 16 and 0xff
-            val green = pixel ushr 8 and 0xff
-            val blue = pixel and 0xff
-            // The probe uses a colorful square against a black activity; ignore antialiased
-            // dark greys and require a clearly visible device pixel.
-            maxOf(red, green, blue) > 80 && maxOf(red, green, blue) - minOf(red, green, blue) > 25
         }
     }
 

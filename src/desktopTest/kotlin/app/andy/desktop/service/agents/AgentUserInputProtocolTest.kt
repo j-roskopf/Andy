@@ -60,4 +60,28 @@ class AgentUserInputProtocolTest {
 
         assertEquals("Ship the GPU gate first.", agentPlanTextCandidate(text))
     }
+
+    @Test
+    fun humanizesSnakeCaseOptionLabelsFromCodex() {
+        val text =
+            """<andy_user_input>{"questions":[{"id":"device_interaction_model","question":"What should v1 promise?","options":[{"label":"interactive_simulators_view_only_physical_recommended"},{"label":"embedded_view_only_for_both"},{"label":"simulators_only_until_physical_is_controllable"}]}]}</andy_user_input>"""
+
+        val parsed = assertNotNull(parseAgentUserInput(text))
+        val options = parsed.request.questions.single().options
+        assertEquals(
+            "Interactive Simulators View Only Physical Recommended",
+            options[0].label,
+        )
+        assertEquals("Embedded View Only For Both", options[1].label)
+        assertEquals("Simulators Only Until Physical Is Controllable", options[2].label)
+    }
+
+    @Test
+    fun acceptsOptionIdsWhenLabelMissing() {
+        val text =
+            """<andy_user_input>{"questions":[{"id":"choice","question":"Pick one","options":[{"id":"desktop_only"},{"id":"desktop_and_web"}]}]}</andy_user_input>"""
+
+        val parsed = assertNotNull(parseAgentUserInput(text))
+        assertEquals(listOf("Desktop Only", "Desktop And Web"), parsed.request.questions.single().options.map { it.label })
+    }
 }

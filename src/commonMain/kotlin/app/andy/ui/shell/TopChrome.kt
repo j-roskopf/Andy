@@ -2,6 +2,9 @@ package app.andy.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,31 +41,42 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.model.ProjectAction
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
-import app.andy.ui.network.GlowingDot
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.network.GlowingDot
+import org.jetbrains.compose.resources.painterResource
 
 @Composable
 internal fun TopChrome(
     destination: AndyDestination,
     selectedDevice: AndroidDevice?,
     devices: List<AndroidDevice>,
+    iosTargets: List<IosTarget>,
+    selectedIosTarget: IosTarget?,
     onSelectDevice: (String) -> Unit,
+    onSelectIosTarget: (String) -> Unit,
     onRefresh: () -> Unit,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
+    showDevicePopOut: Boolean = false,
+    onPopOutDevice: (String, String) -> Unit = { _, _ -> },
     actionConfig: ActionsConfig,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
@@ -86,7 +101,7 @@ internal fun TopChrome(
     ) {
         Column(Modifier.width(260.dp)) {
             Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
-            Text(selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+            Text(selectedIosTarget?.displayName ?: selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
         }
         Spacer(Modifier.weight(1f))
         actions()
@@ -123,9 +138,14 @@ internal fun TopChrome(
         DevicePicker(
             devices = devices,
             selectedDevice = selectedDevice,
+            iosTargets = iosTargets,
+            selectedIosTarget = selectedIosTarget,
             expanded = deviceMenuExpanded,
             onExpandedChange = { deviceMenuExpanded = it },
             onSelect = onSelectDevice,
+            onSelectIos = onSelectIosTarget,
+            showPopOut = showDevicePopOut,
+            onPopOut = onPopOutDevice,
         )
     }
 }
@@ -243,16 +263,27 @@ private fun ActionRunnerSelector(
 private fun DevicePicker(
     devices: List<AndroidDevice>,
     selectedDevice: AndroidDevice?,
+    iosTargets: List<IosTarget>,
+    selectedIosTarget: IosTarget?,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
+    onSelectIos: (String) -> Unit,
+    showPopOut: Boolean = false,
+    onPopOut: (String, String) -> Unit = { _, _ -> },
 ) {
+    val activeDevices = remember(devices) {
+        devices.filter { it.state == DeviceConnectionState.Online }
+    }
+    val activeIosTargets = remember(iosTargets) {
+        iosTargets.filter { it.isLiveReady }
+    }
     Box {
         Button(onClick = { onExpandedChange(true) }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
             Text("•", color = Green, fontSize = 18.sp)
             Spacer(Modifier.width(6.dp))
             Text(
-                selectedDevice?.displayName ?: "no device",
+                selectedIosTarget?.displayName ?: selectedDevice?.displayName ?: "no device",
                 color = TextPrimary,
                 fontFamily = MonoFont,
                 fontSize = 12.sp,
@@ -261,11 +292,101 @@ private fun DevicePicker(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
-            devices.forEach { device ->
-                DropdownMenuItem(text = { Text(device.displayName, color = TextPrimary) }, onClick = {
-                    onSelect(device.serial)
-                    onExpandedChange(false)
-                })
+            if (activeDevices.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("Android", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    onClick = {},
+                    enabled = false,
+                )
+                activeDevices.forEach { device ->
+                    DropdownMenuItem(
+                        text = {
+                            DeviceMenuRow(
+                                title = device.displayName,
+                                subtitle = null,
+                                showPopOut = showPopOut,
+                                onPopOut = {
+                                    onExpandedChange(false)
+                                    onPopOut(device.serial, device.displayName)
+                                },
+                            )
+                        },
+                        onClick = {
+                            onSelect(device.serial)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
+            }
+            if (activeIosTargets.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("iOS", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    onClick = {},
+                    enabled = false,
+                )
+                activeIosTargets.forEach { target ->
+                    val subtitle = when (target.kind) {
+                        IosTargetKind.Physical -> "usb"
+                        IosTargetKind.Simulator -> "booted"
+                    }
+                    DropdownMenuItem(
+                        text = {
+                            DeviceMenuRow(
+                                title = target.displayName,
+                                subtitle = subtitle,
+                                showPopOut = showPopOut,
+                                onPopOut = {
+                                    onExpandedChange(false)
+                                    onPopOut(target.udid, target.displayName)
+                                },
+                            )
+                        },
+                        onClick = {
+                            onSelectIos(target.udid)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceMenuRow(
+    title: String,
+    subtitle: String?,
+    showPopOut: Boolean,
+    onPopOut: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = TextPrimary)
+            if (subtitle != null) {
+                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            }
+        }
+        if (showPopOut) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onPopOut,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(Res.drawable.hardware_pop_out),
+                    contentDescription = "Pop out mirror",
+                    modifier = Modifier.size(16.dp),
+                    colorFilter = ColorFilter.tint(Cyan),
+                )
             }
         }
     }

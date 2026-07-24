@@ -10,7 +10,11 @@ import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
+import app.andy.desktop.service.ios.DesktopIosDeviceService
+import app.andy.desktop.service.ios.DesktopIosMirrorEngine
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.desktop.service.mirror.DesktopPopOutMirrorPool
+import app.andy.service.RoutingMirrorEngine
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
@@ -23,12 +27,27 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-fun createDesktopServices(): AndyServices {
+fun createDesktopServices(): AndyServices = createDesktopRuntime().services
+
+data class DesktopRuntime(
+    val services: AndyServices,
+    val popOutMirrors: DesktopPopOutMirrorPool,
+)
+
+fun createDesktopRuntime(): DesktopRuntime {
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     val devices = DesktopDeviceService(runner, locator, store)
-    val mirror = DesktopMirrorEngine(runner, devices)
+    val iosDevices = DesktopIosDeviceService(runner)
+    val androidMirror = DesktopMirrorEngine(runner, devices)
+    val iosMirror = DesktopIosMirrorEngine(iosDevices)
+    val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
+    val popOutMirrors = DesktopPopOutMirrorPool(
+        primary = mirror,
+        newAndroid = { DesktopMirrorEngine(runner, devices) },
+        newIos = { DesktopIosMirrorEngine(iosDevices) },
+    )
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
@@ -79,8 +98,9 @@ fun createDesktopServices(): AndyServices {
         actionConfig = actionConfig,
     )
 
-    return AndyServices(
+    val services = AndyServices(
         devices = devices,
+        iosDevices = iosDevices,
         avd = avd,
         mirror = mirror,
         logcat = logcat,
@@ -109,4 +129,5 @@ fun createDesktopServices(): AndyServices {
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
     )
+    return DesktopRuntime(services, popOutMirrors)
 }

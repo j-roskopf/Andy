@@ -12,7 +12,10 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetState
 import app.andy.model.PairedWifiDevice
+import app.andy.service.IosTargetRegistry
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
@@ -35,10 +38,20 @@ internal class ShellState(
         private set
     var devices by mutableStateOf<List<AndroidDevice>>(emptyList())
         private set
+    var iosTargets by mutableStateOf<List<IosTarget>>(emptyList())
+        private set
     var sdk by mutableStateOf(SdkDiscovery(null, null, null, null, null, listOf("SDK not scanned yet")))
         private set
     var selectedSerial by mutableStateOf<String?>(null)
         private set
+    var selectedIosUdid by mutableStateOf<String?>(null)
+        private set
+
+    val activeTargetId: String?
+        get() = selectedIosUdid ?: selectedSerial
+
+    val isIosSelection: Boolean
+        get() = selectedIosUdid != null
     var workspaceState by mutableStateOf(WorkspaceState())
         private set
     var workspaceLoaded by mutableStateOf(false)
@@ -65,6 +78,8 @@ internal class ShellState(
         private set
     var chromeMenuExpanded by mutableStateOf(false)
         private set
+    private var startupTargetId: String? = null
+    private var startupSelectionResolved = false
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
@@ -82,6 +97,78 @@ internal class ShellState(
 
     fun selectDevice(serial: String?) {
         selectedSerial = serial
+        if (serial != null) selectedIosUdid = null
+        persistSelectedTarget()
+    }
+
+    fun selectIosTarget(udid: String?) {
+        selectedIosUdid = udid
+        if (udid != null) {
+            selectedSerial = null
+        }
+        persistSelectedTarget()
+    }
+
+    private fun persistSelectedTarget() {
+        val targetId = activeTargetId
+        if (workspaceState.selectedDeviceSerial == targetId) return
+        updateWorkspace { it.copy(selectedDeviceSerial = targetId) }
+    }
+
+    private fun isTargetAvailable(targetId: String): Boolean {
+        if (iosTargets.any { it.udid == targetId && it.isLiveReady }) return true
+        return devices.any { it.serial == targetId && it.state == DeviceConnectionState.Online }
+    }
+
+    private fun applyTarget(targetId: String) {
+        if (iosTargets.any { it.udid == targetId && it.isLiveReady }) {
+            selectedIosUdid = targetId
+            selectedSerial = null
+        } else {
+            selectedSerial = targetId
+            selectedIosUdid = null
+        }
+    }
+
+    private fun defaultOnlineAndroidSerial(): String? =
+        devices.firstOrNull { it.state == DeviceConnectionState.Online }?.serial
+
+    fun bootIosSimulator(target: IosTarget) {
+        scope.launch {
+            startingEmulatorName = target.displayName
+            emulatorStartStatus = "Booting ${target.displayName}..."
+            val result = services.iosDevices.boot(target.udid)
+            if (!result.isSuccess) {
+                emulatorStartStatus = result.stderr.ifBlank { result.stdout }
+                startingEmulatorName = null
+                return@launch
+            }
+            repeat(90) {
+                refreshDevicesNow()
+                val booted = iosTargets.firstOrNull { it.udid == target.udid }?.state == IosTargetState.Booted
+                if (booted) {
+                    emulatorStartStatus = "${target.displayName} is ready"
+                    selectIosTarget(target.udid)
+                    startingEmulatorName = null
+                    return@launch
+                }
+                emulatorStartStatus = "${target.displayName} booting..."
+                delay(1_000)
+            }
+            emulatorStartStatus = "${target.displayName} boot timed out — try Refresh"
+            startingEmulatorName = null
+        }
+    }
+
+    fun shutdownIosSimulator(target: IosTarget) {
+        scope.launch {
+            services.iosDevices.shutdown(target.udid)
+            refreshDevicesNow()
+        }
+    }
+
+    fun openIosInSimulatorApp(target: IosTarget) {
+        scope.launch { services.iosDevices.openInSimulatorApp(target.udid) }
     }
 
     fun updateNetworkRulesVisible(value: Boolean) {
@@ -119,9 +206,31 @@ internal class ShellState(
     suspend fun refreshDevicesNow(): List<AndroidDevice> {
         sdk = services.devices.discoverSdk()
         devices = services.devices.listDevices()
-        val selectedStillPresent = devices.any { it.serial == selectedSerial && it.state == DeviceConnectionState.Online }
-        if (!selectedStillPresent) {
-            selectedSerial = devices.firstOrNull { it.state == DeviceConnectionState.Online }?.serial
+        iosTargets = services.iosDevices.listTargets()
+        IosTargetRegistry.update(iosTargets)
+        if (!startupSelectionResolved) {
+            startupSelectionResolved = true
+            val saved = startupTargetId
+            startupTargetId = null
+            when {
+                saved != null && isTargetAvailable(saved) -> applyTarget(saved)
+                else -> {
+                    selectedIosUdid = null
+                    selectedSerial = defaultOnlineAndroidSerial()
+                }
+            }
+            return devices
+        }
+
+        val current = activeTargetId
+        if (current != null && isTargetAvailable(current)) {
+            return devices
+        }
+        if (selectedIosUdid != null) {
+            selectedIosUdid = null
+            selectedSerial = defaultOnlineAndroidSerial()
+        } else if (selectedSerial != null) {
+            selectedSerial = defaultOnlineAndroidSerial()
         }
         return devices
     }
@@ -145,9 +254,11 @@ internal class ShellState(
             }
             val refreshed = refreshDevicesNow()
             if (result.isSuccess && selectedSerial == device.serial) {
-                selectedSerial = refreshed.firstOrNull {
-                    it.serial != device.serial && it.state == DeviceConnectionState.Online
-                }?.serial
+                selectDevice(
+                    refreshed.firstOrNull {
+                        it.serial != device.serial && it.state == DeviceConnectionState.Online
+                    }?.serial,
+                )
             }
             stoppingEmulatorSerial = null
         }
@@ -171,7 +282,7 @@ internal class ShellState(
                     val booted = awaitDeviceBootCompleted(started.serial)
                     val refreshed = refreshDevicesNow()
                     val ready = refreshed.firstOrNull { it.serial == started.serial } ?: started
-                    selectedSerial = ready.serial
+                    selectDevice(ready.serial)
                     destination = AndyDestination.Live
                     emulatorStartStatus = if (booted) {
                         "${ready.displayName} is ready"
@@ -210,7 +321,7 @@ internal class ShellState(
     suspend fun initialize() {
         val saved = services.workspaceStore.load()
         workspaceState = saved
-        selectedSerial = saved.selectedDeviceSerial
+        startupTargetId = saved.selectedDeviceSerial
         if (services.capabilities.hostAutomation) {
             actionsConfig = services.actionConfig.load()
         }
@@ -297,7 +408,7 @@ internal class ShellState(
     }
 
     fun updateWorkspace(transform: (WorkspaceState) -> WorkspaceState) {
-        val updated = transform(workspaceState).copy(selectedDeviceSerial = selectedSerial)
+        val updated = transform(workspaceState).copy(selectedDeviceSerial = activeTargetId)
         workspaceState = updated
         scope.launch { services.workspaceStore.save(updated) }
     }
@@ -308,7 +419,11 @@ internal class ShellState(
     }
 
     fun openLive(serial: String) {
-        selectedSerial = serial
+        if (iosTargets.any { it.udid == serial }) {
+            selectIosTarget(serial)
+        } else {
+            selectDevice(serial)
+        }
         destination = AndyDestination.Live
     }
 

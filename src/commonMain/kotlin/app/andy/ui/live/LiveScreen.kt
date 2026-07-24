@@ -39,6 +39,9 @@ import app.andy.model.ActionProject
 import app.andy.model.BugCaptureDraft
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
 import app.andy.model.RunningAction
 import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
@@ -120,6 +123,56 @@ internal fun MirrorSession.liveTelemetry(): String = buildString {
     backend.fallbackReason?.let { append(" · $it") }
 }
 
+internal enum class LiveStreamChipTone { Neutral, Active, Warning }
+
+internal data class LiveStreamChip(
+    val label: String,
+    val tone: LiveStreamChipTone = LiveStreamChipTone.Neutral,
+)
+
+internal fun liveStreamChips(
+    session: MirrorSession?,
+    frame: app.andy.service.MirrorFrame?,
+    mirrorStatus: String,
+): List<LiveStreamChip> {
+    val chips = mutableListOf<LiveStreamChip>()
+    val width = session?.width?.takeIf { it > 1 } ?: frame?.width?.takeIf { it > 1 }
+    val height = session?.height?.takeIf { it > 1 } ?: frame?.height?.takeIf { it > 1 }
+    if (width != null && height != null) {
+        chips += LiveStreamChip("${width}×${height}")
+    }
+    val fps = session?.stats?.displayedFps?.takeIf { it > 0f }
+        ?: frame?.displayedFps?.takeIf { it > 0f }
+    if (fps != null) {
+        chips += LiveStreamChip("${fps.toInt()} fps", LiveStreamChipTone.Active)
+    }
+    session?.let { active ->
+        if (active.backend.decoder != "Unavailable") {
+            chips += LiveStreamChip(active.backend.decoder)
+        }
+        if (active.backend.renderer != "Unavailable") {
+            chips += LiveStreamChip(active.backend.renderer)
+        }
+        chips += LiveStreamChip(
+            if (active.backend.isHardwareBacked) "GPU" else "CPU",
+            if (active.backend.isHardwareBacked) LiveStreamChipTone.Active else LiveStreamChipTone.Neutral,
+        )
+        if (active.stats.droppedFrames > 0) {
+            chips += LiveStreamChip("${active.stats.droppedFrames} dropped", LiveStreamChipTone.Warning)
+        }
+        active.stats.p95InputToPresentMillis?.let { latency ->
+            chips += LiveStreamChip("${app.andy.formatDecimal(latency, 1)} ms P95")
+        }
+        active.backend.fallbackReason?.let { reason ->
+            chips += LiveStreamChip(reason, LiveStreamChipTone.Warning)
+        }
+    }
+    if (chips.isEmpty() && mirrorStatus.isNotBlank()) {
+        chips += LiveStreamChip(mirrorStatus)
+    }
+    return chips
+}
+
 private sealed interface LiveRecordingState {
     data object Idle : LiveRecordingState
     data class Countdown(val seconds: Int) : LiveRecordingState
@@ -132,6 +185,9 @@ internal fun LiveScreen(
     services: AndyServices,
     serial: String?,
     device: AndroidDevice?,
+    iosTarget: IosTarget? = null,
+    /** True when this device is currently shown in a pop-out window and should not mirror here. */
+    mirroredElsewhere: Boolean = false,
     devicePaneWidth: Float,
     controlsPaneHeight: Float,
     onStopEmulator: (AndroidDevice) -> Unit,
@@ -152,6 +208,15 @@ internal fun LiveScreen(
     terminalRunId: String? = null,
     onActiveRunIdChange: (String?) -> Unit = {},
 ) {
+    val isIosTarget = iosTarget != null
+    val mirrorReady = when {
+        isIosTarget -> iosTarget.isLiveReady
+        else -> serial != null && device?.state == DeviceConnectionState.Online
+    }
+    // Only iOS Simulator hands off to an external host app (Simulator.app). Android emulators
+    // and physical devices use an Andy pop-out window (emulators are launched window-hidden).
+    val mirroredInExternalApp =
+        mirroredElsewhere && iosTarget?.kind == IosTargetKind.Simulator
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
@@ -174,7 +239,11 @@ internal fun LiveScreen(
     var rendererMode by remember(acceleratedMirror) {
         mutableStateOf(if (acceleratedMirror) preferred.rendererMode else MirrorRendererMode.Legacy)
     }
-    var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
+    // A surface recreated for a different target must not inherit presentation stats from the
+    // previous connection. In particular, returning to the same iOS serial after Android could
+    // reuse framesPresented > 0, hide the loading overlay, and expose a black presenter while the
+    // new SimulatorKit session was still attaching.
+    var mirrorSession by remember(serial) { mutableStateOf<MirrorSession?>(null) }
     var bugDialogVisible by remember { mutableStateOf(false) }
     var bugSaveStatus by remember { mutableStateOf("") }
     var liveActionStatus by remember { mutableStateOf("") }
@@ -327,44 +396,60 @@ internal fun LiveScreen(
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
     }
-    LaunchedEffect(Unit) {
-        services.mirror.session.collectLatest { mirrorSession = it }
+    LaunchedEffect(services.mirror, serial) {
+        services.mirror.session.collectLatest { session ->
+            mirrorSession = session?.takeIf { it.serial == serial }
+        }
     }
-    LaunchedEffect(serial, device?.state) {
+    LaunchedEffect(serial, device?.state, iosTarget?.udid, mirrorReady, mirroredElsewhere) {
         recordingState = LiveRecordingState.Idle
         recordingStartedAtMillis = null
         recordingElapsedMillis = 0L
-        if (serial != null && device?.state == DeviceConnectionState.Online) {
+        if (mirrorReady && serial != null && !mirroredElsewhere) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
             if (result.isSuccess) {
-                try {
-                    services.bugs.startCapture(serial, device)
-                } catch (error: kotlinx.coroutines.CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
+                if (!isIosTarget) {
+                    try {
+                        services.bugs.startCapture(serial, device)
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
+                    }
                 }
                 try {
                     awaitCancellation()
                 } finally {
                     withContext(NonCancellable) {
-                        // Keep the scrcpy session warm when leaving Live so returning is instant.
-                        // Device stop / serial change still tear down via ShellState / reconnect.
                         services.bugs.stopCapture()
                     }
                 }
             }
         } else {
-            // Still on Live but no online device — release the stream.
+            // When this device is mirrored elsewhere, do not disconnect the primary engine here.
+            // iOS Simulator handoff / shared-primary pop-outs keep Live's session warm; Android
+            // pop-outs of the Live device take over that engine into the pop-out pool instead.
             withContext(NonCancellable) {
                 services.bugs.stopCapture()
-                services.mirror.disconnect()
+                when {
+                    mirroredElsewhere -> Unit
+                    else -> services.mirror.disconnect(immediate = false)
+                }
             }
         }
     }
     val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
     val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
+    val iosInputEnabled = isIosTarget && when (iosTarget.kind) {
+        // Physical devices have no HID path. Sims accept input as soon as Live attaches — don't
+        // gate on frame presentation or registry Booted state (Devices → Live can race that).
+        IosTargetKind.Physical -> false
+        IosTargetKind.Simulator -> true
+    }
+    val showLogcat = !isIosTarget
+    val showMirrorStreamControls = !isIosTarget
+    val iosSinglePane = isIosTarget
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Row(Modifier.weight(1f).fillMaxWidth()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
@@ -372,15 +457,26 @@ internal fun LiveScreen(
             LiveDevicePane(
                 serial = serial,
                 device = device,
+                displayName = iosTarget?.displayName ?: device?.displayName,
                 frame = frame,
                 frameFlow = frameFlow,
                 mirrorStatus = mirrorStatus,
-                mirrorTelemetry = mirrorSession?.liveTelemetry().orEmpty(),
-                connectResult = connectResult,
+                mirrorSession = mirrorSession,
+                connectResult = when {
+                    mirrorSession?.failureReason != null -> mirrorSession?.failureReason.orEmpty()
+                    else -> connectResult
+                },
+                showAndroidNavButtons = !isIosTarget,
+                showHardwareControls = !isIosTarget,
+                passThroughInput = !isIosTarget || iosInputEnabled,
+                terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
+                onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
                 modifier = Modifier
-                    .width(localDevicePaneWidth.dp)
+                    .then(
+                        if (iosSinglePane) Modifier.weight(1f)
+                        else Modifier.width(localDevicePaneWidth.dp).padding(end = 6.dp),
+                    )
                     .fillMaxHeight()
-                    .padding(end = 6.dp)
                     .onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
                 onPower = { sendHardware(MirrorInput.Power) },
                 onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
@@ -427,7 +523,9 @@ internal fun LiveScreen(
                 showRecord = true,
                 onClipText = { clipDialogVisible = true },
                 onPopOut = onPopOutMirror,
-                showPopOut = !isWeb,
+                showPopOut = !isWeb && !mirroredElsewhere,
+                mirroredElsewhere = mirroredElsewhere,
+                mirroredInExternalApp = mirroredInExternalApp,
                 surfaceOccluded = dialogsOpen,
                 onInput = sendMirrorInput,
                 onConnect = {
@@ -435,12 +533,20 @@ internal fun LiveScreen(
                 },
             )
         }
+        if (!iosSinglePane) {
         PaneDivider(
             onDrag = { dragX -> localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(560f, 1800f) },
             onDragEnd = { onDevicePaneWidthChange(localDevicePaneWidth) },
         )
         Column(Modifier.weight(1f).fillMaxHeight().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PanelCard(Modifier.fillMaxWidth().height(localControlsPaneHeight.dp)) {
+            PanelCard(
+                Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (showLogcat) Modifier.height(localControlsPaneHeight.dp)
+                        else Modifier.weight(1f),
+                    ),
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -453,61 +559,64 @@ internal fun LiveScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Controls", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    Text("Live workspace", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TerminalDockToggleRow(
                         terminalPlacement = terminalPlacement,
                         onToggle = ::toggleTerminal,
                     )
                 }
-                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
-                    FilterPill("1080 edge", maxSize == "1080", Green) { applyPreset("1080", "8") }
-                    FilterPill("1440 edge", maxSize == "1440", Yellow) { applyPreset("1440", "12") }
-                    FilterPill("Native", maxSize == "0", Rust) { applyPreset("0", "16") }
-                }
-                if (acceleratedMirror) {
+                if (showMirrorStreamControls) {
+                    Text("Stream settings", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterPill("Auto", rendererMode == MirrorRendererMode.Auto, Cyan) {
-                            rendererMode = MirrorRendererMode.Auto
-                            reconnectMirror(mirrorConfig())
-                        }
-                        FilterPill("GPU", rendererMode == MirrorRendererMode.Accelerated, Green) {
-                            rendererMode = MirrorRendererMode.Accelerated
-                            reconnectMirror(mirrorConfig())
-                        }
-                        FilterPill("CPU", rendererMode == MirrorRendererMode.Legacy, Rust) {
-                            rendererMode = MirrorRendererMode.Legacy
-                            reconnectMirror(mirrorConfig())
-                        }
+                        FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
+                        FilterPill("1080 edge", maxSize == "1080", Green) { applyPreset("1080", "8") }
+                        FilterPill("1440 edge", maxSize == "1440", Yellow) { applyPreset("1440", "12") }
+                        FilterPill("Native", maxSize == "0", Rust) { applyPreset("0", "16") }
                     }
-                }
-                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    LabeledField("Max edge", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
-                    LabeledField("Mbps", bitRateMbps, { bitRateMbps = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.width(88.dp))
-                    LabeledField("FPS", maxFps, { maxFps = it.filter(Char::isDigit) }, Modifier.width(78.dp))
-                    Box(Modifier.align(Alignment.Bottom).padding(bottom = 2.dp)) {
-                        Button(onClick = {
-                            reconnectMirror(mirrorConfig())
-                        }) { Text("Restart mirror") }
-                    }
-                }
-                Text("Max edge is the stream's longest side; 0 keeps the device's native resolution.", color = TextSecondary, fontSize = 10.sp)
-                Text(
                     if (acceleratedMirror) {
-                        if (isWeb) {
-                            "Auto uses WebCodecs/WebGL when the browser verifies hardware, otherwise CPU. GPU never falls back."
-                        } else {
-                            "Auto uses inline Metal when available and falls back to CPU. GPU never falls back."
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterPill("Auto", rendererMode == MirrorRendererMode.Auto, Cyan) {
+                                rendererMode = MirrorRendererMode.Auto
+                                reconnectMirror(mirrorConfig())
+                            }
+                            FilterPill("GPU", rendererMode == MirrorRendererMode.Accelerated, Green) {
+                                rendererMode = MirrorRendererMode.Accelerated
+                                reconnectMirror(mirrorConfig())
+                            }
+                            FilterPill("CPU", rendererMode == MirrorRendererMode.Legacy, Rust) {
+                                rendererMode = MirrorRendererMode.Legacy
+                                reconnectMirror(mirrorConfig())
+                            }
                         }
-                    } else {
-                        "This platform uses CPU presentation until a native GPU mirror is available."
-                    },
-                    color = TextSecondary,
-                    fontSize = 10.sp,
-                )
-                Text("Bug capture", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        LabeledField("Max edge", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
+                        LabeledField("Mbps", bitRateMbps, { bitRateMbps = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.width(88.dp))
+                        LabeledField("FPS", maxFps, { maxFps = it.filter(Char::isDigit) }, Modifier.width(78.dp))
+                        Box(Modifier.align(Alignment.Bottom).padding(bottom = 2.dp)) {
+                            Button(onClick = {
+                                reconnectMirror(mirrorConfig())
+                            }) { Text("Restart mirror") }
+                        }
+                    }
+                    Text("Max edge is the stream's longest side; 0 keeps the device's native resolution.", color = TextSecondary, fontSize = 10.sp)
+                    Text(
+                        if (acceleratedMirror) {
+                            if (isWeb) {
+                                "Auto uses WebCodecs/WebGL when the browser verifies hardware, otherwise CPU. GPU never falls back."
+                            } else {
+                                "Auto uses inline Metal when available and falls back to CPU. GPU never falls back."
+                            }
+                        } else {
+                            "This platform uses CPU presentation until a native GPU mirror is available."
+                        },
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                    )
+                }
+                Text("Capture", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
                     if (transfer.busy) {
@@ -541,20 +650,23 @@ internal fun LiveScreen(
                 }
                 }
             }
-            HorizontalPaneDivider(
-                onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(controlsPaneMinHeight, 520f) },
-                onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
-            )
-            LogcatPanel(
-                logcat = services.logcat,
-                appsService = services.apps,
-                serial = serial,
-                selectedPackage = selectedPackage,
-                onSelectedPackageChange = onSelectedPackageChange,
-                modifier = Modifier.fillMaxWidth().weight(0.55f),
-                compact = true,
-                state = logcatState
-            )
+            if (showLogcat) {
+                HorizontalPaneDivider(
+                    onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(controlsPaneMinHeight, 520f) },
+                    onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
+                )
+                LogcatPanel(
+                    logcat = services.logcat,
+                    appsService = services.apps,
+                    serial = serial,
+                    selectedPackage = selectedPackage,
+                    onSelectedPackageChange = onSelectedPackageChange,
+                    modifier = Modifier.fillMaxWidth().weight(0.55f),
+                    compact = true,
+                    state = logcatState
+                )
+            }
+        }
         }
         if (terminalPlacement == DockPlacement.Right) {
             TerminalDockDrawer(

@@ -39,4 +39,11 @@ class ScrcpyFrameProtocolTest {
         assertFailsWith<IllegalArgumentException> { scrcpyFramePayloadSize(header) }
         assertFalse(scrcpyFrameIsSession(ByteArray(12)))
     }
+
+    @Test
+    fun recognizesForwardTunnelDummyByte() {
+        assertTrue(isScrcpyForwardDummyByte(0))
+        assertFalse(isScrcpyForwardDummyByte(-1))
+        assertFalse(isScrcpyForwardDummyByte(0x80))
+    }
 }

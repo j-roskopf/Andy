@@ -1,9 +1,12 @@
 package app.andy.desktop.service.mirror
 
 import app.andy.service.MirrorFrame
+import app.andy.desktop.nsWindowNumber
 import java.awt.Canvas
 import java.awt.Component
+import java.awt.Window
 import java.io.File
+import javax.swing.SwingUtilities
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -16,6 +19,8 @@ import java.nio.file.StandardCopyOption
  */
 internal object NativeMirrorJni {
     private val loadResult: Result<Unit> by lazy(::loadLibrary)
+
+    fun ensureLoaded(): Result<Unit> = loadResult
     @Volatile private var metalInlineOverlayOpen = false
     @Volatile private var contentWidth = 0
     @Volatile private var contentHeight = 0
@@ -41,7 +46,11 @@ internal object NativeMirrorJni {
         val opened = runCatching(::nativeOpenMetalInlineOverlay).getOrDefault(false)
         metalInlineOverlayOpen = opened
         lastGeometryKey = null
-        if (opened) updateMetalLayerGeometry(host)
+        if (opened) {
+            runCatching { nativeSetMetalInlineOverlayVisible(true) }
+            updateMetalLayerGeometry(host)
+            repaintLatestFrame()
+        }
         return opened
     }
 
@@ -59,6 +68,12 @@ internal object NativeMirrorJni {
             lastGeometryKey = null
             NativeMirrorHostRegistry.current()?.let(::updateMetalLayerGeometry)
         }
+    }
+
+    /** Re-submits the last decoded iOS/VideoToolbox frame after Metal geometry changes. */
+    fun repaintLatestFrame() {
+        if (!loadResult.isSuccess || !metalInlineOverlayOpen) return
+        runCatching(::nativeRepaintLatestFrame)
     }
 
     /**
@@ -108,6 +123,10 @@ internal object NativeMirrorJni {
      */
     fun updateMetalLayerGeometry(component: Component) {
         if (!loadResult.isSuccess || !component.isDisplayable || !metalInlineOverlayOpen) return
+        // The overlay is shared across Live + pop-out hosts. Only the active host may position it;
+        // otherwise the main window keeps stealing Metal back and pop-outs stay black.
+        val active = NativeMirrorHostRegistry.current()
+        if (active != null && active !== component) return
         geometryHost = component
         if (geometryUpdateScheduled) return
         geometryUpdateScheduled = true
@@ -128,11 +147,17 @@ internal object NativeMirrorJni {
             val hostH = component.height.coerceAtLeast(1)
             val videoW = contentWidth
             val videoH = contentHeight
+            val fillHost = (component as? Canvas)?.let(NativeMirrorHostRegistry::fillsHost) == true
             val x: Int
             val y: Int
             val drawW: Int
             val drawH: Int
-            if (videoW > 0 && videoH > 0) {
+            if (fillHost) {
+                x = loc.x
+                y = loc.y
+                drawW = hostW
+                drawH = hostH
+            } else if (videoW > 0 && videoH > 0) {
                 val fit = minOf(hostW.toDouble() / videoW, hostH.toDouble() / videoH)
                 drawW = (videoW * fit).toInt().coerceAtLeast(1)
                 drawH = (videoH * fit).toInt().coerceAtLeast(1)
@@ -144,10 +169,11 @@ internal object NativeMirrorJni {
                 drawW = hostW
                 drawH = hostH
             }
-            val key = "$x,$y,$drawW,$drawH,$scale"
+            val parentWindowNumber = SwingUtilities.getWindowAncestor(component)?.nsWindowNumber() ?: 0
+            val key = "$x,$y,$drawW,$drawH,$scale,$parentWindowNumber"
             if (key == lastGeometryKey) return
             lastGeometryKey = key
-            nativeUpdateMetalInlineOverlay(x, y, drawW, drawH, scale)
+            nativeUpdateMetalInlineOverlay(x, y, drawW, drawH, scale, parentWindowNumber)
         }
     }
 
@@ -298,8 +324,16 @@ internal object NativeMirrorJni {
     }
 
     private external fun nativeOpenMetalInlineOverlay(): Boolean
-    private external fun nativeUpdateMetalInlineOverlay(x: Int, y: Int, width: Int, height: Int, scale: Double)
+    private external fun nativeUpdateMetalInlineOverlay(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        scale: Double,
+        parentWindowNumber: Int,
+    )
     private external fun nativeSetMetalInlineOverlayVisible(visible: Boolean)
+    private external fun nativeRepaintLatestFrame()
     private external fun nativeCopyLatestFrameArgb(outSize: IntArray): IntArray?
     private external fun nativeIsHardwareReady(): Boolean
     private external fun nativeDestroyRenderer()

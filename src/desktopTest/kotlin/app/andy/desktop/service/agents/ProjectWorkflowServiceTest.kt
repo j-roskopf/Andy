@@ -208,8 +208,22 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun duplicateTerminalReviewBlockAdvancesThePair() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("duplicate-leading")))) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
+            assertEquals(ProjectReviewStatus.Approved, review.reviewVerdicts.single().status)
+            assertEquals("Approved", review.reviewVerdicts.single().summary)
+        }
+    }
+
+    @Test
     fun invalidReviewContractsNeverAdvanceOrConsumeAReviewFailure() = runBlocking {
-        listOf("malformed", "duplicate", "contradictory", "trailing").forEach { outcome ->
+        listOf("malformed", "contradictory", "trailing").forEach { outcome ->
             withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf(outcome)))) { harness ->
                 val buildId = saveExternalPair(harness.service, reviewEnabled = true)
                 harness.service.startBuildPair(buildId)
@@ -255,6 +269,37 @@ class ProjectWorkflowServiceTest {
             assertEquals(ProjectReviewStatus.Approved, review.reviewVerdicts.single().status)
             assertTrue(verification.attempts.isEmpty())
             assertTrue(build.lastError?.contains("cost") == true)
+        }
+    }
+
+    @Test
+    fun singleReviewPassStopsAfterOneBlockingReview() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("changes", "changes")))) { harness ->
+            val buildId = harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Implement external plan",
+                    plan = ProjectPlanSnapshot("1. Add the feature\n2. Test it"),
+                    buildNotes = "",
+                    verificationInstructions = "Run deterministic checks",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                    reviewEnabled = true,
+                    singleReviewPass = true,
+                    reviewInstructions = "Flag correctness, security, and scope regressions",
+                    reviewProfile = reviewProfile(),
+                ),
+            )
+            harness.service.startBuildPair(buildId)
+            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
+            val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
+            assertEquals(1, build.attempts.size)
+            assertEquals(1, review.reviewVerdicts.count { it.status == ProjectReviewStatus.ChangesRequested })
+            assertTrue(build.lastError?.contains("single review pass") == true)
+            assertTrue(verification.attempts.isEmpty())
         }
     }
 
@@ -633,7 +678,7 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun invalidVerifierOutputNeverCompletesBuildOrSchedulesAnotherStage() = runBlocking {
-        listOf("malformed", "duplicate", "contradictory", "trailing").forEach { outcome ->
+        listOf("malformed", "contradictory", "trailing").forEach { outcome ->
             withHarness(WorkflowAdapter(verificationOutcomes = ArrayDeque(listOf(outcome)))) { harness ->
                 val buildId = saveExternalPair(harness.service)
                 harness.service.startBuildPair(buildId)
@@ -853,6 +898,25 @@ class ProjectWorkflowServiceTest {
         } finally {
             scope.cancel()
             root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun recoveryFollowUpImagesAttachToBuildRun() = runBlocking {
+        val adapter = WorkflowAdapter()
+        withHarness(adapter) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await(timeoutMillis = 20_000) {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
+            }
+
+            val imagePaths = listOf("/tmp/rotation-bug.png", "/tmp/toast-missing.jpg")
+            harness.service.startRecoveryFollowUp(buildId, "The confirmation toast never appears after rotation.", imagePaths)
+            await { adapter.launched.any { it.workflowTaskId == buildId && it.workflowAttempt == 2 } }
+            val run = adapter.launched.first { it.workflowTaskId == buildId && it.workflowAttempt == 2 }
+            assertEquals(imagePaths, run.imagePaths)
+            assertTrue(run.prompt.contains("confirmation toast never appears after rotation"))
         }
     }
 
@@ -1140,6 +1204,7 @@ private class WorkflowAdapter(
             "review-changes" -> "<andy_review>{\"status\":\"changes_requested\",\"summary\":\"A blocking issue remains\",\"findings\":[{\"severity\":\"blocking\",\"title\":\"Unsafe fallback\",\"details\":\"The failure path bypasses validation\",\"file\":\"src/Main.kt\",\"line\":42}]}</andy_review>"
             "review-malformed" -> "Review found no issue, but intentionally omitted the verdict block."
             "review-duplicate" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"First\",\"findings\":[]}</andy_review>\n<andy_review>{\"status\":\"approved\",\"summary\":\"Second\",\"findings\":[]}</andy_review>"
+            "review-duplicate-leading" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Approved\",\"findings\":[]}</andy_review>\nHuman summary in between.\n<andy_review>{\"status\":\"approved\",\"summary\":\"Approved\",\"findings\":[]}</andy_review>"
             "review-contradictory" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Contradictory\",\"findings\":[{\"severity\":\"blocking\",\"title\":\"Blocker\",\"details\":\"This must block\"}]}</andy_review>"
             "review-trailing" -> "<andy_review>{\"status\":\"approved\",\"summary\":\"Looks good\",\"findings\":[]}</andy_review>\nThis makes the block non-terminal."
             "verify-failed" -> "<andy_verification>{\"status\":\"failed\",\"summary\":\"A check failed\",\"evidence\":[\"Sources compiled\"],\"failures\":[\"desktop test failed\"]}</andy_verification>"

@@ -4,15 +4,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorTouchAction
+import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
+import app.andy.desktop.service.mirror.GpuMirrorJni
+import app.andy.desktop.service.mirror.GpuMirrorPresenter
+import app.andy.desktop.service.mirror.GpuMirrorSessions
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import java.awt.AlphaComposite
@@ -21,6 +29,10 @@ import java.awt.BasicStroke
 import java.awt.Cursor
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.event.HierarchyBoundsAdapter
+import java.awt.event.HierarchyEvent
+import java.awt.event.FocusAdapter
+import java.awt.event.FocusEvent
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -53,27 +65,49 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    deferNativePresentation: Boolean,
+    nativePresentation: Boolean,
+    nativePresentationFillHost: Boolean,
+    gpuMirrorStreamKey: Any?,
 ) {
     if (isScreenshotRenderer()) {
         ScreenshotMirrorSurface(frame, modifier, overlay)
         return
     }
-    SwingPanel(
-        modifier = modifier,
-        background = Color.Black,
-        factory = { MirrorPanel(hostsNativePresentation = false) },
-        update = { panel ->
-            panel.setFrame(frame)
-            panel.onInput = onInput
-            panel.onHoverColor = onHoverColor
-            panel.passThroughInput = passThroughInput
-            panel.onPickerClick = onPickerClick
-            panel.onDevicePointClick = onDevicePointClick
-            panel.onRulerResize = onRulerResize
-            panel.setOverlay(overlay)
-            panel.setOccluded(occluded)
-        },
-    )
+    val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    val deferGpuHost =
+        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
+    // SwingPanel punches a Skia clear-hole above Compose popups; hiding the child is not
+    // enough (the host still eclipses chrome DropdownMenus), so tear the interop down.
+    key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
+        val panel = remember {
+            MirrorPanel(
+                hostsNativePresentation = nativePresentation,
+                fillNativePresentationHost = nativePresentationFillHost,
+                gpuMirrorStreamKey = gpuMirrorStreamKey,
+            )
+        }
+        Box(modifier.background(Color.Black)) {
+            if (!suppressHeavyweight && !deferGpuHost) {
+                SwingPanel(
+                    modifier = Modifier.fillMaxSize(),
+                    background = Color.Black,
+                    factory = { panel },
+                    update = {
+                        panel.setFrame(frame)
+                        panel.onInput = onInput
+                        panel.onHoverColor = onHoverColor
+                        panel.passThroughInput = passThroughInput
+                        panel.onPickerClick = onPickerClick
+                        panel.onDevicePointClick = onDevicePointClick
+                        panel.onRulerResize = onRulerResize
+                        panel.setOverlay(overlay)
+                        panel.setOccluded(occluded)
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -89,31 +123,50 @@ actual fun MirrorVideoSurface(
     onRulerResize: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
+    deferNativePresentation: Boolean,
+    nativePresentation: Boolean,
+    nativePresentationFillHost: Boolean,
+    gpuMirrorStreamKey: Any?,
 ) {
     if (isScreenshotRenderer()) {
         val frame by frames.collectAsState(initial = null)
         ScreenshotMirrorSurface(frame, modifier, overlay)
         return
     }
-    val panel = remember { MirrorPanel(hostsNativePresentation = true) }
-    SwingPanel(
-        modifier = modifier,
-        background = Color.Black,
-        factory = { panel },
-        update = {
-            panel.onInput = onInput
-            panel.onHoverColor = onHoverColor
-            panel.passThroughInput = passThroughInput
-            panel.onPickerClick = onPickerClick
-            panel.onDevicePointClick = onDevicePointClick
-            panel.onRulerResize = onRulerResize
-            panel.setOverlay(overlay)
-            panel.setOccluded(occluded)
-        },
-    )
-    LaunchedEffect(panel, frames, resetKey) {
-        frames.collectLatest { frame ->
-            panel.enqueueFrame(frame)
+    val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    val deferGpuHost =
+        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
+    key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
+        val panel = remember {
+            MirrorPanel(
+                hostsNativePresentation = nativePresentation,
+                fillNativePresentationHost = nativePresentationFillHost,
+                gpuMirrorStreamKey = gpuMirrorStreamKey,
+            )
+        }
+        Box(modifier.background(Color.Black)) {
+            if (!suppressHeavyweight && !deferGpuHost) {
+                SwingPanel(
+                    modifier = Modifier.fillMaxSize(),
+                    background = Color.Black,
+                    factory = { panel },
+                    update = {
+                        panel.onInput = onInput
+                        panel.onHoverColor = onHoverColor
+                        panel.passThroughInput = passThroughInput
+                        panel.onPickerClick = onPickerClick
+                        panel.onDevicePointClick = onDevicePointClick
+                        panel.onRulerResize = onRulerResize
+                        panel.setOverlay(overlay)
+                        panel.setOccluded(occluded)
+                    },
+                )
+            }
+        }
+        LaunchedEffect(panel, frames, resetKey) {
+            frames.collectLatest { frame ->
+                panel.enqueueFrame(frame)
+            }
         }
     }
 }
@@ -150,6 +203,8 @@ private fun ScreenshotMirrorSurface(frame: MirrorFrame?, modifier: Modifier, ove
 
 private class MirrorPanel(
     private val hostsNativePresentation: Boolean = true,
+    private val fillNativePresentationHost: Boolean = false,
+    private val gpuMirrorStreamKey: Any? = null,
 ) : java.awt.Canvas() {
     private enum class DragMode { Device, RulerX, RulerY, Inspect, None }
 
@@ -178,6 +233,42 @@ private class MirrorPanel(
     private val frameLock = Any()
     private var pendingFrame: MirrorFrame? = null
     private var frameDispatchPending = false
+    private var gpuPresenter: GpuMirrorPresenter? = null
+
+    private fun prefersGpuHub(): Boolean =
+        hostsNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
+
+    private fun usesGpuHub(): Boolean =
+        prefersGpuHub() && GpuMirrorSessions.get(gpuMirrorStreamKey!!) != null
+
+    private fun ensureGpuPresenter(): GpuMirrorPresenter? {
+        if (!prefersGpuHub()) return null
+        gpuPresenter?.let { return it }
+        GpuMirrorHostRegistry.presenterFor(this)?.let { existing ->
+            gpuPresenter = existing
+            return existing
+        }
+        val pipeline = GpuMirrorSessions.get(gpuMirrorStreamKey ?: return null) ?: return null
+        return pipeline.createPresenter(this)?.also { gpuPresenter = it }
+    }
+
+    private fun attachGpuPresentationIfReady() {
+        if (!prefersGpuHub()) return
+        val presenter = ensureGpuPresenter() ?: return
+        if (presenter.isAttachedTo(this)) {
+            presenter.updateGeometry(this)
+            return
+        }
+        presenter.attach(this, fillNativePresentationHost)
+    }
+
+    private fun updatePresentationGeometry() {
+        if (usesGpuHub()) {
+            gpuPresenter?.updateGeometry(this)
+        } else if (hostsNativePresentation) {
+            NativeMirrorJni.updateMetalLayerGeometry(this)
+        }
+    }
 
     init {
         background = java.awt.Color.BLACK
@@ -208,7 +299,16 @@ private class MirrorPanel(
         })
         val listener = object : MouseAdapter() {
             override fun mousePressed(event: MouseEvent) {
-                requestFocusInWindow()
+                if (MIRROR_DEBUG) {
+                    System.err.println(
+                        "MIRROR_MOUSE_PRESS: pt=${event.point} passThrough=$passThroughInput" +
+                            " image=${image?.width}x${image?.height} mapped=${mapPoint(event.point)}" +
+                            " size=${width}x$height metadata=$nativeMetadataFrame",
+                    )
+                }
+                // Avoid requestFocusInWindow when already focused — focus changes raise the black
+                // Canvas above a non-child Metal overlay and flash every tap.
+                if (!isFocusOwner) requestFocusInWindow()
                 pressedPoint = event.point
                 mapPoint(event.point)?.let { point ->
                     dragMode = rulerDragMode(event.point)
@@ -268,25 +368,48 @@ private class MirrorPanel(
 
             override fun mouseExited(event: MouseEvent) {
                 pickerPoint = null
-                if (overlay.pickerColor != null) NativeMirrorJni.updatePickerPoint(null, null)
+                if (overlay.pickerColor != null) {
+                    ensureGpuPresenter()?.updatePickerPoint(null, null)
+                        ?: NativeMirrorJni.updatePickerPoint(null, null)
+                }
                 if (!nativeMetadataFrame) presentCpuFrame()
             }
         }
         addMouseListener(listener)
         addMouseMotionListener(listener)
+        addFocusListener(object : FocusAdapter() {
+            override fun focusGained(event: FocusEvent) {
+                // Focus can bury a non-child Metal overlay under the black Canvas. Refresh
+                // geometry so hub re-parents via addChildWindow without orderFront flashing.
+                if (occluded || !hostsNativePresentation) return
+                if (usesGpuHub()) {
+                    ensureGpuPresenter()?.invalidateGeometry()
+                }
+                updatePresentationGeometry()
+            }
+        })
         addComponentListener(object : ComponentAdapter() {
             override fun componentResized(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
                 if (!nativeMetadataFrame) presentCpuFrame()
             }
 
             override fun componentMoved(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
             }
 
             override fun componentShown(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
                 if (!nativeMetadataFrame) presentCpuFrame()
+            }
+        })
+        addHierarchyBoundsListener(object : HierarchyBoundsAdapter() {
+            override fun ancestorResized(event: HierarchyEvent) {
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
+            }
+
+            override fun ancestorMoved(event: HierarchyEvent) {
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
             }
         })
     }
@@ -296,16 +419,29 @@ private class MirrorPanel(
     override fun addNotify() {
         super.addNotify()
         if (hostsNativePresentation) {
-            NativeMirrorHostRegistry.register(this)
+            if (prefersGpuHub()) {
+                attachGpuPresentationIfReady()
+            } else {
+                NativeMirrorHostRegistry.markHostsMetalPresentation(
+                    this,
+                    hostsMetal = true,
+                    fillHost = fillNativePresentationHost,
+                )
+                NativeMirrorHostRegistry.register(this)
+            }
         }
         val window = SwingUtilities.getWindowAncestor(this)
         ancestorMoveListener = object : ComponentAdapter() {
             override fun componentMoved(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
             }
 
             override fun componentResized(event: ComponentEvent) {
-                if (!occluded) NativeMirrorJni.updateMetalLayerGeometry(this@MirrorPanel)
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
+            }
+
+            override fun componentShown(event: ComponentEvent) {
+                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
             }
         }.also { window?.addComponentListener(it) }
     }
@@ -318,8 +454,13 @@ private class MirrorPanel(
         }
         ancestorMoveListener = null
         if (hostsNativePresentation) {
-            NativeMirrorHostRegistry.unregister(this)
-            NativeMirrorJni.removeMetalLayer(this)
+            if (prefersGpuHub()) {
+                gpuPresenter?.close()
+                gpuPresenter = null
+            } else {
+                NativeMirrorHostRegistry.unregister(this)
+                NativeMirrorJni.removeMetalLayer(this)
+            }
         }
         super.removeNotify()
     }
@@ -333,7 +474,17 @@ private class MirrorPanel(
         occluded = next
         isVisible = !next
         if (hostsNativePresentation) {
-            NativeMirrorJni.setInlineOverlayVisible(!next)
+            if (prefersGpuHub()) {
+                val presenter = ensureGpuPresenter()
+                presenter?.setVisible(!next)
+                if (!next) {
+                    presenter?.updateGeometry(this)
+                    presenter?.repaint()
+                }
+            } else {
+                NativeMirrorJni.setInlineOverlayVisible(!next)
+                if (!next) updatePresentationGeometry()
+            }
         }
         if (!next && !nativeMetadataFrame) presentCpuFrame()
     }
@@ -364,9 +515,15 @@ private class MirrorPanel(
     }
 
     fun setFrame(frame: MirrorFrame?) {
-        if (frame == null || frame.frameNumber == frameNumber) return
-        frameNumber = frame.frameNumber
+        if (frame == null) return
         val hasCpuPixels = frame.argb.size >= frame.width * frame.height
+        if (!hasCpuPixels) {
+            val sameMetadata = frame.frameNumber == frameNumber &&
+                image?.width == frame.width &&
+                image?.height == frame.height
+            if (sameMetadata) return
+        }
+        frameNumber = frame.frameNumber
         nativeMetadataFrame = !hasCpuPixels
         val sizeChanged = image?.width != frame.width || image?.height != frame.height
         val buffered = image?.takeIf { it.width == frame.width && it.height == frame.height }
@@ -378,8 +535,16 @@ private class MirrorPanel(
             frame.argb.copyInto(pixels, endIndex = frame.width * frame.height)
             presentCpuFrame()
         } else {
-            NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)
-            if (sizeChanged) NativeMirrorJni.updateMetalLayerGeometry(this)
+            attachGpuPresentationIfReady()
+            if (usesGpuHub()) {
+                gpuMirrorStreamKey?.let { key ->
+                    GpuMirrorSessions.get(key)?.setContentSize(frame.width, frame.height)
+                    ensureGpuPresenter()?.setContentSize(frame.width, frame.height)
+                }
+            } else {
+                NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)
+            }
+            if (sizeChanged && hostsNativePresentation) updatePresentationGeometry()
         }
     }
 
@@ -437,6 +602,33 @@ private class MirrorPanel(
         }
         val rulerColor = next.rulerColor.copy(alpha = .95f)
         val highlight = parseBounds(next.highlightBounds)
+        val gpu = ensureGpuPresenter()
+        if (gpu != null && usesGpuHub()) {
+            gpu.updateOverlay(
+                gridEnabled = next.showGrid && next.gridSize >= 2f,
+                gridStepX = (next.gridSize / sourceWidth).coerceIn(0f, 1f),
+                gridStepY = (next.gridSize / sourceHeight).coerceIn(0f, 1f),
+                gridR = gridColor.red,
+                gridG = gridColor.green,
+                gridB = gridColor.blue,
+                gridA = gridColor.alpha,
+                rulerEnabled = next.showRuler,
+                rulerX = (next.rulerX / sourceWidth).coerceIn(0f, 1f),
+                rulerY = (next.rulerY / sourceHeight).coerceIn(0f, 1f),
+                rulerR = rulerColor.red,
+                rulerG = rulerColor.green,
+                rulerB = rulerColor.blue,
+                rulerA = rulerColor.alpha,
+                sourceWidth = sourceWidth.toFloat(),
+                sourceHeight = sourceHeight.toFloat(),
+                pickerEnabled = next.pickerColor != null,
+                highlightLeft = highlight?.get(0)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 1f,
+                highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
+                highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
+                highlightBottom = highlight?.get(3)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 0f,
+            )
+            return
+        }
         NativeMirrorJni.updateOverlay(
             gridEnabled = next.showGrid && next.gridSize >= 2f,
             gridStepX = (next.gridSize / sourceWidth).coerceIn(0f, 1f),
@@ -842,5 +1034,8 @@ private class MirrorPanel(
 
     companion object {
         private const val DEVICE_MOVE_MIN_INTERVAL_NANOS = 8_000_000L
+
+        /** Set ANDY_MIRROR_DEBUG=1 to trace mouse delivery into the mirror surface. */
+        private val MIRROR_DEBUG = System.getenv("ANDY_MIRROR_DEBUG") == "1"
     }
 }

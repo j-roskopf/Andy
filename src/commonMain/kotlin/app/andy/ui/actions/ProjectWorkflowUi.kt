@@ -476,6 +476,8 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
     var planExpanded by remember(build.id, build.planSnapshot?.text) { mutableStateOf(false) }
     var followUpOpen by remember(build.id) { mutableStateOf(false) }
     var followUp by remember(build.id) { mutableStateOf("") }
+    var followUpImagePaths by remember(build.id) { mutableStateOf<List<String>>(emptyList()) }
+    var followUpImageDragActive by remember(build.id) { mutableStateOf(false) }
     var recoveryActionError by remember(build.id) { mutableStateOf<String?>(null) }
     val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
     val verification = workflow.tasks.firstOrNull { it.id == build.linkedVerificationTaskId }
@@ -528,7 +530,12 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
         DetailBlock(
             "REVIEW GATE · GENERATION ${build.reviewGeneration}",
             buildString {
-                append("Enabled · ").append(failureCount).append('/').append(build.maxReviewFailures).append(" blocking verdicts")
+                append("Enabled")
+                if (build.singleReviewPass) {
+                    append(" · single pass")
+                } else {
+                    append(" · ").append(failureCount).append('/').append(build.maxReviewFailures).append(" blocking verdicts")
+                }
                 build.reviewInstructions.takeIf { it.isNotBlank() }?.let { append("\n\nCustom instructions\n").append(it) }
             },
         )
@@ -543,28 +550,69 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
             containerColor = Panel,
             title = { Text("Add build follow-up", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
             text = {
-                LabeledField(
-                    "What did testing reveal?",
-                    followUp,
-                    { followUp = it },
-                    Modifier.width(620.dp),
-                    singleLine = false,
-                    minHeight = 150.dp,
-                )
+                Column(Modifier.width(620.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "what did testing reveal?",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                    )
+                    TextField(
+                        value = followUp,
+                        onValueChange = { followUp = it },
+                        singleLine = false,
+                        minLines = 6,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 150.dp)
+                            .onImageFilesDropped(
+                                onFiles = { dropped -> followUpImagePaths = (followUpImagePaths + dropped).distinct() },
+                                onDragActiveChange = { active -> followUpImageDragActive = active },
+                            )
+                            .border(
+                                if (followUpImageDragActive) 2.dp else 1.dp,
+                                if (followUpImageDragActive) Cyan else Border.copy(alpha = 0.35f),
+                                RoundedCornerShape(AndyRadius.R2),
+                            ),
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                        colors = fieldColors(),
+                        placeholder = {
+                            Text(
+                                if (followUpImageDragActive) "release to attach image" else "describe the issue — drag screenshots here",
+                                color = if (followUpImageDragActive) Cyan else TextSecondary,
+                                fontFamily = MonoFont,
+                            )
+                        },
+                    )
+                    if (followUpImagePaths.isNotEmpty()) {
+                        ChatAttachedImages(
+                            paths = followUpImagePaths,
+                            onRemove = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
+                            maxWidth = 140.dp,
+                            maxHeight = 100.dp,
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
                         scope.launch {
-                            val error = services.projectWorkflows.startRecoveryFollowUp(build.id, followUp.trim())
+                            val error = services.projectWorkflows.startRecoveryFollowUp(
+                                build.id,
+                                followUp.trim(),
+                                followUpImagePaths,
+                            )
                             recoveryActionError = error
                             if (error == null) {
                                 followUp = ""
+                                followUpImagePaths = emptyList()
                                 followUpOpen = false
                             }
                         }
                     },
-                    enabled = followUp.isNotBlank(),
+                    enabled = followUp.isNotBlank() || followUpImagePaths.isNotEmpty(),
                     colors = primaryButtonColors(),
                 ) { Text("Start follow-up") }
             },
@@ -938,6 +986,7 @@ internal fun BuildPairDialog(
     var verificationInstructions by remember(existing?.id) { mutableStateOf(existing?.verificationInstructions.orEmpty()) }
     var buildProfile by remember(existing?.id) { mutableStateOf(existing?.profile ?: workflow.profiles[ProjectTaskKind.Build] ?: ProjectAgentProfile()) }
     var reviewEnabled by remember(existing?.id) { mutableStateOf(existing?.reviewEnabled ?: false) }
+    var singleReviewPass by remember(existing?.id) { mutableStateOf(existing?.singleReviewPass ?: false) }
     var reviewInstructions by remember(existing?.id) { mutableStateOf(existing?.reviewInstructions.orEmpty()) }
     var reviewProfile by remember(existing?.id) { mutableStateOf(linkedReview?.profile ?: workflow.profiles[ProjectTaskKind.Review] ?: ProjectAgentProfile()) }
     var verifyProfile by remember(existing?.id) { mutableStateOf(linkedVerify?.profile ?: workflow.profiles[ProjectTaskKind.Verification] ?: ProjectAgentProfile()) }
@@ -1009,6 +1058,7 @@ internal fun BuildPairDialog(
                         LabeledField("Custom review instructions (optional)", reviewInstructions, { reviewInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 100.dp)
                         ProjectAgentProfileEditor("REVIEW PROFILE · BUILD WORKSPACE INHERITED", reviewProfile, { reviewProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
                         FilterPill("Reviewer gets scratchpad snapshot", includeReviewScratchpad, AndyColors.Blue) { includeReviewScratchpad = !includeReviewScratchpad }
+                        FilterPill("Single review pass (no rebuild loop)", singleReviewPass, Rust) { singleReviewPass = !singleReviewPass }
                     }
                 }
                 LabeledField("Verification instructions (optional)", verificationInstructions, { verificationInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
@@ -1038,6 +1088,7 @@ internal fun BuildPairDialog(
                             maxBudgetUsd = budgetText.toDoubleOrNull(),
                             buildTaskId = existing?.id,
                             reviewEnabled = reviewEnabled,
+                            singleReviewPass = singleReviewPass,
                             reviewInstructions = reviewInstructions,
                             reviewProfile = reviewProfile,
                             includeScratchpadInReview = includeReviewScratchpad,

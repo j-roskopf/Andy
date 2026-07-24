@@ -288,6 +288,7 @@ internal fun LiveDockDrawer(
     services: AndyServices,
     serial: String?,
     device: AndroidDevice?,
+    targetDisplayName: String? = null,
     placement: DockPlacement,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -309,7 +310,7 @@ internal fun LiveDockDrawer(
             Column(Modifier.weight(1f)) {
                 Text("Live", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold)
                 Text(
-                    device?.displayName ?: serial ?: "Select a device in the toolbar",
+                    device?.displayName ?: targetDisplayName ?: serial ?: "Select a device in the toolbar",
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
@@ -321,6 +322,7 @@ internal fun LiveDockDrawer(
             services = services,
             serial = serial,
             device = device,
+            displayName = device?.displayName ?: targetDisplayName,
             modifier = Modifier.fillMaxSize(),
             showChromeControls = false,
             showDeviceHeader = false,

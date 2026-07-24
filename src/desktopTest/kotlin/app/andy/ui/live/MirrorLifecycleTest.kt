@@ -9,6 +9,9 @@ import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.DeviceTransport
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
 import app.andy.service.CommandResult
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
@@ -17,11 +20,14 @@ import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.logcat.LogcatState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -116,6 +122,102 @@ class MirrorLifecycleTest {
         }
     }
 
+    @Test
+    fun deviceSwitchStartsFreshInputQueueWhenPreviousBackendIsStalled() = withComposeMirrorRenderer {
+        runDesktopComposeUiTestDrainingPriorFailures {
+            val serial = mutableStateOf("ios-sim")
+            val mirror = BlockingInputMirror()
+            val services = ScreenshotServices.create().copy(mirror = mirror)
+            lateinit var sendInput: (MirrorInput) -> Unit
+
+            setContent {
+                sendInput = rememberMirrorInputSender(
+                    services = services,
+                    serial = serial.value,
+                    mirror = mirror,
+                    recordActions = false,
+                )
+            }
+
+            try {
+                runOnUiThread { sendInput(MirrorInput.Home) }
+                waitUntil(timeoutMillis = 5_000) { mirror.stalledInputStarted }
+
+                runOnUiThread { serial.value = "android-device" }
+                waitForIdle()
+                runOnUiThread { sendInput(MirrorInput.Back) }
+
+                waitUntil(timeoutMillis = 5_000) { mirror.androidInputReceived }
+            } finally {
+                mirror.releaseStalledInput.complete(Unit)
+            }
+        }
+    }
+
+    @Test
+    fun liveScreenSwitchesAndroidIosAndroidWithoutStaleDisconnect() = withComposeMirrorRenderer {
+        runDesktopComposeUiTestDrainingPriorFailures {
+            val android = AndroidDevice(
+                serial = "android-device",
+                displayName = "Android",
+                kind = DeviceKind.Physical,
+                state = DeviceConnectionState.Online,
+                transport = DeviceTransport.Usb,
+            )
+            val ios = IosTarget(
+                udid = "ios-sim",
+                displayName = "iPhone",
+                kind = IosTargetKind.Simulator,
+                state = IosTargetState.Booted,
+            )
+            val serial = mutableStateOf(android.serial)
+            val iosTarget = mutableStateOf<IosTarget?>(null)
+            val mirror = TrackingMirror()
+            val services = ScreenshotServices.create().copy(mirror = mirror)
+
+            setContent {
+                LiveScreen(
+                    services = services,
+                    serial = serial.value,
+                    device = android.takeIf { iosTarget.value == null },
+                    iosTarget = iosTarget.value,
+                    devicePaneWidth = 680f,
+                    controlsPaneHeight = 320f,
+                    onStopEmulator = {},
+                    stoppingEmulatorSerial = null,
+                    stopStatus = "",
+                    onDevicePaneWidthChange = {},
+                    onControlsPaneHeightChange = {},
+                    onBugSaved = {},
+                    onRecordingSaved = {},
+                    logcatState = LogcatState(),
+                    onPopOutMirror = {},
+                    selectedPackage = null,
+                    onSelectedPackageChange = {},
+                    transfer = DeviceTransferCoordinator(),
+                )
+            }
+
+            waitUntil(timeoutMillis = 5_000) { mirror.connectedSerials == listOf(android.serial) }
+            runOnUiThread {
+                iosTarget.value = ios
+                serial.value = ios.udid
+            }
+            waitUntil(timeoutMillis = 5_000) {
+                mirror.connectedSerials == listOf(android.serial, ios.udid)
+            }
+            runOnUiThread {
+                iosTarget.value = null
+                serial.value = android.serial
+            }
+            waitUntil(timeoutMillis = 5_000) {
+                mirror.connectedSerials == listOf(android.serial, ios.udid, android.serial)
+            }
+
+            assertEquals(0, mirror.disconnectCalls, "A cancelled target effect must not disconnect the new session")
+        }
+    }
+
     private fun runDesktopComposeUiTestDrainingPriorFailures(block: ComposeUiTest.() -> Unit) {
         try {
             runDesktopComposeUiTest(block = block)
@@ -144,12 +246,14 @@ class MirrorLifecycleTest {
             private set
         var disconnectCalls = 0
             private set
+        val connectedSerials = mutableListOf<String>()
 
         override val frames: Flow<MirrorFrame> = mutableFrames
         override val status: Flow<String> = mutableStatus
 
         override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
             connectCalls += 1
+            connectedSerials += serial
             mutableStatus.value = "Connected"
             return CommandResult.success("Connected")
         }
@@ -160,6 +264,37 @@ class MirrorLifecycleTest {
         }
 
         override suspend fun sendInput(input: MirrorInput) = CommandResult.success()
+
+        override suspend fun screenshot(serial: String): ByteArray? = null
+    }
+
+    private class BlockingInputMirror : MirrorEngine {
+        override val session = MutableStateFlow<MirrorSession?>(null)
+        override val frames = MutableSharedFlow<MirrorFrame>()
+        override val status = MutableStateFlow("Connected")
+        val releaseStalledInput = CompletableDeferred<Unit>()
+
+        @Volatile
+        var stalledInputStarted = false
+            private set
+
+        @Volatile
+        var androidInputReceived = false
+            private set
+
+        override suspend fun connect(serial: String, config: MirrorVideoConfig) = CommandResult.success()
+
+        override suspend fun disconnect(immediate: Boolean) = Unit
+
+        override suspend fun sendInput(input: MirrorInput): CommandResult {
+            if (input == MirrorInput.Home) {
+                stalledInputStarted = true
+                withContext(NonCancellable) { releaseStalledInput.await() }
+            } else if (input == MirrorInput.Back) {
+                androidInputReceived = true
+            }
+            return CommandResult.success()
+        }
 
         override suspend fun screenshot(serial: String): ByteArray? = null
     }

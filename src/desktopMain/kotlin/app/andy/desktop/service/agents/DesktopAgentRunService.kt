@@ -378,6 +378,7 @@ class DesktopAgentRunService(
             reviewEnabled = draft.reviewEnabled,
             reviewInstructions = reviewInstructions,
             reviewGeneration = reviewGeneration,
+            singleReviewPass = draft.singleReviewPass,
             verificationInstructions = verificationInstructions,
             maxBudgetUsd = draft.maxBudgetUsd,
             createdAtMillis = now,
@@ -395,6 +396,7 @@ class DesktopAgentRunService(
             reviewEnabled = draft.reviewEnabled,
             reviewInstructions = reviewInstructions,
             reviewGeneration = reviewGeneration,
+            singleReviewPass = draft.singleReviewPass,
             reviewReopenedCompleted = when {
                 reopeningCompleted -> true
                 restoringCompleted -> false
@@ -554,21 +556,26 @@ class DesktopAgentRunService(
             ?.lastOrNull { it.reviewedBuildRunId == buildRun?.id && it.reviewGeneration == build.reviewGeneration }
         when {
             buildRun == null -> startBuildAttempt(buildTaskId)
-            build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested -> startBuildAttempt(buildTaskId)
+            build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested && !build.singleReviewPass -> startBuildAttempt(buildTaskId)
+            build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested && build.singleReviewPass -> setPairAttention(build, reviewLimitReachedMessage(build))
             build.reviewEnabled && currentReviewApproval(review, buildRun.id, build.reviewGeneration) == null -> startReviewAttempt(buildTaskId)
             build.linkedVerificationTaskId != null -> startVerificationAttempt(buildTaskId)
             else -> completeBuildWithoutVerification(buildTaskId)
         }
     }
 
-    override suspend fun startRecoveryFollowUp(buildTaskId: String, followUp: String): String? {
+    override suspend fun startRecoveryFollowUp(
+        buildTaskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+    ): String? {
         ready.await()
         val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build }
             ?: return "This Build workflow is no longer available."
         val review = build.linkedReviewTaskId?.let(::projectTask)
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
         when {
-            followUp.isBlank() -> return "Describe the issue found during testing before starting a follow-up."
+            followUp.isBlank() && imagePaths.isEmpty() -> return "Describe the issue found during testing, or attach a screenshot, before starting a follow-up."
             !build.recoveryMode && build.state != ProjectTaskState.Completed -> return "Finish or pause the current workflow stage before adding a follow-up."
             isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) -> return "Wait for the current workflow run to finish before adding another follow-up."
             workflowBudgetReached(build) -> return "The workflow's reported-cost guardrail has been reached."
@@ -611,6 +618,7 @@ class DesktopAgentRunService(
                 workflowTaskId = build.id,
                 stage = ProjectWorkflowStage.Build,
                 attempt = attempt,
+                imagePaths = imagePaths,
                 existingWorktreePath = recoveryWorkspace,
                 existingBranchName = build.branchName,
             ),
@@ -1823,8 +1831,8 @@ class DesktopAgentRunService(
             persist()
             return
         }
-        if (build.reviewEnabled && reviewFailureCount(build, linkedReview) >= build.maxReviewFailures) {
-            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+        if (build.reviewEnabled && reviewFailureCount(build, linkedReview) >= effectiveMaxReviewFailures(build)) {
+            setPairAttention(build, reviewLimitReachedMessage(build))
             persist()
             return
         }
@@ -1912,8 +1920,8 @@ class DesktopAgentRunService(
         ) {
             return
         }
-        if (reviewFailureCount(build, review) >= build.maxReviewFailures) {
-            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+        if (reviewFailureCount(build, review) >= effectiveMaxReviewFailures(build)) {
+            setPairAttention(build, reviewLimitReachedMessage(build))
             persist()
             return
         }
@@ -2305,8 +2313,8 @@ class DesktopAgentRunService(
             return
         }
         val refreshedReview = projectTask(review.id) ?: review
-        if (reviewFailureCount(build, refreshedReview) >= build.maxReviewFailures) {
-            setPairAttention(build, "review requested changes ${build.maxReviewFailures} times")
+        if (reviewFailureCount(build, refreshedReview) >= effectiveMaxReviewFailures(build)) {
+            setPairAttention(build, reviewLimitReachedMessage(build))
             persist()
         } else if (build.paused) {
             updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
@@ -2371,11 +2379,12 @@ class DesktopAgentRunService(
         reviewGeneration: Int,
         atMillis: Long,
     ): ProjectReviewVerdict? {
-        val output = text.orEmpty()
+        val output = text.orEmpty().trimEnd()
         val matches = REVIEW_BLOCK.findAll(output).toList()
-        if (matches.size != 1 || matches.single().range.last != output.trimEnd().lastIndex) return null
+        val terminal = matches.lastOrNull() ?: return null
+        if (terminal.range.last != output.lastIndex) return null
         return runCatching {
-            val value = Json.parseToJsonElement(matches.single().groupValues[1]).jsonObject
+            val value = Json.parseToJsonElement(terminal.groupValues[1]).jsonObject
             val status = when (value["status"]?.jsonPrimitive?.content?.lowercase()) {
                 "approved" -> ProjectReviewStatus.Approved
                 "changes_requested" -> ProjectReviewStatus.ChangesRequested
@@ -2413,12 +2422,12 @@ class DesktopAgentRunService(
         reviewedBuildRunId: String?,
         reviewGeneration: Int,
     ): ProjectVerificationVerdict? {
-        val output = text.orEmpty()
+        val output = text.orEmpty().trimEnd()
         val matches = VERIFICATION_BLOCK.findAll(output).toList()
-        if (matches.size != 1) return null
-        if (matches.single().range.last != output.trimEnd().lastIndex) return null
+        val terminal = matches.lastOrNull() ?: return null
+        if (terminal.range.last != output.lastIndex) return null
         return runCatching {
-            val value = Json.parseToJsonElement(matches.single().groupValues[1]).jsonObject
+            val value = Json.parseToJsonElement(terminal.groupValues[1]).jsonObject
             val statusText = value["status"]?.jsonPrimitive?.content ?: return null
             val status = when (statusText.lowercase()) {
                 "passed" -> ProjectVerificationStatus.Passed
@@ -2451,6 +2460,16 @@ class DesktopAgentRunService(
         review?.reviewVerdicts?.count {
             it.status == ProjectReviewStatus.ChangesRequested && it.reviewGeneration == build.reviewGeneration
         } ?: 0
+
+    private fun effectiveMaxReviewFailures(build: ProjectTask): Int =
+        if (build.singleReviewPass) 1 else build.maxReviewFailures
+
+    private fun reviewLimitReachedMessage(build: ProjectTask): String =
+        if (build.singleReviewPass) {
+            "review requested changes (single review pass)"
+        } else {
+            "review requested changes ${build.maxReviewFailures} times"
+        }
 
     private fun recoverInterruptedWorkflows(
         workflows: Map<String, ProjectWorkflowState>,

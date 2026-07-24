@@ -134,6 +134,8 @@ data class ProjectTask(
     val reviewEnabled: Boolean = false,
     val reviewInstructions: String = "",
     val reviewGeneration: Int = 0,
+    /** When true, run one review after build and stop instead of looping back to build. */
+    val singleReviewPass: Boolean = false,
     val maxReviewFailures: Int = 5,
     val reviewReopenedCompleted: Boolean = false,
     /** True while a completed workflow is collecting manually tested fix threads. */
@@ -190,6 +192,7 @@ data class ProjectBuildPairDraft(
     val maxBudgetUsd: Double? = null,
     val buildTaskId: String? = null,
     val reviewEnabled: Boolean = false,
+    val singleReviewPass: Boolean = false,
     val reviewInstructions: String = "",
     val reviewProfile: ProjectAgentProfile = ProjectAgentProfile(),
     val includeScratchpadInReview: Boolean = false,

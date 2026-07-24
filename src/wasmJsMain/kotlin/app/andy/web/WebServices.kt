@@ -936,6 +936,7 @@ fun createWebServices(): AndyServices {
     val bugs = BrowserBugService(logcat)
     return AndyServices(
         devices = devices,
+        iosDevices = UnavailableIosDeviceService,
         avd = UnavailableAvdService,
         mirror = mirror,
         logcat = logcat,

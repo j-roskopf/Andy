@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
+import app.andy.availableWithIosTarget
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.model.SdkDiscovery
@@ -69,6 +70,7 @@ internal fun Sidebar(
     current: AndyDestination,
     destinations: List<AndyDestination>,
     deviceCount: Int,
+    iosSelectionActive: Boolean = false,
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
     hasActiveProjectAgentTasks: Boolean,
@@ -133,23 +135,26 @@ internal fun Sidebar(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
         ) {
             destinations.forEach { item ->
+                val disabledForIos = iosSelectionActive && !item.availableWithIosTarget()
                 val active = item == current
                 Row(
                     Modifier.fillMaxWidth()
                         .height(34.dp)
                         .background(if (active) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
                         .then(if (active) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.52f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
-                        .clickable { onSelect(item) }
+                        .clickable(enabled = !disabledForIos) {
+                            if (disabledForIos) onSelect(AndyDestination.Live) else onSelect(item)
+                        }
                         .padding(horizontal = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
                 ) {
-                    Text(navMark(item), color = if (active) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                    Text(navMark(item), color = if (active) Rust else if (disabledForIos) TextSecondary.copy(alpha = 0.35f) else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
                     if (labelAlpha > 0.01f) {
                         Spacer(Modifier.width(labelGap))
                         Text(
                             item.label.lowercase(),
-                            color = (if (active) AndyColors.Neutral100 else AndyColors.Neutral300).copy(alpha = labelAlpha),
+                            color = (if (active) AndyColors.Neutral100 else AndyColors.Neutral300).copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
                             fontFamily = MonoFont,
                             fontSize = 13.sp,
                             modifier = Modifier.weight(1f),

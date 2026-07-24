@@ -253,7 +253,7 @@ private fun DeviceFilesBrowser(
     Column(
         Modifier
             .fillMaxSize()
-            .onExternalFileDrop(enabled = serial != null) { handleIncoming(it) }
+            .onExternalFileDrop { handleIncoming(it) }
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 if (event.key == Key.Enter || event.key == Key.NumPadEnter) {
@@ -280,11 +280,11 @@ private fun DeviceFilesBrowser(
             OutlinedButton(onClick = { load(parentPath(path)) }) { Text("Up") }
             Button(
                 onClick = { startDownload(rows.filter { it.path in selectedPaths }) },
-                enabled = serial != null && selectedPaths.isNotEmpty() && !transfer.busy,
+                enabled = selectedPaths.isNotEmpty() && !transfer.busy,
             ) { Text("Download") }
             OutlinedButton(
                 onClick = { startUpload() },
-                enabled = serial != null && !transfer.busy,
+                enabled = !transfer.busy,
             ) { Text("Upload…") }
             if (transfer.busy) {
                 OutlinedButton(onClick = { transfer.cancel() }) { Text("Cancel") }

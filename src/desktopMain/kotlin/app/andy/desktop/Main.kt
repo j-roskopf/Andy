@@ -19,11 +19,19 @@ import app.andy.andy.generated.resources.andy_robot
 import app.andy.AndyDestination
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
-import app.andy.desktop.service.createDesktopServices
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.key
+import app.andy.desktop.service.ios.NativeIosDeviceJni
 import app.andy.desktop.service.DesktopAgentAttentionCoordinator
 import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.PendingAgentTaskOpen
+import app.andy.desktop.service.createDesktopRuntime
+import app.andy.desktop.service.mirror.GpuMirrorJni
+import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
+import app.andy.model.IosTargetKind
+import app.andy.service.IosTargetRegistry
+import app.andy.service.MirrorEngine
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.theme.windowBackgroundForTint
 import com.kdroid.composetray.tray.api.Tray
@@ -34,12 +42,31 @@ import java.awt.desktop.SystemEventListener
 import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
+
+private data class MirrorPopOutWindow(
+    val targetId: String,
+    val displayName: String,
+    val controlsVisible: Boolean = false,
+    /**
+     * Reuse the Live mirror session while it still targets this device (iOS / legacy Metal).
+     * Android pop-outs of the Live device take over the engine instead — see [startPopOut].
+     */
+    val preferPrimaryMirror: Boolean = false,
+    /** Legacy single-overlay Metal: promote after taking over Live's Android session. */
+    val ownsLegacyMetal: Boolean = false,
+)
 
 fun main() {
     installRuntimeAppIcon()
     application {
-        val services = remember { createDesktopServices() }
+        val runtime = remember { createDesktopRuntime() }
+        val services = runtime.services
+        val popOutMirrorPool = runtime.popOutMirrors
         val workspaceStore = services.workspaceStore as DesktopWorkspaceStore
         val workspaceState by workspaceStore.state.collectAsState()
         val agentTasks by services.agentRuns.tasks.collectAsState()
@@ -51,10 +78,15 @@ fun main() {
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
         var requestedOpenAgentTask by remember { mutableStateOf<OpenAgentTaskRequest?>(null) }
         val appFocus = remember { AppFocusState() }
+        val scope = rememberCoroutineScope()
         var requestPopOutMirror by remember { mutableStateOf(false) }
-        var popOutSerial by remember { mutableStateOf<String?>(null) }
-        var popOutDeviceName by remember { mutableStateOf<String?>(null) }
-        var popOutControlsVisible by remember { mutableStateOf(false) }
+        var popOutWindows by remember { mutableStateOf(mapOf<String, MirrorPopOutWindow>()) }
+        // iOS sims handed off to Simulator.app: Andy stops mirroring and defers to that window.
+        // Cleared automatically when the Simulator device window closes (see reconcile below).
+        var externalSimulatorMirrors by remember {
+            mutableStateOf(mapOf<String, ExternalSimulatorMirrorWatch>())
+        }
+        val externallyMirrored = externalSimulatorMirrors.keys
         val popOutMirrorShortcut = KeyShortcut(Key.D, ctrl = !isMacOs(), meta = isMacOs(), shift = true)
         val appIcon = painterResource(Res.drawable.andy_robot)
         fun open(destination: AndyDestination) {
@@ -72,8 +104,90 @@ fun main() {
             visible = true
             requestPopOutMirror = true
         }
+        // iOS Simulator already has a host window (Simulator.app), so pop-out hands off to that
+        // app and Andy stops mirroring. Android emulators are launched with -qt-hide-window, so
+        // there is no usable native window to reveal — they (and physical devices) open a
+        // dedicated Andy mirror window instead. Either way Live hands the device off so it never
+        // renders in two places at once.
+        fun usesExternalDeviceApp(targetId: String): Boolean =
+            IosTargetRegistry.isIosTarget(targetId) &&
+                IosTargetRegistry.target(targetId)?.kind == IosTargetKind.Simulator
+        fun focusExternalDeviceApp(targetId: String) {
+            // SimulatorKit capture is headless; bring Simulator.app forward when handing off.
+            if (IosTargetRegistry.isIosTarget(targetId)) {
+                runCatching { ProcessBuilder("open", "-a", "Simulator").start() }
+            }
+        }
+        fun addPopOutWindow(
+            targetId: String,
+            displayName: String,
+            preferPrimaryMirror: Boolean,
+            ownsLegacyMetal: Boolean = false,
+        ) {
+            if (targetId in popOutWindows) return
+            popOutWindows = popOutWindows + (
+                targetId to MirrorPopOutWindow(
+                    targetId = targetId,
+                    displayName = displayName,
+                    preferPrimaryMirror = preferPrimaryMirror,
+                    ownsLegacyMetal = ownsLegacyMetal,
+                )
+                )
+        }
+        fun startPopOut(targetId: String, displayName: String) {
+            if (usesExternalDeviceApp(targetId)) {
+                if (targetId !in externalSimulatorMirrors) {
+                    externalSimulatorMirrors = externalSimulatorMirrors + (
+                        targetId to ExternalSimulatorMirrorWatch(targetId, displayName)
+                        )
+                }
+                focusExternalDeviceApp(targetId)
+            } else {
+                val primaryOwns = services.mirror.session.value?.serial == targetId
+                val isAndroid = !IosTargetRegistry.isIosTarget(targetId)
+                if (isAndroid && primaryOwns) {
+                    // Move the live scrcpy owner into the pop-out pool before Live can switch
+                    // devices and tear it down. Android allows only one scrcpy per serial.
+                    popOutMirrorPool.takeOverPrimaryAndroid(targetId)
+                    addPopOutWindow(
+                        targetId,
+                        displayName,
+                        preferPrimaryMirror = false,
+                        ownsLegacyMetal = !GpuMirrorJni.isAvailable(),
+                    )
+                } else {
+                    // iOS (or Android not on Live): share primary while it still targets this
+                    // device, otherwise use a dedicated pool engine.
+                    addPopOutWindow(targetId, displayName, preferPrimaryMirror = primaryOwns)
+                }
+            }
+        }
+        // Toggle used by the main Live pop-out button / hand-off placeholder.
+        fun togglePopOut(targetId: String, displayName: String) {
+            when (targetId) {
+                in externalSimulatorMirrors -> {
+                    externalSimulatorMirrors = externalSimulatorMirrors - targetId
+                    // Manual "Mirror in Andy again" — tuck Simulator away like auto-resume.
+                    scope.launch(Dispatchers.IO) { services.iosDevices.hideSimulatorApp() }
+                }
+                in popOutWindows -> Unit // Managed by the pop-out window's own close.
+                else -> startPopOut(targetId, displayName)
+            }
+        }
+        fun closePopOutWindow(targetId: String, mirror: MirrorEngine) {
+            popOutWindows = popOutWindows - targetId
+            if (mirror !== services.mirror) {
+                scope.launch { popOutMirrorPool.release(targetId) }
+            }
+            if (popOutWindows.isEmpty()) {
+                NativeMirrorHostRegistry.clearPopOutPresentation()
+            }
+        }
         fun quitApp() {
-            runBlocking { services.mirror.disconnect(immediate = true) }
+            runBlocking {
+                popOutMirrorPool.releaseAll()
+                services.mirror.disconnect(immediate = true)
+            }
             exitApplication()
         }
         DisposableEffect(Unit) {
@@ -93,6 +207,42 @@ fun main() {
                 workspace = { workspaceStore.state.value }, isForeground = appFocus::isForeground,
                 notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
             ).start()
+        }
+        LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) {
+                NativeIosDeviceJni.prepareForCapture()
+            }
+        }
+        // After an iOS pop-out handoff, watch Simulator.app device windows. Closing the window
+        // (without needing Quit) clears the handoff so Live reconnects automatically.
+        LaunchedEffect(externalSimulatorMirrors.keys) {
+            if (externalSimulatorMirrors.isEmpty()) return@LaunchedEffect
+            while (true) {
+                delay(500)
+                val snapshot = externalSimulatorMirrors
+                if (snapshot.isEmpty()) return@LaunchedEffect
+                val reconciled = withContext(Dispatchers.IO) {
+                    reconcileExternalSimulatorMirrors(snapshot) { displayName ->
+                        services.iosDevices.hasVisibleSimulatorDeviceWindow(displayName)
+                    }
+                }
+                val closed = snapshot.keys - reconciled.keys
+                if (closed.isNotEmpty()) {
+                    // Hide Simulator before Live remounts so windows aren't racing the Metal host.
+                    withContext(Dispatchers.IO) {
+                        services.iosDevices.hideSimulatorApp()
+                    }
+                    delay(150)
+                    // Only remove windows that closed; keep targets added/cleared mid-poll.
+                    externalSimulatorMirrors = externalSimulatorMirrors - closed
+                    if (externalSimulatorMirrors.isEmpty()) return@LaunchedEffect
+                } else if (reconciled != snapshot) {
+                    // seenWindow flags advanced — merge without dropping newer entries.
+                    externalSimulatorMirrors = externalSimulatorMirrors.mapValues { (id, watch) ->
+                        reconciled[id] ?: watch
+                    }
+                }
+            }
         }
         LaunchedEffect(unreadCount, workspaceState.agentIconBadgeEnabled) {
             updateDockBadge(if (workspaceState.agentIconBadgeEnabled) unreadCount else 0)
@@ -179,41 +329,77 @@ fun main() {
                 requestPopOutMirror = requestPopOutMirror,
                 onPopOutMirrorRequestConsumed = { requestPopOutMirror = false },
                 onPopOutMirror = { serial, name ->
-                    popOutSerial = serial
-                    popOutDeviceName = name
-                    popOutControlsVisible = false
+                    if (serial != null && name != null) {
+                        togglePopOut(serial, name)
+                    }
                 },
+                onPopOutDevice = { targetId, displayName ->
+                    startPopOut(targetId, displayName)
+                },
+                // Devices handed off (Andy pop-out window OR Simulator.app): main view shows a
+                // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
+                // pop-outs of the Live device own the engine via the pop-out pool instead.
+                poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
                 contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
             )
         }
-        popOutSerial?.let { serial ->
-            Window(
-                onCloseRequest = { popOutSerial = null },
-                state = rememberWindowState(width = 520.dp, height = 900.dp),
-                title = "Andy mirror - $serial",
-                icon = appIcon,
-            ) {
-                ApplyMacWindowChrome(
-                    windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
-                )
-                MenuBar {
-                    Menu("View") {
-                        CheckboxItem(
-                            text = "Show controls",
-                            checked = popOutControlsVisible,
-                            onCheckedChange = { popOutControlsVisible = it },
-                            shortcut = popOutMirrorShortcut,
-                        )
-                    }
+        val primaryMirrorSerial = services.mirror.session.collectAsState().value?.serial
+        popOutWindows.values.forEach { popOut ->
+            key(popOut.targetId) {
+                val sharePrimary =
+                    popOut.preferPrimaryMirror && primaryMirrorSerial == popOut.targetId
+                val mirrorEngine: MirrorEngine = when {
+                    sharePrimary -> services.mirror
+                    else -> remember(popOut.targetId) { popOutMirrorPool.acquire(popOut.targetId) }
                 }
-                AndyMirrorPopOut(
-                    services = services,
-                    serial = serial,
-                    deviceName = popOutDeviceName,
-                    controlsVisible = popOutControlsVisible,
-                    tintId = workspaceState.tintId,
-                    surfaceModeId = workspaceState.surfaceModeId,
-                )
+                val gpuPresentation = GpuMirrorJni.isAvailable() ||
+                    IosTargetRegistry.isIosTarget(popOut.targetId) ||
+                    mirrorEngine === services.mirror
+                Window(
+                    onCloseRequest = { closePopOutWindow(popOut.targetId, mirrorEngine) },
+                    state = rememberWindowState(width = 520.dp, height = 900.dp),
+                    title = "Andy mirror - ${popOut.displayName}",
+                    icon = appIcon,
+                ) {
+                    ApplyMacWindowChrome(
+                        windowBackgroundForTint(workspaceState.tintId, workspaceState.surfaceModeId),
+                    )
+                    // The legacy single-overlay promotion (this effect) resurrects the shared
+                    // NativeMirror overlay as a floating window on top of the multi-presenter GPU
+                    // hub. Only let it run when the hub is unavailable (CPU fallback); with the hub
+                    // active each pop-out renders through its own GpuMirrorPresenter.
+                    PopOutMirrorPresentationEffect(
+                        ownsMetalPresentation = !GpuMirrorJni.isAvailable() &&
+                            (sharePrimary || popOut.ownsLegacyMetal),
+                    )
+                    MenuBar {
+                        Menu("View") {
+                            CheckboxItem(
+                                text = "Show controls",
+                                checked = popOut.controlsVisible,
+                                onCheckedChange = { checked ->
+                                    popOutWindows = popOutWindows + (
+                                        popOut.targetId to popOut.copy(controlsVisible = checked)
+                                        )
+                                },
+                                shortcut = popOutMirrorShortcut,
+                            )
+                        }
+                    }
+                    AndyMirrorPopOut(
+                        services = services,
+                        serial = popOut.targetId,
+                        deviceName = popOut.displayName,
+                        mirror = mirrorEngine,
+                        gpuPresentation = gpuPresentation,
+                        // WindowScope.window — not the forEach MirrorPopOutWindow data class.
+                        mirrorHostWindow = window,
+                        controlsVisible = popOut.controlsVisible,
+                        contentTopPadding = macTitleBarContentInset,
+                        tintId = workspaceState.tintId,
+                        surfaceModeId = workspaceState.surfaceModeId,
+                    )
+                }
             }
         }
     }
