@@ -224,6 +224,7 @@ class AgentPlanHandoffTest {
         }
         val cwd = File(dir, "existing-worktree").apply { mkdirs() }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
             val completedPlan = "1. Add the handoff transition.\n2. Cover it with tests."
             val planned = AgentTask(
@@ -258,7 +259,7 @@ class AgentPlanHandoffTest {
                 ),
             )
             val adapter = PlanHandoffTestAdapter()
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
                 locator = AgentCliLocator(),
@@ -300,6 +301,8 @@ class AgentPlanHandoffTest {
                     .any { it.text.startsWith("Begin implementation.") },
             )
         } finally {
+            runCatching { service?.close() }
+            delay(500)
             scope.cancel()
             dir.deleteRecursively()
         }

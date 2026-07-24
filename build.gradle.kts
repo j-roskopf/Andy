@@ -97,7 +97,7 @@ kotlin {
                 outputFileName = "andy-web.js"
                 devServer = (devServer ?: KotlinWebpackConfig.DevServer()).copy(
                     port = 10000,
-                    open = false,
+                    open = providers.gradleProperty("web.openBrowser").map { it.toBoolean() }.orElse(true).get(),
                 )
             }
         }

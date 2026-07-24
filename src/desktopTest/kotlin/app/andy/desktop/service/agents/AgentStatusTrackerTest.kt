@@ -201,7 +201,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun scrapeStatusSourceDetectsBlockedThenIdleAfterQuiescence() = runTest {
+    fun scrapeStatusSourceDetectsBlockedThenIdleAfterQuiescence() {
         val scrape = ScrapeStatusSource(AgentKind.ClaudeCode)
         scrape.onBuffer("Some output\nDo you want to proceed? (y/n)")
         assertEquals(AgentSessionStatus.Blocked, scrape.latest())
