@@ -12,6 +12,9 @@ import kotlinx.coroutines.delay
 class DesktopIosDeviceService(
     private val runner: CommandRunner,
     private val simulatorAppRunning: () -> Boolean = Companion::isSimulatorAppRunning,
+    private val visibleSimulatorDeviceWindow: (String?) -> Boolean =
+        Companion::hasVisibleSimulatorDeviceWindow,
+    private val hideSimulator: () -> Unit = Companion::hideSimulatorApp,
 ) : IosDeviceService {
     override suspend fun listTargets(): List<IosTarget> {
         val sims = runCatching {
@@ -44,6 +47,11 @@ class DesktopIosDeviceService(
         return if (result.isSuccess) CommandResult.success("Opened Simulator for $udid") else result
     }
 
+    override fun hasVisibleSimulatorDeviceWindow(displayName: String?): Boolean =
+        visibleSimulatorDeviceWindow(displayName)
+
+    override fun hideSimulatorApp() = hideSimulator()
+
     override suspend fun prepareEmbeddedMirror(udid: String): CommandResult {
         // Launch Simulator.app *before* SimulatorKit IO attaches. Opening it mid-session races the
         // display pipeline and leaves Live black; HID still needs the process for Indigo.
@@ -57,9 +65,14 @@ class DesktopIosDeviceService(
         if (!simulatorAppRunning()) {
             return CommandResult.failure("Simulator.app did not start")
         }
+        // After a pop-out handoff Simulator may still own visible windows; hide them so embedded
+        // Live is the only compositor consumer again.
+        hideSimulator()
         if (!alreadyRunning) {
             // Brief settle so CoreSimulator finishes wiring before we open SimDeviceIO.
             delay(SIMULATOR_APP_SETTLE_MILLIS)
+        } else {
+            delay(SIMULATOR_APP_HIDE_SETTLE_MILLIS)
         }
         return CommandResult.success("Simulator.app ready")
     }
@@ -81,6 +94,7 @@ class DesktopIosDeviceService(
     companion object {
         private const val SIMULATOR_APP_WAIT_NANOS = 15_000_000_000L
         private const val SIMULATOR_APP_SETTLE_MILLIS = 400L
+        private const val SIMULATOR_APP_HIDE_SETTLE_MILLIS = 150L
 
         internal fun isSimulatorAppRunning(): Boolean =
             runCatching {
@@ -90,6 +104,11 @@ class DesktopIosDeviceService(
                     .start()
                     .waitFor() == 0
             }.getOrDefault(false)
+
+        internal fun hasVisibleSimulatorDeviceWindow(displayName: String? = null): Boolean =
+            NativeIosSimJni.hasVisibleDeviceWindow(displayName)
+
+        internal fun hideSimulatorApp() = NativeIosSimJni.hideSimulatorApp()
     }
 
     override suspend fun iosSimAvailable(): Boolean = NativeIosSimJni.isAvailable()

@@ -43,6 +43,7 @@ import java.io.File
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
@@ -76,7 +77,11 @@ fun main() {
         var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutWindows by remember { mutableStateOf(mapOf<String, MirrorPopOutWindow>()) }
         // iOS sims handed off to Simulator.app: Andy stops mirroring and defers to that window.
-        var externallyMirrored by remember { mutableStateOf(setOf<String>()) }
+        // Cleared automatically when the Simulator device window closes (see reconcile below).
+        var externalSimulatorMirrors by remember {
+            mutableStateOf(mapOf<String, ExternalSimulatorMirrorWatch>())
+        }
+        val externallyMirrored = externalSimulatorMirrors.keys
         val popOutMirrorShortcut = KeyShortcut(Key.D, ctrl = !isMacOs(), meta = isMacOs(), shift = true)
         val appIcon = painterResource(Res.drawable.andy_robot)
         fun open(destination: AndyDestination) {
@@ -120,7 +125,11 @@ fun main() {
         }
         fun startPopOut(targetId: String, displayName: String) {
             if (usesExternalDeviceApp(targetId)) {
-                externallyMirrored = externallyMirrored + targetId
+                if (targetId !in externalSimulatorMirrors) {
+                    externalSimulatorMirrors = externalSimulatorMirrors + (
+                        targetId to ExternalSimulatorMirrorWatch(targetId, displayName)
+                        )
+                }
                 focusExternalDeviceApp(targetId)
             } else {
                 // Same device as Live → fan out a second GPU presenter from the primary session
@@ -132,7 +141,11 @@ fun main() {
         // Toggle used by the main Live pop-out button / hand-off placeholder.
         fun togglePopOut(targetId: String, displayName: String) {
             when (targetId) {
-                in externallyMirrored -> externallyMirrored = externallyMirrored - targetId
+                in externalSimulatorMirrors -> {
+                    externalSimulatorMirrors = externalSimulatorMirrors - targetId
+                    // Manual "Mirror in Andy again" — tuck Simulator away like auto-resume.
+                    scope.launch(Dispatchers.IO) { services.iosDevices.hideSimulatorApp() }
+                }
                 in popOutWindows -> Unit // Managed by the pop-out window's own close.
                 else -> startPopOut(targetId, displayName)
             }
@@ -174,6 +187,37 @@ fun main() {
         LaunchedEffect(Unit) {
             withContext(Dispatchers.IO) {
                 NativeIosDeviceJni.prepareForCapture()
+            }
+        }
+        // After an iOS pop-out handoff, watch Simulator.app device windows. Closing the window
+        // (without needing Quit) clears the handoff so Live reconnects automatically.
+        LaunchedEffect(externalSimulatorMirrors.keys) {
+            if (externalSimulatorMirrors.isEmpty()) return@LaunchedEffect
+            while (true) {
+                delay(500)
+                val snapshot = externalSimulatorMirrors
+                if (snapshot.isEmpty()) return@LaunchedEffect
+                val reconciled = withContext(Dispatchers.IO) {
+                    reconcileExternalSimulatorMirrors(snapshot) { displayName ->
+                        services.iosDevices.hasVisibleSimulatorDeviceWindow(displayName)
+                    }
+                }
+                val closed = snapshot.keys - reconciled.keys
+                if (closed.isNotEmpty()) {
+                    // Hide Simulator before Live remounts so windows aren't racing the Metal host.
+                    withContext(Dispatchers.IO) {
+                        services.iosDevices.hideSimulatorApp()
+                    }
+                    delay(150)
+                    // Only remove windows that closed; keep targets added/cleared mid-poll.
+                    externalSimulatorMirrors = externalSimulatorMirrors - closed
+                    if (externalSimulatorMirrors.isEmpty()) return@LaunchedEffect
+                } else if (reconciled != snapshot) {
+                    // seenWindow flags advanced — merge without dropping newer entries.
+                    externalSimulatorMirrors = externalSimulatorMirrors.mapValues { (id, watch) ->
+                        reconciled[id] ?: watch
+                    }
+                }
             }
         }
         LaunchedEffect(unreadCount, workspaceState.agentIconBadgeEnabled) {
@@ -268,9 +312,9 @@ fun main() {
                 onPopOutDevice = { targetId, displayName ->
                     startPopOut(targetId, displayName)
                 },
-                // Devices handed off (Andy pop-out window OR external app): main view shows a
-                // placeholder. Andy pop-outs keep the Live session for GPU fan-out; only external
-                // handoff tears the stream down (see LiveScreen).
+                // Devices handed off (Andy pop-out window OR Simulator.app): main view shows a
+                // placeholder. The Live mirror session stays warm so closing the handoff remounts
+                // presenters instead of reconnecting into a black surface.
                 poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
                 contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
             )

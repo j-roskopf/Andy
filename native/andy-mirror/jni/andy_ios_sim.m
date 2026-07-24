@@ -320,6 +320,111 @@ static void invalidate_hid_client(void) {
     sim_hid_device = nil;
 }
 
+static bool session_target_booted(void) {
+    pthread_mutex_lock(&sim_session_lock);
+    NSString *udid = sim_session.udid[0] ? [NSString stringWithUTF8String:sim_session.udid] : nil;
+    const bool session_connected = sim_session.connected;
+    pthread_mutex_unlock(&sim_session_lock);
+    if (!udid || !session_connected) return false;
+    id device = sim_device_for_udid(udid, NULL);
+    return device != nil && sim_device_is_booted(device);
+}
+
+static bool hid_client_matches_session(void) {
+    if (!sim_hid_client) return false;
+    return session_target_booted();
+}
+
+/**
+ * True when Simulator.app has an on-screen device chrome window.
+ * Optional [display_name] matches the window title (e.g. "iPhone 17 Pro"). When titles are
+ * unavailable (Screen Recording denied) any device-sized Simulator window counts as a match.
+ */
+static bool simulator_has_visible_device_window(NSString *display_name) {
+    CFArrayRef info = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (!info) return false;
+    const CFIndex count = CFArrayGetCount(info);
+    bool any_device = false;
+    bool named_match = false;
+    const bool want_name = display_name.length > 0;
+    for (CFIndex i = 0; i < count; i++) {
+        CFDictionaryRef window = CFArrayGetValueAtIndex(info, i);
+        if (!window) continue;
+        NSString *owner = (__bridge NSString *)CFDictionaryGetValue(window, kCGWindowOwnerName);
+        if (![owner isEqualToString:@"Simulator"]) continue;
+        CFNumberRef layer_ref = CFDictionaryGetValue(window, kCGWindowLayer);
+        int layer = -1;
+        if (layer_ref) CFNumberGetValue(layer_ref, kCFNumberIntType, &layer);
+        if (layer != 0) continue;
+        CFDictionaryRef bounds = CFDictionaryGetValue(window, kCGWindowBounds);
+        if (!bounds) continue;
+        CGRect rect = CGRectZero;
+        if (!CGRectMakeWithDictionaryRepresentation(bounds, &rect)) continue;
+        // Device windows are phone/tablet chrome; ignore menu-strip leftovers (~33pt tall).
+        if (rect.size.width < 150.0 || rect.size.height < 200.0) continue;
+        any_device = true;
+        if (!want_name) {
+            named_match = true;
+            break;
+        }
+        NSString *title = (__bridge NSString *)CFDictionaryGetValue(window, kCGWindowName);
+        if (title.length > 0 &&
+            [title rangeOfString:display_name options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            named_match = true;
+            break;
+        }
+    }
+    CFRelease(info);
+    if (!want_name) return any_device;
+    if (named_match) return true;
+    // Privacy-stripped titles: still treat a lone device window as belonging to the handoff.
+    return any_device;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeHasVisibleDeviceWindow(
+        JNIEnv *env, jclass clazz, jstring display_name) {
+    (void) clazz;
+    NSString *name = nil;
+    if (display_name) {
+        const char *utf = (*env)->GetStringUTFChars(env, display_name, NULL);
+        if (utf) {
+            name = [NSString stringWithUTF8String:utf];
+            (*env)->ReleaseStringUTFChars(env, display_name, utf);
+        }
+    }
+    return simulator_has_visible_device_window(name) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeHideSimulatorApp(
+        JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    for (NSRunningApplication *app in [[NSWorkspace sharedWorkspace] runningApplications]) {
+        if ([[app bundleIdentifier] isEqualToString:@"com.apple.iphonesimulator"]) {
+            [app hide];
+            return;
+        }
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeResetInput(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    invalidate_hid_client();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeIsCaptureHealthy(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    return session_target_booted() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeProbe(JNIEnv *env, jclass clazz) {
     (void) env;
@@ -525,8 +630,13 @@ static bool ensure_hid_client_once(void) {
     return true;
 }
 
+static bool send_hid_message_sync(void *message);
+
 /** Retries HID attach — Simulator.app may still be coming up after a headless simctl boot. */
 static bool ensure_hid_client_ready(int attempts, useconds_t delay_us) {
+    if (sim_hid_client && !hid_client_matches_session()) {
+        invalidate_hid_client();
+    }
     if (sim_hid_client) return true;
     for (int attempt = 0; attempt < attempts; attempt++) {
         if (ensure_hid_client_once()) return true;

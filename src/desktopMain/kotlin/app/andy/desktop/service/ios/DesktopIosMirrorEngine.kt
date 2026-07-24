@@ -60,8 +60,26 @@ class DesktopIosMirrorEngine(
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = withContext(Dispatchers.IO) {
         if (connectedUdid == serial && session.value != null) {
-            activeGpuPipeline()?.repaintAll()
-            rebindPresentation()
+            // Surface remount after Simulator.app / pop-out handoff: reattach presenters to the
+            // warm pipeline instead of tearing SimulatorKit down (that path often resumes black).
+            resumeSimulatorAfterHandoff(serial)
+            if (gpuPipelineKey != null) {
+                awaitGpuPresenter(serial)
+                val pipeline = activeGpuPipeline()
+                pipeline?.refreshAllGeometry()
+                pipeline?.repaintAll()
+                frames.value = MirrorFrame(
+                    session.value?.width?.coerceAtLeast(2) ?: 2,
+                    session.value?.height?.coerceAtLeast(2) ?: 2,
+                    intArrayOf(),
+                    frameNumber = nextFrameNumber++,
+                )
+                delay(120)
+                pipeline?.refreshAllGeometry()
+                pipeline?.repaintAll()
+            } else {
+                rebindPresentation()
+            }
             return@withContext CommandResult.success("iOS mirror already connected for $serial")
         }
         disconnect(immediate = true)
@@ -69,23 +87,7 @@ class DesktopIosMirrorEngine(
         val target = IosTargetRegistry.target(serial)
         if (target?.kind == IosTargetKind.Simulator && target.state == IosTargetState.Shutdown) {
             iosDevices?.boot(serial)?.takeIf { !it.isSuccess }?.let { return@withContext it }
-            var booted = false
-            for (attempt in 0 until 120) {
-                delay(500)
-                if (iosDevices?.listTargets()
-                        ?.firstOrNull { it.udid == serial }
-                        ?.state == IosTargetState.Booted
-                ) {
-                    IosTargetRegistry.update(
-                        IosTargetRegistry.targets.value.map { entry ->
-                            if (entry.udid == serial) entry.copy(state = IosTargetState.Booted) else entry
-                        },
-                    )
-                    booted = true
-                    break
-                }
-            }
-            if (!booted) {
+            if (!waitForSimulatorBoot(serial)) {
                 val reason = "Simulator is still booting — try again in a few seconds"
                 session.value = MirrorSession(
                     serial = serial,
@@ -229,6 +231,50 @@ class DesktopIosMirrorEngine(
             }
         }
         CommandResult.success(status.value)
+    }
+
+    private suspend fun waitForSimulatorBoot(serial: String): Boolean {
+        for (attempt in 0 until 120) {
+            delay(500)
+            if (iosDevices?.listTargets()
+                    ?.firstOrNull { it.udid == serial }
+                    ?.state == IosTargetState.Booted
+            ) {
+                IosTargetRegistry.update(
+                    IosTargetRegistry.targets.value.map { entry ->
+                        if (entry.udid == serial) entry.copy(state = IosTargetState.Booted) else entry
+                    },
+                )
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * After Simulator.app handoff, closing its window often shuts the sim down or leaves a stale
+     * HID client. Re-boot, reconnect capture when needed, and re-warm input without tearing the
+     * GPU pipeline down.
+     */
+    private suspend fun resumeSimulatorAfterHandoff(serial: String) {
+        if (IosTargetRegistry.target(serial)?.kind == IosTargetKind.Physical) return
+        val liveTarget = iosDevices?.listTargets()?.firstOrNull { it.udid == serial }
+        val wasShutdown = liveTarget?.state == IosTargetState.Shutdown
+        if (wasShutdown) {
+            iosDevices?.boot(serial)?.takeIf { !it.isSuccess }?.let { return }
+            if (!waitForSimulatorBoot(serial)) return
+        }
+        iosDevices?.prepareEmbeddedMirror(serial)
+        if (wasShutdown || !NativeIosSimJni.isCaptureHealthy()) {
+            NativeIosSimJni.disconnect()
+            val size = NativeIosSimJni.connect(serial) ?: return
+            activeGpuPipeline()?.setContentSize(size[0], size[1])
+            session.value = session.value?.copy(width = size[0], height = size[1])
+            frames.value = MirrorFrame(size[0], size[1], intArrayOf(), frameNumber = nextFrameNumber++)
+        }
+        NativeIosSimJni.resetInput()
+        inputReadyJob?.cancel()
+        inputReadyJob = scope.async { NativeIosSimJni.ensureInputReady() }
     }
 
     private suspend fun connectPhysicalDevice(

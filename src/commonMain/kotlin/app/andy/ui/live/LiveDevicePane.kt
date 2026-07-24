@@ -269,7 +269,7 @@ internal fun LiveDevicePane(
                                     Spacer(Modifier.height(6.dp))
                                     Text(
                                         if (mirroredInExternalApp) {
-                                            "This simulator is shown in Simulator.app. Andy isn’t mirroring it."
+                                            "This simulator is shown in Simulator.app. Close that window to mirror here again."
                                         } else {
                                             "This device is mirroring in its own Andy window. Close that window to view it here."
                                         },

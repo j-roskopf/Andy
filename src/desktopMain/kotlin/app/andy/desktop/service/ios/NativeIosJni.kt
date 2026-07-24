@@ -56,8 +56,34 @@ internal object NativeIosSimJni {
         if (ensureLoaded().isSuccess) runCatching { nativeSendButton(button) }
     }
 
+    /**
+     * True when Simulator.app shows an on-screen device window. [displayName] matches the window
+     * title when available (e.g. "iPhone 17 Pro"); null matches any device-sized window.
+     */
+    fun hasVisibleDeviceWindow(displayName: String? = null): Boolean =
+        ensureLoaded().isSuccess &&
+            runCatching { nativeHasVisibleDeviceWindow(displayName) }.getOrDefault(false)
+
+    /** Hides Simulator.app after an embedded Live handoff so its windows stop competing. */
+    fun hideSimulatorApp() {
+        if (ensureLoaded().isSuccess) runCatching { nativeHideSimulatorApp() }
+    }
+
+    /** Drops a stale LegacyHID client after Simulator.app was frontmost during handoff. */
+    fun resetInput() {
+        if (ensureLoaded().isSuccess) runCatching { nativeResetInput() }
+    }
+
+    /** True when SimDeviceIO is attached to a booted simulator for the active session. */
+    fun isCaptureHealthy(): Boolean =
+        ensureLoaded().isSuccess && runCatching { nativeIsCaptureHealthy() }.getOrDefault(false)
+
     private external fun nativeProbe(): Boolean
     private external fun nativeDiagnostic(): String
+    private external fun nativeHasVisibleDeviceWindow(displayName: String?): Boolean
+    private external fun nativeHideSimulatorApp()
+    private external fun nativeResetInput()
+    private external fun nativeIsCaptureHealthy(): Boolean
     private external fun nativeConnect(udid: String): IntArray
     private external fun nativeDisconnect()
     private external fun nativeContentSizePoints(): IntArray

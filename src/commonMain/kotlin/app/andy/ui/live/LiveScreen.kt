@@ -427,12 +427,13 @@ internal fun LiveScreen(
                 }
             }
         } else {
-            // External handoff (Simulator.app) tears the stream down. Andy pop-outs keep the Live
-            // session so a second GPU presenter can fan out from the same decoder / scrcpy.
+            // Andy pop-outs and Simulator.app handoff keep the Live session warm so presenters can
+            // remount without tearing SimulatorKit / scrcpy down (full reconnect often resumes black).
             withContext(NonCancellable) {
                 services.bugs.stopCapture()
                 when {
-                    mirroredInExternalApp -> services.mirror.disconnect(immediate = true)
+                    // Simulator.app handoff and Andy pop-outs both keep the Live session warm so
+                    // closing the external window can remount presenters without a black reconnect.
                     mirroredElsewhere -> Unit
                     else -> services.mirror.disconnect(immediate = false)
                 }

@@ -46,13 +46,41 @@ class DesktopIosDeviceServiceTest {
     @Test
     fun prepareEmbeddedMirrorSkipsOpenWhenSimulatorAlreadyRunning() = runBlocking {
         val commands = mutableListOf<List<String>>()
+        var hideCalls = 0
         val runner = CommandRunner { command, _ ->
             commands += command
             CommandResult.success()
         }
-        val service = DesktopIosDeviceService(runner, simulatorAppRunning = { true })
+        val service = DesktopIosDeviceService(
+            runner = runner,
+            simulatorAppRunning = { true },
+            hideSimulator = { hideCalls++ },
+        )
         val result = service.prepareEmbeddedMirror("already-running")
         assertTrue(result.isSuccess)
         assertTrue(commands.none { it.firstOrNull() == "open" })
+        assertEquals(1, hideCalls)
+    }
+
+    @Test
+    fun hasVisibleSimulatorDeviceWindowUsesInjectedChecker() {
+        val service = DesktopIosDeviceService(
+            runner = CommandRunner { _, _ -> CommandResult.success() },
+            visibleSimulatorDeviceWindow = { name -> name == "iPhone 17 Pro" },
+        )
+        assertTrue(service.hasVisibleSimulatorDeviceWindow("iPhone 17 Pro"))
+        assertFalse(service.hasVisibleSimulatorDeviceWindow("iPad Pro"))
+        assertFalse(service.hasVisibleSimulatorDeviceWindow(null))
+    }
+
+    @Test
+    fun hideSimulatorAppUsesInjectedAction() {
+        var hideCalls = 0
+        val service = DesktopIosDeviceService(
+            runner = CommandRunner { _, _ -> CommandResult.success() },
+            hideSimulator = { hideCalls++ },
+        )
+        service.hideSimulatorApp()
+        assertEquals(1, hideCalls)
     }
 }

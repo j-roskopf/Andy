@@ -396,8 +396,10 @@ internal fun AndyShell(
                             onRecordingSaved = { state.navigateTo(AndyDestination.Recordings) },
                             logcatState = state.liveLogcatState,
                             onPopOutMirror = {
-                                val selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial }
-                                onPopOutMirror(state.selectedSerial, selectedDevice?.displayName ?: state.selectedSerial)
+                                val targetId = state.activeTargetId ?: return@LiveScreen
+                                val selectedDevice = state.devices.firstOrNull { it.serial == targetId }
+                                val iosName = state.iosTargets.firstOrNull { it.udid == targetId }?.displayName
+                                onPopOutMirror(targetId, selectedDevice?.displayName ?: iosName ?: targetId)
                             },
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },

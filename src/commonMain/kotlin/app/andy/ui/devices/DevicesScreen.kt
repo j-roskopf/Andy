@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -399,48 +398,125 @@ private fun AndroidDevicesTab(
     onDisconnectWifi: (String) -> Unit,
     refreshAvds: () -> Unit,
 ) {
+    fun avdRunningDevice(avd: VirtualDevice): AndroidDevice? =
+        devices.firstOrNull {
+            it.kind == DeviceKind.Emulator &&
+                it.state == DeviceConnectionState.Online &&
+                namesMatch(it.displayName, avd.name)
+        }
+
+    val stoppedAvds = filteredAvds.filter { avd ->
+        val runningDevice = avdRunningDevice(avd)
+        runningDevice == null && !avd.running
+    }
+    val disconnectedPairedWifi = pairedWifiDevices.filter { paired ->
+        findLiveWifiDevice(devices, paired)?.state != DeviceConnectionState.Online
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (filteredDevices.isNotEmpty()) {
+            item {
+                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        items(filteredDevices, key = { it.serial }) { device ->
+            val online = device.state == DeviceConnectionState.Online
+            val rowShape = RoundedCornerShape(AndyRadius.R4)
+            Row(
+                Modifier.fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .heightIn(min = 76.dp)
+                    .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
+                    .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
+                Spacer(Modifier.width(18.dp))
+                Column(Modifier.width(260.dp)) {
+                    Text(device.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+                Text(
+                    "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.width(170.dp),
+                )
+                Text(
+                    device.storageSummary ?: "-",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.width(150.dp),
+                )
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    StatusTag(device.state.name, if (online) Green else TextSecondary)
+                    if (device.transport == DeviceTransport.Wifi) {
+                        StatusTag("Wi‑Fi", Cyan)
+                    }
+                }
+                OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
+                if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { onStopEmulator(device) },
+                        enabled = stoppingEmulatorSerial != device.serial,
+                    ) {
+                        Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
+                    }
+                }
+            }
+        }
         if (allowAvdManagement) {
             item {
-                PanelCard {
-                    Text("Created emulators", color = TextPrimary, fontWeight = FontWeight.Bold)
-                    if (startStatus.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (startingEmulatorName != null) {
-                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
-                            }
-                            Text(
-                                startStatus,
-                                color = if (startingEmulatorName != null) Rust else TextSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
+                Text(
+                    "Created emulators",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = if (filteredDevices.isNotEmpty()) 8.dp else 0.dp),
+                )
+            }
+            if (startStatus.isNotBlank()) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (startingEmulatorName != null) {
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
                         }
-                    }
-                    if (state.avdStatus.isNotBlank()) {
-                        Text(state.avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
-                    if (stopStatus.isNotBlank()) {
-                        Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
-                    if (filteredAvds.isEmpty()) {
                         Text(
-                            "No AVDs found. Create one in Catalog or Android Studio, then refresh.",
-                            color = TextSecondary,
+                            startStatus,
+                            color = if (startingEmulatorName != null) Rust else TextSecondary,
+                            fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                         )
                     }
                 }
             }
-            items(filteredAvds, key = { it.name }) { avd ->
-                val runningDevice = devices.firstOrNull {
-                    it.kind == DeviceKind.Emulator &&
-                        it.state == DeviceConnectionState.Online &&
-                        namesMatch(it.displayName, avd.name)
+            if (state.avdStatus.isNotBlank()) {
+                item {
+                    Text(state.avdStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 }
+            }
+            if (stopStatus.isNotBlank()) {
+                item {
+                    Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
+            if (filteredAvds.isEmpty()) {
+                item {
+                    Text(
+                        "No AVDs found. Create one in Catalog or Android Studio, then refresh.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            items(stoppedAvds, key = { it.name }) { avd ->
+                val runningDevice = avdRunningDevice(avd)
                 Row(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
@@ -559,7 +635,7 @@ private fun AndroidDevicesTab(
                 }
             }
         }
-        if (allowWifiPairing && pairedWifiDevices.isNotEmpty()) {
+        if (allowWifiPairing && disconnectedPairedWifi.isNotEmpty()) {
             item {
                 PanelCard {
                     Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -568,7 +644,7 @@ private fun AndroidDevicesTab(
                     }
                 }
             }
-            items(pairedWifiDevices, key = { it.id }) { paired ->
+            items(disconnectedPairedWifi, key = { it.id }) { paired ->
                 val live = findLiveWifiDevice(devices, paired)
                 val online = live?.state == DeviceConnectionState.Online
                 Row(
@@ -618,61 +694,6 @@ private fun AndroidDevicesTab(
                 }
             }
         }
-        if (filteredDevices.isNotEmpty()) {
-            item {
-                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
-        items(filteredDevices, key = { it.serial }) { device ->
-            val online = device.state == DeviceConnectionState.Online
-            val rowShape = RoundedCornerShape(AndyRadius.R4)
-            Row(
-                Modifier.fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-                    .heightIn(min = 76.dp)
-                    .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
-                    .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
-                Spacer(Modifier.width(18.dp))
-                Column(Modifier.width(260.dp)) {
-                    Text(device.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
-                    Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                }
-                Text(
-                    "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(170.dp),
-                )
-                Text(
-                    device.storageSummary ?: "-",
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(150.dp),
-                )
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusTag(device.state.name, if (online) Green else TextSecondary)
-                    if (device.transport == DeviceTransport.Wifi) {
-                        StatusTag("Wi‑Fi", Cyan)
-                    }
-                }
-                OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
-                if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(
-                        onClick = { onStopEmulator(device) },
-                        enabled = stoppingEmulatorSerial != device.serial,
-                    ) {
-                        Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
-                    }
-                }
-            }
-        }
         if (filteredDevices.isEmpty() && (!allowAvdManagement || filteredAvds.isEmpty()) && pairedWifiDevices.isEmpty()) {
             item {
                 EmptyState(
@@ -699,6 +720,12 @@ private fun IosDevicesTab(
     onOpenInSimulatorApp: (IosTarget) -> Unit,
     onLive: (String) -> Unit,
 ) {
+    val connectedTargets = buildList {
+        addAll(physicalDevices)
+        addAll(simulators.filter { it.state == IosTargetState.Booted })
+    }
+    val stoppedSimulators = simulators.filter { it.state != IosTargetState.Booted }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -718,19 +745,11 @@ private fun IosDevicesTab(
                 }
             }
         }
-        item {
-            Text("Simulators", color = TextPrimary, fontWeight = FontWeight.Bold)
-        }
-        if (simulators.isEmpty()) {
+        if (connectedTargets.isNotEmpty()) {
             item {
-                Text(
-                    "No iOS simulators found. Install an iOS runtime in Xcode, then refresh.",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                )
+                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold)
             }
-        } else {
-            items(simulators, key = { it.udid }) { target ->
+            items(connectedTargets, key = { it.udid }) { target ->
                 IosTargetRow(
                     target = target,
                     starting = startingName == target.displayName,
@@ -741,17 +760,29 @@ private fun IosDevicesTab(
                 )
             }
         }
-        if (physicalDevices.isNotEmpty()) {
+        item {
+            Text("Simulators", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = if (connectedTargets.isNotEmpty()) 8.dp else 0.dp))
+        }
+        if (stoppedSimulators.isEmpty()) {
             item {
-                Text("Physical devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    if (simulators.isEmpty()) {
+                        "No iOS simulators found. Install an iOS runtime in Xcode, then refresh."
+                    } else {
+                        "All simulators are booted."
+                    },
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
             }
-            items(physicalDevices, key = { it.udid }) { target ->
+        } else {
+            items(stoppedSimulators, key = { it.udid }) { target ->
                 IosTargetRow(
                     target = target,
-                    starting = false,
-                    onBoot = {},
-                    onShutdown = {},
-                    onOpenInSimulatorApp = {},
+                    starting = startingName == target.displayName,
+                    onBoot = { onBoot(target) },
+                    onShutdown = { onShutdown(target) },
+                    onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
                     onLive = { onLive(target.udid) },
                 )
             }

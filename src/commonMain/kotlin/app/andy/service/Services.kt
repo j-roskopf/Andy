@@ -25,6 +25,13 @@ interface IosDeviceService {
     suspend fun openInSimulatorApp(udid: String): CommandResult
     /** Starts Simulator.app in the background so embedded Live can inject HID. */
     suspend fun prepareEmbeddedMirror(udid: String): CommandResult = openInSimulatorApp(udid)
+    /**
+     * True when Simulator.app has an on-screen device window. Used to detect handoff end after
+     * pop-out so Live can resume mirroring. [displayName] matches the window title when known.
+     */
+    fun hasVisibleSimulatorDeviceWindow(displayName: String? = null): Boolean = false
+    /** Best-effort hide of Simulator.app windows after an embedded-mirror handoff ends. */
+    fun hideSimulatorApp(): Unit = Unit
     suspend fun iosSimAvailable(): Boolean
     suspend fun iosSimDiagnostic(): String
 }
