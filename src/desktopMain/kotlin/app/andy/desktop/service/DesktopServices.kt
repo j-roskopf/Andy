@@ -27,6 +27,9 @@ import app.andy.service.PlatformCapabilities
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 fun createDesktopServices(): AndyServices = createDesktopRuntime().services
 
@@ -101,6 +104,17 @@ fun createDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         actionConfig = actionConfig,
     )
+
+    // Live sessions pick up KetraTerm theme/font changes from Settings.
+    updatesScope.launch {
+        store.state
+            .map { Triple(it.terminalThemeId, it.terminalFontFamilyId, it.terminalFontSize) }
+            .distinctUntilChanged()
+            .collect {
+                actionRuns.reloadAppearance()
+                agentRuns.reloadTerminalAppearance()
+            }
+    }
 
     val services = AndyServices(
         devices = devices,

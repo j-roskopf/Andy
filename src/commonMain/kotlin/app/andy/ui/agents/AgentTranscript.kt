@@ -137,7 +137,6 @@ internal fun AgentTranscript(
     events: List<AgentEvent>,
     isActive: Boolean,
     agentLabel: String = "agent",
-    compactToolCalls: Boolean = true,
     headerContent: (@Composable () -> Unit)? = null,
     pendingContent: (@Composable () -> Unit)? = null,
     originalPrompt: String? = null,
@@ -154,7 +153,7 @@ internal fun AgentTranscript(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val displayItems = remember(events, compactToolCalls) { transcriptDisplayItems(events, compactToolCalls) }
+    val displayItems = remember(events) { transcriptDisplayItems(events) }
     val originalPromptVisible = !originalPrompt.isNullOrBlank() || originalImagePaths.isNotEmpty()
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
@@ -446,12 +445,8 @@ internal sealed class TranscriptDisplayItem {
 
 internal fun transcriptDisplayItems(
     events: List<AgentEvent>,
-    compactToolCalls: Boolean,
 ): List<TranscriptDisplayItem> {
     val display = transcriptDisplayEvents(events).filterNot { it is AgentEvent.ContextUsage }
-    if (!compactToolCalls) {
-        return display.mapIndexed { index, event -> TranscriptDisplayItem.Event(index, event) }
-    }
     val items = mutableListOf<TranscriptDisplayItem>()
     var index = 0
     while (index < display.size) {

@@ -58,12 +58,8 @@ import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
-import app.andy.model.TerminalColorPaletteKind
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
-import app.andy.model.normalizeTerminalHex
-import app.andy.model.parseTerminalHex
-import app.andy.model.terminalHexArgb
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.McpServerService
@@ -105,7 +101,6 @@ private enum class WebSettingsCategory(
     val subtitle: String,
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
-    Agents("Agents", "How tool activity appears in chats"),
     Connection("Connection", "ADB WebSocket and WebUSB"),
     Data("Data", "Browser storage and authorization"),
     About("About", "Origins and platform support"),
@@ -140,7 +135,6 @@ internal fun SettingsScreen(
         when (category) {
             DesktopSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
             DesktopSettingsCategory.Agents -> {
-                AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -474,18 +468,17 @@ private fun TerminalAppearancePanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
-    val selectedPresetId = workspace.terminalThemeId
-    val selectedPalette = TerminalColorPaletteKind.fromId(workspace.terminalColorPaletteId)
+    val selectedPresetId = TerminalThemePreset.fromId(workspace.terminalThemeId).id
     val selectedFont = TerminalFontFamily.fromId(workspace.terminalFontFamilyId)
     val selectedSize = TerminalThemePreset.coerceFontSize(workspace.terminalFontSize)
 
     PanelCard {
         SettingsSectionHeader(
             title = "Terminal",
-            description = "Colors and font for agent and project terminals. Changes apply to new sessions.",
+            description = "KetraTerm theme and font for agent and project terminals. Changes apply to new and live sessions.",
         )
 
-        Text("Preset", color = TextSecondary, fontSize = 12.sp)
+        Text("Theme", color = TextSecondary, fontSize = 12.sp)
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -497,99 +490,6 @@ private fun TerminalAppearancePanel(
                     selected = preset.id == selectedPresetId,
                     contentDescription = "${preset.label} terminal theme",
                     onClick = { update { preset.applyTo(it) } },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        TerminalColorPreviewStrip(workspace)
-
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TerminalColorHexRow(
-                label = "Foreground",
-                hex = workspace.terminalForegroundHex,
-                fallback = TerminalThemePreset.Andy.foregroundHex,
-                onCommit = { hex -> update { it.copy(terminalForegroundHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Background",
-                hex = workspace.terminalBackgroundHex,
-                fallback = TerminalThemePreset.Andy.backgroundHex,
-                onCommit = { hex -> update { it.copy(terminalBackgroundHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Selection fg",
-                hex = workspace.terminalSelectionFgHex,
-                fallback = TerminalThemePreset.Andy.selectionFgHex,
-                onCommit = { hex -> update { it.copy(terminalSelectionFgHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Selection bg",
-                hex = workspace.terminalSelectionBgHex,
-                fallback = TerminalThemePreset.Andy.selectionBgHex,
-                onCommit = { hex -> update { it.copy(terminalSelectionBgHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Find fg",
-                hex = workspace.terminalFoundFgHex,
-                fallback = TerminalThemePreset.Andy.foundFgHex,
-                onCommit = { hex -> update { it.copy(terminalFoundFgHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Find bg",
-                hex = workspace.terminalFoundBgHex,
-                fallback = TerminalThemePreset.Andy.foundBgHex,
-                onCommit = { hex -> update { it.copy(terminalFoundBgHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Hyperlink fg",
-                hex = workspace.terminalHyperlinkFgHex,
-                fallback = TerminalThemePreset.Andy.hyperlinkFgHex,
-                onCommit = { hex -> update { it.copy(terminalHyperlinkFgHex = hex, terminalThemeId = "custom") } },
-            )
-            TerminalColorHexRow(
-                label = "Hyperlink bg",
-                hex = workspace.terminalHyperlinkBgHex,
-                fallback = TerminalThemePreset.Andy.hyperlinkBgHex,
-                onCommit = { hex -> update { it.copy(terminalHyperlinkBgHex = hex, terminalThemeId = "custom") } },
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Checkbox(
-                checked = workspace.terminalUseInverseSelection,
-                onCheckedChange = { checked ->
-                    update { it.copy(terminalUseInverseSelection = checked, terminalThemeId = "custom") }
-                },
-            )
-            Text("Inverse selection colors", color = TextPrimary, fontSize = 13.sp)
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Text("ANSI palette", color = TextSecondary, fontSize = 12.sp)
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TerminalColorPaletteKind.entries.forEach { palette ->
-                SettingsChoicePill(
-                    label = palette.label,
-                    selected = palette == selectedPalette,
-                    contentDescription = "${palette.label} ANSI palette",
-                    onClick = {
-                        update {
-                            it.copy(
-                                terminalColorPaletteId = palette.id,
-                                terminalThemeId = "custom",
-                            )
-                        }
-                    },
                 )
             }
         }
@@ -627,6 +527,15 @@ private fun TerminalAppearancePanel(
                 )
             }
         }
+
+        Spacer(Modifier.height(8.dp))
+        Text("Preview", color = TextSecondary, fontSize = 12.sp)
+        TerminalThemePreview(
+            terminalThemeId = workspace.terminalThemeId,
+            fontFamilyId = workspace.terminalFontFamilyId,
+            fontSize = workspace.terminalFontSize,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -655,82 +564,6 @@ private fun SettingsChoicePill(
             .semantics { this.contentDescription = contentDescription },
     ) {
         Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-    }
-}
-
-@Composable
-private fun TerminalColorPreviewStrip(workspace: WorkspaceState) {
-    val fg = Color(terminalHexArgb(workspace.terminalForegroundHex))
-    val bg = Color(terminalHexArgb(workspace.terminalBackgroundHex))
-    val sel = Color(terminalHexArgb(workspace.terminalSelectionBgHex))
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(36.dp)
-            .clip(RoundedCornerShape(AndyRadius.R3))
-            .background(bg)
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Aa", color = fg, fontFamily = MonoFont, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Box(
-            modifier = Modifier
-                .background(sel, RoundedCornerShape(4.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-        ) {
-            Text("selection", color = Color(terminalHexArgb(workspace.terminalSelectionFgHex)), fontFamily = MonoFont, fontSize = 11.sp)
-        }
-        Text(
-            "link",
-            color = Color(terminalHexArgb(workspace.terminalHyperlinkFgHex)),
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-        )
-    }
-}
-
-@Composable
-private fun TerminalColorHexRow(
-    label: String,
-    hex: String,
-    fallback: String,
-    onCommit: (String) -> Unit,
-) {
-    val normalized = normalizeTerminalHex(hex, fallback)
-    var draft by remember(normalized) { mutableStateOf(normalized) }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(
-            label,
-            color = TextSecondary,
-            fontSize = 12.sp,
-            modifier = Modifier.width(96.dp),
-        )
-        Box(
-            modifier = Modifier
-                .size(22.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color(terminalHexArgb(parseTerminalHex(draft) ?: normalized)))
-                .border(1.dp, Border, RoundedCornerShape(4.dp)),
-        )
-        TextField(
-            value = draft,
-            onValueChange = { value ->
-                draft = value
-                parseTerminalHex(value)?.let(onCommit)
-            },
-            modifier = Modifier.width(120.dp),
-            textStyle = LocalTextStyle.current.copy(
-                color = TextPrimary,
-                fontSize = 12.sp,
-                fontFamily = MonoFont,
-            ),
-        )
     }
 }
 
@@ -768,36 +601,6 @@ private fun OnboardingPanel(
     }
 }
 
-@Composable
-private fun AgentTranscriptPanel(
-    workspace: WorkspaceState,
-    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
-) {
-    PanelCard {
-        SettingsSectionHeader(
-            title = "Transcript",
-            description = "Control how tool activity appears in agent chats.",
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Checkbox(
-                checked = workspace.compactToolCalls,
-                onCheckedChange = { checked -> update { it.copy(compactToolCalls = checked) } },
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Compact tool calls", color = TextPrimary, fontSize = 13.sp)
-                Text(
-                    "Collapse consecutive tools into one expandable line. Uncheck to show each tool call on its own row.",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun AgentNotificationsPanel(
@@ -1138,7 +941,6 @@ private fun WebSettingsScreen(
     ) {
         when (category) {
             WebSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
-            WebSettingsCategory.Agents -> AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
             WebSettingsCategory.Connection -> {
                 PanelCard {
                     SettingsSectionHeader(

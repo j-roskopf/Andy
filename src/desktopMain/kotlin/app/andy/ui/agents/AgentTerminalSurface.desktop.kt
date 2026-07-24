@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,21 +30,19 @@ import androidx.compose.ui.unit.sp
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.installImageDropTarget
-import app.andy.model.TerminalThemePreset
 import app.andy.model.WorkspaceState
-import app.andy.model.normalizeTerminalHex
-import app.andy.model.terminalHexArgb
 import app.andy.model.toTerminalAppearance
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
-import app.andy.terminal.createScrollbackReplayWidget
+import app.andy.terminal.createScrollbackReplayTerminal
 import app.andy.terminal.onSwingEdt
+import app.andy.terminal.panelBackgroundArgb
 import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextSecondary
-import com.jediterm.terminal.ui.JediTermWidget
+import io.github.ketraterm.ui.swing.api.SwingTerminal
 import java.awt.Component
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -71,29 +68,25 @@ actual fun AgentTerminalSurface(
     val workspaceStore = services.workspaceStore as? DesktopWorkspaceStore
     val workspaceFlow = remember(workspaceStore) { workspaceStore?.state ?: NoWorkspace }
     val workspace by workspaceFlow.collectAsState()
-    val terminalPanelBackground = remember(workspace.terminalBackgroundHex) {
-        Color(
-            terminalHexArgb(
-                normalizeTerminalHex(
-                    workspace.terminalBackgroundHex,
-                    TerminalThemePreset.Andy.backgroundHex,
-                ),
-            ),
-        )
+    val appearance = remember(workspace.terminalThemeId, workspace.terminalFontFamilyId, workspace.terminalFontSize) {
+        workspace.toTerminalAppearance()
+    }
+    val terminalPanelBackground = remember(appearance) {
+        Color(appearance.panelBackgroundArgb())
     }
     val revisionFlow = remember(agentRuns) { agentRuns?.terminalSessionsRevision ?: NoSessionsRevision }
     val attachedFlow = remember(agentRuns) { agentRuns?.attachedTerminalTaskIds ?: NoAttachedIds }
     val sessionsRevision by revisionFlow.collectAsState()
     val attachedIds by attachedFlow.collectAsState()
 
-    var liveTerminal by remember(taskId) { mutableStateOf<JediTermWidget?>(null) }
-    var replayTerminal by remember(taskId) { mutableStateOf<JediTermWidget?>(null) }
+    var liveTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
+    var replayTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
 
     LaunchedEffect(taskId, sessionActive, sessionsRevision, attachedIds) {
         liveTerminal = agentRuns?.terminalWidget(taskId)
         if (!sessionActive) return@LaunchedEffect
         replayTerminal?.let { widget ->
-            runCatching { onSwingEdt { widget.close() } }
+            runCatching { onSwingEdt { widget.dispose() } }
             replayTerminal = null
         }
         var attempts = 0
@@ -104,7 +97,7 @@ actual fun AgentTerminalSurface(
         }
     }
 
-    LaunchedEffect(taskId, sessionActive, sessionsRevision, liveTerminal, workspace) {
+    LaunchedEffect(taskId, sessionActive, sessionsRevision, liveTerminal, appearance) {
         if (sessionActive || liveTerminal != null) return@LaunchedEffect
         val file = agentRuns?.scrollbackFile(taskId)
         val ansi = withContext(Dispatchers.IO) {
@@ -114,17 +107,16 @@ actual fun AgentTerminalSurface(
         }
         if (ansi.isNullOrBlank()) {
             replayTerminal?.let { widget ->
-                runCatching { onSwingEdt { widget.close() } }
+                runCatching { onSwingEdt { widget.dispose() } }
             }
             replayTerminal = null
             return@LaunchedEffect
         }
-        val appearance = workspace.toTerminalAppearance()
         val widget = withContext(Dispatchers.IO) {
-            runCatching { createScrollbackReplayWidget(ansi, appearance = appearance) }.getOrNull()
+            runCatching { createScrollbackReplayTerminal(ansi, appearance = appearance) }.getOrNull()
         }
         replayTerminal?.let { old ->
-            runCatching { onSwingEdt { old.close() } }
+            runCatching { onSwingEdt { old.dispose() } }
         }
         replayTerminal = widget
     }
@@ -133,7 +125,7 @@ actual fun AgentTerminalSurface(
     DisposableEffect(taskId) {
         onDispose {
             replayToDispose.value?.let { widget ->
-                runCatching { onSwingEdt { widget.close() } }
+                runCatching { onSwingEdt { widget.dispose() } }
             }
         }
     }

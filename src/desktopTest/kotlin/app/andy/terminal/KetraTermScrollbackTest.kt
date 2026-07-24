@@ -1,7 +1,11 @@
 package app.andy.terminal
 
-import com.jediterm.terminal.TerminalColor
-import com.jediterm.terminal.TextStyle
+import app.andy.desktop.service.agents.AgentTerminalManager
+import app.andy.model.AgentKind
+import app.andy.model.AgentTask
+import app.andy.model.AgentTaskStatus
+import app.andy.model.TerminalAppearanceSnapshot
+import app.andy.model.TerminalThemePreset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -15,27 +19,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import app.andy.desktop.service.agents.AgentTerminalManager
-import app.andy.model.AgentKind
-import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
+import java.nio.file.Files
 
-class JediTermScrollbackTest {
-    @Test
-    fun textStyleToAnsiIncludesBoldAndTruecolor() {
-        val style = TextStyle(
-            TerminalColor.rgb(228, 222, 208),
-            TerminalColor.rgb(17, 16, 13),
-            java.util.EnumSet.of(TextStyle.Option.BOLD),
-        )
-        val sgr = style.toAnsiSgr()
-        assertTrue(sgr.startsWith("\u001b["))
-        assertTrue(sgr.endsWith("m"))
-        assertTrue(sgr.contains(";1;") || sgr.contains("[1;") || sgr.contains(";1m") || sgr.contains("1;"))
-        assertTrue(sgr.contains("38;2;228;222;208"))
-        assertTrue(sgr.contains("48;2;17;16;13"))
-    }
-
+class KetraTermScrollbackTest {
     @Test
     fun capScrollbackSizeDropsOldestLines() {
         val content = (1..200).joinToString("") { idx -> "line-$idx-xxxxxxxx\n" }
@@ -47,7 +33,18 @@ class JediTermScrollbackTest {
     }
 
     @Test
+    fun scrollbackTeeCapturesStdoutBytes() {
+        val tee = ScrollbackAnsiTee(maxBytes = 1024)
+        val chunk = "hello-\u001b[32mgreen\u001b[0m\n".encodeToByteArray()
+        tee.append(chunk, 0, chunk.size)
+        val snap = tee.snapshot()
+        assertTrue(snap.contains("hello-"))
+        assertTrue(snap.contains("\u001b[32m"))
+    }
+
+    @Test
     fun exportScrollbackAnsiContainsEchoOutput() = runBlocking {
+        AndyKetraTermConfig.ensureInitialized()
         val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
         val argv = if (isWindows) {
             listOf("cmd", "/c", "echo", "andy-scrollback-ok")
@@ -59,16 +56,15 @@ class JediTermScrollbackTest {
                 sessionId = "scrollback-export-test",
                 argv = argv,
             ),
-        ) as JediTermBackend
+        ) as KetraTermBackend
         try {
             withTimeout(15_000) { session.exitCode.first { it != null } }
-            delay(200) // let scrape/final paint settle
-            val ansi = session.exportScrollbackAnsi()
+            delay(200)
+            val ansi = session.scrollbackAnsi()
             assertTrue(
                 ansi.contains("andy-scrollback-ok"),
                 "expected echo text in scrollback export, got=${ansi.take(200)}",
             )
-            assertTrue(ansi.contains("\u001b[") || ansi.contains("andy-scrollback-ok"))
         } finally {
             session.close()
         }
@@ -154,15 +150,76 @@ class JediTermScrollbackTest {
     }
 
     @Test
+    fun appearanceMapsToSwingSettings() {
+        val settings = TerminalAppearanceSnapshot(
+            ketraThemeId = TerminalThemePreset.Nord.id,
+            fontSize = 16f,
+        ).toSwingSettings(columns = 80, rows = 24)
+        assertEquals(80, settings.columns)
+        assertEquals(24, settings.rows)
+        assertEquals(16, settings.font.size)
+    }
+
+    @Test
+    fun configForceEnablesHistoryAndNotificationsUnderAndyHome() {
+        val previousHome = System.getProperty("user.home")
+        val previousConfig = System.getProperty("ketraterm.config.path")
+        val tempHome = Files.createTempDirectory("andy-ketraterm-home")
+        try {
+            System.setProperty("user.home", tempHome.toString())
+            AndyKetraTermConfig.resetForTests()
+            AndyKetraTermConfig.ensureInitialized()
+            val configPath = AndyKetraTermPaths.configFile()
+            assertTrue(Files.isRegularFile(configPath), "expected config at $configPath")
+            assertTrue(configPath.toString().contains(".andy${File.separator}ketraterm") ||
+                configPath.toString().contains(".andy/ketraterm"))
+            assertEquals(
+                configPath.toAbsolutePath().toString(),
+                System.getProperty("ketraterm.config.path"),
+            )
+            val reloaded = io.github.ketraterm.workspace.config.TerminalWorkspaceConfigManager(configPath).load()
+            assertTrue(reloaded.desktopNotificationsEnabled)
+            assertTrue(reloaded.persistentCommandHistoryEnabled)
+            assertEquals(AndyKetraTermPaths.commandHistoryFile(), AndyKetraTermPaths.root().resolve("command-history-v1.tsv"))
+        } finally {
+            AndyKetraTermConfig.resetForTests()
+            if (previousHome != null) {
+                System.setProperty("user.home", previousHome)
+            } else {
+                System.clearProperty("user.home")
+            }
+            if (previousConfig != null) {
+                System.setProperty("ketraterm.config.path", previousConfig)
+            } else {
+                System.clearProperty("ketraterm.config.path")
+            }
+            tempHome.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun ansiReplayConnectorServesAllBytesThenParks() {
-        val connector = AnsiReplayTtyConnector("hi")
-        val buf = CharArray(8)
-        assertEquals(2, connector.read(buf, 0, 8))
-        assertEquals('h', buf[0])
-        assertEquals('i', buf[1])
-        assertTrue(connector.isConnected)
+        val payload = "hi".encodeToByteArray()
+        val connector = AnsiReplayConnector(payload)
+        val received = java.util.concurrent.atomic.AtomicReference<ByteArray?>(null)
+        val closed = java.util.concurrent.CountDownLatch(1)
+        connector.start(
+            object : io.github.ketraterm.transport.TerminalConnectorListener {
+                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
+                    received.set(bytes.copyOfRange(offset, offset + length))
+                }
+
+                override fun onClosed(exitCode: Int?) {
+                    closed.countDown()
+                }
+
+                override fun onError(error: Throwable) = Unit
+            },
+        )
+        // Allow reader thread to feed bytes.
+        Thread.sleep(50)
+        assertEquals("hi", received.get()?.decodeToString())
         connector.close()
-        assertEquals(-1, connector.read(buf, 0, 8))
-        assertFalse(connector.isConnected)
+        assertTrue(closed.await(2, java.util.concurrent.TimeUnit.SECONDS))
     }
 }

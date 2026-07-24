@@ -448,6 +448,7 @@ internal object ScreenshotServices {
         override suspend fun createAndStart(draft: AgentTaskDraft) = task
         override suspend fun startImplementation(taskId: String) = Unit
         override fun stop(taskId: String) = Unit
+        override fun completeWorkflowRun(taskId: String) = Unit
         override suspend fun retry(taskId: String) = Unit
         override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
         override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit

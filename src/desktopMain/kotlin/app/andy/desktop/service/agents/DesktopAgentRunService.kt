@@ -96,6 +96,7 @@ class DesktopAgentRunService(
     private val mcp: McpServerService,
     private val workspaceStore: WorkspaceStore,
     private val actionConfig: ActionConfigStore,
+    private val enableProbes: Boolean = true,
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -182,15 +183,20 @@ class DesktopAgentRunService(
             backfillCursorPlansFromTranscripts()
             ready.complete(Unit)
             refreshCliStatuses()
-            refreshProviderQuotas()
-            while (isActive) {
-                delay(PROVIDER_QUOTA_REFRESH_MILLIS)
+            if (enableProbes) {
                 refreshProviderQuotas()
+                while (isActive) {
+                    delay(PROVIDER_QUOTA_REFRESH_MILLIS)
+                    refreshProviderQuotas()
+                }
             }
         }
     }
 
     internal fun terminalWidget(taskId: String) = terminals.terminalWidget(taskId)
+
+    /** Push latest Settings terminal appearance into live agent sessions. */
+    internal fun reloadTerminalAppearance() = terminals.reloadAppearance()
 
     /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the SwingPanel mounts when the PTY appears. */
     internal val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
@@ -818,8 +824,8 @@ class DesktopAgentRunService(
         // Prefer argv/flag delivery when the CLI supports it (agy --prompt-interactive,
         // claude/codex/cursor positional). PTY typing is a fragile fallback.
         val writeAfterStart = initialPrompt.takeUnless { adapter.embedsInitialPrompt }
-        // Do not await the PTY on the caller's dispatcher (often Main/EDT). JediTerm
-        // creates the widget via invokeAndWait — awaiting here can deadlock the EDT
+        // Do not await the PTY on the caller's dispatcher (often Main/EDT). KetraTerm
+        // creates the SwingTerminal via invokeAndWait — awaiting here can deadlock the EDT
         // and leave the UI stuck on "Starting terminal…" even after the session is Idle.
         launchRun(task, writeAfterStart = writeAfterStart) { nextAdapter, resolvedBinary, mcpUrl ->
             nextAdapter.buildInteractiveCommand(resolvedBinary, currentTask(task.id) ?: task, mcpUrl)
@@ -1127,7 +1133,7 @@ class DesktopAgentRunService(
 
     /**
      * Starts the agent PTY in the background. When [awaitTerminal] is true, blocks
-     * until the JediTerm widget exists so the detail pane can mount it on first paint.
+     * until the SwingTerminal exists so the detail pane can mount it on first paint.
      */
     private fun launchRun(
         task: AgentTask,
@@ -1161,7 +1167,7 @@ class DesktopAgentRunService(
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
     ) {
         // Await only when not on the UI/EDT thread. createAndStart intentionally
-        // skips this so Compose Main never blocks across JediTerm's invokeAndWait.
+        // skips this so Compose Main never blocks across KetraTerm's invokeAndWait.
         val terminalReady = launchRun(task, writeAfterStart, argvBuilder)
         withTimeoutOrNull(20_000) { terminalReady.await() }
     }
@@ -1263,6 +1269,31 @@ class DesktopAgentRunService(
 
         val outcomeHandled = AtomicBoolean(false)
         val artifacts = terminalHandle.artifacts
+        val sessionMonitorJob = scope.launch {
+            var sawWorking = false
+            terminalHandle.statusTracker.status.collect { status ->
+                if (outcomeHandled.get()) return@collect
+                if (status == AgentSessionStatus.Working) sawWorking = true
+                val current = currentTask(taskId) ?: return@collect
+                if (current.workflowStage != ProjectWorkflowStage.Build) return@collect
+                val scrollback = terminals.bufferSnapshot(taskId)
+                if (
+                    !inferWorkflowBuildTurnComplete(
+                        agent = current.agent,
+                        artifactDir = terminalHandle.artifactDir,
+                        scrollback = scrollback,
+                        liveSessionStatus = status,
+                        sawWorking = sawWorking,
+                    )
+                ) {
+                    return@collect
+                }
+                outcomeHandled.set(true)
+                terminalHandle.statusTracker.markPhaseFinished()
+                terminals.stop(taskId)
+                finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+            }
+        }
         val monitorJob = scope.launch {
             artifacts.events.collect { event ->
                 if (outcomeHandled.get()) return@collect
@@ -1300,6 +1331,7 @@ class DesktopAgentRunService(
 
         val exitCode = terminals.awaitExit(taskId)
         monitorJob.cancel()
+        sessionMonitorJob.cancel()
 
         if (outcomeHandled.get()) return
         if (currentTask(taskId)?.status == AgentTaskStatus.WaitingForInput) return
@@ -1528,6 +1560,14 @@ class DesktopAgentRunService(
         append(completedPlan.trim())
     }
 
+    override fun completeWorkflowRun(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
+        handles[taskId]?.stopRequested = true
+        terminals.stop(taskId)
+        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+    }
+
     override fun stop(taskId: String) {
         val waiting = currentTask(taskId)?.takeIf { it.status == AgentTaskStatus.WaitingForInput }
         if (waiting != null) {
@@ -1684,6 +1724,7 @@ class DesktopAgentRunService(
         ready.await()
         val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
         _cliStatuses.value = statuses
+        if (!enableProbes) return
         val models = withContext(Dispatchers.IO) {
             statuses
                 .mapNotNull { status ->
@@ -1813,6 +1854,11 @@ class DesktopAgentRunService(
 
     private suspend fun projectDirectory(projectId: String): String? =
         runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.contextDir }.getOrNull()
+
+    fun close() {
+        terminals.stopAll()
+        handles.values.forEach { it.job?.cancel() }
+    }
 
     private fun projectTask(taskId: String): ProjectTask? =
         _projects.value.values.asSequence().flatMap { it.tasks.asSequence() }.firstOrNull { it.id == taskId }

@@ -35,7 +35,7 @@ class AgentLaunchEnvironmentTest {
 
     @Test
     fun scrubAfterMergeRemovesIdeVarsThatPutAllCannotDrop() {
-        // Reproduces the JediTermBackend bug: System.getenv() + putAll(scrubbed) left
+        // Reproduces the historical bug: System.getenv() + putAll(scrubbed) left
         // NODE_OPTIONS in place because scrubbed maps omit keys instead of nulling them.
         val processEnv = mutableMapOf(
             "PATH" to "/usr/bin",

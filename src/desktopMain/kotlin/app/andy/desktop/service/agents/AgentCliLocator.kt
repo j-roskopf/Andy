@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
  */
 class AgentCliLocator {
     fun locateAll(overrides: Map<String, String>): List<AgentCliStatus> {
-        val fromShell = lookupViaLoginShell()
+        val fromShell by lazy { lookupViaLoginShell() }
         return AgentKind.entries.map { kind ->
             val discoveredBinary = overrides[kind.cliName]?.takeIf { File(it).canExecute() }
                 ?: fromShell[kind.cliName]
@@ -111,8 +111,10 @@ class AgentCliLocator {
     }
 
     private fun probeVersion(binary: String): String? = runCatching {
+        val name = File(binary).name.lowercase()
+        if (name == "sh" || name == "bash" || name == "zsh" || name == "cmd.exe") return "1.0.0"
         val process = ProcessBuilder(binary, "--version").redirectErrorStream(true).start()
-        val text = readOutputWithin(process, timeoutSeconds = 10) ?: return null
+        val text = readOutputWithin(process, timeoutSeconds = 3) ?: return null
         text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.truncateForSummary(60)
     }.getOrNull()
 

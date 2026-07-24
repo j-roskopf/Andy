@@ -46,6 +46,53 @@ class AgentSessionRecoveryTest {
     }
 
     @Test
+    fun inferWorkflowBuildTurnCompleteRequiresWorkingThenIdleAtPrompt() {
+        val artifactDir = File.createTempFile("andy-artifacts", null).also { it.delete(); it.mkdirs() }
+        try {
+            val scrollback = "Applied edits and ran ./gradlew test.\n\n> "
+            assertFalse(
+                inferWorkflowBuildTurnComplete(
+                    agent = AgentKind.Cursor,
+                    artifactDir = artifactDir,
+                    scrollback = scrollback,
+                    liveSessionStatus = AgentSessionStatus.Idle,
+                    sawWorking = false,
+                ),
+            )
+            assertTrue(
+                inferWorkflowBuildTurnComplete(
+                    agent = AgentKind.Cursor,
+                    artifactDir = artifactDir,
+                    scrollback = scrollback,
+                    liveSessionStatus = AgentSessionStatus.Idle,
+                    sawWorking = true,
+                ),
+            )
+            assertFalse(
+                inferWorkflowBuildTurnComplete(
+                    agent = AgentKind.Cursor,
+                    artifactDir = artifactDir,
+                    scrollback = scrollback,
+                    liveSessionStatus = AgentSessionStatus.Working,
+                    sawWorking = true,
+                ),
+            )
+            File(artifactDir, "status.json").writeText("""{"status":"done","at":1}""" + "\n")
+            assertTrue(
+                inferWorkflowBuildTurnComplete(
+                    agent = AgentKind.ClaudeCode,
+                    artifactDir = artifactDir,
+                    scrollback = "done\n> ",
+                    liveSessionStatus = AgentSessionStatus.Idle,
+                    sawWorking = false,
+                ),
+            )
+        } finally {
+            artifactDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun inferPausedAtPromptUsesLiveIdleOverStaleHookDone() {
         val artifactDir = File.createTempFile("andy-artifacts", null).also { it.delete(); it.mkdirs() }
         try {

@@ -4,14 +4,14 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentSessionStatus
 import app.andy.model.AgentTask
 import app.andy.model.TerminalAppearanceSnapshot
-import app.andy.terminal.JediTermBackend
+import app.andy.terminal.KetraTermBackend
 import app.andy.terminal.SCROLLBACK_SESSION_SEPARATOR
 import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalSession
 import app.andy.terminal.TerminalSessions
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
-import com.jediterm.terminal.ui.JediTermWidget
+import io.github.ketraterm.ui.swing.api.SwingTerminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.awt.Component
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -40,7 +41,7 @@ class AgentTerminalManager(
     data class Handle(
         val taskId: String,
         val session: TerminalSession,
-        val widget: JediTermWidget,
+        val widget: SwingTerminal,
         val artifacts: AgentWorkflowArtifacts,
         val statusTracker: AgentStatusTracker,
         val artifactDir: File,
@@ -72,8 +73,10 @@ class AgentTerminalManager(
 
     fun get(taskId: String): Handle? = handles[taskId]
 
-    fun terminalWidget(taskId: String): JediTermWidget? =
-        handles[taskId]?.widget ?: (handles[taskId]?.session as? JediTermBackend)?.terminalWidget()
+    fun terminalWidget(taskId: String): SwingTerminal? =
+        handles[taskId]?.widget ?: (handles[taskId]?.session as? KetraTermBackend)?.swingTerminal()
+
+    fun terminalComponent(taskId: String): Component? = terminalWidget(taskId)
 
     fun isAlive(taskId: String): Boolean = handles[taskId]?.session?.isAlive == true
 
@@ -84,12 +87,21 @@ class AgentTerminalManager(
         return file.isFile && file.length() > 0L
     }
 
+    /** Push latest Settings appearance into live sessions. */
+    fun reloadAppearance() {
+        val appearance = terminalAppearance()
+        handles.values.forEach { handle ->
+            (handle.session as? KetraTermBackend)?.updateAppearance(appearance)
+        }
+    }
+
     private fun bumpSessionsRevision() {
         _sessionsRevision.value = _sessionsRevision.value + 1
         _attachedTaskIds.value = handles.keys.filterTo(mutableSetOf()) { id ->
             terminalWidget(id) != null
         }
     }
+
     fun write(taskId: String, text: String) {
         val body = text.trimEnd('\r', '\n')
         if (body.isEmpty()) return
@@ -155,7 +167,7 @@ class AgentTerminalManager(
                 appearance = terminalAppearance(),
             ),
         )
-        val widget = (session as? JediTermBackend)?.terminalWidget()
+        val widget = (session as? KetraTermBackend)?.swingTerminal()
             ?: error("terminal widget missing after start (backend=${session::class.simpleName})")
         val artifacts = AgentWorkflowArtifacts(scope, task.id, artifactDir)
         val tracker = AgentStatusTracker(
@@ -208,7 +220,6 @@ class AgentTerminalManager(
     fun liveSessionStatus(taskId: String): AgentSessionStatus? =
         handles[taskId]?.statusTracker?.status?.value
 
-
     /** Blocks until the PTY process exits (or stop was requested). */
     suspend fun awaitExit(taskId: String): Int {
         val handle = handles[taskId] ?: return -1
@@ -235,9 +246,13 @@ class AgentTerminalManager(
         stop(taskId)
     }
 
+    fun stopAll() {
+        handles.keys.toList().forEach(::stop)
+    }
+
     private fun persistScrollback(handle: Handle) {
-        val backend = handle.session as? JediTermBackend ?: return
-        val export = backend.exportScrollbackAnsi()
+        val backend = handle.session as? KetraTermBackend ?: return
+        val export = backend.scrollbackAnsi()
         if (export.isBlank() && handle.committedScrollbackPrefix.isBlank()) return
         val content = capScrollbackSize(handle.committedScrollbackPrefix + export)
         atomicWriteText(handle.scrollbackPath, content)

@@ -15,7 +15,7 @@ import java.io.File
  */
 class ClaudePtyLaunchEnvTest {
     @Test
-    fun jediTermScrubsNodeOptionsBootloaderSoClaudeStaysAlive() = runBlocking {
+    fun ketraTermScrubsNodeOptionsBootloaderSoClaudeStaysAlive() = runBlocking {
         val bin = File(System.getProperty("user.home"), ".local/share/claude/versions/2.1.212")
         if (!bin.isFile) {
             println("SKIP: claude binary not installed at ${bin.absolutePath}")

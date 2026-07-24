@@ -9,7 +9,6 @@ import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
 import app.andy.model.FilesTab
 import app.andy.model.PerformanceTab
-import app.andy.model.TerminalColorPaletteKind
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
 import app.andy.model.normalizeTerminalHex
@@ -49,46 +48,47 @@ class DesktopWorkspaceStore(
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
-            terminalThemeId = props.getProperty("terminalThemeId")?.takeIf { it.isNotBlank() }
-                ?: TerminalThemePreset.Andy.id,
+            // Legacy Andy hex theme ids coerce to KetraTerm built-ins; hex fields are ignored at runtime.
+            terminalThemeId = TerminalThemePreset.fromId(
+                props.getProperty("terminalThemeId").orEmpty(),
+            ).id,
             terminalForegroundHex = normalizeTerminalHex(
                 props.getProperty("terminalForegroundHex").orEmpty(),
-                TerminalThemePreset.Andy.foregroundHex,
+                WorkspaceState().terminalForegroundHex,
             ),
             terminalBackgroundHex = normalizeTerminalHex(
                 props.getProperty("terminalBackgroundHex").orEmpty(),
-                TerminalThemePreset.Andy.backgroundHex,
+                WorkspaceState().terminalBackgroundHex,
             ),
             terminalSelectionFgHex = normalizeTerminalHex(
                 props.getProperty("terminalSelectionFgHex").orEmpty(),
-                TerminalThemePreset.Andy.selectionFgHex,
+                WorkspaceState().terminalSelectionFgHex,
             ),
             terminalSelectionBgHex = normalizeTerminalHex(
                 props.getProperty("terminalSelectionBgHex").orEmpty(),
-                TerminalThemePreset.Andy.selectionBgHex,
+                WorkspaceState().terminalSelectionBgHex,
             ),
             terminalFoundFgHex = normalizeTerminalHex(
                 props.getProperty("terminalFoundFgHex").orEmpty(),
-                TerminalThemePreset.Andy.foundFgHex,
+                WorkspaceState().terminalFoundFgHex,
             ),
             terminalFoundBgHex = normalizeTerminalHex(
                 props.getProperty("terminalFoundBgHex").orEmpty(),
-                TerminalThemePreset.Andy.foundBgHex,
+                WorkspaceState().terminalFoundBgHex,
             ),
             terminalHyperlinkFgHex = normalizeTerminalHex(
                 props.getProperty("terminalHyperlinkFgHex").orEmpty(),
-                TerminalThemePreset.Andy.hyperlinkFgHex,
+                WorkspaceState().terminalHyperlinkFgHex,
             ),
             terminalHyperlinkBgHex = normalizeTerminalHex(
                 props.getProperty("terminalHyperlinkBgHex").orEmpty(),
-                TerminalThemePreset.Andy.hyperlinkBgHex,
+                WorkspaceState().terminalHyperlinkBgHex,
             ),
             terminalUseInverseSelection = props.getProperty("terminalUseInverseSelection")
                 ?.toBooleanStrictOrNull()
-                ?: TerminalThemePreset.Andy.useInverseSelection,
-            terminalColorPaletteId = TerminalColorPaletteKind.fromId(
-                props.getProperty("terminalColorPaletteId").orEmpty(),
-            ).id,
+                ?: false,
+            terminalColorPaletteId = props.getProperty("terminalColorPaletteId")?.takeIf { it.isNotBlank() }
+                ?: WorkspaceState().terminalColorPaletteId,
             terminalFontFamilyId = TerminalFontFamily.fromId(
                 props.getProperty("terminalFontFamilyId").orEmpty(),
             ).id,
@@ -131,7 +131,6 @@ class DesktopWorkspaceStore(
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
-            compactToolCalls = props.getProperty("compactToolCalls")?.toBooleanStrictOrNull() ?: true,
         )
     }.also { mutableState.value = it }
 
@@ -215,7 +214,6 @@ class DesktopWorkspaceStore(
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
-            setProperty("compactToolCalls", state.compactToolCalls.toString())
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         mutableState.value = state

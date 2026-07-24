@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DesktopActionRunServiceTest {
@@ -27,10 +28,9 @@ class DesktopActionRunServiceTest {
 
         try {
             assertEquals("Terminal", service.running.value.single().actionName)
-            val terminal = requireNotNull(service.terminalWidget(runId))
-            assertTrue(terminal.isSessionRunning)
-            terminal.ttyConnector.write("echo ready\r")
-            awaitTerminalText(terminal, "ready")
+            assertNotNull(service.terminalWidget(runId))
+            service.writeToTerminal(runId, "echo ready\r")
+            awaitTerminalText(service, runId, "ready")
         } finally {
             service.stop(runId)
         }
@@ -50,14 +50,14 @@ class DesktopActionRunServiceTest {
         )
 
         try {
-            val terminal = requireNotNull(service.terminalWidget(runId))
-            awaitTerminalText(terminal, "initial")
+            assertNotNull(service.terminalWidget(runId))
+            awaitTerminalText(service, runId, "initial")
             assertEquals(ActionRunStatus.Running, service.running.value.single().status)
 
-            terminal.ttyConnector.write("echo typed\r")
-            awaitTerminalText(terminal, "typed")
+            service.writeToTerminal(runId, "echo typed\r")
+            awaitTerminalText(service, runId, "typed")
 
-            terminal.ttyConnector.write("exit\r")
+            service.writeToTerminal(runId, "exit\r")
             withTimeout(5_000) {
                 while (service.running.value.single().status == ActionRunStatus.Running) delay(25)
             }
@@ -67,9 +67,10 @@ class DesktopActionRunServiceTest {
         }
     }
 
-    private suspend fun awaitTerminalText(terminal: com.jediterm.terminal.ui.JediTermWidget, text: String) {
+    private suspend fun awaitTerminalText(service: DesktopActionRunService, runId: String, text: String) {
         withTimeout(5_000) {
-            while (!terminal.terminalTextBuffer.getScreenLines().contains(text)) delay(25)
+            while (!service.bufferSnapshot(runId).contains(text)) delay(25)
         }
+        assertTrue(service.bufferSnapshot(runId).contains(text))
     }
 }

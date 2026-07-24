@@ -69,6 +69,7 @@ private data class MirrorPopOutWindow(
 )
 
 fun main() {
+    app.andy.terminal.AndyKetraTermConfig.ensureInitialized()
     installRuntimeAppIcon()
     application {
         val runtime = remember { createDesktopRuntime() }

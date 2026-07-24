@@ -335,6 +335,8 @@ interface AgentRunService {
     /** Starts a fresh writable provider run from a completed plan-mode task. */
     suspend fun startImplementation(taskId: String)
     fun stop(taskId: String)
+    /** Manually completes an active workflow build run and advances the project workflow. */
+    fun completeWorkflowRun(taskId: String)
     /** Starts the failed task over with its original prompt and configuration. */
     suspend fun retry(taskId: String)
     fun resume(

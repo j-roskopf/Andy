@@ -63,7 +63,7 @@ class DesktopAgentTaskStore(
 
     fun launchLogFile(taskId: String): File = File(taskDir(taskId), "launch.log")
 
-    /** Cumulative JediTerm scrollback (ANSI) for finished-chat replay. */
+    /** Cumulative KetraTerm scrollback (ANSI) for finished-chat replay. */
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {

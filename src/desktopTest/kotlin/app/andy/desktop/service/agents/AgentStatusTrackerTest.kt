@@ -195,7 +195,7 @@ class AgentStatusTrackerTest {
     @Test
     fun isQuiescentAtPromptDetectsClaudePrompt() {
         val scrape = ScrapeStatusSource(AgentKind.ClaudeCode)
-        scrape.onBuffer("Here is the answer about Pty4j and JediTerm.\n✻ Cooked for 8s\n> ")
+        scrape.onBuffer("Here is the answer about Pty4j and KetraTerm.\n✻ Cooked for 8s\n> ")
         assertTrue(scrape.isQuiescentAtPrompt(idleAfterMs = 0))
     }
 

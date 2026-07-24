@@ -43,6 +43,31 @@ import kotlinx.coroutines.withTimeout
 
 class ProjectWorkflowServiceTest {
     @Test
+    fun manualCompleteBuildAttemptAdvancesWorkflow() = runBlocking {
+        withHarness(
+            WorkflowAdapter(
+                buildKeepAliveSeconds = 120,
+                reviewOutcomes = ArrayDeque(listOf("approved")),
+            ),
+        ) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            val buildRun = awaitValue(timeoutMillis = 20_000) {
+                harness.service.tasks.value.firstOrNull {
+                    it.workflowStage == ProjectWorkflowStage.Build && it.isActive
+                }
+            }
+            harness.service.completeWorkflowRun(buildRun.id)
+            await(timeoutMillis = 20_000) {
+                harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentTaskStatus.Completed
+            }
+            await(timeoutMillis = 20_000) {
+                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
+            }
+        }
+    }
+
+    @Test
     fun recoveryFollowUpsWaitForOneManualCumulativeReview() = runBlocking {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "approved")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
@@ -891,16 +916,18 @@ class ProjectWorkflowServiceTest {
             ),
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
-                WorkflowFakeMcp, WorkflowWorkspaceStore, config,
+                WorkflowFakeMcp, WorkflowWorkspaceStore, config, enableProbes = false,
             )
             service.ensureProject("project-1")
             await { config.value.projects.single().notes.isEmpty() }
             val scratchpad = service.projects.value.getValue("project-1").scratchpad
             assertEquals(1, scratchpad.lines().count { it == "## Migrated todos" })
         } finally {
+            runCatching { service?.close() }
             scope.cancel()
             root.deleteRecursively()
         }
@@ -1020,11 +1047,13 @@ class ProjectWorkflowServiceTest {
             ),
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
                 WorkflowFakeMcp, WorkflowWorkspaceStore,
                 MutableActionConfig(ActionsConfig(projects = listOf(ActionProject("project-1", "Project", projectDir.absolutePath)))),
+                enableProbes = false,
             )
             service.ensureProject("project-1")
             val recovered = service.projects.value.getValue("project-1").tasks
@@ -1033,6 +1062,7 @@ class ProjectWorkflowServiceTest {
             delay(150)
             assertEquals(1, service.tasks.value.size, "restart recovery must not launch another paid run")
         } finally {
+            runCatching { service?.close() }
             scope.cancel()
             root.deleteRecursively()
         }
@@ -1132,8 +1162,9 @@ private suspend fun withHarness(
     val store = DesktopAgentTaskStore(File(root, "agents.toml"))
     store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to workflowShellBinary())))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    var service: DesktopAgentRunService? = null
     try {
-        val service = DesktopAgentRunService(
+        service = DesktopAgentRunService(
             scope = scope,
             store = store,
             locator = AgentCliLocator(),
@@ -1142,10 +1173,12 @@ private suspend fun withHarness(
             mcp = WorkflowFakeMcp,
             workspaceStore = WorkflowWorkspaceStore,
             actionConfig = config,
+            enableProbes = false,
         )
         service.ensureProject("project-1")
         block(WorkflowHarness(service, store, projectDir))
     } finally {
+        runCatching { service?.close() }
         scope.cancel()
         root.deleteRecursively()
     }
@@ -1158,6 +1191,7 @@ private class WorkflowAdapter(
     override val kind: AgentKind = AgentKind.Codex,
     private val failStage: ProjectWorkflowStage? = null,
     private val stageDelayMillis: Long = 0,
+    private val buildKeepAliveSeconds: Int = 0,
     private val reviewWritesFile: Boolean = false,
 ) : AgentCliAdapter {
     val launched = Collections.synchronizedList(mutableListOf<AgentTask>())
@@ -1203,7 +1237,9 @@ private class WorkflowAdapter(
             ProjectWorkflowStage.Spec -> {
                 append(writeArtifact(task, "plan.md", specPlanText()))
             }
-            ProjectWorkflowStage.Build -> Unit
+            ProjectWorkflowStage.Build -> {
+                if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
+            }
             ProjectWorkflowStage.Review -> {
                 if (reviewWritesFile) append("printf 'reviewed change\\n' > review-edit.txt; ")
                 reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifact(task, "review.json", it)) }
@@ -1223,7 +1259,9 @@ private class WorkflowAdapter(
         if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
         when (task.workflowStage) {
             ProjectWorkflowStage.Spec -> append(writeArtifactWindows(task, "plan.md", specPlanText()))
-            ProjectWorkflowStage.Build -> Unit
+            ProjectWorkflowStage.Build -> {
+                if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
+            }
             ProjectWorkflowStage.Review -> {
                 if (reviewWritesFile) append("echo reviewed change>review-edit.txt & ")
                 reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifactWindows(task, "review.json", it)) }
@@ -1315,6 +1353,18 @@ private suspend fun await(timeoutMillis: Long = 10_000, condition: () -> Boolean
     withTimeout(timeoutMillis) {
         while (!condition()) delay(20)
     }
+}
+
+private suspend fun <T> awaitValue(timeoutMillis: Long = 10_000, supplier: () -> T?): T {
+    var result: T? = null
+    withTimeout(timeoutMillis) {
+        while (true) {
+            result = supplier()
+            if (result != null) return@withTimeout
+            delay(20)
+        }
+    }
+    return result!!
 }
 
 private fun initializeGitRepository(directory: File) {

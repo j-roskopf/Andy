@@ -314,7 +314,6 @@ internal fun AndyShell(
                             requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
                             requestedProjectId = requestedOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
-                            compactToolCalls = state.workspaceState.compactToolCalls,
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
@@ -325,7 +324,6 @@ internal fun AndyShell(
                             services = services, active = agentsActive,
                             requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = onOpenAgentTaskConsumed,
-                            compactToolCalls = state.workspaceState.compactToolCalls,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {

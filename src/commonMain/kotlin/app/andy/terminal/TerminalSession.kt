@@ -7,8 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Backend-agnostic PTY + emulator seam.
  *
- * JediTerm (pty4j) ships everywhere; libghostty is the GPU-native macOS/Linux
- * path when the native library loads. The rest of Andy talks only to this.
+ * Desktop uses KetraTerm (Pty4J under the hood). Wasm remains a no-op stub.
  */
 interface TerminalSession {
     /** Opaque id for UI/host lookup (usually the agent task id). */
@@ -29,11 +28,6 @@ interface TerminalSession {
     fun close()
 }
 
-enum class TerminalBackendKind {
-    JediTerm,
-    Libghostty,
-}
-
 data class TerminalLaunchRequest(
     val sessionId: String,
     val argv: List<String>,
@@ -46,6 +40,5 @@ data class TerminalLaunchRequest(
 
 /** Platform factory — desktop creates a real PTY session; other targets are stubs. */
 expect object TerminalSessions {
-    fun preferredBackend(): TerminalBackendKind
     fun create(request: TerminalLaunchRequest): TerminalSession
 }

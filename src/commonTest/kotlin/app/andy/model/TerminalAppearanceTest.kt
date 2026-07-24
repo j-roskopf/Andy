@@ -16,41 +16,46 @@ class TerminalAppearanceTest {
     }
 
     @Test
-    fun andyPresetMatchesWorkspaceDefaults() {
-        val applied = TerminalThemePreset.Andy.applyTo(WorkspaceState())
-        assertEquals(TerminalThemePreset.Andy.id, applied.terminalThemeId)
-        assertEquals("#E4DED0", applied.terminalForegroundHex)
-        assertEquals("#11100D", applied.terminalBackgroundHex)
-        assertEquals("#526DA5", applied.terminalSelectionBgHex)
+    fun ketraThemesAreDefaults() {
+        val state = WorkspaceState()
+        assertEquals(TerminalThemePreset.OneDark.id, state.terminalThemeId)
+        val snap = state.toTerminalAppearance()
+        assertEquals(TerminalThemePreset.OneDark.id, snap.ketraThemeId)
+        assertEquals(TerminalFontFamily.Default, snap.fontFamily)
     }
 
     @Test
-    fun lightPresetOverwritesColors() {
-        val applied = TerminalThemePreset.Light.applyTo(WorkspaceState())
-        assertEquals(TerminalThemePreset.Light.id, applied.terminalThemeId)
-        assertEquals("#F7F4EC", applied.terminalBackgroundHex)
-        assertEquals(false, applied.terminalUseInverseSelection)
+    fun legacyThemeIdsCoerceToKetraThemes() {
+        assertEquals(TerminalThemePreset.OneDark, TerminalThemePreset.fromId("andy"))
+        assertEquals(TerminalThemePreset.OneDark, TerminalThemePreset.fromId("dracula"))
+        assertEquals(TerminalThemePreset.Nord, TerminalThemePreset.fromId("nord"))
+        assertEquals(TerminalThemePreset.OneDark, TerminalThemePreset.fromId("custom"))
+        assertEquals(TerminalThemePreset.TokyoNight, TerminalThemePreset.fromId("tokyo-night"))
     }
 
     @Test
-    fun toTerminalAppearanceCoercesInvalidValues() {
+    fun themeApplyUpdatesWorkspaceThemeId() {
+        val applied = TerminalThemePreset.Everforest.applyTo(WorkspaceState())
+        assertEquals(TerminalThemePreset.Everforest.id, applied.terminalThemeId)
+    }
+
+    @Test
+    fun toTerminalAppearanceIgnoresLegacyHexFields() {
         val snap = WorkspaceState(
+            terminalThemeId = "nord",
             terminalForegroundHex = "not-a-color",
             terminalBackgroundHex = "#abc",
-            terminalColorPaletteId = "nope",
             terminalFontFamilyId = "comic-sans",
             terminalFontSize = 12.4f,
         ).toTerminalAppearance()
-        assertEquals(TerminalThemePreset.Andy.foregroundHex, snap.foregroundHex)
-        assertEquals("#AABBCC", snap.backgroundHex)
-        assertEquals(TerminalColorPaletteKind.Xterm, snap.colorPalette)
+        assertEquals(TerminalThemePreset.Nord.id, snap.ketraThemeId)
         assertEquals(TerminalFontFamily.Default, snap.fontFamily)
         assertEquals(12f, snap.fontSize)
     }
 
     @Test
     fun coerceFontSizeSnapsToAllowedList() {
-        assertEquals(13f, TerminalThemePreset.coerceFontSize(13.2f))
+        assertEquals(14f, TerminalThemePreset.coerceFontSize(14.2f))
         assertEquals(16f, TerminalThemePreset.coerceFontSize(15.6f))
         assertEquals(11f, TerminalThemePreset.coerceFontSize(10f))
     }

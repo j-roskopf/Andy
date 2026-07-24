@@ -153,7 +153,6 @@ private fun ProjectCockpit(
     requestedAgentTaskId: String?,
     requestedProjectId: String?,
     onRequestedAgentTaskConsumed: () -> Unit,
-    compactToolCalls: Boolean,
     serial: String?,
     device: AndroidDevice?,
     targetDisplayName: String? = null,
@@ -441,7 +440,6 @@ private fun ProjectCockpit(
                                                         selectedTaskId = null
                                                     }
                                                 },
-                                                compactToolCalls = compactToolCalls,
                                                 transcriptScrollMemory = transcriptScrollMemory,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
@@ -633,7 +631,6 @@ internal fun ActionsScreen(
     requestedAgentTaskId: String? = null,
     requestedProjectId: String? = null,
     onRequestedAgentTaskConsumed: () -> Unit = {},
-    compactToolCalls: Boolean = true,
     serial: String? = null,
     device: AndroidDevice? = null,
     targetDisplayName: String? = null,
@@ -655,7 +652,6 @@ internal fun ActionsScreen(
             requestedAgentTaskId = requestedAgentTaskId,
             requestedProjectId = requestedProjectId,
             onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
-            compactToolCalls = compactToolCalls,
             serial = serial,
             device = device,
             targetDisplayName = targetDisplayName,

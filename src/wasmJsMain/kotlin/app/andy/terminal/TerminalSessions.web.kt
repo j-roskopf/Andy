@@ -8,8 +8,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 actual object TerminalSessions {
-    actual fun preferredBackend(): TerminalBackendKind = TerminalBackendKind.JediTerm
-
     actual fun create(request: TerminalLaunchRequest): TerminalSession = StubTerminalSession(request.sessionId)
 }
 

@@ -107,7 +107,6 @@ internal fun AgentTaskDetail(
     nowMillis: Long,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
-    @Suppress("UNUSED_PARAMETER") compactToolCalls: Boolean = true,
     @Suppress("UNUSED_PARAMETER") transcriptScrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -262,6 +261,11 @@ internal fun AgentTaskDetail(
                 nowMillis = nowMillis,
                 sessionStatus = sessionStatus,
                 onStop = { services.agentRuns.stop(task.id) },
+                onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
+                    { services.agentRuns.completeWorkflowRun(task.id) }
+                } else {
+                    null
+                },
                 onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
                 onResume = { services.agentRuns.resume(task.id, "Continue where you left off.", emptyList(), emptyList()) },
                 onDelete = { onDelete(task) },
@@ -618,6 +622,7 @@ private fun AgentTaskHeader(
     nowMillis: Long,
     sessionStatus: app.andy.model.AgentSessionStatus? = null,
     onStop: () -> Unit,
+    onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
@@ -689,6 +694,13 @@ private fun AgentTaskHeader(
                 StatusTag("READ-ONLY", TextSecondary)
             }
             if (terminalLive) {
+                onCompleteBuild?.let { complete ->
+                    OutlinedButton(
+                        onClick = complete,
+                        modifier = Modifier.height(30.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    ) { Text("mark complete", fontSize = 11.sp) }
+                }
                 Button(
                     onClick = onStop,
                     colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),

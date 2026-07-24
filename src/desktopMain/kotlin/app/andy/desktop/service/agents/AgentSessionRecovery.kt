@@ -62,6 +62,27 @@ internal fun inferCompletedTurn(
     return readLatestHookStatus(artifactDir) == AgentSessionStatus.Done
 }
 
+/**
+ * True when a workflow [ProjectWorkflowStage.Build] turn has finished but the
+ * interactive CLI is still alive at its input prompt (Cursor, Codex, etc.).
+ */
+internal fun inferWorkflowBuildTurnComplete(
+    agent: AgentKind,
+    artifactDir: File,
+    scrollback: String,
+    liveSessionStatus: AgentSessionStatus?,
+    sawWorking: Boolean,
+): Boolean {
+    if (scrollbackLooksBlocked(agent, scrollback)) return false
+    if (liveSessionStatus == AgentSessionStatus.Working || liveSessionStatus == AgentSessionStatus.Blocked) {
+        return false
+    }
+    if (inferCompletedTurn(agent, artifactDir, scrollback, liveSessionStatus)) return true
+    if (!sawWorking) return false
+    return liveSessionStatus == AgentSessionStatus.Idle &&
+        scrollbackLooksIdleAtPrompt(agent, scrollback)
+}
+
 internal fun inferPausedAtPrompt(
     agent: AgentKind,
     artifactDir: File,

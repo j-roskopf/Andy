@@ -79,7 +79,6 @@ private fun AgentCommandCenter(
     active: Boolean,
     requestedTaskId: String?,
     onRequestedTaskConsumed: () -> Unit,
-    compactToolCalls: Boolean,
 ) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
@@ -207,7 +206,6 @@ private fun AgentCommandCenter(
                                         }
                                     }
                                 },
-                                compactToolCalls = compactToolCalls,
                                 transcriptScrollMemory = transcriptScrollMemory,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -226,9 +224,8 @@ internal fun AgentsScreen(
     active: Boolean = true,
     requestedTaskId: String? = null,
     onRequestedTaskConsumed: () -> Unit = {},
-    compactToolCalls: Boolean = true,
 ) {
-    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, compactToolCalls)
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed)
 }
 
 @Composable
