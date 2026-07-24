@@ -126,6 +126,7 @@ internal fun LiveDevicePane(
     showChromeControls: Boolean = true,
     showAndroidNavButtons: Boolean = true,
     showHardwareControls: Boolean = showChromeControls,
+    showClipTextControl: Boolean = false,
     showContainerChrome: Boolean = true,
     deviceBorderWidth: Dp = 5.dp,
     deviceCornerRadius: Dp = 10.dp,
@@ -191,6 +192,11 @@ internal fun LiveDevicePane(
                 recordEnabled = recordEnabled,
                 recordingDuration = recordingDuration,
                 showRecord = showRecord,
+                onClipText = onClipText,
+            )
+        } else if (showClipTextControl) {
+            LiveClipTextToolbar(
+                enabled = serial != null,
                 onClipText = onClipText,
             )
         }
@@ -427,6 +433,30 @@ internal fun CompactHardwareButton(label: String, serial: String?, onClick: () -
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+internal fun LiveClipTextToolbar(
+    enabled: Boolean,
+    onClipText: () -> Unit,
+) {
+    Box(
+        Modifier.width(68.dp).fillMaxHeight(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(58.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(AndyColors.Neutral900.copy(alpha = 0.92f))
+                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(15.dp))
+                .padding(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
+        }
     }
 }
 

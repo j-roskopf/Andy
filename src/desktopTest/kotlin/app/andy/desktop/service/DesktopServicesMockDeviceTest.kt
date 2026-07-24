@@ -108,12 +108,49 @@ class DesktopServicesMockDeviceTest {
         assertTrue(command.windowed(2).any { it == listOf("-grpc", "8560") })
         assertTrue(command.windowed(2).any { it == listOf("-idle-grpc-timeout", "300") })
         assertTrue(command.windowed(2).any { it == listOf("-gpu", "auto") })
+        assertTrue(command.windowed(2).any { it == listOf("-vsync-rate", "120") })
         assertTrue("-writable-system" in command)
         assertTrue("-no-snapshot-load" in command)
         assertTrue("-no-snapshot-save" in command)
         assertFalse("-no-window" in command)
         assertFalse("-grpc-use-token" in command)
         assertFalse("swiftshader_indirect" in command)
+    }
+
+    @Test
+    fun emulatorVsyncRateDefaultsTo120AndHonorsEnvOverride() {
+        assertEquals(120, emulatorVsyncRate { null })
+        assertEquals(120, emulatorVsyncRate { "" })
+        assertEquals(120, emulatorVsyncRate { "0" })
+        assertEquals(120, emulatorVsyncRate { "nope" })
+        assertEquals(90, emulatorVsyncRate { key ->
+            if (key == EMULATOR_VSYNC_RATE_ENV) "90" else null
+        })
+        val command = emulatorStudioStyleLaunchCommand(
+            emulator = "/sdk/emulator/emulator",
+            name = "Pixel_8",
+            vsyncRate = 90,
+        )
+        assertTrue(command.windowed(2).any { it == listOf("-vsync-rate", "90") })
+    }
+
+    @Test
+    fun emulatorGuestRefreshShellCommandsForcePeakAndMin() {
+        assertEquals(
+            listOf(
+                listOf("settings", "put", "system", "peak_refresh_rate", "120"),
+                listOf("settings", "put", "system", "min_refresh_rate", "120"),
+            ),
+            emulatorGuestRefreshShellCommands(120),
+        )
+        assertEquals(
+            listOf(
+                listOf("settings", "put", "system", "peak_refresh_rate", "120"),
+                listOf("settings", "put", "system", "min_refresh_rate", "120"),
+                listOf("cmd", "display", "set-user-preferred-display-mode", "1080", "2424", "120", "0", "false"),
+            ),
+            emulatorGuestRefreshShellCommands(120, displayWidth = 1080, displayHeight = 2424),
+        )
     }
 
     @Test

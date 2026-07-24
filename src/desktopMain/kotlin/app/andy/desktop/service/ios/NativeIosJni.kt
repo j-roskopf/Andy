@@ -52,6 +52,9 @@ internal object NativeIosSimJni {
         if (ensureLoaded().isSuccess) runCatching { nativeSendText(value) }
     }
 
+    fun sendKey(hidUsage: Int): Boolean =
+        ensureLoaded().isSuccess && runCatching { nativeSendKey(hidUsage) }.getOrDefault(false)
+
     fun sendButton(button: Int) {
         if (ensureLoaded().isSuccess) runCatching { nativeSendButton(button) }
     }
@@ -91,6 +94,7 @@ internal object NativeIosSimJni {
     private external fun nativeSendTouch(action: Int, nx: Float, ny: Float): Boolean
     private external fun nativeSendSwipe(startX: Float, startY: Float, endX: Float, endY: Float, steps: Int)
     private external fun nativeSendText(value: String)
+    private external fun nativeSendKey(hidUsage: Int): Boolean
     private external fun nativeSendButton(button: Int)
 }
 

@@ -441,8 +441,7 @@ class DesktopIosMirrorEngine(
         return withContext(Dispatchers.IO) {
             val requiresHid = when (input) {
                 MirrorInput.Back,
-                MirrorInput.Recents,
-                is MirrorInput.Key -> false
+                MirrorInput.Recents -> false
                 else -> true
             }
             if (requiresHid) {
@@ -507,7 +506,15 @@ class DesktopIosMirrorEngine(
                     CommandResult.success("Sent")
                 }
                 MirrorInput.Back, MirrorInput.Recents -> CommandResult.failure("No iOS equivalent")
-                is MirrorInput.Key -> CommandResult.failure("Use text input for iOS keyboard")
+                is MirrorInput.Key -> {
+                    val hidUsage = androidKeyCodeToIosHidUsage(input.keyCode)
+                        ?: return@withContext CommandResult.failure("Unsupported iOS key ${input.keyCode}")
+                    if (NativeIosSimJni.sendKey(hidUsage)) {
+                        CommandResult.success("Sent")
+                    } else {
+                        CommandResult.failure("Simulator HID did not accept key ${input.keyCode}")
+                    }
+                }
             }
         }
     }
