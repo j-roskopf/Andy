@@ -27,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -54,6 +55,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.random.Random
 
@@ -63,12 +65,13 @@ private const val EMULATOR_BOOT_WAIT_NANOS = 120_000_000_000L
 private const val EMULATOR_BOOT_POLL_MILLIS = 500L
 private const val MIRROR_START_MAX_ATTEMPTS = 4
 private const val MIRROR_START_RETRY_DELAY_MILLIS = 2_000L
-private const val MIRROR_SOCKET_SETTLE_MILLIS = 1_500L
-private const val MIRROR_WIRELESS_SOCKET_SETTLE_MILLIS = 2_500L
 private const val NATIVE_HOST_WAIT_NANOS = 750_000_000L
 private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
 private const val SCRCPY_FRAME_HEADER_BYTES = 12
 private const val MAX_SCRCPY_FRAME_BYTES = 16 * 1024 * 1024
+/** Matches scrcpy's forward-tunnel connect loop: retry until the server dummy byte arrives. */
+private const val SCRCPY_SOCKET_CONNECT_ATTEMPTS = 100
+private const val SCRCPY_SOCKET_CONNECT_RETRY_MILLIS = 100L
 /** Keep scrcpy warm across AndyShell destination switches (Live ↔ Design ↔ Accessibility). */
 private const val MIRROR_RELEASE_GRACE_MILLIS = 500L
 
@@ -161,6 +164,25 @@ internal fun emulatorRgb888ToArgb(width: Int, height: Int, rgb: ByteBuffer): Int
  * The server accepts arbitrary MediaFormat keys, so this must be limited to Qualcomm devices.
  * An explicit developer override remains authoritative, including an explicit `=0` opt-out.
  */
+/** Scrcpy's forward-tunnel readiness sentinel (`DesktopConnection` writes a single `0` byte). */
+internal fun isScrcpyForwardDummyByte(value: Int): Boolean = value == 0
+
+/**
+ * Whether an on-device `stat -c %s` / `wc -c` probe matches the local scrcpy-server byte
+ * length. Existence alone is not enough — Andy ships updated server jars over time.
+ */
+internal fun remoteScrcpyServerSizeMatches(localByteCount: Long, remoteSizeStdout: String): Boolean {
+    if (localByteCount <= 0L) return false
+    val remoteSize = remoteSizeStdout
+        .lineSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() && !it.startsWith("stat:") }
+        ?.substringBefore(' ')
+        ?.substringBefore('\t')
+        ?.toLongOrNull()
+    return remoteSize == localByteCount
+}
+
 internal fun videoCodecOptionsForDevice(
     socManufacturer: String?,
     override: String?,
@@ -761,9 +783,7 @@ class DesktopMirrorEngine(
         val scid = Random.nextInt(1, Int.MAX_VALUE).toString(16).padStart(8, '0')
         videoForwardPort = forwardPort
         val remoteServer = "/data/local/tmp/scrcpy-server-andy.jar"
-        val push = runner.run(listOf(adb, "-s", serial, "push", scrcpyServer.absolutePath, remoteServer), 10)
-        if (!push.isSuccess) {
-            status.value = "Failed to push scrcpy-server: ${push.stderr.ifBlank { push.stdout }.take(180)}"
+        if (!ensureRemoteScrcpyServer(adb, serial, scrcpyServer, remoteServer)) {
             return@withContext
         }
         val forward = runner.run(listOf(adb, "-s", serial, "forward", "tcp:$forwardPort", "localabstract:scrcpy_$scid"), 5)
@@ -797,7 +817,10 @@ class DesktopMirrorEngine(
             "send_device_meta=false",
             "send_stream_meta=false",
             "send_frame_meta=true",
-            "send_dummy_byte=false",
+            // Forward tunnels accept locally before the device socket exists. The server's
+            // leading 0x00 lets us retry until the abstract socket is actually ready instead
+            // of sleeping a fixed settle window.
+            "send_dummy_byte=true",
             "max_size=${config.maxSize}",
             "video_bit_rate=${config.bitRate}",
             "max_fps=${config.maxFps}",
@@ -825,21 +848,14 @@ class DesktopMirrorEngine(
                 }
             }
         }
-        // On physical devices the server may take longer than an emulator to initialize its
-        // localabstract socket. ADB accepts the local TCP connection before that socket exists,
-        // then immediately closes it; waiting here avoids treating that empty stream as a
-        // decoder failure. Wireless tunnels need a bit more slack.
-        delay(
-            if (isWirelessAdbSerial(serial)) MIRROR_WIRELESS_SOCKET_SETTLE_MILLIS
-            else MIRROR_SOCKET_SETTLE_MILLIS,
-        )
         var socket: Socket? = null
         var codecContext: AVCodecContext? = null
         var packet: AVPacket? = null
         var frame: AVFrame? = null
         var swsContext: SwsContext? = null
         try {
-            socket = connectScrcpySocket(forwardPort)
+            // First socket only: consume the forward-tunnel dummy byte, then open control.
+            socket = awaitScrcpyVideoSocket(forwardPort)
             synchronized(controlLock) {
                 controlSocket = connectScrcpySocket(forwardPort).also { it.tcpNoDelay = true }
                 controlOutput = BufferedOutputStream(controlSocket!!.getOutputStream(), 1024)
@@ -1164,6 +1180,32 @@ class DesktopMirrorEngine(
         }
     }
 
+    /**
+     * Skip re-uploading Andy's scrcpy-server when the on-device copy already matches by size.
+     * Probe failure or a size mismatch falls through to `adb push`.
+     */
+    private suspend fun ensureRemoteScrcpyServer(
+        adb: String,
+        serial: String,
+        localServer: File,
+        remoteServer: String,
+    ): Boolean {
+        val localSize = localServer.length()
+        val remote = runner.run(
+            listOf(adb, "-s", serial, "shell", "stat", "-c", "%s", remoteServer),
+            timeoutSeconds = 3,
+        )
+        if (remote.isSuccess && remoteScrcpyServerSizeMatches(localSize, remote.stdout)) {
+            return true
+        }
+        val push = runner.run(listOf(adb, "-s", serial, "push", localServer.absolutePath, remoteServer), 10)
+        if (!push.isSuccess) {
+            status.value = "Failed to push scrcpy-server: ${push.stderr.ifBlank { push.stdout }.take(180)}"
+            return false
+        }
+        return true
+    }
+
     private suspend fun captureSize(adb: String, serial: String, maxSize: Int): CaptureSize {
         // Retry briefly: on first emulator boot wm size often fails or returns before the
         // display mode is final, which previously fell back to 720x1280 and made Live too wide.
@@ -1185,16 +1227,50 @@ class DesktopMirrorEngine(
         return ServerSocket(0).use { it.localPort }
     }
 
+    /**
+     * Connect the video socket and wait for scrcpy's forward-tunnel dummy byte. ADB may accept
+     * the local TCP connection before `localabstract:scrcpy_*` exists; those attempts close
+     * immediately and are retried here instead of sleeping a fixed settle delay.
+     */
+    private suspend fun awaitScrcpyVideoSocket(port: Int): Socket {
+        var lastError: Throwable? = null
+        repeat(SCRCPY_SOCKET_CONNECT_ATTEMPTS) {
+            coroutineContext.ensureActive()
+            var socket: Socket? = null
+            try {
+                socket = Socket("127.0.0.1", port).also { it.tcpNoDelay = true }
+                val value = socket.getInputStream().read()
+                if (isScrcpyForwardDummyByte(value)) {
+                    return socket
+                }
+                lastError = IllegalStateException(
+                    if (value < 0) "scrcpy tunnel closed before dummy byte"
+                    else "unexpected scrcpy readiness byte: $value",
+                )
+                socket.close()
+                socket = null
+            } catch (cancelled: CancellationException) {
+                runCatching { socket?.close() }
+                throw cancelled
+            } catch (error: Throwable) {
+                lastError = error
+                runCatching { socket?.close() }
+            }
+            delay(SCRCPY_SOCKET_CONNECT_RETRY_MILLIS)
+        }
+        throw IllegalStateException("Unable to connect scrcpy video socket", lastError)
+    }
+
     private fun connectScrcpySocket(port: Int): Socket {
         var lastError: Throwable? = null
-        repeat(100) {
+        repeat(SCRCPY_SOCKET_CONNECT_ATTEMPTS) {
             try {
                 val socket = Socket("127.0.0.1", port)
                 socket.tcpNoDelay = true
                 return socket
             } catch (error: Throwable) {
                 lastError = error
-                Thread.sleep(100)
+                Thread.sleep(SCRCPY_SOCKET_CONNECT_RETRY_MILLIS)
             }
         }
         throw IllegalStateException("Unable to connect scrcpy socket", lastError)
