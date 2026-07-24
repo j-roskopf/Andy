@@ -51,17 +51,35 @@ class RoutingMirrorEngine(
     init {
         scope.launch {
             androidEngine.flatMapLatest { it.session }.collect { session ->
-                if (session != null && IosTargetRegistry.isIosTarget(session.serial)) return@collect
-                if (session != null || _session.value?.let { !IosTargetRegistry.isIosTarget(it.serial) } != false) {
+                if (session != null) {
+                    if (IosTargetRegistry.isIosTarget(session.serial)) return@collect
                     _session.value = session
+                    return@collect
+                }
+                // Ignore stale disconnects once the Android engine has already reconnected.
+                val current = _session.value
+                if (current != null &&
+                    !IosTargetRegistry.isIosTarget(current.serial) &&
+                    android().session.value == null
+                ) {
+                    _session.compareAndSet(current, null)
                 }
             }
         }
         scope.launch {
             ios.session.collect { session ->
-                if (session != null && !IosTargetRegistry.isIosTarget(session.serial)) return@collect
-                if (session != null || _session.value?.let { IosTargetRegistry.isIosTarget(it.serial) } != false) {
+                if (session != null) {
+                    if (!IosTargetRegistry.isIosTarget(session.serial)) return@collect
                     _session.value = session
+                    return@collect
+                }
+                // Ignore stale disconnects once the iOS engine has already reconnected.
+                val current = _session.value
+                if (current != null &&
+                    IosTargetRegistry.isIosTarget(current.serial) &&
+                    ios.session.value == null
+                ) {
+                    _session.compareAndSet(current, null)
                 }
             }
         }

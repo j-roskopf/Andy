@@ -468,6 +468,7 @@ internal fun LiveScreen(
                 },
                 showAndroidNavButtons = !isIosTarget,
                 showHardwareControls = !isIosTarget,
+                showClipTextControl = !isIosTarget || iosInputEnabled,
                 passThroughInput = !isIosTarget || iosInputEnabled,
                 terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
                 onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,

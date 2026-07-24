@@ -3,6 +3,8 @@ package app.andy.desktop.service.mirror
 import app.andy.desktop.service.CommandRunner
 import app.andy.desktop.service.DesktopDeviceService
 import app.andy.desktop.parser.AndroidParsers
+import app.andy.desktop.service.emulatorGuestRefreshShellCommands
+import app.andy.desktop.service.emulatorVsyncRate
 import app.andy.desktop.service.emulator.EMULATOR_IMAGE_BYTES_PER_PIXEL
 import app.andy.desktop.service.emulator.EmulatorGrpcClient
 import app.andy.desktop.service.emulator.EmulatorMappedFramebuffer
@@ -369,6 +371,8 @@ class DesktopMirrorEngine(
             val wireless = isWirelessAdbSerial(serial)
             if (emulator) {
                 awaitEmulatorReady(adb, serial)
+                // -vsync-rate alone leaves renderFrameRate at 60; force peak/min to match Live FPS.
+                applyEmulatorGuestRefreshRate(adb, serial, config.maxFps)
             }
             var coldStartAttempt = 0
             while (isActive && connectedSerial == serial) {
@@ -701,6 +705,23 @@ class DesktopMirrorEngine(
             delay(EMULATOR_BOOT_POLL_MILLIS)
         }
         status.value = "Emulator boot wait timed out — starting mirror anyway"
+    }
+
+    /**
+     * Emulator guest vsync can be 120 while Android still renders at 60 (`defaultRefreshRate`).
+     * Align system peak/min refresh (and preferred mode) with Live maxFps before scrcpy captures.
+     */
+    private suspend fun applyEmulatorGuestRefreshRate(adb: String, serial: String, maxFps: Int) {
+        val rate = maxOf(maxFps, emulatorVsyncRate()).coerceIn(1, 240)
+        val display = readEmulatorDisplaySize(adb, serial)
+        val commands = emulatorGuestRefreshShellCommands(
+            rateHz = rate,
+            displayWidth = display?.width ?: 0,
+            displayHeight = display?.height ?: 0,
+        )
+        for (shellArgs in commands) {
+            runner.run(listOf(adb, "-s", serial, "shell") + shellArgs, timeoutSeconds = 3)
+        }
     }
 
     override suspend fun screenshot(serial: String): ByteArray? {

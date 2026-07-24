@@ -43,6 +43,7 @@ typedef struct {
     void *(*indigo_mouse)(CGPoint *, CGPoint *, uint32_t, uint32_t, uint32_t, double, double, double, double);
     void *(*indigo_mouse_edge)(CGPoint *, CGPoint *, uint32_t, uint32_t, uint32_t, double, double);
     void *(*indigo_keyboard)(void *, unsigned short, int);
+    void *(*indigo_hid_arbitrary)(uint32_t, uint32_t, uint32_t, uint32_t);
     void *(*indigo_button)(int, int, int);
     void *(*indigo_scroll)(uint32_t, double, double, double, int);
     void *(*create_pointer_service)(void);
@@ -196,6 +197,10 @@ static bool probe_ios_sim_runtime(void) {
     sim_runtime.indigo_mouse = indigo_mouse_symbol;
     sim_runtime.indigo_mouse_edge = indigo_mouse_symbol;
     sim_runtime.indigo_keyboard = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageForKeyboardNSEvent");
+    sim_runtime.indigo_hid_arbitrary = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageForHIDArbitrary");
+    if (!sim_runtime.indigo_hid_arbitrary) {
+        sim_runtime.indigo_hid_arbitrary = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageForKeyboardArbitrary");
+    }
     sim_runtime.indigo_button = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageForButton");
     sim_runtime.indigo_scroll = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageForScrollEvent");
     sim_runtime.create_pointer_service = dlsym(sim_runtime.simulator_kit, "IndigoHIDMessageToCreatePointerService");
@@ -572,7 +577,22 @@ Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeContentSizePoints(JNIEnv
 
 // HID input implementation continues in second part - sendTouch, sendKey, etc.
 
+static const uint32_t kAndyIosHidKeyboardPage = 7;
+static const uint32_t kAndyIosHidKeyDown = 1;
+static const uint32_t kAndyIosHidKeyUp = 2;
+static const uint32_t kAndyIosHidModifierShift = 0xE1;
+
+typedef struct {
+    uint32_t usage;
+    bool shift;
+} AndyIosHidKeystroke;
+
 static bool send_hid_message_sync(void *message);
+static bool send_hid_arbitrary(uint32_t page, uint32_t usage, uint32_t operation);
+static bool send_hid_key_usage(uint32_t usage);
+static bool send_hid_keystroke(AndyIosHidKeystroke stroke);
+static bool ascii_to_hid_keystroke(unichar character, AndyIosHidKeystroke *stroke_out);
+static void send_text_via_keyboard_nsevent(NSString *value);
 static void activate_simulator_app(void);
 static void post_simulator_keyboard_shortcut(CGKeyCode key_code, CGEventFlags flags);
 
@@ -763,14 +783,99 @@ Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendScroll(
     send_hid_message(message);
 }
 
-JNIEXPORT void JNICALL
-Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendText(
-        JNIEnv *env, jclass clazz, jstring text) {
-    (void) clazz;
-    if (!sim_runtime.indigo_keyboard || !text) return;
-    const char *utf = (*env)->GetStringUTFChars(env, text, NULL);
-    if (!utf) return;
-    NSString *value = [NSString stringWithUTF8String:utf];
+static bool send_hid_arbitrary(uint32_t page, uint32_t usage, uint32_t operation) {
+    if (!sim_runtime.indigo_hid_arbitrary) return false;
+    void *message = sim_runtime.indigo_hid_arbitrary(kAndyIosHidTarget, page, usage, operation);
+    return message && send_hid_message_sync(message);
+}
+
+static bool send_hid_key_usage(uint32_t usage) {
+    if (!send_hid_arbitrary(kAndyIosHidKeyboardPage, usage, kAndyIosHidKeyDown)) return false;
+    return send_hid_arbitrary(kAndyIosHidKeyboardPage, usage, kAndyIosHidKeyUp);
+}
+
+static bool send_hid_keystroke(AndyIosHidKeystroke stroke) {
+    if (stroke.shift && !send_hid_arbitrary(kAndyIosHidKeyboardPage, kAndyIosHidModifierShift, kAndyIosHidKeyDown)) {
+        return false;
+    }
+    const bool ok = send_hid_key_usage(stroke.usage);
+    if (stroke.shift) {
+        (void) send_hid_arbitrary(kAndyIosHidKeyboardPage, kAndyIosHidModifierShift, kAndyIosHidKeyUp);
+    }
+    return ok;
+}
+
+static bool ascii_to_hid_keystroke(unichar character, AndyIosHidKeystroke *stroke_out) {
+    if (!stroke_out) return false;
+    stroke_out->shift = false;
+    if (character >= 'a' && character <= 'z') {
+        stroke_out->usage = 0x04u + (uint32_t) (character - 'a');
+        return true;
+    }
+    if (character >= 'A' && character <= 'Z') {
+        stroke_out->usage = 0x04u + (uint32_t) (character - 'A');
+        stroke_out->shift = true;
+        return true;
+    }
+    if (character >= '1' && character <= '9') {
+        stroke_out->usage = 0x1Eu + (uint32_t) (character - '1');
+        return true;
+    }
+    if (character == '0') {
+        stroke_out->usage = 0x27u;
+        return true;
+    }
+    if (character == ' ') {
+        stroke_out->usage = 0x2Cu;
+        return true;
+    }
+    if (character == '\n' || character == '\r') {
+        stroke_out->usage = 0x28u;
+        return true;
+    }
+    if (character == '\t') {
+        stroke_out->usage = 0x2Bu;
+        return true;
+    }
+    switch (character) {
+        case '-': stroke_out->usage = 0x2Du; return true;
+        case '_': stroke_out->usage = 0x2Du; stroke_out->shift = true; return true;
+        case '=': stroke_out->usage = 0x2Eu; return true;
+        case '+': stroke_out->usage = 0x2Eu; stroke_out->shift = true; return true;
+        case '[': stroke_out->usage = 0x2Fu; return true;
+        case '{': stroke_out->usage = 0x2Fu; stroke_out->shift = true; return true;
+        case ']': stroke_out->usage = 0x30u; return true;
+        case '}': stroke_out->usage = 0x30u; stroke_out->shift = true; return true;
+        case '\\': stroke_out->usage = 0x31u; return true;
+        case '|': stroke_out->usage = 0x31u; stroke_out->shift = true; return true;
+        case ';': stroke_out->usage = 0x33u; return true;
+        case ':': stroke_out->usage = 0x33u; stroke_out->shift = true; return true;
+        case '\'': stroke_out->usage = 0x34u; return true;
+        case '"': stroke_out->usage = 0x34u; stroke_out->shift = true; return true;
+        case '`': stroke_out->usage = 0x35u; return true;
+        case '~': stroke_out->usage = 0x35u; stroke_out->shift = true; return true;
+        case ',': stroke_out->usage = 0x36u; return true;
+        case '<': stroke_out->usage = 0x36u; stroke_out->shift = true; return true;
+        case '.': stroke_out->usage = 0x37u; return true;
+        case '>': stroke_out->usage = 0x37u; stroke_out->shift = true; return true;
+        case '/': stroke_out->usage = 0x38u; return true;
+        case '?': stroke_out->usage = 0x38u; stroke_out->shift = true; return true;
+        case '!': stroke_out->usage = 0x1Eu; stroke_out->shift = true; return true;
+        case '@': stroke_out->usage = 0x1Fu; stroke_out->shift = true; return true;
+        case '#': stroke_out->usage = 0x20u; stroke_out->shift = true; return true;
+        case '$': stroke_out->usage = 0x21u; stroke_out->shift = true; return true;
+        case '%': stroke_out->usage = 0x22u; stroke_out->shift = true; return true;
+        case '^': stroke_out->usage = 0x23u; stroke_out->shift = true; return true;
+        case '&': stroke_out->usage = 0x24u; stroke_out->shift = true; return true;
+        case '*': stroke_out->usage = 0x25u; stroke_out->shift = true; return true;
+        case '(': stroke_out->usage = 0x26u; stroke_out->shift = true; return true;
+        case ')': stroke_out->usage = 0x27u; stroke_out->shift = true; return true;
+        default: return false;
+    }
+}
+
+static void send_text_via_keyboard_nsevent(NSString *value) {
+    if (!sim_runtime.indigo_keyboard || !value) return;
     for (NSUInteger i = 0; i < value.length; i++) {
         const unichar character = [value characterAtIndex:i];
         void *message = sim_runtime.indigo_keyboard(NULL, character, NSEventTypeKeyDown);
@@ -778,7 +883,35 @@ Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendText(
         message = sim_runtime.indigo_keyboard(NULL, character, NSEventTypeKeyUp);
         send_hid_message(message);
     }
+}
+
+JNIEXPORT void JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendText(
+        JNIEnv *env, jclass clazz, jstring text) {
+    (void) clazz;
+    if (!text) return;
+    const char *utf = (*env)->GetStringUTFChars(env, text, NULL);
+    if (!utf) return;
+    NSString *value = [NSString stringWithUTF8String:utf];
+    if (sim_runtime.indigo_hid_arbitrary) {
+        for (NSUInteger i = 0; i < value.length; i++) {
+            AndyIosHidKeystroke stroke = {0};
+            if (!ascii_to_hid_keystroke([value characterAtIndex:i], &stroke)) continue;
+            (void) send_hid_keystroke(stroke);
+        }
+    } else {
+        send_text_via_keyboard_nsevent(value);
+    }
     (*env)->ReleaseStringUTFChars(env, text, utf);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_andy_desktop_service_ios_NativeIosSimJni_nativeSendKey(
+        JNIEnv *env, jclass clazz, jint hid_usage) {
+    (void) env;
+    (void) clazz;
+    if (hid_usage <= 0 || !sim_runtime.indigo_hid_arbitrary) return JNI_FALSE;
+    return send_hid_key_usage((uint32_t) hid_usage) ? JNI_TRUE : JNI_FALSE;
 }
 
 static void send_home_gesture(void) {

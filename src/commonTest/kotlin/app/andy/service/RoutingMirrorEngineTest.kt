@@ -8,12 +8,18 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RoutingMirrorEngineTest {
+    @AfterTest
+    fun tearDown() {
+        IosTargetRegistry.update(emptyList())
+    }
+
     @Test
     fun connectToIosDisconnectsAndroidFirst() = runBlocking {
         val android = TrackingMirrorEngine("android")
