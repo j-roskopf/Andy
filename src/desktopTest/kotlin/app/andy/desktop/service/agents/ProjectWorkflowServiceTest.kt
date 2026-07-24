@@ -25,7 +25,6 @@ import app.andy.service.CommandResult
 import app.andy.service.McpServerService
 import app.andy.service.WorkspaceStore
 import java.io.File
-import java.util.Base64
 import java.util.Collections
 import kotlin.test.Ignore
 import kotlin.test.Test
@@ -1200,6 +1199,7 @@ private class WorkflowAdapter(
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
         launched += task
         return if (isWindows()) {
+            writeWorkflowArtifacts(task)
             listOf(binary, "/d", "/c", windowsCommand(task))
         } else {
             listOf(binary, "-c", unixCommand(task))
@@ -1259,34 +1259,43 @@ private class WorkflowAdapter(
         }
         if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
         when (task.workflowStage) {
-            ProjectWorkflowStage.Spec -> append(writeArtifactWindows(task, "plan.md", specPlanText()))
             ProjectWorkflowStage.Build -> {
                 if (buildKeepAliveSeconds > 0) {
                     append("timeout /t ").append(buildKeepAliveSeconds).append(" /nobreak >nul")
+                } else {
+                    append("exit /b 0")
                 }
             }
+            else -> append("exit /b 0")
+        }
+    }
+
+    private fun writeWorkflowArtifacts(task: AgentTask) {
+        if (task.workflowStage == failStage) return
+        when (task.workflowStage) {
+            ProjectWorkflowStage.Spec -> writeArtifactFile(task, "plan.md", specPlanText())
             ProjectWorkflowStage.Review -> {
-                if (reviewWritesFile) append("echo reviewed change>review-edit.txt & ")
-                reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifactWindows(task, "review.json", it)) }
+                if (reviewWritesFile) {
+                    task.cwd?.let { File(it, "review-edit.txt").writeText("reviewed change\n") }
+                }
+                reviewJson(reviewOutcomeKey(task))?.let { writeArtifactFile(task, "review.json", it) }
             }
             ProjectWorkflowStage.Verification -> {
-                verificationJson(verificationOutcomeKey(task))?.let { append(writeArtifactWindows(task, "verification.json", it)) }
+                verificationJson(verificationOutcomeKey(task))?.let { writeArtifactFile(task, "verification.json", it) }
             }
-            null -> Unit
+            else -> Unit
         }
+    }
+
+    private fun writeArtifactFile(task: AgentTask, name: String, content: String) {
+        val dir = File(artifactDir(task))
+        dir.mkdirs()
+        File(dir, name).writeText(content)
     }
 
     private fun writeArtifact(task: AgentTask, name: String, content: String): String {
         val dir = artifactDir(task)
         return "mkdir -p ${shellQuote(dir)} && printf %s ${shellQuote(content)} > ${shellQuote("$dir/$name")}"
-    }
-
-    private fun writeArtifactWindows(task: AgentTask, name: String, content: String): String {
-        val dir = artifactDir(task).replace('/', '\\')
-        val file = "$dir\\$name"
-        val encoded = Base64.getEncoder().encodeToString(content.toByteArray(Charsets.UTF_8))
-        return "if not exist \"$dir\" mkdir \"$dir\" & powershell -NoProfile -Command " +
-            "\"[IO.File]::WriteAllBytes('$file', [Convert]::FromBase64String('$encoded'))\""
     }
 
     private fun specPlanText(): String =
