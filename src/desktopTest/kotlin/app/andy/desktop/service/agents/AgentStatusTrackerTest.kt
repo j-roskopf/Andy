@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.jsonObject
 import java.io.File
@@ -63,7 +64,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun staleHookDoneDoesNotOverridePerambulatingScrape() = runTest {
+    fun staleHookDoneDoesNotOverridePerambulatingScrape() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val artifactDir = File.createTempFile("andy-status", null).also { it.delete(); it.mkdirs() }
@@ -128,7 +129,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun activelyWorkingOverridesStaleBlockedHook() = runTest {
+    fun activelyWorkingOverridesStaleBlockedHook() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val artifactDir = File.createTempFile("andy-status", null).also { it.delete(); it.mkdirs() }
@@ -220,7 +221,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun agentStatusTrackerPrefersBlockedFromScrape() = runTest {
+    fun agentStatusTrackerPrefersBlockedFromScrape() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {
             val session = FakeTerminalSession()
