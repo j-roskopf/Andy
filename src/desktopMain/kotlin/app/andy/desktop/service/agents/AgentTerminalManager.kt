@@ -12,6 +12,7 @@ import app.andy.terminal.TerminalSessions
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
 import app.andy.terminal.joinReadableLines
+import app.andy.terminal.replayCaptureReadableLines
 import app.andy.terminal.resolveScrollbackForReplay
 import io.github.ketraterm.ui.swing.api.SwingTerminal
 import kotlinx.coroutines.CoroutineScope
@@ -259,7 +260,17 @@ class AgentTerminalManager(
 
     private fun persistScrollback(handle: Handle) {
         val backend = handle.session as? KetraTermBackend ?: return
-        val fresh = backend.captureReadableLines(handle.capturedLineKeys)
+        val fresh = backend.captureReadableLines(handle.capturedLineKeys).ifEmpty {
+            val tee = backend.scrollbackAnsi()
+            if (tee.isBlank()) {
+                emptyList()
+            } else {
+                replayCaptureReadableLines(tee).filter { line ->
+                    val key = line.trim()
+                    key.isNotEmpty() && handle.capturedLineKeys.add(key)
+                }
+            }
+        }
         if (fresh.isNotEmpty()) {
             handle.capturedLines.addAll(fresh)
         }
