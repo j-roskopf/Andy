@@ -25,6 +25,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -109,12 +110,14 @@ private fun AgentCommandCenter(
     val activeTasks = inbox.filter { it.isActive }
     // Open chats stay read — including when a live run finishes while you're watching.
     // Gate on [active] so a retained Agents pane off-destination cannot clear unread.
-    LaunchedEffect(active, selected?.id, selected?.status, composing) {
-        if (!active) return@LaunchedEffect
-        val task = selected ?: return@LaunchedEffect
-        if (composing) return@LaunchedEffect
-        if (task.unread && !task.isActive) {
-            services.agentRuns.markRead(task.id)
+    DisposableEffect(active, selected?.id, composing) {
+        val taskId = selected?.id?.takeIf { active && !composing }
+        if (taskId != null) {
+            services.agentRuns.setChatViewing(taskId, viewing = true)
+            services.agentRuns.markRead(taskId)
+        }
+        onDispose {
+            if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
         }
     }
 

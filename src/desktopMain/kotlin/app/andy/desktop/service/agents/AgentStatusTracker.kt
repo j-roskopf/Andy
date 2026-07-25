@@ -96,7 +96,9 @@ class AgentStatusTracker(
             hookStatus == AgentSessionStatus.Done && (scrapeStatus == AgentSessionStatus.Idle || quiescentAtPrompt) -> {
                 if (isTabSeen()) AgentSessionStatus.Idle else AgentSessionStatus.Done
             }
-            scrapeStatus == AgentSessionStatus.Idle || quiescentAtPrompt -> AgentSessionStatus.Idle
+            scrapeStatus == AgentSessionStatus.Idle || quiescentAtPrompt -> {
+                if (isTabSeen()) AgentSessionStatus.Idle else AgentSessionStatus.Done
+            }
             hookStatus == AgentSessionStatus.Working || scrapeStatus == AgentSessionStatus.Working ->
                 AgentSessionStatus.Working
             hookStatus == AgentSessionStatus.Idle ->

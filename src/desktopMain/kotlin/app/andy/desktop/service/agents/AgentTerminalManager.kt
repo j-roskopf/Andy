@@ -11,6 +11,8 @@ import app.andy.terminal.TerminalSession
 import app.andy.terminal.TerminalSessions
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
+import app.andy.terminal.joinReadableLines
+import app.andy.terminal.resolveScrollbackForReplay
 import io.github.ketraterm.ui.swing.api.SwingTerminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Component
 import java.io.File
+import java.util.LinkedHashSet
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -47,6 +50,8 @@ class AgentTerminalManager(
         val artifactDir: File,
         val scrollbackPath: File,
         val committedScrollbackPrefix: String,
+        val capturedLineKeys: MutableSet<String>,
+        val capturedLines: MutableList<String>,
         @Volatile var stopRequested: Boolean = false,
         @Volatile var waitJob: Job? = null,
         @Volatile var scrollbackJob: Job? = null,
@@ -181,7 +186,7 @@ class AgentTerminalManager(
         artifacts.start()
         tracker.start()
         val scrollbackPath = scrollbackFile(task.id)
-        val committedPrefix = loadCommittedScrollbackPrefix(scrollbackPath)
+        val (committedPrefix, capturedKeys, capturedLines) = loadCommittedScrollbackState(scrollbackPath)
         val handle = Handle(
             taskId = task.id,
             session = session,
@@ -191,6 +196,8 @@ class AgentTerminalManager(
             artifactDir = artifactDir,
             scrollbackPath = scrollbackPath,
             committedScrollbackPrefix = committedPrefix,
+            capturedLineKeys = capturedKeys,
+            capturedLines = capturedLines,
         )
         handles[task.id] = handle
         handle.scrollbackJob = scope.launch(Dispatchers.IO) {
@@ -252,18 +259,34 @@ class AgentTerminalManager(
 
     private fun persistScrollback(handle: Handle) {
         val backend = handle.session as? KetraTermBackend ?: return
-        val export = backend.scrollbackAnsi()
+        val fresh = backend.captureReadableLines(handle.capturedLineKeys)
+        if (fresh.isNotEmpty()) {
+            handle.capturedLines.addAll(fresh)
+        }
+        val export = joinReadableLines(handle.capturedLines)
         if (export.isBlank() && handle.committedScrollbackPrefix.isBlank()) return
         val content = capScrollbackSize(handle.committedScrollbackPrefix + export)
         atomicWriteText(handle.scrollbackPath, content)
     }
 
-    private fun loadCommittedScrollbackPrefix(file: File): String {
+    private fun loadCommittedScrollbackState(file: File): Triple<String, MutableSet<String>, MutableList<String>> {
         val existing = runCatching {
             if (file.isFile && file.length() > 0L) file.readText() else ""
         }.getOrDefault("")
-        if (existing.isBlank()) return ""
-        return existing.trimEnd() + SCROLLBACK_SESSION_SEPARATOR
+        if (existing.isBlank()) {
+            return Triple("", LinkedHashSet(), mutableListOf())
+        }
+        val normalized = resolveScrollbackForReplay(existing).trimEnd()
+        if (normalized.isBlank()) {
+            return Triple("", LinkedHashSet(), mutableListOf())
+        }
+        val lines = normalized.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
+        val keys = lines.map { it.trim() }.toCollection(LinkedHashSet())
+        return Triple(
+            normalized + SCROLLBACK_SESSION_SEPARATOR,
+            keys,
+            lines.toMutableList(),
+        )
     }
 
     private fun refreshStatus(taskId: String) {
