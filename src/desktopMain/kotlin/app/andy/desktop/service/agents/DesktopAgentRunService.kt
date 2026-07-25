@@ -21,6 +21,7 @@ import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentTaskStatus
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.ConfigSource
 import app.andy.model.AgentSandboxMode
 import app.andy.model.grillMeInteractivePromptAddendum
 import app.andy.model.ProjectAgentProfile
@@ -162,7 +163,9 @@ class DesktopAgentRunService(
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
-            snapshotActiveTasksBeforeShutdown()
+            // Best-effort: never let a shutdown-time persist failure (e.g. the store
+            // already torn down) throw uncaught out of the shutdown thread.
+            runCatching { snapshotActiveTasksBeforeShutdown() }
             handles.keys.toList().forEach(terminals::stop)
         })
         scope.launch {
@@ -1687,7 +1690,10 @@ class DesktopAgentRunService(
         val task = currentTask(taskId) ?: return
         if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
         handles[taskId]?.stopRequested = true
-        terminals.stop(taskId)
+        // Mark Completed before stopping the terminal. finishTask stops the session
+        // itself (after atomically setting the status), so the run pipeline's own
+        // awaitExit wakes only once the task is already inactive — otherwise it would
+        // race in and overwrite this completion with Stopped/Failed.
         finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
     }
 
@@ -2927,13 +2933,14 @@ class DesktopAgentRunService(
         var changedWorkflows = false
         val projectIdsToClear = mutableSetOf<String>()
         config.projects.forEach { project ->
-            if (project.notes.isEmpty()) return@forEach
+            val globalNotes = project.notes.filter { it.source == ConfigSource.Global }
+            if (globalNotes.isEmpty()) return@forEach
             val existing = _projects.value[project.id] ?: defaultProjectState(project.id)
             projectIdsToClear += project.id
             if (existing.legacyNotesMigrated) return@forEach
             val block = buildString {
                 append("## Migrated todos\n")
-                project.notes.forEach { note ->
+                globalNotes.forEach { note ->
                     append("- [").append(if (note.completed) 'x' else ' ').append("] ").append(note.title.trim()).append('\n')
                     if (note.body.isNotEmpty()) {
                         note.body.lines().forEach { append("  ").append(it).append('\n') }
@@ -2948,7 +2955,7 @@ class DesktopAgentRunService(
         if (projectIdsToClear.isEmpty()) return
         actionConfig.save(
             config.copy(projects = config.projects.map { project ->
-                if (project.id in projectIdsToClear) project.copy(notes = emptyList()) else project
+                if (project.id in projectIdsToClear) project.copy(notes = project.notes.filterNot { it.source == ConfigSource.Global }) else project
             }),
         )
     }

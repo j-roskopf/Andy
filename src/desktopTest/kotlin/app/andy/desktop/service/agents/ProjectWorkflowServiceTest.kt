@@ -921,6 +921,7 @@ class ProjectWorkflowServiceTest {
             service = DesktopAgentRunService(
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
                 WorkflowFakeMcp, WorkflowWorkspaceStore, config, enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             service.ensureProject("project-1")
             await { config.value.projects.single().notes.isEmpty() }
@@ -1054,6 +1055,7 @@ class ProjectWorkflowServiceTest {
                 WorkflowFakeMcp, WorkflowWorkspaceStore,
                 MutableActionConfig(ActionsConfig(projects = listOf(ActionProject("project-1", "Project", projectDir.absolutePath)))),
                 enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             service.ensureProject("project-1")
             val recovered = service.projects.value.getValue("project-1").tasks
@@ -1174,6 +1176,8 @@ private suspend fun withHarness(
             workspaceStore = WorkflowWorkspaceStore,
             actionConfig = config,
             enableProbes = false,
+            // Fast-exiting shell "agents" race the tmux-attach path; run them in-process.
+            terminalMode = AgentTerminalMode.DirectPty,
         )
         service.ensureProject("project-1")
         block(WorkflowHarness(service, store, projectDir))

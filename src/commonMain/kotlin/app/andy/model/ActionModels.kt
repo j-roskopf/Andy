@@ -1,5 +1,7 @@
 package app.andy.model
 
+enum class ConfigSource { Global, Repo }
+
 data class ActionProject(
     val id: String,
     val name: String,
@@ -7,6 +9,7 @@ data class ActionProject(
     val env: Map<String, String> = emptyMap(),
     val actions: List<ProjectAction> = emptyList(),
     val notes: List<ProjectNote> = emptyList(),
+    val source: ConfigSource = ConfigSource.Global,
 )
 
 data class ProjectAction(
@@ -16,6 +19,7 @@ data class ProjectAction(
     val command: String,
     val cwd: String? = null,
     val env: Map<String, String> = emptyMap(),
+    val source: ConfigSource = ConfigSource.Global,
 )
 
 data class ProjectNote(
@@ -23,7 +27,9 @@ data class ProjectNote(
     val title: String,
     val body: String = "",
     val completed: Boolean = false,
+    val source: ConfigSource = ConfigSource.Global,
 )
+
 
 data class ActionsConfig(
     val projects: List<ActionProject> = emptyList(),

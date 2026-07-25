@@ -39,11 +39,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -79,7 +82,9 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentTask
 import app.andy.model.AndroidDevice
+import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
+import app.andy.model.ProjectNote
 import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
@@ -555,7 +560,7 @@ private fun ProjectCockpit(
             project = edit.project,
             existingProjects = config.projects,
             onDismiss = { editingProject = null },
-            onDelete = edit.project?.let { project ->
+            onDelete = edit.project?.takeIf { it.source != ConfigSource.Repo }?.let { project ->
                 {
                     editingProject = null
                     pendingConfirmation = PendingConfirmation(
@@ -761,18 +766,22 @@ private fun ProjectSessionGroup(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            AnimatedVisibility(
-                visible = hovered,
-                enter = fadeIn(tween(120)) + expandHorizontally(tween(160), expandFrom = Alignment.End),
-                exit = fadeOut(tween(90)) + shrinkHorizontally(tween(120), shrinkTowards = Alignment.End),
-            ) {
-                Text(
-                    "Edit",
-                    color = Cyan,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    modifier = Modifier.clickable(onClick = onEditProject).padding(end = 2.dp),
-                )
+            if (project.source == ConfigSource.Repo) {
+                RepoSourceBadge()
+            } else {
+                AnimatedVisibility(
+                    visible = hovered,
+                    enter = fadeIn(tween(120)) + expandHorizontally(tween(160), expandFrom = Alignment.End),
+                    exit = fadeOut(tween(90)) + shrinkHorizontally(tween(120), shrinkTowards = Alignment.End),
+                ) {
+                    Text(
+                        "Edit",
+                        color = Cyan,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                        modifier = Modifier.clickable(onClick = onEditProject).padding(end = 2.dp),
+                    )
+                }
             }
             NewProjectChatButton(onClick = onNewChat, size = 15.dp)
             if (hasUnread) UnreadDot()
@@ -1012,33 +1021,74 @@ private fun ProjectRunbook(
         Text("Runbook", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
         Button(onClick = onNewAction) { Text("Add action") }
     }
-    if (project.actions.isEmpty()) {
+    if (project.actions.isEmpty() && project.notes.isEmpty()) {
         EmptyState("Add the commands you use most")
     } else {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
-            items(project.actions, key = { it.id }) { action ->
-                val expanded = expandedActionId == action.id
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
-                        .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.R3))
-                        .clickable { onExpandedActionChange(if (expanded) null else action.id) }
-                        .animateContentSize(animationSpec = tween(220))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(actionIconMarker(action.icon), color = Rust, fontFamily = MonoFont)
-                        Text(action.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        OutlinedButton(onClick = { onEditAction(action) }) { Text("Edit") }
-                        Button(onClick = { onRunAction(action) }) { Text("Run") }
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+            if (project.actions.isNotEmpty()) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f, fill = false)) {
+                    items(project.actions, key = { it.id }) { action ->
+                        val expanded = expandedActionId == action.id
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .clickable { onExpandedActionChange(if (expanded) null else action.id) }
+                                .animateContentSize(animationSpec = tween(220))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(actionIconMarker(action.icon), color = Rust, fontFamily = MonoFont)
+                                Text(action.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                if (action.source == ConfigSource.Repo) {
+                                    RepoSourceBadge()
+                                    OutlinedButton(onClick = {}, enabled = false) { Text("Edit") }
+                                } else {
+                                    OutlinedButton(onClick = { onEditAction(action) }) { Text("Edit") }
+                                }
+                                Button(onClick = { onRunAction(action) }) { Text("Run") }
+                            }
+                            AnimatedVisibility(
+                                visible = expanded,
+                                enter = fadeIn(tween(160)) + expandVertically(tween(220)),
+                                exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+                            ) {
+                                Text(action.command, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
-                    AnimatedVisibility(
-                        visible = expanded,
-                        enter = fadeIn(tween(160)) + expandVertically(tween(220)),
-                        exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
-                    ) {
-                        Text(action.command, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (project.notes.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Notes", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    project.notes.forEach { note ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Checkbox(
+                                checked = note.completed,
+                                onCheckedChange = null,
+                                enabled = note.source != ConfigSource.Repo,
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(note.title, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    if (note.source == ConfigSource.Repo) {
+                                        RepoSourceBadge()
+                                    }
+                                }
+                                if (note.body.isNotBlank()) {
+                                    Text(note.body, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1090,13 +1140,13 @@ private fun ProjectDialog(
                         ),
                     )
                 },
-                enabled = name.isNotBlank() && contextDir.isNotBlank(),
+                enabled = project?.source != ConfigSource.Repo && name.isNotBlank() && contextDir.isNotBlank(),
                 colors = primaryButtonColors(),
             ) { Text("Save") }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (onDelete != null) {
+                if (onDelete != null && project?.source != ConfigSource.Repo) {
                     OutlinedButton(
                         onClick = onDelete,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
@@ -1192,3 +1242,21 @@ private fun nextActionId(prefix: String, label: String, existing: Set<String>): 
     }
     return id
 }
+
+@Composable
+private fun RepoSourceBadge() {
+    Surface(
+        color = AndyColors.Neutral800,
+        shape = RoundedCornerShape(AndyRadius.R2),
+        border = BorderStroke(1.dp, AndyColors.Neutral600),
+    ) {
+        Text(
+            "from repo",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+

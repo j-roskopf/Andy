@@ -431,7 +431,7 @@ class DesktopAgentTaskStoreTest {
     }
 
     @Test
-    fun loadRecoversFromBackupWhenPrimaryUnreadable() {
+    fun loadRecoversFromSqliteWhenTomlMirrorIsUnreadable() {
         val dir = File.createTempFile("andy-agents", null).also {
             it.delete()
             it.mkdirs()
@@ -441,7 +441,7 @@ class DesktopAgentTaskStoreTest {
                 val file = File(dir, "agents.toml")
                 val store = DesktopAgentTaskStore(file)
                 val task = AgentTask(
-                    id = "from-bak",
+                    id = "from-db",
                     title = "recovered",
                     prompt = "p",
                     agent = AgentKind.Codex,
@@ -449,12 +449,10 @@ class DesktopAgentTaskStoreTest {
                     createdAtMillis = 7,
                 )
                 store.save(AgentStoreState(tasks = listOf(task)))
-                // Second save creates agents.toml.bak from the good primary.
-                store.save(AgentStoreState(tasks = listOf(task)))
+                // Corrupt the human-readable TOML mirror; the SQLite DB is the source of truth.
                 file.writeText("this is not valid toml {{{")
                 val loaded = store.load()
                 assertEquals(listOf(task.id), loaded.tasks.map { it.id })
-                assertTrue(file.readText().contains("from-bak"))
             }
         } finally {
             dir.deleteRecursively()

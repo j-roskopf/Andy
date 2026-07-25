@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
+import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectNote
 import kotlinx.coroutines.runBlocking
@@ -14,149 +15,48 @@ import kotlin.test.assertTrue
 
 class DesktopActionConfigStoreTest {
     @Test
-    fun loadsStarterActionsFromARelativePath() = runBlocking {
-        val dir = createTempDirectory("andy-actions-relative-starter").toFile()
+    fun discoversVirtualProjectFromRepoRoot() = runBlocking {
+        val dir = createTempDirectory("andy-actions-repo-discovery").toFile()
         val homeConfig = dir.resolve("home/actions.toml")
-
-        val loaded = DesktopActionConfigStore(homeConfig, File(".andy/actions.toml")).load()
-
-        assertEquals(File(System.getProperty("user.dir")).absolutePath, loaded.projects.single().contextDir)
-    }
-
-    @Test
-    fun loadsStarterActionsWhenNoPersonalConfigurationExists() = runBlocking {
-        val dir = createTempDirectory("andy-actions-starter").toFile()
-        val homeConfig = dir.resolve("home/actions.toml")
-        val starter = dir.resolve("workspace/.andy/actions.toml").apply {
+        val repoDir = dir.resolve("workspace").apply { mkdirs() }
+        repoDir.resolve(".andy/actions.toml").apply {
             parentFile.mkdirs()
             writeText(
                 """
                 version = 1
                 [[projects]]
-                id = "andy"
-                name = "Andy"
+                id = "repo-proj"
+                name = "Repo Project"
                 contextDir = "."
                 env = { }
                 [[actions]]
-                id = "record"
-                projectId = "andy"
-                name = "Record screenshots"
-                icon = "test"
-                command = "./gradlew recordRoborazziDesktop"
+                id = "repo-act"
+                projectId = "repo-proj"
+                name = "Repo Run"
+                icon = "run"
+                command = "echo repo"
                 cwd = ""
                 env = { }
                 """.trimIndent() + "\n",
             )
         }
 
-        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { listOf(repoDir.absolutePath) })
+        val loaded = store.load()
 
         assertEquals(1, loaded.projects.size)
-        assertEquals(starter.parentFile.parentFile.absolutePath, loaded.projects.single().contextDir)
-        assertEquals("./gradlew recordRoborazziDesktop", loaded.projects.single().actions.single().command)
-        assertFalse(homeConfig.exists(), "starter data must not overwrite personal configuration")
+        val proj = loaded.projects.single()
+        assertEquals("repo-proj", proj.id)
+        assertEquals(repoDir.absolutePath, proj.contextDir)
+        assertEquals(ConfigSource.Repo, proj.source)
+        assertEquals(1, proj.actions.size)
+        assertEquals(ConfigSource.Repo, proj.actions.single().source)
+        assertFalse(homeConfig.exists(), "personal config must not be created on load")
     }
 
     @Test
-    fun ignoresMalformedStarterActionsWithoutChangingPersonalConfiguration() = runBlocking {
-        val dir = createTempDirectory("andy-actions-invalid-starter").toFile()
-        val homeConfig = dir.resolve("home/actions.toml")
-        val starter = dir.resolve("workspace/.andy/actions.toml").apply {
-            parentFile.mkdirs()
-            writeText("[[projects]\nid = \"unterminated\"")
-        }
-
-        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
-
-        assertTrue(loaded.projects.isEmpty())
-        assertFalse(homeConfig.exists(), "starter data must not overwrite personal configuration")
-        assertFalse(File(starter.absolutePath + ".corrupt").exists(), "starter data must not be renamed or copied")
-    }
-
-    @Test
-    fun doesNotReseedDeletedStarterProjectWhenPersonalConfigurationExists() = runBlocking {
-        val dir = createTempDirectory("andy-actions-no-reseed").toFile()
-        val workspace = dir.resolve("workspace").apply { mkdirs() }
-        val homeConfig = dir.resolve("home/actions.toml").apply {
-            parentFile.mkdirs()
-            writeText(
-                """
-                version = 1
-                [[projects]]
-                id = "proj-other"
-                name = "Other"
-                contextDir = "/tmp/other"
-                env = { }
-                """.trimIndent() + "\n",
-            )
-        }
-        val starter = workspace.resolve(".andy/actions.toml").apply {
-            parentFile.mkdirs()
-            writeText(
-                """
-                version = 1
-                [[projects]]
-                id = "andy"
-                name = "Andy"
-                contextDir = "."
-                env = { }
-                [[actions]]
-                id = "record"
-                projectId = "andy"
-                name = "Record screenshots"
-                icon = "test"
-                command = "./gradlew recordRoborazziDesktop"
-                cwd = ""
-                env = { }
-                """.trimIndent() + "\n",
-            )
-        }
-
-        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
-
-        assertEquals(listOf("proj-other"), loaded.projects.map { it.id })
-        assertFalse(loaded.projects.any { it.name == "Andy" })
-    }
-
-    @Test
-    fun reseedsStarterProjectsWhenPersonalConfigurationIsCorrupt() = runBlocking {
-        val dir = createTempDirectory("andy-actions-corrupt-reseed").toFile()
-        val workspace = dir.resolve("workspace").apply { mkdirs() }
-        val homeConfig = dir.resolve("home/actions.toml").apply {
-            parentFile.mkdirs()
-            writeText("[[projects]\nid = \"unterminated\"")
-        }
-        val starter = workspace.resolve(".andy/actions.toml").apply {
-            parentFile.mkdirs()
-            writeText(
-                """
-                version = 1
-                [[projects]]
-                id = "andy"
-                name = "Andy"
-                contextDir = "."
-                env = { }
-                [[actions]]
-                id = "record"
-                projectId = "andy"
-                name = "Record screenshots"
-                icon = "test"
-                command = "./gradlew recordRoborazziDesktop"
-                cwd = ""
-                env = { }
-                """.trimIndent() + "\n",
-            )
-        }
-
-        val loaded = DesktopActionConfigStore(homeConfig, starter).load()
-
-        assertEquals(listOf("andy"), loaded.projects.map { it.id })
-        assertTrue(File(homeConfig.absolutePath + ".corrupt").exists())
-    }
-
-    @Test
-    fun mergesScreenshotStarterActionIntoExistingPersonalProject() = runBlocking {
-        val dir = createTempDirectory("andy-actions-merge").toFile()
+    fun augmentsGlobalProjectWithRepoActionsAndNotesAndDedups() = runBlocking {
+        val dir = createTempDirectory("andy-actions-augment").toFile()
         val workspace = dir.resolve("workspace").apply { mkdirs() }
         val homeConfig = dir.resolve("home/actions.toml").apply {
             parentFile.mkdirs()
@@ -179,15 +79,23 @@ class DesktopActionConfigStoreTest {
                 """.trimIndent() + "\n",
             )
         }
-        val starter = workspace.resolve(".andy/actions.toml").apply {
+        workspace.resolve(".andy/actions.toml").apply {
             parentFile.mkdirs()
             writeText(
                 """
                 version = 1
                 [[projects]]
                 id = "andy"
-                name = "Andy"
+                name = "Andy Repo"
                 contextDir = "."
+                env = { }
+                [[actions]]
+                id = "test"
+                projectId = "andy"
+                name = "Test"
+                icon = "test"
+                command = "./gradlew desktopTest"
+                cwd = ""
                 env = { }
                 [[actions]]
                 id = "record"
@@ -197,22 +105,134 @@ class DesktopActionConfigStoreTest {
                 command = "./gradlew recordRoborazziDesktop"
                 cwd = ""
                 env = { }
+                [[notes]]
+                id = "note-repo"
+                projectId = "andy"
+                title = "Repo note"
+                body = "Read me"
+                completed = true
                 """.trimIndent() + "\n",
             )
         }
 
-        val project = DesktopActionConfigStore(homeConfig, starter).load().projects.single()
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { listOf(workspace.absolutePath) })
+        val loaded = store.load()
+        val project = loaded.projects.single()
 
+        assertEquals(ConfigSource.Global, project.source)
         assertEquals(2, project.actions.size)
-        assertTrue(project.actions.any { it.command == "./gradlew recordRoborazziDesktop" })
-        assertTrue(homeConfig.readText().contains("./gradlew desktopTest"), "personal config remains unchanged")
+        val globalAction = project.actions.first { it.id == "test" }
+        assertEquals(ConfigSource.Global, globalAction.source)
+        val repoAction = project.actions.first { it.id == "record" }
+        assertEquals(ConfigSource.Repo, repoAction.source)
+
+        assertEquals(1, project.notes.size)
+        val repoNote = project.notes.single()
+        assertEquals("note-repo", repoNote.id)
+        assertEquals(true, repoNote.completed)
+        assertEquals(ConfigSource.Repo, repoNote.source)
+    }
+
+    @Test
+    fun roundTripSafetyDropsRepoContentAndVirtualProjectsOnSave() = runBlocking {
+        val dir = createTempDirectory("andy-actions-roundtrip").toFile()
+        val homeConfig = dir.resolve("home/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "global-proj"
+                name = "Global Project"
+                contextDir = "/tmp/global"
+                env = { }
+                [[actions]]
+                id = "global-act"
+                projectId = "global-proj"
+                name = "Global Action"
+                icon = "run"
+                command = "echo global"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+        val repoDir = dir.resolve("workspace").apply { mkdirs() }
+        repoDir.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "virtual-proj"
+                name = "Virtual Project"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "virtual-act"
+                projectId = "virtual-proj"
+                name = "Virtual Action"
+                icon = "run"
+                command = "echo virtual"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { listOf(repoDir.absolutePath) })
+        val merged = store.load()
+        assertEquals(2, merged.projects.size)
+
+        store.save(merged)
+
+        val reloadedRaw = homeConfig.readText()
+        assertFalse(reloadedRaw.contains("virtual-proj"), "virtual projects must not be saved")
+        assertFalse(reloadedRaw.contains("virtual-act"), "virtual actions must not be saved")
+        assertTrue(reloadedRaw.contains("global-proj"))
+        assertTrue(reloadedRaw.contains("global-act"))
+    }
+
+    @Test
+    fun stripsEnvFromRepoConfig() = runBlocking {
+        val dir = createTempDirectory("andy-actions-strip-env").toFile()
+        val homeConfig = dir.resolve("home/actions.toml")
+        val repoDir = dir.resolve("workspace").apply { mkdirs() }
+        repoDir.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "secret-proj"
+                name = "Secret Project"
+                contextDir = "."
+                env = { SECRET = "repo_secret" }
+                [[actions]]
+                id = "secret-act"
+                projectId = "secret-proj"
+                name = "Secret Action"
+                icon = "run"
+                command = "echo secret"
+                cwd = ""
+                env = { API_KEY = "12345" }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { listOf(repoDir.absolutePath) })
+        val loaded = store.load()
+        val project = loaded.projects.single()
+
+        assertTrue(project.env.isEmpty(), "repo project env must be stripped")
+        assertTrue(project.actions.single().env.isEmpty(), "repo action env must be stripped")
     }
 
     @Test
     fun roundTripsProjectsActionsAndNotes() = runBlocking {
         val dir = createTempDirectory("andy-actions-config").toFile()
         val file = dir.resolve("actions.toml")
-        val store = DesktopActionConfigStore(file, starterFile = null)
+        val store = DesktopActionConfigStore(file, discoveryRootsProvider = { emptyList() })
         val config = ActionsConfig(
             projects = listOf(
                 ActionProject(
@@ -274,35 +294,49 @@ class DesktopActionConfigStoreTest {
     }
 
     @Test
-    fun loadsLegacyTomlWithoutNotesAsEmptyNotes() = runBlocking {
-        val dir = createTempDirectory("andy-actions-legacy").toFile()
-        val file = dir.resolve("actions.toml")
-        file.writeText(
-            """
-            version = 1
-            [[projects]]
-            id = "proj-legacy"
-            name = "Legacy"
-            contextDir = "/tmp/legacy"
-            env = { }
-            [[actions]]
-            id = "act-run"
-            projectId = "proj-legacy"
-            name = "Run"
-            icon = "run"
-            command = "echo hi"
-            cwd = ""
-            env = { }
-            """.trimIndent() + "\n",
-        )
+    fun savesVirtualProjectWhenGlobalChildIsAdded() = runBlocking {
+        val dir = createTempDirectory("andy-actions-global-child").toFile()
+        val homeConfig = dir.resolve("home/actions.toml")
+        val repoDir = dir.resolve("workspace").apply { mkdirs() }
+        repoDir.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "repo-proj"
+                name = "Repo Project"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "repo-act"
+                projectId = "repo-proj"
+                name = "Repo Action"
+                icon = "run"
+                command = "echo repo"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
 
-        val loaded = DesktopActionConfigStore(file, starterFile = null).load()
-        assertEquals(1, loaded.projects.size)
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { listOf(repoDir.absolutePath) })
+        val loaded = store.load()
         val project = loaded.projects.single()
-        assertEquals("proj-legacy", project.id)
-        assertEquals(1, project.actions.size)
-        assertEquals("act-run", project.actions.single().id)
-        assertTrue(project.notes.isEmpty())
-        assertFalse(file.readText().contains("[[notes]]"))
+
+        val updatedActions = project.actions + ProjectAction(
+            id = "user-act",
+            name = "User Action",
+            command = "echo user",
+            source = ConfigSource.Global,
+        )
+        val updatedConfig = loaded.copy(projects = listOf(project.copy(actions = updatedActions)))
+
+        store.save(updatedConfig)
+
+        val savedRaw = homeConfig.readText()
+        assertTrue(savedRaw.contains("repo-proj"))
+        assertTrue(savedRaw.contains("user-act"))
+        assertFalse(savedRaw.contains("repo-act"), "repo action must still be filtered out on save")
     }
 }

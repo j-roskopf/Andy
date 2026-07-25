@@ -189,6 +189,8 @@ class AgentRetryTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             withTimeout(10_000) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
@@ -268,6 +270,8 @@ class AgentPlanHandoffTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             withTimeout(10_000) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
@@ -331,6 +335,8 @@ class AgentQueuedFollowUpTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             val task = service.createAndStart(
                 AgentTaskDraft(
@@ -403,6 +409,8 @@ class AgentUserInputResumeTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             val task = service.createAndStart(
                 AgentTaskDraft("ask", "Ask before planning", AgentKind.Codex, projectId = null, directory = dir.absolutePath),
@@ -495,6 +503,8 @@ class CursorPlanBackfillTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
 
             withTimeout(10_000) {

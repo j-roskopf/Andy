@@ -97,7 +97,13 @@ fun createDaemonRuntime(
     val iosMirror = DesktopIosMirrorEngine(iosDevices)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val logcat = DesktopLogcatService(runner, devices)
-    val actionConfig = DesktopActionConfigStore()
+    val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
+        val ws = store.state.value
+        (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
+         ws.recentHostFiles.mapNotNull { File(it).parent } +
+         listOfNotNull(ws.lastHostFilePath?.let { File(it).parent }))
+            .distinct()
+    })
     val actionRuns = DesktopActionRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
@@ -243,7 +249,13 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
-    val actionConfig = DesktopActionConfigStore()
+    val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
+        val ws = store.state.value
+        (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
+         ws.recentHostFiles.mapNotNull { File(it).parent } +
+         listOfNotNull(ws.lastHostFilePath?.let { File(it).parent }))
+            .distinct()
+    })
     val actionRuns = DesktopActionRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
@@ -363,7 +375,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
-    val actionConfig = DesktopActionConfigStore()
+    val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
+        val ws = store.state.value
+        (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
+         ws.recentHostFiles.mapNotNull { File(it).parent } +
+         listOfNotNull(ws.lastHostFilePath?.let { File(it).parent }))
+            .distinct()
+    })
     val actionRuns = DesktopActionRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
