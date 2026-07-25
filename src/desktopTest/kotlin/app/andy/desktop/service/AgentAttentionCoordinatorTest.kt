@@ -59,6 +59,16 @@ class AgentAttentionCoordinatorTest {
     }
 
     @Test
+    fun notifiesWhenMovingToIdle() {
+        val fixture = Fixture()
+        fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.Running)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentTaskStatus.Paused)))
+
+        assertEquals(listOf("Idle"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("chime"), fixture.sounds.played)
+    }
+
+    @Test
     fun doesNotNotifyForTerminalTaskThatFirstAppearsAfterStartup() {
         val fixture = Fixture()
         fixture.coordinator.onTasksChanged(emptyList())

@@ -263,6 +263,10 @@ object UnavailableAgentRunService : AgentRunService {
     override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+
+    override fun reattachSession(taskId: String) = Unit
+
+    override fun canReattachSession(taskId: String): Boolean = false
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
     override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
@@ -270,6 +274,7 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit
     override fun markRead(taskId: String) = Unit
     override fun markUnread(taskId: String) = Unit
+    override fun setChatViewing(taskId: String?, viewing: Boolean) = Unit
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())

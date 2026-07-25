@@ -267,6 +267,7 @@ internal fun LiveScreen(
     }
 
     fun closeTerminalTab(runId: String) {
+        services.actionRuns.stop(runId)
         val remaining = terminalTabIds.filter { it != runId }
         terminalTabIds = remaining
         if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())

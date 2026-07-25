@@ -46,6 +46,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -207,6 +208,7 @@ private fun ProjectCockpit(
     }
 
     fun closeTerminalTab(runId: String) {
+        services.actionRuns.stop(runId)
         val remaining = terminalTabIds.filter { it != runId }
         terminalTabIds = remaining
         if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())
@@ -290,11 +292,15 @@ private fun ProjectCockpit(
     // Open chats stay read — including while a live run is on screen.
     // Only while Projects is the active destination: RetainedDestination keeps this
     // screen composed off-page, and clearing unread there would hide the badge.
-    LaunchedEffect(active, selectedProjectTask?.id, canvas) {
-        if (!active) return@LaunchedEffect
-        val task = selectedProjectTask ?: return@LaunchedEffect
-        if (canvas != ProjectCanvas.Chat) return@LaunchedEffect
-        services.agentRuns.markRead(task.id)
+    DisposableEffect(active, selectedProjectTask?.id, canvas) {
+        val taskId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
+        if (taskId != null) {
+            services.agentRuns.setChatViewing(taskId, viewing = true)
+            services.agentRuns.markRead(taskId)
+        }
+        onDispose {
+            if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
+        }
     }
     LaunchedEffect(loadedProjectWorkflow?.tasks, selectedWorkflowTaskId) {
         if (selectedWorkflowTaskId != null && loadedProjectWorkflow != null && loadedProjectWorkflow.tasks.none { it.id == selectedWorkflowTaskId }) {

@@ -221,6 +221,29 @@ class AgentStatusTrackerTest {
     }
 
     @Test
+    fun quiescentPromptIsDoneWhenTabUnseen() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val session = FakeTerminalSession()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-status",
+                agent = AgentKind.Codex,
+                artifactDir = File.createTempFile("andy-status", null).also { it.delete(); it.mkdirs() },
+                session = session,
+                isTabSeen = { false },
+            )
+            tracker.start()
+            session.emitBuffer("All done.\n› ")
+            kotlinx.coroutines.delay(4_600)
+            assertEquals(AgentSessionStatus.Done, tracker.status.value)
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun agentStatusTrackerPrefersBlockedFromScrape() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {

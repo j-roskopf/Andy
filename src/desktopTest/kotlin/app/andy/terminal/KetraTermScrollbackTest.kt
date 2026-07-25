@@ -71,7 +71,64 @@ class KetraTermScrollbackTest {
     }
 
     @Test
-    fun agentTerminalManagerPersistsAndAppendsScrollback() = runBlocking {
+    fun looksLikeRawAnsiTeeDetectsPtyStream() {
+        assertFalse(looksLikeRawAnsiTee("plain\n"))
+        assertFalse(looksLikeRawAnsiTee("hello\n"))
+        assertTrue(looksLikeRawAnsiTee("\u001b[2A\u001b[0G".repeat(10)))
+    }
+
+    @Test
+    fun resolveScrollbackForReplayCollapsesSpinnerRedraws() {
+        AndyKetraTermConfig.ensureInitialized()
+        val noisy = buildString {
+            repeat(40) {
+                append("\r\u001b[2A\u001b[0G⣾  \u001b[90mWorking\u001b[0m")
+            }
+            append("\nFinal answer is ready.\n> ")
+        }
+        val resolved = resolveScrollbackForReplay(noisy)
+        assertTrue(resolved.contains("Final answer is ready."), "resolved=$resolved")
+        val workingCount = Regex("Working").findAll(resolved).count()
+        assertTrue(workingCount <= 1, "expected at most one Working line, got $workingCount in:\n$resolved")
+    }
+
+    @Test
+    fun resolveScrollbackForReplayRepairsLegacyCursorTuiSnippet() {
+        AndyKetraTermConfig.ensureInitialized()
+        val legacy = buildString {
+            repeat(25) {
+                append("\u001b[?25l\r\u001b[2A\u001b[0G⣾  \u001b[90mWorking\u001b[0m")
+                append("\u001b[93D\u001b[?25h\u001b[?25l")
+            }
+            append("\r\n\u001b[90m─── ───\u001b[0m\r\n")
+            append("iOS Simulator mirroring is unchanged (no camera permission involved)\n")
+            append("> ")
+        }
+        val resolved = resolveScrollbackForReplay(legacy)
+        assertTrue(resolved.contains("iOS Simulator mirroring is unchanged"))
+        assertTrue(Regex("Working").findAll(resolved).count() <= 1)
+        assertFalse(looksLikeRawAnsiTee(resolved))
+    }
+
+    @Test
+    fun resolveScrollbackForReplayRepairsRealCursorAgentFile() {
+        AndyKetraTermConfig.ensureInitialized()
+        val file = java.io.File(System.getProperty("user.home"), ".andy/agents/task-7a20497d5e/scrollback.ansi")
+        if (!file.isFile) return
+        val raw = file.readText()
+        val resolved = resolveScrollbackForReplay(raw)
+        assertTrue(
+            resolved.contains("would it auto apply to old chats") ||
+                resolved.contains("readable on the next open"),
+            "resolved should keep conversation text",
+        )
+        assertFalse(looksLikeRawAnsiTee(resolved))
+        val spinnerStatusCount = Regex("""[⠀-⣿].*\b(Working|Running|Thinking)\b""").findAll(resolved).count()
+        assertTrue(spinnerStatusCount == 0, "expected no spinner status lines, got $spinnerStatusCount")
+    }
+
+    @Test
+    fun agentTerminalManagerPersistsResolvedScrollbackNotRawTee() = runBlocking {
         val dir = File.createTempFile("andy-scrollback", null).also {
             it.delete()
             it.mkdirs()
@@ -106,6 +163,7 @@ class KetraTermScrollbackTest {
             assertTrue(file.isFile, "scrollback file should exist after stop")
             val first = file.readText()
             assertTrue(first.contains("first-run-output"), "first run missing: ${first.take(300)}")
+            assertFalse(looksLikeRawAnsiTee(first), "persisted scrollback should be resolved text")
 
             val argv2 = if (isWindows) {
                 listOf("cmd", "/c", "echo", "second-run-output")

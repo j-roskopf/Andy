@@ -2,6 +2,7 @@ package app.andy.terminal
 
 import app.andy.model.TerminalAppearanceSnapshot
 import io.github.ketraterm.core.TerminalBuffers
+import io.github.ketraterm.core.api.TerminalBuffer
 import io.github.ketraterm.session.TerminalSession as KetraSession
 import io.github.ketraterm.transport.TerminalConnector
 import io.github.ketraterm.transport.TerminalConnectorListener
@@ -14,8 +15,7 @@ import javax.swing.SwingUtilities
 /** Soft cap for cumulative `scrollback.ansi` files (~5 MB). */
 internal const val SCROLLBACK_MAX_BYTES: Int = 5 * 1024 * 1024
 
-internal const val SCROLLBACK_SESSION_SEPARATOR: String =
-    "\r\n\u001b[90m─── ───\u001b[0m\r\n"
+internal const val SCROLLBACK_SESSION_SEPARATOR: String = "\n─── ───\n"
 
 /**
  * Accumulates raw PTY stdout (host→emulator) bytes for durable ANSI scrollback.
@@ -75,16 +75,72 @@ internal fun atomicWriteText(file: File, content: String) {
 }
 
 /**
- * Build a read-only [SwingTerminal] that replays [ansi] instantly and stays
+ * True when [content] looks like a raw PTY tee (spinner redraws, cursor motion, etc.)
+ * rather than resolved scrollback text from [io.github.ketraterm.core.api.TerminalInspector.getAllAsString].
+ */
+internal fun looksLikeRawAnsiTee(content: String): Boolean {
+    if (!content.contains('\u001b')) return false
+    var escapes = 0
+    for (ch in content) {
+        if (ch == '\u001b' && ++escapes > 8) return true
+    }
+    return false
+}
+
+/**
+ * Collapse legacy raw ANSI tee streams into readable plain text. New scrollback files
+ * are already resolved on write; this mainly repairs pre-fix `scrollback.ansi` blobs.
+ */
+internal fun resolveScrollbackForReplay(
+    content: String,
+    cols: Int = 120,
+    rows: Int = 32,
+): String {
+    if (content.isBlank() || !looksLikeRawAnsiTee(content)) return content
+    return joinReadableLines(replayCaptureReadableLines(content, cols, rows))
+}
+
+/** Feed legacy ANSI in chunks and capture readable lines before spinner history pushes them out. */
+internal fun replayCaptureReadableLines(
+    content: String,
+    cols: Int = 120,
+    rows: Int = 32,
+    chunkSize: Int = 8_192,
+): List<String> {
+    val bytes = content.toByteArray(StandardCharsets.UTF_8)
+    val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
+    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
+    val seen = LinkedHashSet<String>()
+    val captured = mutableListOf<String>()
+    return try {
+        session.start(cols, rows)
+        var offset = 0
+        while (offset < bytes.size) {
+            val length = minOf(chunkSize, bytes.size - offset)
+            session.onBytes(bytes, offset, length)
+            offset += length
+            for (line in captureNewReadableLines(buffer, seen)) {
+                captured += line
+            }
+        }
+        captured
+    } finally {
+        runCatching { session.close() }
+    }
+}
+
+/**
+ * Build a read-only [SwingTerminal] that replays [content] instantly and stays
  * open for scrolling. User keystrokes are discarded by the parked connector.
  */
 fun createScrollbackReplayTerminal(
-    ansi: String,
+    content: String,
     cols: Int = 120,
     rows: Int = 32,
     appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
 ): SwingTerminal {
-    val payload = (ansi + "\u001b[?25l").toByteArray(StandardCharsets.UTF_8)
+    val resolved = resolveScrollbackForReplay(content, cols, rows)
+    val payload = (resolved + "\n\u001b[?25l").toByteArray(StandardCharsets.UTF_8)
     val connector = AnsiReplayConnector(payload)
     val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
     val session = KetraSession.create(terminal = buffer, connector = connector)
@@ -127,6 +183,31 @@ internal class TeeTerminalConnector(
     override fun resize(columns: Int, rows: Int) = delegate.resize(columns, rows)
 
     override fun close() = delegate.close()
+}
+
+/** Parked connector for sessions fed manually via [io.github.ketraterm.session.TerminalSession.onBytes]. */
+internal class ParkedTerminalConnector : TerminalConnector {
+    override fun start(listener: TerminalConnectorListener) = Unit
+    override fun write(bytes: ByteArray, offset: Int, length: Int) = Unit
+    override fun resize(columns: Int, rows: Int) = Unit
+    override fun close() = Unit
+}
+
+/** Feeds [ansi] synchronously when the session connector starts. */
+internal class SynchronousAnsiConnector(
+    private val ansi: ByteArray,
+) : TerminalConnector {
+    override fun start(listener: TerminalConnectorListener) {
+        if (ansi.isNotEmpty()) {
+            listener.onBytes(ansi, 0, ansi.size)
+        }
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int) = Unit
+
+    override fun resize(columns: Int, rows: Int) = Unit
+
+    override fun close() = Unit
 }
 
 /**

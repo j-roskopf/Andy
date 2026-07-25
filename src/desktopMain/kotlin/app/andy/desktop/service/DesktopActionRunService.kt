@@ -56,11 +56,14 @@ class DesktopActionRunService(
         initialCommand = null,
     )
 
-    override fun run(project: ActionProject, action: ProjectAction): String = start(
-        project = project,
-        action = action,
-        initialCommand = action.command.takeIf { it.isNotBlank() },
-    )
+    override fun run(project: ActionProject, action: ProjectAction): String {
+        clearExistingRuns(project.id, action.id)
+        return start(
+            project = project,
+            action = action,
+            initialCommand = action.command.takeIf { it.isNotBlank() },
+        )
+    }
 
     private fun start(project: ActionProject, action: ProjectAction, initialCommand: String?): String {
         val runId = "run-${nextRun.getAndIncrement()}"
@@ -154,6 +157,12 @@ class DesktopActionRunService(
         handles.values.forEach { handle ->
             (handle.session as? KetraTermBackend)?.updateAppearance(appearance)
         }
+    }
+
+    private fun clearExistingRuns(projectId: String, actionId: String) {
+        _running.value
+            .filter { it.projectId == projectId && it.actionId == actionId }
+            .forEach { clear(it.runId) }
     }
 
     private fun markComplete(runId: String, status: ActionRunStatus, exitCode: Int?) {

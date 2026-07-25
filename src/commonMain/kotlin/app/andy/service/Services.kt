@@ -345,6 +345,9 @@ interface AgentRunService {
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
     )
+    /** Reopens a stored provider session so the live interactive terminal UI comes back. */
+    fun reattachSession(taskId: String)
+    fun canReattachSession(taskId: String): Boolean
     /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
     fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
     /** Holds a follow-up until the active run completes successfully. */
@@ -363,6 +366,8 @@ interface AgentRunService {
     fun markRead(taskId: String)
     /** Marks a chat unread so list/dock badges show again. */
     fun markUnread(taskId: String)
+    /** Tracks whether an embedded chat is currently on screen (not merely opened before). */
+    fun setChatViewing(taskId: String?, viewing: Boolean)
     /** Hides a finished chat from the default list without deleting it. */
     fun archive(taskId: String)
     /** Restores an archived chat to the default list. */

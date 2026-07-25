@@ -71,8 +71,19 @@ class KetraTermBackend(
 
     fun swingTerminal(): SwingTerminal? = swingTerminal
 
-    /** Raw teed PTY stdout for durable `scrollback.ansi` persistence. */
+    /** Raw teed PTY stdout (includes in-place TUI redraws). */
     fun scrollbackAnsi(): String = scrollbackTee.snapshot()
+
+    /** Resolved readable scrollback suitable for durable replay after restart. */
+    fun scrollbackExport(seenKeys: MutableSet<String>): String {
+        val session = ketraSession ?: return ""
+        return joinReadableLines(captureNewReadableLines(session.terminal, seenKeys))
+    }
+
+    fun captureReadableLines(seenKeys: MutableSet<String>): List<String> {
+        val session = ketraSession ?: return emptyList()
+        return captureNewReadableLines(session.terminal, seenKeys)
+    }
 
     fun updateAppearance(appearance: TerminalAppearanceSnapshot) {
         appearanceRef.set(appearance)

@@ -67,6 +67,31 @@ class DesktopActionRunServiceTest {
         }
     }
 
+    @Test
+    fun rerunningAnActionStopsThePreviousShellAndStartsFresh() = runBlocking {
+        val service = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        val project = ActionProject(
+            id = "project",
+            name = "Project",
+            contextDir = createTempDirectory("andy-rerun-action").toString(),
+        )
+        val action = ProjectAction(id = "run", name = "Run", command = "echo first")
+
+        val firstRunId = service.run(project, action)
+        try {
+            awaitTerminalText(service, firstRunId, "first")
+            assertEquals(ActionRunStatus.Running, service.running.value.single().status)
+
+            val secondRunId = service.run(project, action)
+            assertTrue(firstRunId != secondRunId)
+            assertEquals(listOf(secondRunId), service.running.value.map { it.runId })
+            assertNotNull(service.terminalWidget(secondRunId))
+            awaitTerminalText(service, secondRunId, "first")
+        } finally {
+            service.running.value.forEach { service.stop(it.runId) }
+        }
+    }
+
     private suspend fun awaitTerminalText(service: DesktopActionRunService, runId: String, text: String) {
         withTimeout(5_000) {
             while (!service.bufferSnapshot(runId).contains(text)) delay(25)

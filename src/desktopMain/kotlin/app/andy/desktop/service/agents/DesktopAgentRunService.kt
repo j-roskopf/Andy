@@ -144,7 +144,8 @@ class DesktopAgentRunService(
     private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
-    private val seenSessionIds = ConcurrentHashMap.newKeySet<String>()
+    private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val previousSessionStatuses = ConcurrentHashMap<String, AgentSessionStatus>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
@@ -183,6 +184,9 @@ class DesktopAgentRunService(
             backfillCursorPlansFromTranscripts()
             ready.complete(Unit)
             refreshCliStatuses()
+            scope.launch {
+                terminals.sessionStatuses.collect(::onSessionStatusesChanged)
+            }
             if (enableProbes) {
                 refreshProviderQuotas()
                 while (isActive) {
@@ -944,6 +948,73 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun canReattachSession(taskId: String): Boolean {
+        val task = currentTask(taskId) ?: return false
+        if (task.isActive || terminals.isAlive(taskId) || task.userInputRequest != null) return false
+        return resumeTaskForReattach(task) != null
+    }
+
+    override fun reattachSession(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.isActive || terminals.isAlive(taskId) || task.userInputRequest != null) return
+        val taskForResume = resumeTaskForReattach(task) ?: return
+        val adapter = adapters[task.agent] ?: return
+        runCatching {
+            adapter.buildInteractiveResumeCommand(
+                binaryFor(task.agent) ?: return,
+                taskForResume,
+                null,
+                followUp = null,
+                followUpImagePaths = emptyList(),
+            )
+        }.getOrNull() ?: return
+
+        val queued = taskForResume.copy(
+            status = AgentTaskStatus.Queued,
+            exitCode = null,
+            errorMessage = null,
+            finishedAtMillis = null,
+            unread = false,
+        )
+        upsertTask(queued)
+        scope.launch {
+            persist()
+            launchRunAwaitingTerminal(queued, writeAfterStart = null) { resumeAdapter, binary, mcpUrl ->
+                resumeAdapter.buildInteractiveResumeCommand(
+                    binary,
+                    currentTask(taskId) ?: queued,
+                    mcpUrl,
+                    followUp = null,
+                    followUpImagePaths = emptyList(),
+                ) ?: error("interactive resume not supported")
+            }
+        }
+    }
+
+    private fun resumeTaskForReattach(task: AgentTask): AgentTask? {
+        val adapter = adapters[task.agent] ?: return null
+        val taskForResume = when (task.agent) {
+            AgentKind.Antigravity -> {
+                val resolved = AntigravityConversationIds.resolveForTask(task) ?: return null
+                if (resolved != task.vendorSessionId) task.copy(vendorSessionId = resolved) else task
+            }
+            else -> {
+                if (task.vendorSessionId.isNullOrBlank()) return null
+                task
+            }
+        }
+        val binary = binaryFor(task.agent) ?: return null
+        return runCatching {
+            adapter.buildInteractiveResumeCommand(
+                binary,
+                taskForResume,
+                null,
+                followUp = null,
+                followUpImagePaths = emptyList(),
+            )
+        }.getOrNull()?.let { taskForResume }
+    }
+
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         val task = currentTask(taskId) ?: return
         val request = task.userInputRequest?.takeIf { it.id == requestId } ?: return
@@ -1234,7 +1305,7 @@ class DesktopAgentRunService(
                 task = currentTask(taskId) ?: task,
                 argv = argv,
                 env = env,
-                isTabSeen = { taskId in seenSessionIds },
+                isTabSeen = { taskId in viewingTaskIds },
             )
         }.getOrElse { error ->
             finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to start: ${error.message}")
@@ -1501,6 +1572,7 @@ class DesktopAgentRunService(
                     task.copy(
                         status = AgentTaskStatus.Paused,
                         finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
+                        unread = true,
                     )
                 else -> task
             }
@@ -2921,12 +2993,30 @@ class DesktopAgentRunService(
     }
 
     override fun markRead(taskId: String) {
-        seenSessionIds.add(taskId)
         terminals.markSeen(taskId)
         val task = currentTask(taskId) ?: return
         if (!task.unread) return
         updateTask(taskId) { it.copy(unread = false) }
         scope.launch { persist() }
+    }
+
+    override fun setChatViewing(taskId: String?, viewing: Boolean) {
+        when {
+            taskId == null -> viewingTaskIds.clear()
+            viewing -> viewingTaskIds.add(taskId)
+            else -> viewingTaskIds.remove(taskId)
+        }
+    }
+
+    private fun onSessionStatusesChanged(statuses: Map<String, AgentSessionStatus>) {
+        statuses.forEach { (taskId, status) ->
+            val previous = previousSessionStatuses.put(taskId, status)
+            if (previous == null || previous == status) return@forEach
+            val task = currentTask(taskId) ?: return@forEach
+            if (!sessionStatusNeedsUnread(task, previous, status, taskId in viewingTaskIds)) return@forEach
+            markUnread(taskId)
+        }
+        previousSessionStatuses.keys.retainAll(statuses.keys)
     }
 
     override fun markUnread(taskId: String) {

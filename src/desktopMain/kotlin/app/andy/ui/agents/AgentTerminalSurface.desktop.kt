@@ -34,7 +34,6 @@ import app.andy.model.WorkspaceState
 import app.andy.model.toTerminalAppearance
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
-import app.andy.terminal.createScrollbackReplayTerminal
 import app.andy.terminal.onSwingEdt
 import app.andy.terminal.panelBackgroundArgb
 import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
@@ -44,10 +43,8 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextSecondary
 import io.github.ketraterm.ui.swing.api.SwingTerminal
 import java.awt.Component
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.withContext
 import java.awt.dnd.DropTarget
 import javax.swing.SwingUtilities
 
@@ -80,57 +77,34 @@ actual fun AgentTerminalSurface(
     val attachedIds by attachedFlow.collectAsState()
 
     var liveTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
-    var replayTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
+    var reattachRequested by remember(taskId) { mutableStateOf(false) }
 
-    LaunchedEffect(taskId, sessionActive, sessionsRevision, attachedIds) {
+    LaunchedEffect(taskId, sessionActive, sessionsRevision, attachedIds, reattachRequested) {
         liveTerminal = agentRuns?.terminalWidget(taskId)
-        if (!sessionActive) return@LaunchedEffect
-        replayTerminal?.let { widget ->
-            runCatching { onSwingEdt { widget.dispose() } }
-            replayTerminal = null
+        if (liveTerminal != null) return@LaunchedEffect
+
+        if (!sessionActive && !reattachRequested && agentRuns?.canReattachSession(taskId) == true) {
+            reattachRequested = true
+            agentRuns.reattachSession(taskId)
         }
+
         var attempts = 0
-        while (liveTerminal == null && attempts < 200) {
+        while (liveTerminal == null && attempts < 400) {
             delay(50)
             liveTerminal = agentRuns?.terminalWidget(taskId)
             attempts++
         }
     }
 
-    LaunchedEffect(taskId, sessionActive, sessionsRevision, liveTerminal, appearance) {
-        if (sessionActive || liveTerminal != null) return@LaunchedEffect
-        val file = agentRuns?.scrollbackFile(taskId)
-        val ansi = withContext(Dispatchers.IO) {
-            runCatching {
-                if (file != null && file.isFile && file.length() > 0L) file.readText() else null
-            }.getOrNull()
-        }
-        if (ansi.isNullOrBlank()) {
-            replayTerminal?.let { widget ->
-                runCatching { onSwingEdt { widget.dispose() } }
-            }
-            replayTerminal = null
-            return@LaunchedEffect
-        }
-        val widget = withContext(Dispatchers.IO) {
-            runCatching { createScrollbackReplayTerminal(ansi, appearance = appearance) }.getOrNull()
-        }
-        replayTerminal?.let { old ->
-            runCatching { onSwingEdt { old.dispose() } }
-        }
-        replayTerminal = widget
-    }
-
-    val replayToDispose = rememberUpdatedState(replayTerminal)
+    val liveToDispose = rememberUpdatedState(liveTerminal)
     DisposableEffect(taskId) {
         onDispose {
-            replayToDispose.value?.let { widget ->
+            liveToDispose.value?.let { widget ->
                 runCatching { onSwingEdt { widget.dispose() } }
             }
         }
     }
 
-    val widget = liveTerminal ?: replayTerminal
     val acceptsLiveDrops = sessionActive && liveTerminal != null
     var imageDragActive by remember(taskId) { mutableStateOf(false) }
 
@@ -165,7 +139,7 @@ actual fun AgentTerminalSurface(
         Modifier
     }
 
-    if (widget == null) {
+    if (liveTerminal == null) {
         Box(
             modifier = modifier
                 .background(terminalPanelBackground)
@@ -179,7 +153,10 @@ actual fun AgentTerminalSurface(
                 modifier = Modifier.padding(24.dp),
             ) {
                 Text(
-                    if (sessionActive) "Starting terminal…" else "Terminal session ended",
+                    when {
+                        reattachRequested || sessionActive -> "Reconnecting terminal…"
+                        else -> "Terminal session ended"
+                    },
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 13.sp,
@@ -187,7 +164,7 @@ actual fun AgentTerminalSurface(
                 Text(
                     when {
                         imageDragActive -> "release to stage image for your next message"
-                        sessionActive -> "The provider CLI is coming up — drag screenshots here"
+                        reattachRequested || sessionActive -> "Restoring the live provider CLI for this chat"
                         else -> "Send a follow-up below to reopen the interactive CLI"
                     },
                     color = if (imageDragActive) Cyan else TextSecondary.copy(alpha = 0.72f),
@@ -210,11 +187,10 @@ actual fun AgentTerminalSurface(
                 .then(dropModifier),
         ) {
             if (!suppressHeavyweight) {
-                val panelKey = if (liveTerminal != null) taskId else "$taskId-scrollback"
-                key(panelKey) {
-                    var swingDropTarget by remember(panelKey) { mutableStateOf<DropTarget?>(null) }
-                    var swingDropHost by remember(panelKey) { mutableStateOf<Component?>(null) }
-                    DisposableEffect(panelKey) {
+                key(taskId) {
+                    var swingDropTarget by remember(taskId) { mutableStateOf<DropTarget?>(null) }
+                    var swingDropHost by remember(taskId) { mutableStateOf<Component?>(null) }
+                    DisposableEffect(taskId) {
                         onDispose {
                             runCatching {
                                 onSwingEdt {
@@ -229,7 +205,7 @@ actual fun AgentTerminalSurface(
                         modifier = Modifier.fillMaxSize(),
                         background = terminalPanelBackground,
                         factory = {
-                            widget.apply {
+                            liveTerminal!!.apply {
                                 if (acceptsLiveDrops) {
                                     SwingUtilities.invokeLater { requestFocusInWindow() }
                                 }

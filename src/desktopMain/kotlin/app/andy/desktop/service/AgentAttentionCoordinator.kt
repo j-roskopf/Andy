@@ -32,6 +32,7 @@ class DesktopAgentAttentionCoordinator(
                 AgentTaskStatus.Completed -> AgentAttentionKind.Done
                 AgentTaskStatus.WaitingForInput -> AgentAttentionKind.Blocked
                 AgentTaskStatus.Failed -> AgentAttentionKind.Failed
+                AgentTaskStatus.Paused -> AgentAttentionKind.Idle
                 else -> null
             }
             // A task that first appears already terminal is not an observed status
