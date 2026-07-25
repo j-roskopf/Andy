@@ -21,7 +21,10 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Hybrid status: lifecycle hooks (authoritative) + PTY-buffer scrape (fallback).
+ * Hybrid status: lifecycle hooks (authoritative) + buffer scrape (fallback).
+ *
+ * Buffer text comes from [TerminalSession.bufferSnapshots] — KetraTerm screen
+ * scrape for attach/DirectPty, or `tmux capture-pane` for [app.andy.terminal.TmuxAgentBackend].
  */
 class AgentStatusTracker(
     private val scope: CoroutineScope,

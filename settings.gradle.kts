@@ -4,6 +4,10 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
     }
+    plugins {
+        kotlin("jvm") version "2.4.0"
+        id("app.cash.sqldelight") version "2.0.2"
+    }
 }
 
 dependencyResolutionManagement {
@@ -36,3 +40,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Andy"
 include(":web-launcher")
+include(":agent-store")

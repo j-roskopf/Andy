@@ -12,6 +12,20 @@ private val EllipsisPathLine = Regex("""\.\.\.""")
 private val TruncatedReviewLine = Regex("""truncated.*ctrl\+r to review""", RegexOption.IGNORE_CASE)
 private val ShellEchoLine = Regex("""^".+"\s+2>&1""")
 private val EarlierItemsHiddenLine = Regex("""…\s+\d+\s+earlier items hidden""")
+/** ASCII or Unicode horizontal rules from Ink/TUI chrome (incl. `─── ───` session marks). */
+private val RuleLine = Regex("""^[─━═\-_|▕▏\s]{3,}$""")
+/** Antigravity/Cursor slash-command palette rows (`/agents  … description`). */
+private val SlashCommandMenuLine = Regex("""^\s*>?\s*/[a-z0-9][a-z0-9_-]*\s{2,}\S""", RegexOption.IGNORE_CASE)
+private val SlashMenuChromeLine = Regex(
+    """↑/↓|esc to cancel|↓\s*\d+\s+more|tab complete|enter select""",
+    RegexOption.IGNORE_CASE,
+)
+private val ProviderStatusFooter = Regex("""·\s*(high|medium|low|auto)\s*$""", RegexOption.IGNORE_CASE)
+private val BannerEmailLine = Regex("""^\S+@\S+\.\S+(\s+\([^)]+\))?$""")
+private val BannerModelLine = Regex(
+    """^(Gemini|Claude|GPT|Sonnet|Opus|Flash)\b.*\((High|Medium|Low|Auto)\)\s*$""",
+    RegexOption.IGNORE_CASE,
+)
 
 /** Drop TUI chrome and spinner redraw lines that make replay unreadable. */
 internal fun isScrollbackNoiseLine(line: String): Boolean {
@@ -47,6 +61,7 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     val lower = trimmed.lowercase()
     if (lower.startsWith("tip:")) return true
     if (lower.startsWith("cursor agent")) return true
+    if (lower.startsWith("antigravity cli")) return true
     if (lower.matches(Regex("""v\d{4}\.\d{2}\.\d{2}.*"""))) return true
     if (ToolProgressLine.containsMatchIn(trimmed)) return true
     if (Regex("""\bEdited\b.*\+\d+""").containsMatchIn(trimmed)) return true
@@ -54,12 +69,20 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     if (TruncatedReviewLine.containsMatchIn(trimmed)) return true
     if (ShellEchoLine.containsMatchIn(trimmed)) return true
     if (trimmed == "→" || trimmed == "Auto ·") return true
-    if (lower.startsWith("~/cod")) return true
+    if (trimmed == ">" || trimmed == "> /" || trimmed == "/") return true
+    if (lower.startsWith("~/cod") || (lower.startsWith("~/") && !lower.contains(' ') && trimmed.length < 80)) {
+        return true
+    }
     if (lower.startsWith("run this command?")) return true
     if (lower.startsWith("not in allowlist:")) return true
     if (lower.startsWith("add shell(")) return true
     if (lower.startsWith("skip & tell the agent")) return true
-    if (Regex("""^-{10,}$""").containsMatchIn(trimmed)) return true
+    if (RuleLine.matches(trimmed)) return true
+    if (SlashCommandMenuLine.containsMatchIn(trimmed)) return true
+    if (SlashMenuChromeLine.containsMatchIn(trimmed)) return true
+    if (ProviderStatusFooter.containsMatchIn(trimmed) && trimmed.length < 80) return true
+    if (BannerEmailLine.matches(trimmed)) return true
+    if (BannerModelLine.matches(trimmed)) return true
     if (lower.contains("waiting for approval")) return true
     if (lower.startsWith("→ run (once)")) return true
     return false

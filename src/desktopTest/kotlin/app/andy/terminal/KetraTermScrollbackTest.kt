@@ -1,6 +1,7 @@
 package app.andy.terminal
 
 import app.andy.desktop.service.agents.AgentTerminalManager
+import app.andy.desktop.service.agents.AgentTerminalMode
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskStatus
@@ -9,6 +10,8 @@ import app.andy.model.TerminalThemePreset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -138,6 +141,7 @@ class KetraTermScrollbackTest {
             val manager = AgentTerminalManager(
                 scope = scope,
                 scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
             )
             val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
             val taskId = "scroll-task-1"
@@ -199,8 +203,39 @@ class KetraTermScrollbackTest {
             val manager = AgentTerminalManager(
                 scope = scope,
                 scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
             )
             assertFalse(manager.hasScrollback("no-such-task"))
+            assertNull(manager.openScrollbackReplay("no-such-task"))
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun openScrollbackReplayBuildsViewer() {
+        val dir = File.createTempFile("andy-scrollback-replay", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "replay-task"
+            val scrollback = File(dir, "$taskId/scrollback.ansi").also { file ->
+                file.parentFile.mkdirs()
+                file.writeText("hello from finished chat\r\n")
+            }
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            assertTrue(manager.hasScrollback(taskId))
+            assertTrue(scrollback.isFile)
+            val widget = manager.openScrollbackReplay(taskId)
+            assertNotNull(widget)
+            runCatching { widget!!.dispose() }
         } finally {
             scope.cancel()
             dir.deleteRecursively()

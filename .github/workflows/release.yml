@@ -121,6 +121,68 @@ jobs:
           if-no-files-found: error
           path: release-artifacts/*
 
+  andy-cli:
+    name: Andy CLI (${{ matrix.target }})
+    needs:
+      - version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary: andy
+          - os: macos-latest
+            target: macos-arm64
+            binary: andy
+          - os: windows-latest
+            target: windows-x86_64
+            binary: andy.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release CLI
+        shell: bash
+        run: cargo build --release --manifest-path cli/andy/Cargo.toml
+
+      - name: Collect CLI artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          src="cli/andy/target/release/${BINARY}"
+          if [[ ! -f "${src}" ]]; then
+            echo "::error::Missing CLI binary at ${src}"
+            exit 1
+          fi
+          if [[ "${BINARY}" == *.exe ]]; then
+            dest="release-artifacts/andy-${VERSION}-${TARGET}.exe"
+          else
+            dest="release-artifacts/andy-${VERSION}-${TARGET}"
+          fi
+          cp "${src}" "${dest}"
+          chmod +x "${dest}" || true
+          ls -la "${dest}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: andy-cli-${{ matrix.target }}
+          if-no-files-found: error
+          path: release-artifacts/*
 
   linux:
     name: Linux release
@@ -503,7 +565,8 @@ jobs:
       - windows
       - macos
       - tracebox
-    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success'
+      - andy-cli
+    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success' && needs.andy-cli.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -525,6 +588,9 @@ jobs:
             release-artifacts/**/*.flatpak
             release-artifacts/**/*.msi
             release-artifacts/**/*.dmg
+            release-artifacts/**/andy-*-linux-x86_64
+            release-artifacts/**/andy-*-macos-arm64
+            release-artifacts/**/andy-*-windows-x86_64.exe
             release-artifacts/**/andy-tracebox
             release-artifacts/**/andy-tracebox-bin-*
             release-artifacts/**/andy-tracebox-SHA256SUMS

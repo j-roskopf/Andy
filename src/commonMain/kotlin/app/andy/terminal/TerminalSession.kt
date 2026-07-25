@@ -28,6 +28,18 @@ interface TerminalSession {
     fun close()
 }
 
+/** How the desktop terminal backend should host the process. */
+enum class TerminalMode {
+    /** Direct Pty4J spawn (legacy / Actions shell). */
+    DirectPty,
+
+    /** Detached `tmux -L andy` session — headless daemon executor. */
+    TmuxAgent,
+
+    /** Attach KetraTerm to an existing `tmux -L andy` session for GUI. */
+    TmuxAttach,
+}
+
 data class TerminalLaunchRequest(
     val sessionId: String,
     val argv: List<String>,
@@ -36,6 +48,9 @@ data class TerminalLaunchRequest(
     val cols: Int = 120,
     val rows: Int = 32,
     val appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
+    val mode: TerminalMode = TerminalMode.DirectPty,
+    /** When [mode] is [TerminalMode.TmuxAttach], kill the tmux session on close. */
+    val killTmuxOnClose: Boolean = false,
 )
 
 /** Platform factory — desktop creates a real PTY session; other targets are stubs. */

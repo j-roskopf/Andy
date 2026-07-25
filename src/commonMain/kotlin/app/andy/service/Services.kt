@@ -394,6 +394,8 @@ interface AgentRunService {
 
 interface ProjectWorkflowService {
     val projects: StateFlow<Map<String, ProjectWorkflowState>>
+    /** Absolute context directory for [projectId], if the project is configured. */
+    suspend fun projectContextDir(projectId: String): String?
     suspend fun ensureProject(projectId: String)
     suspend fun updateScratchpad(projectId: String, text: String)
     suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile)

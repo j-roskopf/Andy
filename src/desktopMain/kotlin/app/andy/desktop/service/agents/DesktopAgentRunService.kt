@@ -97,6 +97,7 @@ class DesktopAgentRunService(
     private val workspaceStore: WorkspaceStore,
     private val actionConfig: ActionConfigStore,
     private val enableProbes: Boolean = true,
+    terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -112,6 +113,7 @@ class DesktopAgentRunService(
             }
         },
         scrollbackFile = { id -> store.scrollbackFile(id) },
+        mode = terminalMode,
     )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -211,6 +213,44 @@ class DesktopAgentRunService(
     internal fun scrollbackFile(taskId: String): File = store.scrollbackFile(taskId)
 
     internal fun hasScrollback(taskId: String): Boolean = terminals.hasScrollback(taskId)
+
+    /** Cleaned plain-text history for finished chats (null when none). */
+    internal fun scrollbackDisplayText(taskId: String): String? =
+        terminals.scrollbackDisplayText(taskId)
+
+    /**
+     * Read-only scrollback viewer for ended chats. Caller owns dispose.
+     * Does not restart the provider CLI — use [reattachSession] / [resume] for that.
+     */
+    internal fun openScrollbackReplay(taskId: String) =
+        terminals.openScrollbackReplay(taskId)
+
+    /** True while the embedded PTY or underlying tmux session is still running for [taskId]. */
+    internal fun isTerminalLive(taskId: String): Boolean = terminals.isAlive(taskId)
+
+    /**
+     * Reattach a KetraTerm viewer to a live tmux session (GUI reopen while daemon/agent continues).
+     */
+    internal suspend fun attachTerminalIfNeeded(taskId: String) {
+        if (terminals.get(taskId) != null) return
+        terminals.attachExisting(taskId) { taskId in viewingTaskIds }
+    }
+
+    /**
+     * Repairs tasks left [AgentTaskStatus.Running]/[AgentTaskStatus.Queued] after the PTY
+     * exited without a clean [finishTask] (e.g. crash). Safe to call when opening history.
+     * Does not mark stale while a `tmux -L andy` session for the task still exists.
+     */
+    internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.isActive && task.status != AgentTaskStatus.WaitingForInput) return
+        val jobActive = handles[taskId]?.job?.isActive == true
+        if (jobActive || terminals.isAlive(taskId)) return
+        val recovered = recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+        if (recovered == task) return
+        updateTask(taskId) { recovered }
+        scope.launch { persist() }
+    }
 
     override fun sessionStatus(taskId: String): StateFlow<AgentSessionStatus?> = terminals.statusFlow(taskId)
 
@@ -1221,9 +1261,19 @@ class DesktopAgentRunService(
                     terminalReady.complete(false)
                     return@withPermit
                 }
-                runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
-                    terminalReady.complete(true)
-                })
+                try {
+                    runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
+                        terminalReady.complete(true)
+                    })
+                } catch (error: Throwable) {
+                    terminals.stop(task.id)
+                    finishTask(
+                        task.id,
+                        AgentTaskStatus.Failed,
+                        exitCode = null,
+                        error = error.message ?: "agent run failed unexpectedly",
+                    )
+                }
             }
         }
         handle.job?.invokeOnCompletion {
@@ -1457,6 +1507,7 @@ class DesktopAgentRunService(
                 },
             )
         }
+        terminals.stop(taskId)
         finishTask(
             taskId = taskId,
             status = status,
@@ -1725,6 +1776,12 @@ class DesktopAgentRunService(
 
     override fun interactiveResumeCommand(taskId: String): String? {
         val task = currentTask(taskId) ?: return null
+        // Prefer tmux attach when the Andy tmux session is alive.
+        if (app.andy.terminal.TmuxAndy.isAvailable() &&
+            app.andy.terminal.TmuxAndy.hasSession(taskId)
+        ) {
+            return app.andy.terminal.TmuxAndy.attachArgv(taskId).joinToString(" ") { shellQuote(it) }
+        }
         val adapter = adapters[task.agent] ?: return null
         val binary = binaryFor(task.agent) ?: task.agent.cliName
         val changeDirectory = task.cwd?.let { "cd ${shellQuote(it)} && " }.orEmpty()
@@ -1924,8 +1981,10 @@ class DesktopAgentRunService(
         )
     }
 
-    private suspend fun projectDirectory(projectId: String): String? =
+    override suspend fun projectContextDir(projectId: String): String? =
         runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.contextDir }.getOrNull()
+
+    private suspend fun projectDirectory(projectId: String): String? = projectContextDir(projectId)
 
     fun close() {
         terminals.stopAll()
@@ -3054,7 +3113,7 @@ class DesktopAgentRunService(
                     exitCode = exitCode,
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
-                    unread = true,
+                    unread = taskId !in viewingTaskIds,
                     completedChanges = completedChanges ?: task.completedChanges,
                 )
             } else {
@@ -3063,6 +3122,7 @@ class DesktopAgentRunService(
         }
         val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
         handles.remove(taskId)
+        terminals.stop(taskId)
         if (status == AgentTaskStatus.Completed && queuedFollowUp != null) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)

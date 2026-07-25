@@ -54,10 +54,17 @@ data class AgentStoreState(
 )
 
 class DesktopAgentTaskStore(
+    /** Legacy TOML path — imported once into SQLite, then renamed to `.migrated`. */
     private val file: File = File(System.getProperty("user.home"), ".andy/agents.toml"),
+    private val databaseFile: File = File(
+        file.parentFile ?: File(System.getProperty("user.home"), ".andy"),
+        "agents.db",
+    ),
 ) {
-    val storeFile: File get() = file
+    val storeFile: File get() = databaseFile
+    val tomlFile: File get() = file
     val transcriptsDir: File = File(file.parentFile, "agents")
+    private val sqlite by lazy { SqliteAgentStore(dbFile = databaseFile, tomlFile = file) }
 
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
 
@@ -67,31 +74,10 @@ class DesktopAgentTaskStore(
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext AgentStoreState()
-        val primary = runCatching {
-            Toml { ignoreUnknownKeys = true }
-                .decodeFromString(AgentsFileDto.serializer(), file.readText())
-                .toModel(::scrollbackFile)
+        runCatching { sqlite.load(::scrollbackFile) }.getOrElse { error ->
+            // Fall back to legacy TOML if the DB cannot be opened.
+            loadTomlFallback() ?: AgentStoreState()
         }
-        if (primary.isSuccess) return@withContext primary.getOrThrow()
-
-        // Snapshot the unreadable file, then try the last good backup before giving up.
-        runCatching { file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true) }
-        val backup = File(file.absolutePath + ".bak")
-        if (backup.isFile && backup.length() > 0L) {
-            runCatching {
-                Toml { ignoreUnknownKeys = true }
-                    .decodeFromString(AgentsFileDto.serializer(), backup.readText())
-                    .toModel(::scrollbackFile)
-            }.onSuccess { recovered ->
-                // Restore the primary file so the next launch does not depend on .bak.
-                runCatching {
-                    backup.copyTo(file, overwrite = true)
-                }
-                return@withContext recovered
-            }
-        }
-        AgentStoreState()
     }
 
     suspend fun save(state: AgentStoreState): Unit = withContext(Dispatchers.IO) {
@@ -99,27 +85,41 @@ class DesktopAgentTaskStore(
     }
 
     fun saveSync(state: AgentStoreState) {
-        file.parentFile?.mkdirs()
-        // Never clobber a populated store with an empty task list — that is almost
-        // always a failed-load recovery writing back, not an intentional wipe.
-        if (state.tasks.isEmpty() && file.isFile && file.length() > EMPTY_STORE_GUARD_BYTES) {
-            file.copyTo(File(file.absolutePath + ".pre-empty-save"), overwrite = true)
-            return
-        }
-        if (file.exists()) {
-            file.copyTo(File(file.absolutePath + ".bak"), overwrite = true)
-        }
-        val content = Toml.encodeToString(AgentsFileDto.serializer(), state.toFileDto())
-        val tmp = File(file.absolutePath + ".tmp")
-        tmp.writeText(content.trimEnd() + "\n")
-        if (!tmp.renameTo(file)) {
-            tmp.copyTo(file, overwrite = true)
-            tmp.delete()
-        }
+        databaseFile.parentFile?.mkdirs()
+        sqlite.save(state)
+        // Keep a TOML mirror for human inspection / emergency recovery while migrating.
+        writeTomlMirror(state)
     }
 
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
         taskDir(taskId).deleteRecursively()
+    }
+
+    private fun loadTomlFallback(): AgentStoreState? {
+        if (!file.exists()) return null
+        return runCatching {
+            Toml { ignoreUnknownKeys = true }
+                .decodeFromString(AgentsFileDto.serializer(), file.readText())
+                .toModel(::scrollbackFile)
+        }.getOrNull()
+    }
+
+    private fun writeTomlMirror(state: AgentStoreState) {
+        if (state.tasks.isEmpty() && file.isFile && file.length() > EMPTY_STORE_GUARD_BYTES) {
+            return
+        }
+        runCatching {
+            if (file.exists()) {
+                file.copyTo(File(file.absolutePath + ".bak"), overwrite = true)
+            }
+            val content = Toml.encodeToString(AgentsFileDto.serializer(), state.toFileDto())
+            val tmp = File(file.absolutePath + ".tmp")
+            tmp.writeText(content.trimEnd() + "\n")
+            if (!tmp.renameTo(file)) {
+                tmp.copyTo(file, overwrite = true)
+                tmp.delete()
+            }
+        }
     }
 
     companion object {
@@ -128,7 +128,7 @@ class DesktopAgentTaskStore(
 }
 
 @Serializable
-private data class AgentsFileDto(
+internal data class AgentsFileDto(
     val version: Int = 3,
     val maxConcurrent: Int = 8,
     @TomlInline val binaries: Map<String, String> = emptyMap(),
@@ -141,14 +141,14 @@ private data class AgentsFileDto(
 )
 
 @Serializable
-private data class AgentQuotaAccessDto(
+internal data class AgentQuotaAccessDto(
     val claudeAccountAccess: Boolean = false,
     val cursorAccountAccess: Boolean = false,
     val antigravityAccountAccess: Boolean = false,
 )
 
 @Serializable
-private data class AgentProviderDefaultsDto(
+internal data class AgentProviderDefaultsDto(
     val agent: String,
     val model: String = "",
     val reasoningEffort: String = "",
@@ -162,7 +162,7 @@ private data class AgentProviderDefaultsDto(
 )
 
 @Serializable
-private data class AgentTaskDto(
+internal data class AgentTaskDto(
     val id: String,
     val title: String,
     val prompt: String,
@@ -220,13 +220,13 @@ private data class AgentTaskDto(
 )
 
 @Serializable
-private data class AgentUserInputRequestDto(
+internal data class AgentUserInputRequestDto(
     val id: String,
     val questions: List<AgentUserInputQuestionDto>,
 )
 
 @Serializable
-private data class AgentUserInputQuestionDto(
+internal data class AgentUserInputQuestionDto(
     val id: String,
     val header: String = "",
     val question: String,
@@ -234,13 +234,13 @@ private data class AgentUserInputQuestionDto(
 )
 
 @Serializable
-private data class AgentUserInputOptionDto(
+internal data class AgentUserInputOptionDto(
     val label: String,
     val description: String = "",
 )
 
 @Serializable
-private data class ProjectWorkflowDto(
+internal data class ProjectWorkflowDto(
     val projectId: String,
     val scratchpad: String = "",
     val profiles: List<ProjectRoleProfileDto> = emptyList(),
@@ -249,13 +249,13 @@ private data class ProjectWorkflowDto(
 )
 
 @Serializable
-private data class ProjectRoleProfileDto(
+internal data class ProjectRoleProfileDto(
     val kind: String,
     val profile: ProjectAgentProfileDto,
 )
 
 @Serializable
-private data class ProjectAgentProfileDto(
+internal data class ProjectAgentProfileDto(
     val agent: String = AgentKind.Codex.name,
     val model: String = "",
     val reasoningEffort: String = "",
@@ -268,7 +268,7 @@ private data class ProjectAgentProfileDto(
 )
 
 @Serializable
-private data class ProjectTaskDto(
+internal data class ProjectTaskDto(
     val id: String,
     val projectId: String,
     val kind: String,
@@ -311,7 +311,7 @@ private data class ProjectTaskDto(
 )
 
 @Serializable
-private data class ProjectPlanVersionDto(
+internal data class ProjectPlanVersionDto(
     val version: Int,
     val text: String,
     val runId: String,
@@ -319,7 +319,7 @@ private data class ProjectPlanVersionDto(
 )
 
 @Serializable
-private data class ProjectPlanSnapshotDto(
+internal data class ProjectPlanSnapshotDto(
     val text: String,
     val sourceSpecTaskId: String = "",
     val sourceVersion: Int = 0,
@@ -327,7 +327,7 @@ private data class ProjectPlanSnapshotDto(
 )
 
 @Serializable
-private data class ProjectTaskAttemptDto(
+internal data class ProjectTaskAttemptDto(
     val runId: String,
     val stage: String,
     val attempt: Int,
@@ -341,7 +341,7 @@ private data class ProjectTaskAttemptDto(
 )
 
 @Serializable
-private data class ProjectReviewVerdictDto(
+internal data class ProjectReviewVerdictDto(
     val status: String,
     val summary: String,
     val findings: List<ProjectReviewFindingDto> = emptyList(),
@@ -352,7 +352,7 @@ private data class ProjectReviewVerdictDto(
 )
 
 @Serializable
-private data class ProjectReviewFindingDto(
+internal data class ProjectReviewFindingDto(
     val severity: String,
     val title: String,
     val details: String,
@@ -361,7 +361,7 @@ private data class ProjectReviewFindingDto(
 )
 
 @Serializable
-private data class ProjectVerificationVerdictDto(
+internal data class ProjectVerificationVerdictDto(
     val status: String,
     val summary: String,
     val evidence: List<String> = emptyList(),
@@ -373,7 +373,7 @@ private data class ProjectVerificationVerdictDto(
 )
 
 @Serializable
-private data class AgentQueuedFollowUpDto(
+internal data class AgentQueuedFollowUpDto(
     val text: String = "",
     val imagePaths: List<String> = emptyList(),
     val skillNames: List<String> = emptyList(),
@@ -381,20 +381,20 @@ private data class AgentQueuedFollowUpDto(
 )
 
 @Serializable
-private data class AgentThreadChangeSnapshotDto(
+internal data class AgentThreadChangeSnapshotDto(
     val files: List<AgentFileChangeDto> = emptyList(),
     val diffs: List<AgentFileDiffDto> = emptyList(),
 )
 
 @Serializable
-private data class AgentFileChangeDto(
+internal data class AgentFileChangeDto(
     val path: String,
     val additions: Int,
     val deletions: Int,
 )
 
 @Serializable
-private data class AgentFileDiffDto(
+internal data class AgentFileDiffDto(
     val path: String,
     val lines: List<DiffLineDto> = emptyList(),
     val additions: Int = 0,
@@ -404,14 +404,14 @@ private data class AgentFileDiffDto(
 )
 
 @Serializable
-private data class DiffLineDto(
+internal data class DiffLineDto(
     val kind: String,
     val text: String,
     val oldLineNumber: Int? = null,
     val newLineNumber: Int? = null,
 )
 
-private fun AgentsFileDto.toModel(scrollbackFile: (String) -> File): AgentStoreState = AgentStoreState(
+internal fun AgentsFileDto.toModel(scrollbackFile: (String) -> File): AgentStoreState = AgentStoreState(
     tasks = tasks.mapNotNull { it.toModel(scrollbackFile) },
     binaryOverrides = binaries,
     providerDefaults = providerDefaults.mapNotNull { it.toModel() }.toMap(),
@@ -426,7 +426,7 @@ private fun AgentsFileDto.toModel(scrollbackFile: (String) -> File): AgentStoreS
     legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
 )
 
-private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDefaults>? {
+internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDefaults>? {
     val kind = AgentKind.entries.firstOrNull { it.name == agent } ?: return null
     return kind to AgentProviderDefaults(
         model = model.takeIf { it.isNotBlank() },
@@ -441,7 +441,7 @@ private fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDef
     )
 }
 
-private fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? {
+internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? {
     val agentKind = AgentKind.entries.firstOrNull { it.name == agent } ?: return null
     val persistedStatus = AgentTaskStatus.entries.firstOrNull { it.name == status } ?: AgentTaskStatus.Unknown
     val legacyQueuedFollowUp = queuedFollowUp.takeIf { it.isNotBlank() || queuedFollowUpImagePaths.isNotEmpty() }?.let { text ->
@@ -518,7 +518,7 @@ private fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? {
     return recoverInterruptedTaskStatus(task, scrollbackFile(id))
 }
 
-private fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
+internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
     maxConcurrent = maxConcurrent,
     binaries = binaryOverrides,
     lastUsedAgent = lastUsedAgent?.name.orEmpty(),
@@ -632,7 +632,7 @@ private fun AgentUserInputRequest.toDto() = AgentUserInputRequestDto(
     },
 )
 
-private fun ProjectWorkflowDto.toModel(): ProjectWorkflowState = ProjectWorkflowState(
+internal fun ProjectWorkflowDto.toModel(): ProjectWorkflowState = ProjectWorkflowState(
     projectId = projectId,
     scratchpad = scratchpad,
     profiles = profiles.mapNotNull { role ->

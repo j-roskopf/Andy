@@ -23,6 +23,16 @@ limited today.
 
 [Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
 
+## Headless daemon + CLI
+
+Andy can run as a launchd-managed headless daemon (`andyd`) that owns agent/project
+state (SQLite), spawns agents into `tmux -L andy`, and serves MCP over
+`~/.andy/andyd.sock`. The Compose GUI and a Rust CLI (`cli/andy`) attach as clients.
+
+Requires **tmux** (`brew install tmux`). See [docs/ANDYD.md](docs/ANDYD.md) for setup,
+`./gradlew runAndyd`, `./gradlew installAndyCli` (`~/.andy/bin/andy`), launchd packaging,
+and release assets (`andy-<version>-{macos-arm64,linux-x86_64,windows-x86_64.exe}`).
+
 ## Features
 
 ### Devices
@@ -199,6 +209,7 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 - Android SDK platform tools for device and emulator access.
 - Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
+- **tmux** for agent sessions (daemon / GUI): `brew install tmux` (or set `ANDY_TMUX`).
 - scrcpy does not need to be installed separately for embedded Android mirroring; Andy bundles `scrcpy-server`.
 - Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
 

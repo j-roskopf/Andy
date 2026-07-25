@@ -635,6 +635,7 @@ internal object ScreenshotServices {
                 ),
             ),
         )
+        override suspend fun projectContextDir(projectId: String): String? = null
         override suspend fun ensureProject(projectId: String) = Unit
         override suspend fun updateScratchpad(projectId: String, text: String) = Unit
         override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit

@@ -139,6 +139,9 @@ kotlin {
                 // Wayland; dorkbox needs libayatana-appindicator which isn't always present.
                 implementation("io.github.kdroidfilter:composenativetray:1.3.3")
 
+                // SQLDelight agent store (JVM-only module — avoids wasmJs)
+                implementation(project(":agent-store"))
+
                 // MCP and Ktor Server Dependencies
                 implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")
                 implementation("io.ktor:ktor-server-core:3.0.1")
@@ -642,3 +645,150 @@ tasks.matching { it.name in setOf("packageReleaseDmg", "notarizeReleaseDmg") }
     .configureEach {
         dependsOn(resignMacReleaseApp)
     }
+
+// Headless daemon entry point (`andyd`).
+tasks.register<JavaExec>("runAndyd") {
+    group = "application"
+    description = "Run the headless Andy daemon (andyd) with MCP unix socket"
+    val desktopCompilation = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    dependsOn(desktopCompilation.compileTaskProvider)
+    dependsOn(":agent-store:jar")
+    mainClass.set("app.andy.desktop.AndydMainKt")
+    classpath = files(
+        desktopCompilation.output.allOutputs,
+        desktopCompilation.runtimeDependencyFiles,
+    )
+    jvmArgs(
+        "-Djdk.lang.Process.launchMechanism=FORK",
+        // Headless daemon: no Dock icon / AWT UI from Compose desktop deps.
+        "-Dapple.awt.UIElement=true",
+        "-Djava.awt.headless=true",
+    )
+    val pathSep = System.getProperty("path.separator") ?: ":"
+    environment(
+        "PATH",
+        listOfNotNull(
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            System.getenv("PATH"),
+        ).joinToString(pathSep),
+    )
+}
+
+tasks.register("killAndyd") {
+    group = "application"
+    description = "Stop a running andyd daemon (SIGTERM via ~/.andy/andyd.pid)"
+    doLast {
+        val andyHome = file("${System.getProperty("user.home")}/.andy")
+        val pidFile = file("${andyHome}/andyd.pid")
+        val sockFile = file("${andyHome}/andyd.sock")
+        if (!pidFile.isFile) {
+            println("andyd not running (no pidfile ${pidFile.absolutePath})")
+            return@doLast
+        }
+        val pidText = pidFile.readText().trim()
+        val pid = pidText.toLongOrNull()
+        if (pid == null) {
+            println("andyd pidfile unreadable ($pidText); removing stale lock files")
+            pidFile.delete()
+            sockFile.delete()
+            return@doLast
+        }
+        val handle = ProcessHandle.of(pid)
+        if (handle.isEmpty || !handle.get().isAlive) {
+            println("andyd pid $pid not alive; removing stale lock files")
+            pidFile.delete()
+            sockFile.delete()
+            return@doLast
+        }
+        val proc = handle.get()
+        println("Stopping andyd pid=$pid …")
+        proc.destroy()
+        val deadline = System.currentTimeMillis() + 10_000
+        while (proc.isAlive && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100)
+        }
+        if (proc.isAlive) {
+            println("andyd pid=$pid still alive; sending SIGKILL")
+            proc.destroyForcibly()
+            val hardDeadline = System.currentTimeMillis() + 5_000
+            while (proc.isAlive && System.currentTimeMillis() < hardDeadline) {
+                Thread.sleep(100)
+            }
+        }
+        if (proc.isAlive) {
+            throw GradleException("Failed to stop andyd pid=$pid")
+        }
+        // Shutdown hook normally cleans these; clear leftovers if needed.
+        pidFile.delete()
+        sockFile.delete()
+        println("andyd stopped")
+    }
+}
+
+tasks.register<Copy>("installAndydLaunchAgent") {
+    group = "distribution"
+    description = "Copy the andyd launchd plist into ~/Library/LaunchAgents"
+    from("packaging/macos/com.joetr.andyd.plist")
+    into("${System.getProperty("user.home")}/Library/LaunchAgents")
+}
+
+tasks.register<Exec>("buildAndyCli") {
+    group = "build"
+    description = "Build the release andy CLI binary (cli/andy)"
+    workingDir = file("cli/andy")
+    val pathSep = System.getProperty("path.separator") ?: ":"
+    val cargoHomeBin = file("${System.getProperty("user.home")}/.cargo/bin")
+    val pathWithCargo = listOfNotNull(
+        cargoHomeBin.takeIf { it.isDirectory }?.absolutePath,
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        System.getenv("PATH"),
+    ).joinToString(pathSep)
+    environment("PATH", pathWithCargo)
+    val cargo = sequenceOf(
+        file("${cargoHomeBin.absolutePath}/cargo"),
+        file("/opt/homebrew/bin/cargo"),
+        file("/usr/local/bin/cargo"),
+    ).firstOrNull { it.isFile }
+        ?: error(
+            "cargo not found. Install Rust (https://rustup.rs) so ~/.cargo/bin/cargo exists, " +
+                "then re-run ./gradlew installAndyCli",
+        )
+    commandLine(cargo.absolutePath, "build", "--release")
+}
+
+tasks.register<Copy>("installAndyCli") {
+    group = "distribution"
+    description = "Install release andy CLI to ~/.andy/bin/andy"
+    dependsOn("buildAndyCli")
+    from("cli/andy/target/release/andy")
+    into("${System.getProperty("user.home")}/.andy/bin")
+    filePermissions {
+        user {
+            read = true
+            write = true
+            execute = true
+        }
+        group {
+            read = true
+            execute = true
+        }
+        other {
+            read = true
+            execute = true
+        }
+    }
+    doLast {
+        val dest = file("${System.getProperty("user.home")}/.andy/bin/andy")
+        // Gradle Copy invalidates the cargo adhoc signature; macOS then
+        // SIGKILLs the binary ("Code Signature Invalid") until re-signed.
+        val codesign = ProcessBuilder("codesign", "--force", "--sign", "-", dest.absolutePath)
+            .inheritIO()
+            .start()
+        check(codesign.waitFor() == 0) { "codesign failed for ${dest.absolutePath}" }
+        println("Installed ${dest.absolutePath}")
+        println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
+    }
+}
+

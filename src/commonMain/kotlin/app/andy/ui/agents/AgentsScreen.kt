@@ -160,7 +160,7 @@ private fun AgentCommandCenter(
                             !composing && task.id == selected?.id,
                             nowMillis,
                             sessionStatus = sessionStatus,
-                            onClick = { selectedTaskId = task.id; composing = false; if (task.unread) services.agentRuns.markRead(task.id) },
+                            onClick = { selectedTaskId = task.id; composing = false; services.agentRuns.markRead(task.id) },
                             onMarkUnread = { services.agentRuns.markUnread(task.id) },
                             onArchive = if (showArchived) {
                                 { services.agentRuns.unarchive(task.id) }

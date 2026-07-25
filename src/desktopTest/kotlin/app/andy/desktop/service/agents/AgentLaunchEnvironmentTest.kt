@@ -18,6 +18,9 @@ class AgentLaunchEnvironmentTest {
             "NODE_OPTIONS" to "--require /tmp/bootloader.js",
             "VSCODE_INSPECTOR_OPTIONS" to "ipc",
             "ELECTRON_RUN_AS_NODE" to "1",
+            "CURSOR_AGENT" to "1",
+            "TERM" to "dumb",
+            "FORCE_COLOR" to "0",
             "HOME" to "/Users/test",
         )
 
@@ -31,6 +34,9 @@ class AgentLaunchEnvironmentTest {
         assertNull(env["NODE_OPTIONS"])
         assertNull(env["VSCODE_INSPECTOR_OPTIONS"])
         assertNull(env["ELECTRON_RUN_AS_NODE"])
+        assertNull(env["CURSOR_AGENT"])
+        assertNull(env["FORCE_COLOR"])
+        assertEquals("xterm-256color", env["TERM"])
     }
 
     @Test

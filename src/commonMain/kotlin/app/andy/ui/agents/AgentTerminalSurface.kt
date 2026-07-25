@@ -8,7 +8,8 @@ import app.andy.service.AndyServices
  * Embedded agent CLI terminal (PTY). Desktop hosts KetraTerm; other targets no-op.
  *
  * [sessionActive] is true while Andy expects a live PTY (queued/running/waiting).
- * Finished chats have no widget — the surface shows a reconnect hint instead of a blank pane.
+ * Finished chats prefer scrollback history when available; they do not auto-restart
+ * the provider CLI (send a follow-up / resume to reopen interactively).
  */
 @Composable
 expect fun AgentTerminalSurface(

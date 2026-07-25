@@ -132,6 +132,10 @@ internal fun replayCaptureReadableLines(
 /**
  * Build a read-only [SwingTerminal] that replays [content] instantly and stays
  * open for scrolling. User keystrokes are discarded by the parked connector.
+ *
+ * Content is cleaned with [formatScrollbackForDisplay] first so TUI chrome
+ * (slash menus, box rules, spinners) does not paint as overlapping garbage
+ * when the viewer width differs from the original capture.
  */
 fun createScrollbackReplayTerminal(
     content: String,
@@ -140,7 +144,14 @@ fun createScrollbackReplayTerminal(
     appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
 ): SwingTerminal {
     val resolved = resolveScrollbackForReplay(content, cols, rows)
-    val payload = (resolved + "\n\u001b[?25l").toByteArray(StandardCharsets.UTF_8)
+    val display = formatScrollbackForDisplay(resolved).ifBlank {
+        resolved.lines()
+            .filterNot { isScrollbackDisplayNoise(it) }
+            .joinToString("\n")
+            .trim()
+    }.ifBlank { "(no readable history for this chat)" }
+    // Plain text + newlines — avoid feeding wide TUI rows that wrap/overlap.
+    val payload = (display + "\n\u001b[?25l").toByteArray(StandardCharsets.UTF_8)
     val connector = AnsiReplayConnector(payload)
     val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
     val session = KetraSession.create(terminal = buffer, connector = connector)

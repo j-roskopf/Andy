@@ -69,9 +69,20 @@ jobs:
         if: matrix.os == 'linux'
         run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
 
+      - name: Install tmux (agent terminal executor)
+        if: matrix.os == 'macos'
+        run: brew install tmux || true
+
       - name: Run macOS checks
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
+        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build
+
+      - name: Build Andy Rust CLI
+        if: matrix.os == 'macos'
+        run: |
+          rustup show || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --manifest-path cli/andy/Cargo.toml
 
       - name: Run Windows checks
         if: matrix.os == 'windows'

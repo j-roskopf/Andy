@@ -17,11 +17,11 @@ import io.modelcontextprotocol.kotlin.sdk.server.mcp
 import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import java.io.File
 import java.util.Base64
+import app.andy.service.AgentRunService
+import app.andy.service.ProjectWorkflowService
 
 class DesktopMcpServerService(
     private val devices: DeviceService,
@@ -40,12 +40,63 @@ class DesktopMcpServerService(
 
     private var serverEngine: EmbeddedServer<*, *>? = null
     private var runningPort: Int? = null
-    private val serverMutex = Mutex()
+    private val httpLock = Any()
+    private var unixSocketServer: McpUnixSocketServer? = null
+    private var agentRuns: AgentRunService? = null
+    private var projectWorkflows: ProjectWorkflowService? = null
 
-    override suspend fun start(port: Int): CommandResult = withContext(Dispatchers.IO) { serverMutex.withLock {
+    /** Wire agent/project services so MCP tools can control chats (daemon / embedded). */
+    fun bindAgentServices(agents: AgentRunService, projects: ProjectWorkflowService) {
+        agentRuns = agents
+        projectWorkflows = projects
+    }
+
+    fun startUnixSocketBlocking(socketPath: File): CommandResult {
+        return try {
+            unixSocketServer?.stopBlocking()
+            val server = McpUnixSocketServer(socketPath) { createMcpServer() }
+            server.startBlocking()
+            unixSocketServer = server
+            check(socketPath.exists()) {
+                "unix socket missing after start: ${socketPath.absolutePath}"
+            }
+            if (!running.value) {
+                status.value = "running on unix:${socketPath.absolutePath}"
+                running.value = true
+            } else {
+                status.value = "${status.value}; unix:${socketPath.absolutePath}"
+            }
+            CommandResult.success("Unix MCP socket at ${socketPath.absolutePath}")
+        } catch (error: Exception) {
+            error.printStackTrace()
+            CommandResult.failure("Failed to start unix MCP socket: ${error.message}")
+        }
+    }
+
+    suspend fun startUnixSocket(socketPath: File): CommandResult =
+        withContext(Dispatchers.IO) { startUnixSocketBlocking(socketPath) }
+
+    fun stopUnixSocketBlocking(): CommandResult {
+        return try {
+            unixSocketServer?.stopBlocking()
+            unixSocketServer = null
+            CommandResult.success("Unix MCP socket stopped")
+        } catch (error: Exception) {
+            CommandResult.failure(error.message ?: "stop unix socket failed")
+        }
+    }
+
+    suspend fun stopUnixSocket(): CommandResult =
+        withContext(Dispatchers.IO) { stopUnixSocketBlocking() }
+
+    /**
+     * Blocking HTTP bind — safe from [AndydMain] / JavaExec where nested
+     * `runBlocking` + [Dispatchers.IO] can hang indefinitely.
+     */
+    fun startHttpBlocking(port: Int): CommandResult = synchronized(httpLock) {
         if (serverEngine != null) {
             if (runningPort == port) {
-                return@withLock CommandResult.success("Already running")
+                return CommandResult.success("Already running")
             }
             stopEngine()
         }
@@ -53,11 +104,12 @@ class DesktopMcpServerService(
         if (!isPortAvailable(port)) {
             status.value = "error: port $port already in use"
             running.value = false
-            return@withLock CommandResult.failure("Port $port is already in use")
+            return CommandResult.failure("Port $port is already in use")
         }
 
         try {
             status.value = "starting..."
+            System.err.println("andy-mcp: creating Netty engine on 127.0.0.1:$port")
 
             val engine = embeddedServer(Netty, host = "127.0.0.1", port = port) {
                 install(DoubleReceive)
@@ -72,11 +124,13 @@ class DesktopMcpServerService(
             }
 
             serverEngine = engine
+            System.err.println("andy-mcp: engine.start(wait=false)…")
             engine.start(wait = false)
             runningPort = port
 
             status.value = "running on 127.0.0.1:$port"
             running.value = true
+            System.err.println("andy-mcp: HTTP listening on 127.0.0.1:$port")
             CommandResult.success("Server started on port $port")
         } catch (e: Exception) {
             e.printStackTrace()
@@ -86,12 +140,17 @@ class DesktopMcpServerService(
             runningPort = null
             CommandResult.failure("Failed to start server: ${e.message}")
         }
-    } }
+    }
 
-    override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) { serverMutex.withLock {
-        stopEngine()
-        CommandResult.success("Server stopped")
-    } }
+    override suspend fun start(port: Int): CommandResult =
+        withContext(Dispatchers.IO) { startHttpBlocking(port) }
+
+    override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) {
+        synchronized(httpLock) {
+            stopEngine()
+            CommandResult.success("Server stopped")
+        }
+    }
 
     private fun stopEngine() {
         val engine = serverEngine
@@ -144,8 +203,8 @@ class DesktopMcpServerService(
         "set_network_mock_rules", "delete_network_mock_rule", "stop_network_proxy",
         "clear_network_requests", "list_network_requests", "get_network_request",
         "configure_device_proxy", "save_snapshot", "load_snapshot", "delete_snapshot",
-        "list_snapshots", "logcat_snapshot"
-    )
+        "list_snapshots", "logcat_snapshot",
+    ) + agentProjectToolNames()
 
     private fun createMcpServer(): Server {
         val mcpServer = Server(
@@ -158,6 +217,11 @@ class DesktopMcpServerService(
         )
 
         registerTools(mcpServer)
+        val agents = agentRuns
+        val projects = projectWorkflows
+        if (agents != null && projects != null) {
+            mcpServer.registerAgentProjectTools(agents, projects)
+        }
         return mcpServer
     }
 
