@@ -32,12 +32,14 @@ class MitmAddonHookRegistrationTest {
         assumeTrue("Skipping: could not locate python for ${resolved.executable}", python != null)
 
         val addon = File.createTempFile("andy-mitm-addon", ".py")
+        val scriptFile = File.createTempFile("andy-mitm-hook-check", ".py")
         try {
             addon.writeBytes(MitmAddon.getAddonSource())
-            val script = """
+            scriptFile.writeText(
+                """
                 import importlib.util
                 import sys
-                path = ${pythonString(addon.absolutePath)}
+                path = r"${addon.absolutePath.replace("\\", "/")}"
                 spec = importlib.util.spec_from_file_location("andy_mitm_addon", path)
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
@@ -52,8 +54,9 @@ class MitmAddonHookRegistrationTest {
                 if not callable(getattr(mod, "tls_clienthello")):
                     raise SystemExit("tls_clienthello not callable")
                 print("hooks-ok")
-            """.trimIndent()
-            val process = ProcessBuilder(python!!, "-c", script)
+                """.trimIndent(),
+            )
+            val process = ProcessBuilder(python!!, scriptFile.absolutePath)
                 .redirectErrorStream(true)
                 .start()
             val output = process.inputStream.bufferedReader().readText()
@@ -63,6 +66,7 @@ class MitmAddonHookRegistrationTest {
             }
         } finally {
             addon.delete()
+            scriptFile.delete()
         }
     }
 
@@ -82,7 +86,4 @@ class MitmAddonHookRegistrationTest {
             ?.absolutePath
             ?: MitmRuntime.findSuitablePython()
     }
-
-    private fun pythonString(value: String): String =
-        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
