@@ -39,6 +39,7 @@ import app.andy.model.ProjectWorkflowState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import net.peanuuutz.tomlkt.Toml
 import java.io.File
 
 data class AgentStoreState(
@@ -58,6 +59,7 @@ class DesktopAgentTaskStore(
 ) {
     val storeFile: File get() = databaseFile
     val transcriptsDir: File = File(databaseFile.parentFile, "agents")
+    private val legacyTomlFile: File get() = File(databaseFile.parentFile, "agents.toml")
     private val sqlite by lazy { SqliteAgentStore(dbFile = databaseFile) }
 
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
@@ -68,20 +70,61 @@ class DesktopAgentTaskStore(
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
+        migrateLegacyTomlIfNeeded()
         runCatching { sqlite.load(::scrollbackFile) }.getOrElse { AgentStoreState() }
     }
 
-    suspend fun save(state: AgentStoreState): Unit = withContext(Dispatchers.IO) {
-        saveSync(state)
-    }
+    suspend fun save(state: AgentStoreState, allowEmptyTaskList: Boolean = false): Unit =
+        withContext(Dispatchers.IO) {
+            saveSync(state, allowEmptyTaskList)
+        }
 
-    fun saveSync(state: AgentStoreState) {
+    fun saveSync(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
         databaseFile.parentFile?.mkdirs()
-        sqlite.save(state)
+        sqlite.save(state, allowEmptyTaskList)
     }
 
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
         taskDir(taskId).deleteRecursively()
+    }
+
+    private fun migrateLegacyTomlIfNeeded() {
+        if (!legacyTomlFile.isFile) return
+        val existing = runCatching { sqlite.load(::scrollbackFile) }.getOrNull()
+        if (existing != null && (existing.tasks.isNotEmpty() || existing.projectWorkflows.isNotEmpty())) {
+            archiveLegacyToml()
+            return
+        }
+        val migrated = loadLegacyToml() ?: return
+        saveSync(migrated, allowEmptyTaskList = true)
+        archiveLegacyToml()
+    }
+
+    private fun loadLegacyToml(): AgentStoreState? {
+        val primary = runCatching {
+            Toml { ignoreUnknownKeys = true }
+                .decodeFromString(AgentsFileDto.serializer(), legacyTomlFile.readText())
+                .toModel(::scrollbackFile)
+        }
+        if (primary.isSuccess) return primary.getOrThrow()
+
+        runCatching { legacyTomlFile.copyTo(File(legacyTomlFile.absolutePath + ".corrupt"), overwrite = true) }
+        val backup = File(legacyTomlFile.absolutePath + ".bak")
+        if (!backup.isFile || backup.length() == 0L) return null
+        return runCatching {
+            Toml { ignoreUnknownKeys = true }
+                .decodeFromString(AgentsFileDto.serializer(), backup.readText())
+                .toModel(::scrollbackFile)
+        }.getOrNull()
+    }
+
+    private fun archiveLegacyToml() {
+        val archived = File(legacyTomlFile.absolutePath + ".migrated")
+        if (legacyTomlFile.renameTo(archived)) return
+        runCatching {
+            legacyTomlFile.copyTo(archived, overwrite = true)
+            legacyTomlFile.delete()
+        }
     }
 }
 

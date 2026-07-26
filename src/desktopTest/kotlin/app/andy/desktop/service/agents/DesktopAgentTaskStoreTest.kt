@@ -394,4 +394,55 @@ class DesktopAgentTaskStoreTest {
         store.save(AgentStoreState())
         assertEquals(listOf(task.id), store.load().tasks.map { it.id })
     }
+
+    @Test
+    fun allowsEmptySaveWhenExplicit() = withStore { store ->
+        val task = AgentTask(
+            id = "delete-me",
+            title = "gone",
+            prompt = "p",
+            agent = AgentKind.Codex,
+            status = AgentStatus.Done,
+            createdAtMillis = 1,
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        store.save(AgentStoreState(), allowEmptyTaskList = true)
+        assertTrue(store.load().tasks.isEmpty())
+    }
+
+    @Test
+    fun migratesLegacyTomlOnFirstLoad() {
+        val dir = File.createTempFile("andy-agents-migrate", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            val db = File(dir, "agents.db")
+            val toml = File(dir, "agents.toml")
+            toml.writeText(
+                """
+                version = 4
+                maxConcurrent = 8
+                lastUsedAgent = "Codex"
+
+                [[tasks]]
+                id = "legacy-task"
+                title = "legacy chat"
+                prompt = "hello"
+                agent = "Codex"
+                status = "Done"
+                createdAtMillis = 42
+                """.trimIndent() + "\n",
+            )
+            val store = DesktopAgentTaskStore(db)
+            val loaded = runBlocking { store.load() }
+            assertEquals(listOf("legacy-task"), loaded.tasks.map { it.id })
+            assertTrue(!toml.exists(), "legacy toml should be archived after migration")
+            assertTrue(File(dir, "agents.toml.migrated").isFile)
+            val reload = runBlocking { store.load() }
+            assertEquals(listOf("legacy-task"), reload.tasks.map { it.id })
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

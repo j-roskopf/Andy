@@ -790,10 +790,12 @@ tasks.register<Copy>("installAndyCli") {
         val dest = file("$binDir/andy")
         // Gradle Copy invalidates the cargo adhoc signature; macOS then
         // SIGKILLs the binary ("Code Signature Invalid") until re-signed.
-        val codesign = ProcessBuilder("codesign", "--force", "--sign", "-", dest.absolutePath)
-            .inheritIO()
-            .start()
-        check(codesign.waitFor() == 0) { "codesign failed for ${dest.absolutePath}" }
+        if (org.gradle.internal.os.OperatingSystem.current().isMacOsX) {
+            val codesign = ProcessBuilder("codesign", "--force", "--sign", "-", dest.absolutePath)
+                .inheritIO()
+                .start()
+            check(codesign.waitFor() == 0) { "codesign failed for ${dest.absolutePath}" }
+        }
 
         val hookSrc = file("scripts/andy-status-hook.sh")
         check(hookSrc.isFile) { "missing ${hookSrc.path}" }

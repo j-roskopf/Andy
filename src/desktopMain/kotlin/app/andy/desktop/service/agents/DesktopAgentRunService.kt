@@ -1855,7 +1855,7 @@ class DesktopAgentRunService(
                 withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
             }
         }
-        persist()
+        persist(allowEmptyTaskList = true)
     }
 
     private fun detachDeletedWorkflowRun(projectTaskId: String, runId: String) {
@@ -3308,7 +3308,7 @@ class DesktopAgentRunService(
         }
     }
 
-    private suspend fun persist() {
+    private suspend fun persist(allowEmptyTaskList: Boolean = false) {
         persistMutex.withLock {
             store.save(
                 AgentStoreState(
@@ -3321,6 +3321,7 @@ class DesktopAgentRunService(
                     projectWorkflows = _projects.value,
                     legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
                 ),
+                allowEmptyTaskList = allowEmptyTaskList,
             )
         }
     }

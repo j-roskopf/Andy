@@ -7,6 +7,7 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTaskDraft
+import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
 import app.andy.terminal.TmuxAndy
@@ -20,6 +21,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -267,6 +269,26 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "chat.delete",
+        description = "Delete an agent chat/task and its artifacts",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "removeWorktree" to buildJsonObject {
+                put("type", "boolean")
+                put("description", "Also remove an owned git worktree")
+            },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val removeWorktree = args["removeWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: args["removeWorktree"]?.jsonPrimitive?.booleanOrNull
+            ?: false
+        agentRuns.delete(id, removeWorktree)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
         name = "chat.resume",
         description = "Send a follow-up message to an agent chat (reattaches if needed)",
         properties = mapOf(
@@ -473,6 +495,52 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "workflow.save_spec",
+        description = "Create or update a project spec draft",
+        properties = mapOf(
+            "projectId" to buildJsonObject { put("type", "string") },
+            "title" to buildJsonObject { put("type", "string") },
+            "brief" to buildJsonObject { put("type", "string") },
+            "taskId" to buildJsonObject { put("type", "string") },
+            "agent" to buildJsonObject { put("type", "string") },
+            "model" to buildJsonObject { put("type", "string") },
+            "includeScratchpad" to buildJsonObject { put("type", "boolean") },
+            "grillMeEnabled" to buildJsonObject { put("type", "boolean") },
+        ),
+        required = listOf("projectId", "title", "brief"),
+    ) { args ->
+        val projectId = str(args, "projectId") ?: error("projectId required")
+        val title = str(args, "title") ?: error("title required")
+        val brief = str(args, "brief") ?: error("brief required")
+        val agentName = str(args, "agent")
+        val agent = agentName?.let { name ->
+            AgentKind.entries.firstOrNull {
+                it.name.equals(name, ignoreCase = true) ||
+                    it.cliName.equals(name, ignoreCase = true)
+            }
+        } ?: AgentKind.Codex
+        val id = projectWorkflows.saveSpec(
+            ProjectSpecDraft(
+                projectId = projectId,
+                title = title,
+                brief = brief,
+                profile = app.andy.model.ProjectAgentProfile(
+                    agent = agent,
+                    model = str(args, "model")?.takeIf { it.isNotBlank() },
+                ),
+                includeScratchpad = args["includeScratchpad"]?.jsonPrimitive?.booleanOrNull
+                    ?: args["includeScratchpad"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                    ?: false,
+                grillMeEnabled = args["grillMeEnabled"]?.jsonPrimitive?.booleanOrNull
+                    ?: args["grillMeEnabled"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                    ?: false,
+                taskId = str(args, "taskId")?.takeIf { it.isNotBlank() },
+            ),
+        )
+        textResult("""{"ok":true,"taskId":"$id"}""")
+    }
+
+    register(
         name = "workflow.run_spec",
         description = "Run a project spec workflow task",
         properties = mapOf(
@@ -506,6 +574,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.composer_options",
     "chat.start",
     "chat.stop",
+    "chat.delete",
     "chat.resume",
     "chat.respond",
     "chat.status",
@@ -513,6 +582,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.attach_command",
     "chat.reattach",
     "project.list",
+    "workflow.save_spec",
     "workflow.run_spec",
     "workflow.start_build",
 )

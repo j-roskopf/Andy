@@ -59,10 +59,10 @@ internal class SqliteAgentStore(
         )
     }
 
-    fun save(state: AgentStoreState) {
-        // Empty-store guard: never wipe a populated DB with an accidental empty save.
+    fun save(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
+        // Guard against failed-load recovery wiping a populated DB; intentional deletes opt in.
         val existingCount = db.agentStoreQueries.countTasks().executeAsOne()
-        if (state.tasks.isEmpty() && existingCount > 0L) return
+        if (!allowEmptyTaskList && state.tasks.isEmpty() && existingCount > 0L) return
 
         val now = System.currentTimeMillis()
         val dto = state.toFileDto()

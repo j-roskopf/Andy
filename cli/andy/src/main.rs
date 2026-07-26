@@ -167,16 +167,16 @@ async fn main() -> Result<()> {
 }
 
 async fn resolve_socket(cli: &Cli) -> Result<PathBuf> {
-    let local = cli.socket.clone().unwrap_or_else(default_socket_path);
     let Some(remote) = cli.remote.as_deref() else {
-        return Ok(local);
+        return Ok(cli.socket.clone().unwrap_or_else(default_socket_path));
     };
 
-    // OpenSSH stream-local forward: ssh -N -L local_path:remote_path host
-    let remote_sock = format!("/tmp/andy-remote-{}.sock", std::process::id());
-    // Prefer macOS home path; users can override with --socket on the remote side later.
+    // Always bind the forward to a fresh local path so an existing ~/.andy/andyd.sock
+    // is never mistaken for the remote tunnel.
+    let local = PathBuf::from(format!("/tmp/andy-remote-local-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&local);
     let remote_path = "~/.andy/andyd.sock";
-    let _child = Command::new("ssh")
+    let status = Command::new("ssh")
         .args([
             "-f",
             "-N",
@@ -186,10 +186,19 @@ async fn resolve_socket(cli: &Cli) -> Result<PathBuf> {
             &format!("{}:{}", local.display(), remote_path),
             remote,
         ])
-        .spawn()
+        .status()
         .with_context(|| format!("ssh tunnel to {remote}"))?;
-    // Give the forward a moment; if local already existed we still proceed.
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let _ = remote_sock;
-    Ok(local)
+    if !status.success() {
+        anyhow::bail!("ssh tunnel to {remote} failed with status {status}");
+    }
+    for _ in 0..20 {
+        if local.exists() {
+            return Ok(local);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    anyhow::bail!(
+        "ssh tunnel to {remote} did not create local socket at {}",
+        local.display()
+    )
 }

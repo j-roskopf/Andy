@@ -373,7 +373,14 @@ class McpAgentRunClient(
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
     override suspend fun delete(taskId: String, removeWorktree: Boolean) {
-        stop(taskId)
+        callTool(
+            "chat.delete",
+            mapOf(
+                "taskId" to JsonPrimitive(taskId),
+                "removeWorktree" to JsonPrimitive(removeWorktree),
+            ),
+        )
+        refreshTasks()
     }
 
     override fun markRead(taskId: String) = Unit
@@ -410,7 +417,24 @@ class McpAgentRunClient(
     override suspend fun ensureProject(projectId: String) = Unit
     override suspend fun updateScratchpad(projectId: String, text: String) = Unit
     override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit
-    override suspend fun saveSpec(draft: ProjectSpecDraft): String = error("saveSpec via MCP not yet wired")
+    override suspend fun saveSpec(draft: ProjectSpecDraft): String {
+        val raw = callTool(
+            "workflow.save_spec",
+            buildMap {
+                put("projectId", JsonPrimitive(draft.projectId))
+                put("title", JsonPrimitive(draft.title))
+                put("brief", JsonPrimitive(draft.brief))
+                draft.taskId?.let { put("taskId", JsonPrimitive(it)) }
+                put("agent", JsonPrimitive(draft.profile.agent.name))
+                draft.profile.model?.let { put("model", JsonPrimitive(it)) }
+                put("includeScratchpad", JsonPrimitive(draft.includeScratchpad))
+                put("grillMeEnabled", JsonPrimitive(draft.grillMeEnabled))
+            },
+        )
+        return runCatching {
+            json.parseToJsonElement(raw).jsonObject["taskId"]?.jsonPrimitive?.content
+        }.getOrNull() ?: draft.taskId ?: error("saveSpec returned no task id: $raw")
+    }
     override suspend fun runSpec(taskId: String, revisionRequest: String?) {
         callTool(
             "workflow.run_spec",
