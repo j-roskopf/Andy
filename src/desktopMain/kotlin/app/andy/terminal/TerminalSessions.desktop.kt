@@ -13,6 +13,7 @@ actual object TerminalSessions {
                     cols = request.cols,
                     rows = request.rows,
                     appearance = request.appearance,
+                    agentCliMode = request.agentCli,
                 )
                 session.start(request.argv, cwd, request.env)
                 session

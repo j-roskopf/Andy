@@ -34,8 +34,23 @@ internal fun emulatorGrpcDiscoveryFiles(): List<File> {
     }
 }
 
-internal fun loadEmulatorGrpcDiscovery(file: File): EmulatorGrpcDiscovery? {
-    val entries = runCatching {
+internal fun emulatorGrpcDiscoveryFor(serial: String): EmulatorGrpcDiscovery? {
+    val consolePort = serial.emulatorConsolePort()?.toString() ?: return null
+    val discoveries = emulatorGrpcDiscoveryFiles().mapNotNull { file ->
+        val entries = loadEmulatorGrpcDiscoveryEntries(file) ?: return@mapNotNull null
+        val discovery = loadEmulatorGrpcDiscovery(file) ?: return@mapNotNull null
+        if (discovery.port == null) return@mapNotNull null
+        val matches = entries["port.serial"] == consolePort ||
+            entries["adb.port"] == consolePort ||
+            entries["port.adb"] == consolePort
+        if (matches) discovery else null
+    }
+    if (discoveries.size == 1) return discoveries.first()
+    return discoveries.firstOrNull()
+}
+
+internal fun loadEmulatorGrpcDiscoveryEntries(file: File): Map<String, String>? =
+    runCatching {
         file.readLines()
             .mapNotNull { line ->
                 val trimmed = line.trim()
@@ -46,7 +61,10 @@ internal fun loadEmulatorGrpcDiscovery(file: File): EmulatorGrpcDiscovery? {
                 }
             }
             .toMap()
-    }.getOrNull() ?: return null
+    }.getOrNull()
+
+internal fun loadEmulatorGrpcDiscovery(file: File): EmulatorGrpcDiscovery? {
+    val entries = loadEmulatorGrpcDiscoveryEntries(file) ?: return null
     val port = entries["grpc.port"]?.toIntOrNull()
     val token = entries["grpc.token"]?.takeIf { it.isNotBlank() }
     return EmulatorGrpcDiscovery(port = port, token = token)

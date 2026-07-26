@@ -35,6 +35,29 @@ class ScrollbackAccumulatorTest {
     }
 
     @Test
+    fun cursorStatusFooterRedrawReplacesItselfInsteadOfPilingUp() {
+        val accumulator = ScrollbackAccumulator()
+        accumulator.merge(
+            screen(
+                "> fix flicker",
+                "  Cursor Grok 4.5 High Fast · 54.6% · 5 files edited",
+                "~/Code/Andy/Andy · jr/cli · #57",
+            ),
+        )
+        accumulator.merge(
+            screen(
+                "> fix flicker",
+                "  Cursor Grok 4.5 High Fast · 55.1% · 6 files edited",
+                "~/Code/Andy/Andy · jr/cli · #57",
+            ),
+        )
+        assertEquals(
+            "> fix flicker\n  Cursor Grok 4.5 High Fast · 55.1% · 6 files edited\n~/Code/Andy/Andy · jr/cli · #57",
+            accumulator.render(),
+        )
+    }
+
+    @Test
     fun scrolledRowsAreFrozenIntoHistory() {
         val accumulator = ScrollbackAccumulator()
         accumulator.merge(screen("line 1", "line 2", "line 3", "line 4"))

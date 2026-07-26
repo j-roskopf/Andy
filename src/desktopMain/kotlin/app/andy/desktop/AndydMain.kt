@@ -31,8 +31,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
 
     if (!TmuxAndy.isAvailable()) {
         System.err.println(
-            "WARNING: tmux not found. Agent sessions require tmux " +
-                "(brew install tmux) or ANDY_TMUX=/path/to/tmux",
+            "WARNING: tmux not found. Re-run install-andy.sh or set ANDY_TMUX=/path/to/tmux",
         )
     } else {
         runCatching { TmuxAndy.startServer() }

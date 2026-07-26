@@ -8,7 +8,7 @@ import app.andy.desktop.service.emulatorVsyncRate
 import app.andy.desktop.service.emulator.EMULATOR_IMAGE_BYTES_PER_PIXEL
 import app.andy.desktop.service.emulator.EmulatorGrpcClient
 import app.andy.desktop.service.emulator.EmulatorMappedFramebuffer
-import app.andy.desktop.service.emulator.emulatorConsolePort
+import app.andy.desktop.service.emulator.emulatorGrpcDiscoveryFor
 import app.andy.desktop.service.emulator.isEmulatorSerial
 import app.andy.desktop.service.emulator.readEmulatorGrpcToken
 import app.andy.model.DeviceConnectionState
@@ -366,11 +366,82 @@ class DesktopMirrorEngine(
                 return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
             }
         status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
+        startMirrorVideoJob(adb, serial, scrcpyServer, config, useNativeRenderer)
+        return CommandResult.success("Embedded mirror starting for $serial")
+    }
+
+    override suspend fun restartForDisplayChange(serial: String, config: MirrorVideoConfig): CommandResult {
+        val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
+        if (connectedSerial != serial || videoJob?.isActive != true || connectedConfig != config) {
+            return reconnect(serial, config)
+        }
+        val scrcpyServer = ScrcpyServerLocator.find()
+            ?: return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
+        stopScrcpyTransport(adb, serial)
+        emulatorGrpcClient?.close()
+        emulatorGrpcClient = null
+        lastEmulatorDisplaySizeRefreshNanos = 0L
+        frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
+        session.value = session.value?.let { active ->
+            active.copy(
+                readyForPresentation = false,
+                width = 0,
+                height = 0,
+                stats = active.stats.copy(framesPresented = 0, displayedFps = 0f, decodedFps = 0f),
+            )
+        }
+        connectedAtNanos = System.nanoTime()
+        status.value = "Restarting mirror for display change…"
+        if (serial.isEmulatorSerial()) {
+            ensureEmulatorGrpcClient(serial)
+            applyEmulatorGuestRefreshRate(adb, serial, config.maxFps)
+        }
+        val useNativeRenderer =
+            config.rendererMode != MirrorRendererMode.Legacy && activeGpuPipeline() != null
+        if (useNativeRenderer) {
+            activeGpuPipeline()?.resetDecoderStream()
+            val capture = captureSize(adb, serial, config.maxSize)
+            frames.value = MirrorFrame(capture.width, capture.height, IntArray(0), frameNumber = 1)
+            activeGpuPipeline()?.setContentSize(capture.width, capture.height)
+        }
+        startMirrorVideoJob(adb, serial, scrcpyServer, config, useNativeRenderer)
+        activeGpuPipeline()?.refreshAllGeometry()
+        activeGpuPipeline()?.repaintAll()
+        return CommandResult.success("Mirror restarting for display change")
+    }
+
+    private suspend fun stopScrcpyTransport(adb: String, serial: String) {
+        val job = videoJob
+        videoJob = null
+        job?.cancel()
+        synchronized(controlLock) {
+            runCatching { controlOutput?.close() }
+            controlOutput = null
+            runCatching { controlSocket?.close() }
+            controlSocket = null
+        }
+        videoProcess?.destroyForcibly()
+        videoProcess = null
+        videoForwardPort?.let { port ->
+            runner.run(listOf(adb, "-s", serial, "forward", "--remove", "tcp:$port"), 3)
+        }
+        videoForwardPort = null
+        job?.let { runCatching { it.join() } }
+    }
+
+    private fun startMirrorVideoJob(
+        adb: String,
+        serial: String,
+        scrcpyServer: File,
+        config: MirrorVideoConfig,
+        useNativeRenderer: Boolean,
+    ) {
         videoJob = engineScope.launch {
             val emulator = serial.isEmulatorSerial()
             val wireless = isWirelessAdbSerial(serial)
             if (emulator) {
                 awaitEmulatorReady(adb, serial)
+                ensureEmulatorGrpcClient(serial)
                 // -vsync-rate alone leaves renderFrameRate at 60; force peak/min to match Live FPS.
                 applyEmulatorGuestRefreshRate(adb, serial, config.maxFps)
             }
@@ -412,7 +483,6 @@ class DesktopMirrorEngine(
                 }
             }
         }
-        return CommandResult.success("Embedded mirror starting for $serial")
     }
 
     /**
@@ -499,22 +569,26 @@ class DesktopMirrorEngine(
     }
 
     override suspend fun sendInput(input: MirrorInput): CommandResult {
-        emulatorGrpcClient?.let { client ->
-            // Run the blocking gRPC touch RPC off the Compose UI dispatcher so dragging
-            // stays as smooth as Android Studio instead of stalling the event thread.
-            withContext(Dispatchers.IO) {
-                val frame = frames.value
-                val serial = connectedSerial
-                val adb = devices.adbPath()
-                val touchInput = input.usesTouchCoordinates()
-                if (serial != null && adb != null && touchInput) {
-                    refreshEmulatorDisplaySizeIfNeeded(client, adb, serial, frame)
+        val serial = connectedSerial
+        if (serial != null && serial.isEmulatorSerial()) {
+            val client = emulatorGrpcClient ?: ensureEmulatorGrpcClient(serial)
+            client?.let { grpc ->
+                val grpcResult = withContext(Dispatchers.IO) {
+                    val frame = frames.value
+                    val adb = devices.adbPath()
+                    val touchInput = input.usesTouchCoordinates()
+                    if (adb != null && touchInput) {
+                        refreshEmulatorDisplaySizeIfNeeded(grpc, adb, serial, frame)
+                    }
+                    if (touchInput && grpc.displaySize == null) {
+                        return@withContext null
+                    }
+                    grpc.sendInput(input, frame)
                 }
-                if (touchInput && client.displaySize == null) {
-                    return@withContext CommandResult.failure("Waiting for emulator display size before sending touch input")
+                if (grpcResult != null && (grpcResult.isSuccess || !input.usesTouchCoordinates())) {
+                    return grpcResult
                 }
-                client.sendInput(input, frame)
-            }?.let { return it }
+            }
         }
         sendScrcpyControl(input)?.let { return it }
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
@@ -537,6 +611,20 @@ class DesktopMirrorEngine(
         return runner.run(command)
     }
 
+    private suspend fun ensureEmulatorGrpcClient(serial: String): EmulatorGrpcClient? {
+        emulatorGrpcClient?.let { return it }
+        val discovery = emulatorGrpcDiscoveryFor(serial) ?: return null
+        val port = discovery.port ?: return null
+        val adb = devices.adbPath() ?: return null
+        val displaySize = readEmulatorDisplaySize(adb, serial)
+        return EmulatorGrpcClient(
+            host = "127.0.0.1",
+            port = port,
+            token = discovery.token,
+            initialDisplaySize = displaySize?.let { EmulatorDisplaySize(it.width, it.height) },
+        ).also { emulatorGrpcClient = it }
+    }
+
     private suspend fun refreshEmulatorDisplaySizeIfNeeded(
         client: EmulatorGrpcClient,
         adb: String,
@@ -556,30 +644,32 @@ class DesktopMirrorEngine(
         client.updateDisplaySize(next)
     }
 
-    private fun sendScrcpyControl(input: MirrorInput): CommandResult? {
+    private suspend fun sendScrcpyControl(input: MirrorInput): CommandResult? {
         val output = synchronized(controlLock) { controlOutput } ?: return null
-        return runCatching {
-            val messages = ScrcpyControlMessage.serialize(input, frames.value)
-            synchronized(controlLock) {
-                messages.forEach(output::write)
-                output.flush()
-                // Start the host-input measurement at the point the command has actually
-                // entered the scrcpy control socket. Recording it before serialization or a
-                // contended control lock would inflate the end-to-end result with host-side
-                // queuing that has not yet injected anything into Android.
-                if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
-                    activeGpuPipeline()?.recordInput() ?: NativeMirrorJni.recordInput()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val messages = ScrcpyControlMessage.serialize(input, frames.value)
+                synchronized(controlLock) {
+                    messages.forEach(output::write)
+                    output.flush()
+                    // Start the host-input measurement at the point the command has actually
+                    // entered the scrcpy control socket. Recording it before serialization or a
+                    // contended control lock would inflate the end-to-end result with host-side
+                    // queuing that has not yet injected anything into Android.
+                    if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
+                        activeGpuPipeline()?.recordInput() ?: NativeMirrorJni.recordInput()
+                    }
                 }
+                CommandResult.success("Input sent")
+            }.getOrElse { error ->
+                synchronized(controlLock) {
+                    runCatching { controlOutput?.close() }
+                    controlOutput = null
+                    runCatching { controlSocket?.close() }
+                    controlSocket = null
+                }
+                CommandResult.failure("scrcpy control failed: ${error.message ?: error::class.simpleName}")
             }
-            CommandResult.success("Input sent")
-        }.getOrElse { error ->
-            synchronized(controlLock) {
-                runCatching { controlOutput?.close() }
-                controlOutput = null
-                runCatching { controlSocket?.close() }
-                controlSocket = null
-            }
-            CommandResult.failure("scrcpy control failed: ${error.message ?: error::class.simpleName}")
         }
     }
 
@@ -623,8 +713,12 @@ class DesktopMirrorEngine(
             framesPresented = framesPresented,
             p95InputToPresentMillis = p95InputToPresentMillis ?: active.stats.p95InputToPresentMillis,
         )
-        val width = frame.width.takeIf { it > 1 } ?: active.width
-        val height = frame.height.takeIf { it > 1 } ?: active.height
+        val width = frame.width.takeIf { it > 1 }
+            ?: active.width.takeIf { active.readyForPresentation && it > 1 }
+            ?: 0
+        val height = frame.height.takeIf { it > 1 }
+            ?: active.height.takeIf { active.readyForPresentation && it > 1 }
+            ?: 0
         val ready = readyForPresentation ?: active.readyForPresentation
         if (
             nextStats == active.stats &&
@@ -920,13 +1014,28 @@ class DesktopMirrorEngine(
                     // Keep touch-mapping metadata aligned with the live stream size. This matters
                     // most for max_size=0 (native), where the initial estimate must match the
                     // encoder output or scrcpy control injects into a tiny coordinate space.
-                    if (usingNativeRenderer) {
-                        frames.value = MirrorFrame(
-                            sessionFrame.width,
-                            sessionFrame.height,
-                            IntArray(0),
-                            frameNumber = frames.value.frameNumber.coerceAtLeast(1),
+                    val previous = frames.value
+                    val preserveArgb = if (
+                        previous.width == sessionFrame.width &&
+                        previous.height == sessionFrame.height
+                    ) {
+                        previous.argb
+                    } else {
+                        IntArray(0)
+                    }
+                    frames.value = MirrorFrame(
+                        sessionFrame.width,
+                        sessionFrame.height,
+                        preserveArgb,
+                        frameNumber = previous.frameNumber.coerceAtLeast(1),
+                    )
+                    session.value?.let { active ->
+                        session.value = active.copy(
+                            width = sessionFrame.width,
+                            height = sessionFrame.height,
                         )
+                    }
+                    if (usingNativeRenderer) {
                         gpuPipeline?.setContentSize(sessionFrame.width, sessionFrame.height)
                             ?: NativeMirrorJni.setPresentationContentSize(sessionFrame.width, sessionFrame.height)
                     }

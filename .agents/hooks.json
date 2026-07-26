@@ -4,14 +4,14 @@
         "PreInvocation": [
             {
                 "type": "command",
-                "command": "'/Users/joer/Code/Andy/Andy/.andy/task-1ef271c1bb/andy-status-hook.sh' working empty",
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty",
                 "timeout": 5
             }
         ],
         "Stop": [
             {
                 "type": "command",
-                "command": "'/Users/joer/Code/Andy/Andy/.andy/task-1ef271c1bb/andy-status-hook.sh' done stop",
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done stop",
                 "timeout": 5
             }
         ],
@@ -21,7 +21,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-1ef271c1bb/andy-status-hook.sh' blocked allow",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" blocked allow",
                         "timeout": 5
                     }
                 ]

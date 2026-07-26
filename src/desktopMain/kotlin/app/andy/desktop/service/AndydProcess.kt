@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.terminal.TmuxAndy
 import java.io.File
 import java.nio.file.Files
 
@@ -79,7 +80,10 @@ internal object AndydProcess {
                 .directory(andyHome())
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(stdout))
                 .redirectError(ProcessBuilder.Redirect.appendTo(stderr))
-                .apply { environment()["PATH"] = augmentedPath() }
+                .apply {
+                    environment()["PATH"] = augmentedPath()
+                    TmuxAndy.bundledTmuxBinary()?.let { environment()["ANDY_TMUX"] = it }
+                }
                 .start()
             true
         }.getOrDefault(false)
@@ -135,7 +139,8 @@ internal object AndydProcess {
 
     private fun augmentedPath(): String {
         val existing = System.getenv("PATH").orEmpty()
-        val extras = listOf("/opt/homebrew/bin", "/usr/local/bin")
+        val andyBin = File(andyHome(), "bin").absolutePath
+        val extras = listOf(andyBin, "/opt/homebrew/bin", "/usr/local/bin")
         return (extras + existing.split(File.pathSeparatorChar).filter { it.isNotBlank() })
             .distinct()
             .joinToString(File.pathSeparator)

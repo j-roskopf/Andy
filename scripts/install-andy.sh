@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Install the Andy CLI (+ status hook helper) into ~/.andy/bin
+# Install the Andy CLI, andyd daemon runtime, bundled tmux, and status hook into ~/.andy
 # Usage:
 #   curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
 set -euo pipefail
 
 REPO="${ANDY_INSTALL_REPO:-j-roskopf/Andy}"
 BIN_DIR="${ANDY_BIN_DIR:-${HOME}/.andy/bin}"
+ANDY_HOME="${ANDY_HOME:-${HOME}/.andy}"
+RUNTIME_DIR="${ANDY_HOME}/andyd"
 API_URL="${ANDY_RELEASES_API:-https://api.github.com/repos/${REPO}/releases/latest}"
 
 log() { printf '%s\n' "$*" >&2; }
@@ -24,7 +26,7 @@ detect_target() {
       case "${arch}" in
         arm64|aarch64) echo "macos-arm64" ;;
         *)
-          die "unsupported macOS architecture '${arch}' (release builds are macos-arm64 only). Build from source with ./gradlew installAndyCli"
+          die "unsupported macOS architecture '${arch}' (release builds are macos-arm64 only). Build from source with ./gradlew installAndyCli installAndyd"
           ;;
       esac
       ;;
@@ -37,7 +39,7 @@ detect_target() {
       esac
       ;;
     mingw*|msys*|cygwin*|windows*)
-      die "Windows: download andy-<version>-windows-x86_64.exe from https://github.com/${REPO}/releases/latest (this installer is bash/macOS/Linux only)"
+      die "the andy CLI is only supported on macOS and Linux (Unix domain sockets, tmux, andyd). Use the Andy desktop app on Windows."
       ;;
     *)
       die "unsupported OS '${os}'"
@@ -45,11 +47,34 @@ detect_target() {
   esac
 }
 
+find_release_asset() {
+  local pattern="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg re "${pattern}" '
+      .assets[]
+      | select(.name | test($re))
+      | .browser_download_url
+    ' "${RELEASE_JSON}" | head -n1
+    return
+  fi
+  tr '"' '\n' <"${RELEASE_JSON}" | grep -E "${pattern}" | grep -E '^https://' | head -n1 || true
+}
+
+download_release_asset() {
+  local pattern="$1"
+  local dest="$2"
+  local url
+  url="$(find_release_asset "${pattern}")"
+  [[ -n "${url}" ]] || return 1
+  curl -fsSL "${url}" -o "${dest}"
+}
+
 need curl
 need uname
 need mkdir
 need chmod
 need mktemp
+need java
 
 TARGET="$(detect_target)"
 log "Installing Andy CLI for ${TARGET}…"
@@ -57,7 +82,6 @@ log "Installing Andy CLI for ${TARGET}…"
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
-# Prefer jq when present; otherwise parse lightly with sed/tr.
 RELEASE_JSON="${TMP}/release.json"
 curl -fsSL \
   -H "Accept: application/vnd.github+json" \
@@ -76,7 +100,6 @@ if command -v jq >/dev/null 2>&1; then
     .assets[] | select(.name == $n) | .browser_download_url
   ' "${RELEASE_JSON}")"
 else
-  # Match andy-<version>-<target> (not .exe)
   ASSET_NAME="$(
     tr '"' '\n' <"${RELEASE_JSON}" \
       | grep -E "^andy-.+-${TARGET}$" \
@@ -98,27 +121,64 @@ log "Downloading ${ASSET_NAME}…"
 curl -fsSL "${DOWNLOAD_URL}" -o "${TMP}/andy"
 chmod +x "${TMP}/andy"
 
-mkdir -p "${BIN_DIR}"
-# Atomic-ish replace
+mkdir -p "${BIN_DIR}" "${RUNTIME_DIR}"
+
 mv -f "${TMP}/andy" "${BIN_DIR}/andy"
 chmod +x "${BIN_DIR}/andy"
 
-# Ad-hoc codesign: Gradle/curl downloads can leave an invalid signature on macOS.
 if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
   codesign --force --sign - "${BIN_DIR}/andy" >/dev/null 2>&1 || true
 fi
 
-# Install status hook helper (same contract as the desktop app / andyd).
+# andyd runtime (fat JAR + launcher)
+if download_release_asset "^andyd-.+-${TARGET}\\.jar$" "${RUNTIME_DIR}/andyd.jar"; then
+  log "Installed ${RUNTIME_DIR}/andyd.jar"
+else
+  log "warning: no andyd-<version>-${TARGET}.jar in this release — run ./gradlew installAndyd from source or use the desktop app"
+fi
+
+cat >"${BIN_DIR}/andyd" <<'LAUNCHER'
+#!/bin/sh
+ANDY_HOME="${ANDY_HOME:-$HOME/.andy}"
+JAR="${ANDY_ANDYD_JAR:-$ANDY_HOME/andyd/andyd.jar}"
+JAVA="${ANDY_JAVA:-java}"
+if [ ! -f "$JAR" ]; then
+  printf 'andyd runtime missing at %s\n' "$JAR" >&2
+  printf 'Re-run install-andy.sh or run ./gradlew installAndyd from a source checkout.\n' >&2
+  exit 1
+fi
+exec "$JAVA" \
+  -Djdk.lang.Process.launchMechanism=FORK \
+  -Dapple.awt.UIElement=true \
+  -Djava.awt.headless=true \
+  -jar "$JAR" "$@"
+LAUNCHER
+chmod +x "${BIN_DIR}/andyd"
+log "Installed ${BIN_DIR}/andyd"
+
+# Bundled tmux (Andy-managed, like scrcpy-server)
+if download_release_asset "^tmux-.+-${TARGET}$" "${TMP}/tmux"; then
+  mv -f "${TMP}/tmux" "${BIN_DIR}/tmux"
+  chmod +x "${BIN_DIR}/tmux"
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "${BIN_DIR}/tmux" >/dev/null 2>&1 || true
+  fi
+  log "Installed ${BIN_DIR}/tmux"
+elif command -v tmux >/dev/null 2>&1; then
+  ln -sf "$(command -v tmux)" "${BIN_DIR}/tmux"
+  log "Linked system tmux to ${BIN_DIR}/tmux"
+else
+  log "warning: tmux not bundled in this release and not found on PATH — agent sessions will not work until tmux is installed"
+fi
+
+# Status hook helper (same contract as the desktop app / andyd).
 HOOK_DEST="${BIN_DIR}/andy-status-hook.sh"
-cat >"${HOOK_DEST}" <<'HOOK'
+if download_release_asset '^andy-status-hook\\.sh$' "${TMP}/andy-status-hook.sh"; then
+  mv -f "${TMP}/andy-status-hook.sh" "${HOOK_DEST}"
+else
+  cat >"${HOOK_DEST}" <<'HOOK'
 #!/bin/sh
 # Andy-managed status hook — do not edit.
-# Installed to ~/.andy/bin/andy-status-hook.sh by the Andy desktop app, andyd, or install-andy.sh.
-# Usage: andy-status-hook.sh <working|done|blocked|error> [respond]
-# respond: none (default) | empty | allow | stop
-#
-# Resolves the active task via $ANDY_PROJECT_ROOT/.andy/active-task (default: $PWD).
-# No-ops when the pointer is missing so user-level / shared hooks are safe.
 status="${1:-done}"
 respond="${2:-none}"
 ROOT="${ANDY_PROJECT_ROOT:-$PWD}"
@@ -150,6 +210,7 @@ case "$respond" in
 esac
 exit 0
 HOOK
+fi
 chmod +x "${HOOK_DEST}"
 
 log "Installed ${BIN_DIR}/andy"
@@ -158,4 +219,4 @@ if ! command -v andy >/dev/null 2>&1 || [[ "$(command -v andy)" != "${BIN_DIR}/a
   log "Add to PATH if needed:"
   log "  export PATH=\"\$HOME/.andy/bin:\$PATH\""
 fi
-log "Try: andy --help"
+log "Try: andy chat list"

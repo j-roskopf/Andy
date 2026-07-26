@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -43,13 +44,13 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 
 internal fun Modifier.rightBorder(color: Color): Modifier = drawBehind {
-    val strokeWidth = 1.dp.toPx()
+    val strokeWidth = AndyStroke.Hairline.toPx()
     val x = size.width - strokeWidth / 2f
     drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth)
 }
 
 internal fun Modifier.bottomBorder(color: Color): Modifier = drawBehind {
-    val strokeWidth = 1.dp.toPx()
+    val strokeWidth = AndyStroke.Hairline.toPx()
     val y = size.height - strokeWidth / 2f
     drawLine(color, Offset(0f, y), Offset(size.width, y), strokeWidth)
 }

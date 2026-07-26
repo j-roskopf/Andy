@@ -27,16 +27,41 @@ private val BannerModelLine = Regex(
     RegexOption.IGNORE_CASE,
 )
 
+/** Cursor model / progress footer (`Cursor Grok … · 54.6% · 12 files edited`). */
+private val CursorAgentStatusFooter = Regex("""(?i)cursor .+ · \d""")
+
+private val ColonStatusLine = Regex("""^:+\s*(Working|Running|Thinking|Grepping|Reading|Loading)\b""")
+private val StatusWordLine = Regex("""\b(Working|Running|Loading|Thinking)\b""")
+private val TaskCountLine = Regex("""^\d+\s+tasks?$""")
+private val ShellPromptLine = Regex("""^\$\s+""")
+private val DurationOnlyLine = Regex("""^\d+ms$""")
+/** Matched against an already-lowercased line, so no [RegexOption.IGNORE_CASE]. */
+private val ExitCodeLine = Regex("""exit\s+\d+""")
+private val VersionBannerLine = Regex("""v\d{4}\.\d{2}\.\d{2}.*""")
+private val EditedSummaryLine = Regex("""\bEdited\b.*\+\d+""")
+
+/**
+ * Lines that agent TUIs repaint in place (status footers, spinners) rather than append.
+ * Used by [scrollbackSnapshotOverlap] so a changing % does not look like unrelated content.
+ */
+internal fun isVolatileTerminalChromeLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (trimmed.isEmpty()) return true
+    if (isScrollbackNoiseLine(trimmed)) return true
+    if (CursorAgentStatusFooter.containsMatchIn(trimmed) && trimmed.length < 120) return true
+    return false
+}
+
 /** Drop TUI chrome and spinner redraw lines that make replay unreadable. */
 internal fun isScrollbackNoiseLine(line: String): Boolean {
     val trimmed = line.trim()
     if (trimmed.isEmpty()) return true
     val lower = trimmed.lowercase()
-    if (Regex("""^:+\s*(Working|Running|Thinking|Grepping|Reading|Loading)\b""").containsMatchIn(trimmed)) return true
+    if (ColonStatusLine.containsMatchIn(trimmed)) return true
     if (SpinnerStatusLine.containsMatchIn(trimmed)) return true
     if (TokenStatusLine.containsMatchIn(trimmed)) return true
     if (SpinnerTokenLine.containsMatchIn(trimmed)) return true
-    if (Regex("""\b(Working|Running|Loading|Thinking)\b""").containsMatchIn(trimmed) &&
+    if (StatusWordLine.containsMatchIn(trimmed) &&
         trimmed.length < 80 &&
         !trimmed.contains('?')
     ) {
@@ -44,12 +69,12 @@ internal fun isScrollbackNoiseLine(line: String): Boolean {
     }
     if (trimmed == "→ Add a follow-up" || lower.contains("ctrl+c to stop")) return true
     if (lower.contains("run everything")) return true
-    if (Regex("""^\d+\s+tasks?$""").containsMatchIn(trimmed)) return true
+    if (TaskCountLine.containsMatchIn(trimmed)) return true
     if (AutoPercentLine.containsMatchIn(trimmed)) return true
     if (PathStatusLine.containsMatchIn(trimmed)) return true
-    if (Regex("""^\$\s+""").containsMatchIn(trimmed)) return true
-    if (Regex("""^\d+ms$""").containsMatchIn(trimmed)) return true
-    if (Regex("""exit\s+\d+""").containsMatchIn(lower) && trimmed.length < 40) return true
+    if (ShellPromptLine.containsMatchIn(trimmed)) return true
+    if (DurationOnlyLine.containsMatchIn(trimmed)) return true
+    if (ExitCodeLine.containsMatchIn(lower) && trimmed.length < 40) return true
     return false
 }
 
@@ -62,9 +87,9 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     if (lower.startsWith("tip:")) return true
     if (lower.startsWith("cursor agent")) return true
     if (lower.startsWith("antigravity cli")) return true
-    if (lower.matches(Regex("""v\d{4}\.\d{2}\.\d{2}.*"""))) return true
+    if (VersionBannerLine.matches(lower)) return true
     if (ToolProgressLine.containsMatchIn(trimmed)) return true
-    if (Regex("""\bEdited\b.*\+\d+""").containsMatchIn(trimmed)) return true
+    if (EditedSummaryLine.containsMatchIn(trimmed)) return true
     if (EarlierItemsHiddenLine.containsMatchIn(trimmed)) return true
     if (TruncatedReviewLine.containsMatchIn(trimmed)) return true
     if (ShellEchoLine.containsMatchIn(trimmed)) return true

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.HeaderCell
 import app.andy.model.LogLevel
@@ -101,6 +102,7 @@ internal fun LogcatPanel(
     onSelectedPackageChange: (String?) -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean,
+    embedded: Boolean = false,
     state: LogcatState = remember { LogcatState() }
 ) {
     var streamJob by remember { mutableStateOf<Job?>(null) }
@@ -159,7 +161,7 @@ internal fun LogcatPanel(
         }
     }
 
-    PanelCard(modifier) {
+    val panelContent: @Composable () -> Unit = {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val toolbarWidth = maxWidth
             var overflowExpanded by remember { mutableStateOf(false) }
@@ -255,7 +257,7 @@ internal fun LogcatPanel(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                                 Spacer(Modifier.height(4.dp))
-                                Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+                                AndyHorizontalDivider()
                                 Spacer(Modifier.height(4.dp))
                             }
 
@@ -276,7 +278,7 @@ internal fun LogcatPanel(
                                     }
                                 }
                                 Spacer(Modifier.height(4.dp))
-                                Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+                                AndyHorizontalDivider()
                                 Spacer(Modifier.height(4.dp))
                             }
 
@@ -315,6 +317,15 @@ internal fun LogcatPanel(
             }
         }
         LogcatEntryList(state.entries, compact, Modifier.fillMaxSize())
+    }
+    if (embedded) {
+        Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            panelContent()
+        }
+    } else {
+        PanelCard(modifier) {
+            panelContent()
+        }
     }
 }
 

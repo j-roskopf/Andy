@@ -41,8 +41,7 @@ object TmuxAndy {
         cachedBinary.get()?.let { return it }
         val resolved = resolveTmuxBinary()
             ?: error(
-                "tmux is required for Andy agent sessions. Install it (e.g. `brew install tmux`) " +
-                    "and ensure it is on PATH, or set ANDY_TMUX to the binary path.",
+                "tmux is required for Andy agent sessions. Re-run install-andy.sh or set ANDY_TMUX.",
             )
         cachedBinary.set(resolved)
         return resolved
@@ -444,6 +443,7 @@ object TmuxAndy {
     }
 
     private fun resolveTmuxBinary(): String? {
+        bundledTmuxBinary()?.let { return it }
         System.getenv("ANDY_TMUX")?.takeIf { it.isNotBlank() }?.let { path ->
             if (File(path).canExecute()) return path
         }
@@ -456,5 +456,11 @@ object TmuxAndy {
             File("/usr/bin/tmux"),
         )
         return candidates.firstOrNull { it.isFile && it.canExecute() }?.absolutePath
+    }
+
+    /** Andy-managed tmux beside the CLI (`~/.andy/bin/tmux`), like bundled scrcpy-server. */
+    internal fun bundledTmuxBinary(): String? {
+        val bundled = File(System.getProperty("user.home"), ".andy/bin/tmux")
+        return bundled.takeIf { it.isFile && it.canExecute() }?.absolutePath
     }
 }

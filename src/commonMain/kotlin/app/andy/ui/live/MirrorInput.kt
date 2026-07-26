@@ -6,27 +6,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import app.andy.domain.mirrorInputBugText
 import app.andy.domain.mirrorSwipeBugText
 import app.andy.domain.mirrorTapBugText
-import app.andy.model.AccessibilityNode
 import app.andy.service.AndyServices
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.currentTimeMillis
 import app.andy.service.MirrorTouchAction
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 
 @Composable
 internal fun rememberMirrorInputSender(
@@ -40,17 +35,17 @@ internal fun rememberMirrorInputSender(
     val currentEnabled by rememberUpdatedState(enabled)
     val currentRecordActions by rememberUpdatedState(recordActions)
     var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
-    var tapAccessibilityLookup by remember { mutableStateOf<Deferred<AccessibilityNode?>?>(null) }
-    val scope = rememberCoroutineScope()
     // A backend call can be slow or non-cancellable (SimulatorKit HID is synchronous JNI).
     // Give every selected device its own queue so a stalled call from the previous device cannot
     // hold up input after Android ↔ iOS switching. Disposing the old effect also drops stale
     // gesture events instead of replaying them against the newly active routing backend.
     val channel = remember(mirror, serial) { Channel<MirrorInput>(Channel.UNLIMITED) }
     LaunchedEffect(channel, mirror) {
-        for (input in channel) {
-            if (currentEnabled && currentSerial != null) {
-                mirror.sendInput(input)
+        withContext(Dispatchers.Default) {
+            for (input in channel) {
+                if (currentEnabled && currentSerial != null) {
+                    mirror.sendInput(input)
+                }
             }
         }
     }
@@ -66,11 +61,6 @@ internal fun rememberMirrorInputSender(
                         when (input.action) {
                             MirrorTouchAction.Down -> {
                                 touchGesture = BugTouchGesture(input.x, input.y, input.x, input.y, now)
-                                tapAccessibilityLookup?.cancel()
-                                tapAccessibilityLookup = scope.async {
-                                    val activeSerial = currentSerial ?: return@async null
-                                    services.accessibility.dump(activeSerial)
-                                }
                             }
                             MirrorTouchAction.Move -> {
                                 touchGesture = touchGesture?.copy(lastX = input.x, lastY = input.y, moved = true)
@@ -78,56 +68,25 @@ internal fun rememberMirrorInputSender(
                             MirrorTouchAction.Up -> {
                                 val gesture = touchGesture
                                 touchGesture = null
-                                val (label, detail) = if (gesture != null && gesture.isSwipeTo(input.x, input.y)) {
-                                    tapAccessibilityLookup?.cancel()
-                                    tapAccessibilityLookup = null
-                                    mirrorSwipeBugText(
+                                if (gesture != null && gesture.isSwipeTo(input.x, input.y)) {
+                                    val (label, detail) = mirrorSwipeBugText(
                                         startX = gesture.startX,
                                         startY = gesture.startY,
                                         endX = input.x,
                                         endY = input.y,
                                         durationMillis = (now - gesture.startedAtMillis).toInt().coerceAtLeast(0),
                                     )
-                                } else {
-                                    null to null
-                                }
-                                if (label != null) {
                                     services.bugs.recordAction("input", label, detail)
                                 } else {
-                                    val lookup = tapAccessibilityLookup
-                                    tapAccessibilityLookup = null
-                                    scope.launch {
-                                        val root = lookup?.let {
-                                            try {
-                                                withTimeoutOrNull(BugTapAccessibilityLookupMillis) { it.await() }
-                                            } catch (_: CancellationException) {
-                                                null
-                                            } catch (_: Exception) {
-                                                null
-                                            }
-                                        }
-                                        val (tapLabel, tapDetail) = mirrorTapBugText(input.x, input.y, root)
-                                        services.bugs.recordAction("input", tapLabel, tapDetail)
-                                    }
+                                    val (tapLabel, tapDetail) = mirrorTapBugText(input.x, input.y, null)
+                                    services.bugs.recordAction("input", tapLabel, tapDetail)
                                 }
                             }
                         }
                     }
                     is MirrorInput.Tap -> {
-                        scope.launch {
-                            val root = try {
-                                withTimeoutOrNull(BugTapAccessibilityLookupMillis) {
-                                    val activeSerial = currentSerial ?: return@withTimeoutOrNull null
-                                    services.accessibility.dump(activeSerial)
-                                }
-                            } catch (_: CancellationException) {
-                                null
-                            } catch (_: Exception) {
-                                null
-                            }
-                            val (label, detail) = mirrorTapBugText(input.x, input.y, root)
-                            services.bugs.recordAction("input", label, detail)
-                        }
+                        val (label, detail) = mirrorTapBugText(input.x, input.y, null)
+                        services.bugs.recordAction("input", label, detail)
                     }
                     else -> {
                         val (label, detail) = mirrorInputBugText(input, null)
@@ -155,7 +114,6 @@ private data class BugTouchGesture(
     }
 }
 
-private const val BugTapAccessibilityLookupMillis = 1_500L
 private const val BugTapMaxDistancePx = 24
 
 @Composable

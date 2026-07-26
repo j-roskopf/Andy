@@ -41,6 +41,8 @@ class KetraTermBackend(
     private val cols: Int = 120,
     private val rows: Int = 32,
     appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
+    /** Agent CLIs on the alternate screen — tighter insets and PTY sanitization. */
+    private val agentCliMode: Boolean = false,
 ) : TerminalSession {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
@@ -52,7 +54,7 @@ class KetraTermBackend(
     private var scrapeJob: Job? = null
     private val appearanceRef = AtomicReference(appearance)
     private val settingsRef = AtomicReference(
-        appearance.toSwingSettings(columns = cols, rows = rows, scrollbackLines = DEFAULT_MAX_HISTORY),
+        swingSettingsFor(appearance, cols, rows, agentCliMode),
     )
     private val scrollbackTee = ScrollbackAnsiTee()
     private val historyStore by lazy { AndyCommandHistoryStore.shared() }
@@ -116,11 +118,7 @@ class KetraTermBackend(
 
     fun updateAppearance(appearance: TerminalAppearanceSnapshot) {
         appearanceRef.set(appearance)
-        val settings = appearance.toSwingSettings(
-            columns = cols,
-            rows = rows,
-            scrollbackLines = DEFAULT_MAX_HISTORY,
-        )
+        val settings = swingSettingsFor(appearance, cols, rows, agentCliMode)
         settingsRef.set(settings)
         val terminal = swingTerminal ?: return
         val session = ketraSession
@@ -161,7 +159,11 @@ class KetraTermBackend(
 
         val connector = PtyConnector(pty)
         ptyConnector = connector
-        val tee = TeeTerminalConnector(connector, scrollbackTee)
+        val transport = if (agentCliMode) {
+            AgentCliTeeTerminalConnector(connector, scrollbackTee)
+        } else {
+            TeeTerminalConnector(connector, scrollbackTee)
+        }
         val buffer = TerminalBuffers.create(
             width = cols,
             height = rows,
@@ -175,7 +177,7 @@ class KetraTermBackend(
         )
         val session = KetraSession.create(
             terminal = buffer,
-            connector = tee,
+            connector = transport,
             hostEvents = hostSink,
             hostPolicy = HostPolicy(notificationPolicy = HostControlPolicy.ALLOW),
             inputPolicy = PtyOptions.defaultInputPolicy(),
@@ -303,6 +305,26 @@ class KetraTermBackend(
          */
         const val SCROLLBACK_CAPTURE_ROWS: Int = 500
         const val SCROLLBACK_BACKGROUND_CAPTURE_ROWS: Int = 80
+
+        private fun swingSettingsFor(
+            appearance: TerminalAppearanceSnapshot,
+            cols: Int,
+            rows: Int,
+            agentCliMode: Boolean,
+        ): io.github.ketraterm.ui.swing.settings.SwingSettings =
+            if (agentCliMode) {
+                appearance.toAgentCliSwingSettings(
+                    columns = cols,
+                    rows = rows,
+                    scrollbackLines = DEFAULT_MAX_HISTORY,
+                )
+            } else {
+                appearance.toSwingSettings(
+                    columns = cols,
+                    rows = rows,
+                    scrollbackLines = DEFAULT_MAX_HISTORY,
+                )
+            }
     }
 }
 

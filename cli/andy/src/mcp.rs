@@ -5,9 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 pub fn default_socket_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".andy/andyd.sock")
+    crate::daemon::default_socket_path()
 }
 
 pub struct McpClient {
@@ -26,7 +24,7 @@ impl McpClient {
     pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<String> {
         if !self.socket.exists() {
             bail!(
-                "andyd socket not found at {} — is andyd running? (./gradlew runAndyd)",
+                "andyd socket not found at {} — could not start or connect to the daemon",
                 self.socket.display()
             );
         }

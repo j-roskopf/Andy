@@ -2,6 +2,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import org.gradle.api.file.DuplicatesStrategy
 import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.Exec
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
@@ -805,6 +806,50 @@ tasks.register<Copy>("installAndyCli") {
 
         println("Installed ${dest.absolutePath}")
         println("Installed ${hookDest.absolutePath}")
+        println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
+    }
+}
+
+val andydFatJar = tasks.register<Jar>("andydFatJar") {
+    group = "distribution"
+    description = "Fat JAR for the headless andyd daemon"
+    archiveBaseName.set("andyd")
+    archiveVersion.set(andyVersionName)
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    val desktopCompilation = kotlin.targets.getByName("desktop").compilations.getByName("main")
+    dependsOn(desktopCompilation.compileTaskProvider)
+    dependsOn(":agent-store:jar")
+    from(desktopCompilation.output.allOutputs)
+    from({
+        desktopCompilation.runtimeDependencyFiles?.filter { it.isFile }?.map { zipTree(it) } ?: emptyArray<File>()
+    })
+    manifest {
+        attributes["Main-Class"] = "app.andy.desktop.AndydMainKt"
+    }
+}
+
+tasks.register("installAndyd") {
+    group = "distribution"
+    description = "Install andyd launcher + fat JAR to ~/.andy"
+    dependsOn(andydFatJar)
+    doLast {
+        val andyHome = file("${System.getProperty("user.home")}/.andy")
+        val binDir = file("$andyHome/bin")
+        val runtimeDir = file("$andyHome/andyd")
+        binDir.mkdirs()
+        runtimeDir.mkdirs()
+
+        val jarDest = file("$runtimeDir/andyd.jar")
+        andydFatJar.get().archiveFile.get().asFile.copyTo(jarDest, overwrite = true)
+
+        val launcherSrc = file("scripts/andyd-launcher.sh")
+        check(launcherSrc.isFile) { "missing ${launcherSrc.path}" }
+        val launcherDest = file("$binDir/andyd")
+        launcherDest.writeText(launcherSrc.readText())
+        launcherDest.setExecutable(true, false)
+
+        println("Installed ${launcherDest.absolutePath}")
+        println("Installed ${jarDest.absolutePath}")
         println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
     }
 }

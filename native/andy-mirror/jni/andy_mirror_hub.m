@@ -259,7 +259,7 @@ static bool ensure_shared_metal(void) {
     return true;
 }
 
-static void destroy_decoder_locked(GpuDecoder *decoder) {
+static void invalidate_decoder_session_locked(GpuDecoder *decoder) {
     if (!decoder) return;
     if (decoder->decoder) {
         VTDecompressionSessionWaitForAsynchronousFrames(decoder->decoder);
@@ -272,6 +272,11 @@ static void destroy_decoder_locked(GpuDecoder *decoder) {
         decoder->format = NULL;
     }
     decoder->decoder_is_hardware = false;
+}
+
+static void destroy_decoder_locked(GpuDecoder *decoder) {
+    if (!decoder) return;
+    invalidate_decoder_session_locked(decoder);
     free(decoder->sps);
     free(decoder->pps);
     decoder->sps = NULL;
@@ -284,6 +289,18 @@ static void destroy_decoder_locked(GpuDecoder *decoder) {
         decoder->latest_pixels = NULL;
     }
     pthread_mutex_unlock(&decoder->latest_pixels_lock);
+}
+
+void andy_hub_reset_decoder_stream(int64_t decoder_id) {
+    GpuDecoder *decoder = find_decoder(decoder_id);
+    if (!decoder) return;
+    pthread_mutex_lock(&decoder->decoder_lock);
+    destroy_decoder_locked(decoder);
+    pthread_mutex_unlock(&decoder->decoder_lock);
+    pthread_mutex_lock(&decoder->stats_lock);
+    decoder->frames_presented = 0;
+    decoder->dropped_frames = 0;
+    pthread_mutex_unlock(&decoder->stats_lock);
 }
 
 static bool configure_decoder_locked(GpuDecoder *decoder) {
@@ -970,11 +987,17 @@ bool andy_hub_consume_h264(int64_t decoder_id, const uint8_t *bytes, size_t leng
                     pthread_mutex_unlock(&decoder->decoder_lock);
                     return false;
                 }
+                if (decoder->decoder) {
+                    invalidate_decoder_session_locked(decoder);
+                }
             } else if (type == 8) {
                 if (!replace_parameter_set(&decoder->pps, &decoder->pps_size, bytes + nal_start, nal_length)) {
                     free(avcc);
                     pthread_mutex_unlock(&decoder->decoder_lock);
                     return false;
+                }
+                if (decoder->decoder) {
+                    invalidate_decoder_session_locked(decoder);
                 }
             } else if (type == 1 || type == 5) {
                 avcc[avcc_length++] = (uint8_t) (nal_length >> 24);
@@ -1290,6 +1313,12 @@ JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeRepaintPresenter)(JNIEnv *env, jclas
     (void) env;
     (void) clazz;
     andy_hub_repaint_presenter((int64_t) presenter_id);
+}
+
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeResetDecoderStream)(JNIEnv *env, jclass clazz, jlong decoder_id) {
+    (void) env;
+    (void) clazz;
+    andy_hub_reset_decoder_stream((int64_t) decoder_id);
 }
 
 JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeConsumeH264)(JNIEnv *env, jclass clazz, jlong decoder_id,

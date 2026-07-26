@@ -322,6 +322,35 @@ internal class TeeTerminalConnector(
     override fun close() = delegate.close()
 }
 
+/** [TeeTerminalConnector] that strips agent-CLI redraw noise before the emulator sees it. */
+internal class AgentCliTeeTerminalConnector(
+    private val delegate: TerminalConnector,
+    private val tee: ScrollbackAnsiTee,
+) : TerminalConnector {
+    override fun start(listener: TerminalConnectorListener) {
+        delegate.start(
+            object : TerminalConnectorListener {
+                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
+                    val (sanitized, off, len) = sanitizeAgentCliPtyChunk(bytes, offset, length)
+                    tee.append(sanitized, off, len)
+                    listener.onBytes(sanitized, off, len)
+                }
+
+                override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)
+
+                override fun onError(error: Throwable) = listener.onError(error)
+            },
+        )
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int) =
+        delegate.write(bytes, offset, length)
+
+    override fun resize(columns: Int, rows: Int) = delegate.resize(columns, rows)
+
+    override fun close() = delegate.close()
+}
+
 /** Parked connector for sessions fed manually via [io.github.ketraterm.session.TerminalSession.onBytes]. */
 internal class ParkedTerminalConnector : TerminalConnector {
     override fun start(listener: TerminalConnectorListener) = Unit

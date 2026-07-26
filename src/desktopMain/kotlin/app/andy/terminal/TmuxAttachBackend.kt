@@ -298,6 +298,7 @@ class TmuxAttachBackend(
             cols = cols,
             rows = rows,
             appearance = appearance,
+            agentCliMode = true,
         ).also { backend ->
             // Read [foreground] through the lambda rather than copying it: the manager
             // reassigns the whole AtomicBoolean when a chat is bound, so a captured

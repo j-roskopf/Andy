@@ -16,7 +16,10 @@ internal class GpuMirrorPipeline private constructor(
     fun createPresenter(host: Canvas? = null): GpuMirrorPresenter? {
         if (closed) return null
         if (host != null) {
-            GpuMirrorHostRegistry.presenterFor(host)?.let { return it }
+            GpuMirrorHostRegistry.presenterFor(host)?.let { existing ->
+                if (existing.decoderId == decoderId) return existing
+                existing.close()
+            }
         }
         GpuMirrorHostRegistry.pruneOrphanedPresenters(decoderId)
         val presenterId = GpuMirrorJni.createPresenter(decoderId)
@@ -25,6 +28,10 @@ internal class GpuMirrorPipeline private constructor(
     }
 
     fun consumeH264(packet: ByteArray): Boolean = !closed && GpuMirrorJni.consumeH264(decoderId, packet)
+
+    fun resetDecoderStream() {
+        if (!closed) GpuMirrorJni.resetDecoderStream(decoderId)
+    }
 
     fun presentSolidBgra(width: Int, height: Int, blue: Int, green: Int, red: Int, alpha: Int = 255): Boolean =
         !closed && GpuMirrorJni.presentSolidBgra(decoderId, width, height, blue, green, red, alpha)

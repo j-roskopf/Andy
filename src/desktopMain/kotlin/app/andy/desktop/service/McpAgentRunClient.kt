@@ -71,6 +71,11 @@ class McpAgentRunClient(
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
     override val tasks: StateFlow<List<AgentTask>> = _tasks.asStateFlow()
+    /**
+     * Keep a successful delete reflected in the UI while an in-flight or periodic daemon
+     * refresh may still be returning the previous list.
+     */
+    private val locallyDeletedTaskIds = ConcurrentHashMap.newKeySet<String>()
 
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
@@ -138,7 +143,7 @@ class McpAgentRunClient(
         val raw = callTool("chat.list", emptyMap())
         val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return
         // Keep a lightweight task list for the GUI; full AgentTask fields are filled where possible.
-        _tasks.value = arr.mapNotNull { el ->
+        val refreshedTasks = arr.mapNotNull { el ->
             val obj = el.jsonObject
             val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val agentName = obj["agent"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
@@ -163,6 +168,8 @@ class McpAgentRunClient(
                     ?: false,
             )
         }
+        _tasks.value = refreshedTasks.filterNot { it.id in locallyDeletedTaskIds }
+        locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
     }
 
     private suspend fun refreshComposerOptions() {
@@ -380,13 +387,21 @@ class McpAgentRunClient(
                 "removeWorktree" to JsonPrimitive(removeWorktree),
             ),
         )
-        refreshTasks()
+        // The daemon has confirmed deletion. Publish it immediately rather than blocking the
+        // interaction on two follow-up RPCs (composer options + the full chat list).
+        locallyDeletedTaskIds += taskId
+        _tasks.value = _tasks.value.filterNot { it.id == taskId }
+        scope.launch { runCatching { refreshTasks() } }
     }
 
     override fun markRead(taskId: String) = Unit
     override fun markUnread(taskId: String) = Unit
     override fun setChatViewing(taskId: String?, viewing: Boolean) {
         localBridge?.setChatViewing(taskId, viewing)
+    }
+
+    override fun releaseTerminalViewer(taskId: String) {
+        localBridge?.releaseTerminalViewer(taskId)
     }
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit

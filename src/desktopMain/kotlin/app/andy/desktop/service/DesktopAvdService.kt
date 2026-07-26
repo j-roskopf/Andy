@@ -201,9 +201,21 @@ class DesktopAvdService(
         return CommandResult.success("Stopped $name (${emulator.serial})")
     }
 
-    override suspend fun deleteVirtualDevice(name: String): CommandResult {
-        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath ?: return CommandResult.failure("avdmanager not found")
-        return runner.run(listOf(avdManager, "delete", "avd", "-n", name), 60)
+    override suspend fun deleteVirtualDevice(name: String): CommandResult = withContext(Dispatchers.IO) {
+        val avd = listVirtualDevices().firstOrNull { namesMatch(it.name, name) }
+            ?: return@withContext CommandResult.failure("AVD not found: $name")
+        val avdManager = locator.discover(preferredSdkPath()).avdManagerPath
+            ?: return@withContext CommandResult.failure("avdmanager not found")
+        val managerResult = runner.run(listOf(avdManager, "delete", "avd", "-n", avd.name), 60)
+        if (!managerResult.isSuccess) return@withContext managerResult
+
+        val leftovers = removeAvdFiles(avd)
+        if (leftovers.isNotEmpty()) {
+            return@withContext CommandResult.failure(
+                "Deleted ${avd.name} from avdmanager, but could not remove ${leftovers.joinToString()}",
+            )
+        }
+        CommandResult.success(managerResult.stdout.ifBlank { "Deleted ${avd.name}" })
     }
 
     override suspend fun cloneVirtualDevice(sourceName: String, newName: String): CommandResult = withContext(Dispatchers.IO) {
@@ -484,6 +496,24 @@ class DesktopAvdService(
             File(path.parentFile, "${avd.name}.ini"),
             File(resolveAvdHome(), "${avd.name}.ini"),
         ).firstOrNull { it.exists() }
+    }
+
+    /**
+     * avdmanager normally removes these entries itself, but it can leave them behind when
+     * the AVD lives in a custom home or an earlier deletion was interrupted. Andy lists AVDs
+     * from these files, so remove the resolved pair explicitly after avdmanager succeeds.
+     */
+    private fun removeAvdFiles(avd: VirtualDevice): List<String> {
+        val targets = buildList {
+            avd.path
+                ?.let(::File)
+                ?.takeIf { it.isDirectory && it.name.endsWith(".avd") }
+                ?.let(::add)
+            resolveIniFile(avd)?.let(::add)
+        }
+        return targets.mapNotNull { target ->
+            if (target.deleteRecursively()) null else target.absolutePath
+        }
     }
 
     private fun rewriteAvdReferences(target: File, oldName: String, newName: String, oldPath: String, newPath: String) {

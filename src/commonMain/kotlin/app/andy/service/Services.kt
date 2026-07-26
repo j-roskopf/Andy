@@ -11,6 +11,12 @@ interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
     suspend fun listDevices(): List<AndroidDevice>
     suspend fun shell(serial: String, command: List<String>): CommandResult
+    /**
+     * Sends an emulator console command via `adb -s SERIAL emu …`.
+     * Used for foldable posture/hinge and other virtual-device controls.
+     */
+    suspend fun emu(serial: String, command: List<String>): CommandResult =
+        CommandResult.failure("Emulator console commands are unavailable")
     suspend fun pair(host: String, port: Int, code: String): CommandResult
     suspend fun connect(host: String, port: Int): CommandResult
     suspend fun disconnect(serial: String): CommandResult
@@ -88,6 +94,20 @@ interface MirrorEngine {
      * for shutdown, device changes, or other cases that must tear down now.
      */
     suspend fun disconnect(immediate: Boolean = false)
+    /**
+     * Tear down and start a fresh mirror session. Use after foldable display switches where
+     * [connect] would otherwise no-op because the video config is unchanged.
+     */
+    suspend fun reconnect(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult {
+        disconnect(immediate = true)
+        return connect(serial, config)
+    }
+    /**
+     * Restart scrcpy transport after a fold/unfold display change without tearing down the GPU
+     * decode pipeline or Metal presenters. Falls back to [reconnect] when no live session exists.
+     */
+    suspend fun restartForDisplayChange(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult =
+        reconnect(serial, config)
     suspend fun sendInput(input: MirrorInput): CommandResult
     suspend fun screenshot(serial: String): ByteArray?
 }
@@ -379,6 +399,8 @@ interface AgentRunService {
     fun markUnread(taskId: String)
     /** Tracks whether an embedded chat is currently on screen (not merely opened before). */
     fun setChatViewing(taskId: String?, viewing: Boolean)
+    /** Drops the local Swing viewer while keeping the underlying session alive. */
+    fun releaseTerminalViewer(taskId: String) = Unit
     /** Hides a finished chat from the default list without deleting it. */
     fun archive(taskId: String)
     /** Restores an archived chat to the default list. */

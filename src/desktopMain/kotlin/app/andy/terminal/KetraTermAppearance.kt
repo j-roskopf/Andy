@@ -58,6 +58,26 @@ fun TerminalAppearanceSnapshot.toScrollbackReplaySettings(
     )
 }
 
+/**
+ * Swing settings for live embedded agent CLIs (Cursor, Claude Code, …).
+ *
+ * Agent TUIs draw on the alternate screen; matching its insets keeps each row on one line
+ * and stops the bottom chrome from reflowing on every redraw.
+ */
+fun TerminalAppearanceSnapshot.toAgentCliSwingSettings(
+    columns: Int = 120,
+    rows: Int = 32,
+    scrollbackLines: Int = KetraTermBackend.DEFAULT_MAX_HISTORY,
+): SwingSettings {
+    val base = toSwingSettings(columns = columns, rows = rows, scrollbackLines = scrollbackLines)
+    return base.copy(
+        padding = base.alternateScreenPadding,
+        shellIntegrationDecorationGutterWidth = 0,
+        shellIntegrationPromptDotsVisible = false,
+        shellIntegrationFailedCommandRailsVisible = false,
+    )
+}
+
 /** Packed ARGB panel background matching the active KetraTerm theme. */
 fun TerminalAppearanceSnapshot.panelBackgroundArgb(): Long {
     val bg = toKetraTheme().createPalette().defaultBackground

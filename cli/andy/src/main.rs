@@ -1,6 +1,7 @@
 mod attach;
 mod chats;
 mod compose;
+mod daemon;
 mod mcp;
 mod tmux;
 mod tui;
@@ -75,8 +76,12 @@ enum ProjectCmd {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    daemon::ensure_unix_platform()?;
     let cli = Cli::parse();
     let socket = resolve_socket(&cli).await?;
+    if cli.remote.is_none() {
+        daemon::ensure_running(&socket).await?;
+    }
     let mut client = McpClient::new(socket);
 
     match cli.command {

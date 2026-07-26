@@ -97,11 +97,23 @@ class TerminalRepaintThrottle(
 
     companion object {
         /**
-         * Default cap, in frames per second. Terminal output carries no motion that needs
-         * more, and 60 keeps the worst-case added latency to a single 60Hz frame even on a
-         * faster panel. Override with `-Dandy.terminal.repaint.fps=<n>`; `0` disables.
+         * Default cap, in frames per second.
+         *
+         * Each dirty region costs far more than one blit: the JDK's `MTLLayer` drives a
+         * `CVDisplayLink` that keeps re-presenting the layer for several frames after the
+         * content settles. Measured on a 144Hz panel with a terminal-shaped Swing widget,
+         * `MTLLayer.drawInMTLContext` runs at a near-constant **4x the repaint rate**, linear
+         * until it saturates around 120 blits/s — so halving the repaint rate really does
+         * halve the blit work, and the cap is the only lever Andy has over it.
+         *
+         * 60 was above every rate agent CLIs actually produce (claude sits near 24/s), so it
+         * never coalesced anything and only the worst cases paid. 20 keeps the worst-case
+         * added latency at 50ms — under the threshold where echo reads as lag — while cutting
+         * the blit ceiling from ~120/s to ~80/s.
+         *
+         * Override with `-Dandy.terminal.repaint.fps=<n>`; `0` disables.
          */
-        private const val DEFAULT_FPS = 60L
+        private const val DEFAULT_FPS = 20L
 
         private val installed = AtomicBoolean(false)
 

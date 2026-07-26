@@ -35,7 +35,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
+import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -1242,7 +1242,7 @@ private fun ProjectProfileSection(
             Spacer(Modifier.width(6.dp))
             Text(title.uppercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 9.sp)
             Spacer(Modifier.width(8.dp))
-            HorizontalDivider(modifier = Modifier.weight(1f), thickness = 1.dp, color = Border.copy(alpha = 0.7f))
+            AndyHorizontalDivider(modifier = Modifier.weight(1f), color = Border.copy(alpha = 0.7f))
         }
         content()
     }

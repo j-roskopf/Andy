@@ -32,7 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
+import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -640,7 +640,7 @@ private fun AgentTaskHeader(
     onDelete: () -> Unit,
     onCopyPrompt: () -> Unit,
 ) {
-    var expanded by remember(task.id) { mutableStateOf(true) }
+    var expanded by remember(task.id) { mutableStateOf(false) }
     val elapsedEnd = rememberElapsedEndMillis(
         taskId = task.id,
         finishedAtMillis = task.finishedAtMillis,
@@ -759,7 +759,7 @@ private fun AgentTaskHeader(
 
                 AgentContextWindowIndicator(task)
 
-                HorizontalDivider(color = Border)
+                AndyHorizontalDivider(color = Border)
 
                 Row(
                     Modifier.fillMaxWidth(),

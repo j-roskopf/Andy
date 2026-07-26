@@ -23,28 +23,6 @@ limited today.
 
 [Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
 
-## Headless daemon + CLI
-
-Andy can run as a launchd-managed headless daemon (`andyd`) that owns agent/project
-state (SQLite), spawns agents into `tmux -L andy`, and serves MCP over
-`~/.andy/andyd.sock`. The Compose GUI and a Rust CLI (`cli/andy`) attach as clients.
-
-Requires **tmux** (`brew install tmux`).
-
-Install the CLI (macOS arm64 / Linux x86_64) from the latest GitHub Release:
-
-```sh
-curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
-export PATH="$HOME/.andy/bin:$PATH"   # once; add to shell rc if you want
-```
-
-That installs `~/.andy/bin/andy` and the status helper `~/.andy/bin/andy-status-hook.sh`
-(also installed automatically by the desktop app / `andyd`). Windows: download
-`andy-<version>-windows-x86_64.exe` from the [latest release](https://github.com/j-roskopf/Andy/releases/latest).
-
-From source: `./gradlew installAndyCli`. See [docs/ANDYD.md](docs/ANDYD.md) for
-`runAndyd`, launchd packaging, and agent status hooks.
-
 ## Features
 
 ### Devices
@@ -216,17 +194,64 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |
 
-### Runtime Requirements
+## CLI
+
+Andy ships a Rust CLI (`andy`) for driving agent chats from the terminal on
+**macOS and Linux only**. The CLI is not supported on Windows — use the
+[desktop app](#download) there instead.
+
+The CLI talks to the same control plane as the desktop app: a background daemon
+(`andyd`) that owns agent/project state, spawns provider CLIs into Andy-managed
+tmux sessions, and serves MCP over `~/.andy/andyd.sock`.
+
+**`andy` auto-starts `andyd` when needed.** Agent sessions use Andy's bundled
+tmux at `~/.andy/bin/tmux` (installed by `install-andy.sh`, like bundled
+`scrcpy-server` for mirroring). You do not need to install tmux separately.
+
+### Installation
+
+```sh
+curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
+export PATH="$HOME/.andy/bin:$PATH"
+```
+
+Requires **Java 21+** for the `andyd` runtime. The installer places:
+
+| Path | Role |
+| --- | --- |
+| `~/.andy/bin/andy` | CLI |
+| `~/.andy/bin/andyd` | Daemon launcher |
+| `~/.andy/andyd/andyd.jar` | Daemon runtime |
+| `~/.andy/bin/tmux` | Andy-managed tmux for agent sessions |
+
+From source: `./gradlew installAndyCli installAndyd`
+
+### Quick start
+
+```sh
+andy chat list
+andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
+andy tui
+andy attach <taskId>
+```
+
+Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`.
+
+See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
+keybindings, remote access, and launchd packaging.
+
+## Runtime Requirements
 
 - Android SDK platform tools for device and emulator access.
 - Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
-- **tmux** for agent sessions (daemon / GUI): `brew install tmux` (or set `ANDY_TMUX`).
-- scrcpy does not need to be installed separately for embedded Android mirroring; Andy bundles `scrcpy-server`.
+- Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
+  managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
+  or the desktop app). Override with `ANDY_TMUX` if needed.
 - Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
 
-### Icon Attribution
+## Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>
 
-### Inspiration
+## Inspiration
 A lot of visual and functional inspiration was borrowed, with love, from [Emu](https://emu.marathonlabs.io/)

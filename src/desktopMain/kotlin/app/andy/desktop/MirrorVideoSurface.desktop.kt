@@ -76,8 +76,6 @@ actual fun MirrorVideoSurface(
         return
     }
     val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
-    val deferGpuHost =
-        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
     // SwingPanel punches a Skia clear-hole above Compose popups; hiding the child is not
     // enough (the host still eclipses chrome DropdownMenus), so tear the interop down.
     key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
@@ -89,7 +87,7 @@ actual fun MirrorVideoSurface(
             )
         }
         Box(modifier.background(Color.Black)) {
-            if (!suppressHeavyweight && !deferGpuHost) {
+            if (!suppressHeavyweight) {
                 SwingPanel(
                     modifier = Modifier.fillMaxSize(),
                     background = Color.Black,
@@ -135,8 +133,6 @@ actual fun MirrorVideoSurface(
         return
     }
     val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
-    val deferGpuHost =
-        deferNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
     key(nativePresentation, nativePresentationFillHost, gpuMirrorStreamKey) {
         val panel = remember {
             MirrorPanel(
@@ -146,7 +142,7 @@ actual fun MirrorVideoSurface(
             )
         }
         Box(modifier.background(Color.Black)) {
-            if (!suppressHeavyweight && !deferGpuHost) {
+            if (!suppressHeavyweight) {
                 SwingPanel(
                     modifier = Modifier.fillMaxSize(),
                     background = Color.Black,
@@ -242,14 +238,33 @@ private class MirrorPanel(
     private fun usesGpuHub(): Boolean =
         prefersGpuHub() && GpuMirrorSessions.get(gpuMirrorStreamKey!!) != null
 
+    private fun invalidateGpuPresenter() {
+        gpuPresenter = null
+    }
+
     private fun ensureGpuPresenter(): GpuMirrorPresenter? {
         if (!prefersGpuHub()) return null
-        gpuPresenter?.let { return it }
-        GpuMirrorHostRegistry.presenterFor(this)?.let { existing ->
-            gpuPresenter = existing
-            return existing
+        val key = gpuMirrorStreamKey ?: return null
+        val pipeline = GpuMirrorSessions.get(key) ?: run {
+            invalidateGpuPresenter()
+            return null
         }
-        val pipeline = GpuMirrorSessions.get(gpuMirrorStreamKey ?: return null) ?: return null
+        val cached = gpuPresenter
+        if (cached != null &&
+            cached.decoderId == pipeline.decoderId &&
+            GpuMirrorHostRegistry.presenterFor(this) === cached
+        ) {
+            return cached
+        }
+        cached?.close()
+        invalidateGpuPresenter()
+        GpuMirrorHostRegistry.presenterFor(this)?.let { existing ->
+            if (existing.decoderId == pipeline.decoderId) {
+                gpuPresenter = existing
+                return existing
+            }
+            existing.close()
+        }
         return pipeline.createPresenter(this)?.also { gpuPresenter = it }
     }
 
@@ -343,7 +358,9 @@ private class MirrorPanel(
             }
 
             override fun mouseDragged(event: MouseEvent) {
-                updateHoverColor(event.point)
+                if (overlay.pickerColor != null) {
+                    updateHoverColor(event.point)
+                }
                 when (dragMode) {
                     DragMode.RulerX, DragMode.RulerY -> mapPoint(event.point)?.let { updateRulerDrag(event.point) }
                     // Clamp so a fling that leaves the image edge still carries its
@@ -368,7 +385,9 @@ private class MirrorPanel(
             }
 
             override fun mouseMoved(event: MouseEvent) {
-                updateHoverColor(event.point)
+                if (overlay.pickerColor != null) {
+                    updateHoverColor(event.point)
+                }
                 cursor = when (rulerDragMode(event.point)) {
                     DragMode.RulerX -> Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)
                     DragMode.RulerY -> Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)
@@ -697,16 +716,38 @@ private class MirrorPanel(
     // hit-testing hover/press). When clamp is true, off-image points are pinned to the
     // nearest edge so an in-progress drag/release still produces a valid device point.
     private fun mapPoint(point: Point, clamp: Boolean = false): DevicePoint? {
-        val frameImage = image ?: return null
-        if (width <= 0 || height <= 0 || frameImage.width <= 0 || frameImage.height <= 0) return null
-        val rect = fittedRect(frameImage)
+        val rect = fittedContentRect() ?: return null
+        val (contentWidth, contentHeight) = mirrorContentSize() ?: return null
         val localX = point.x - rect.x
         val localY = point.y - rect.y
         if (!clamp && (localX < 0.0 || localY < 0.0 || localX > rect.width || localY > rect.height)) return null
         return DevicePoint(
-            x = (localX / rect.scale).roundToInt().coerceIn(0, frameImage.width - 1),
-            y = (localY / rect.scale).roundToInt().coerceIn(0, frameImage.height - 1),
+            x = (localX / rect.scale).roundToInt().coerceIn(0, contentWidth - 1),
+            y = (localY / rect.scale).roundToInt().coerceIn(0, contentHeight - 1),
         )
+    }
+
+    /** Authoritative mirror size for hit-testing — matches the scrcpy/Metal stream from [setFrame]. */
+    private fun mirrorContentSize(): Pair<Int, Int>? {
+        val frameImage = image
+        if (frameImage != null && frameImage.width > 1 && frameImage.height > 1) {
+            return frameImage.width to frameImage.height
+        }
+        val overlayWidth = overlay.sourceWidth?.takeIf { it > 1 }
+        val overlayHeight = overlay.sourceHeight?.takeIf { it > 1 }
+        if (overlayWidth != null && overlayHeight != null) {
+            return overlayWidth to overlayHeight
+        }
+        return null
+    }
+
+    private fun fittedContentRect(): DrawRect? {
+        if (width <= 0 || height <= 0) return null
+        val (contentWidth, contentHeight) = mirrorContentSize() ?: return null
+        val scale = minOf(width.toDouble() / contentWidth, height.toDouble() / contentHeight)
+        val drawWidth = (contentWidth * scale).toInt()
+        val drawHeight = (contentHeight * scale).toInt()
+        return DrawRect((width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight, scale)
     }
 
     private fun fittedRect(frameImage: BufferedImage): DrawRect {
@@ -917,23 +958,27 @@ private class MirrorPanel(
 
     private fun updateHoverColor(point: Point): String? {
         val frameImage = image ?: return null
+        val (contentWidth, contentHeight) = mirrorContentSize() ?: return null
         val mapped = mapPoint(point) ?: run {
             pickerPoint = null
             if (!nativeMetadataFrame) presentCpuFrame()
             return null
         }
         pickerPoint = point
+        val normalizedX = mapped.x.toFloat() / contentWidth
+        val normalizedY = mapped.y.toFloat() / contentHeight
         if (overlay.pickerColor != null) {
-            NativeMirrorJni.updatePickerPoint(
-                mapped.x.toFloat() / frameImage.width.coerceAtLeast(1),
-                mapped.y.toFloat() / frameImage.height.coerceAtLeast(1),
-            )
+            NativeMirrorJni.updatePickerPoint(normalizedX, normalizedY)
         }
-        val nativeHex = NativeMirrorJni.inspectPixel(
-            mapped.x.toFloat() / frameImage.width.coerceAtLeast(1),
-            mapped.y.toFloat() / frameImage.height.coerceAtLeast(1),
-        )
+        val nativeHex = NativeMirrorJni.inspectPixel(normalizedX, normalizedY)
         val hex = nativeHex ?: run {
+            if (
+                nativeMetadataFrame ||
+                mapped.x !in 0 until frameImage.width ||
+                mapped.y !in 0 until frameImage.height
+            ) {
+                return null
+            }
             val rgb = frameImage.getRGB(mapped.x, mapped.y)
             val color = java.awt.Color(rgb, true)
             "#%02X%02X%02X".format(color.red, color.green, color.blue)
@@ -945,12 +990,10 @@ private class MirrorPanel(
 
     private fun rulerDragMode(point: Point): DragMode {
         if (!overlay.showRuler) return DragMode.None
-        val frameImage = image ?: return DragMode.None
-        val rect = fittedRect(frameImage)
-        val sourceWidth = overlay.sourceWidth ?: frameImage.width
-        val sourceHeight = overlay.sourceHeight ?: frameImage.height
-        val drawX = rect.x + (overlay.rulerX.coerceIn(0f, sourceWidth.toFloat()) * rect.width / sourceWidth).roundToInt()
-        val drawY = rect.y + (overlay.rulerY.coerceIn(0f, sourceHeight.toFloat()) * rect.height / sourceHeight).roundToInt()
+        val rect = fittedContentRect() ?: return DragMode.None
+        val (contentWidth, contentHeight) = mirrorContentSize() ?: return DragMode.None
+        val drawX = rect.x + (overlay.rulerX.coerceIn(0f, contentWidth.toFloat()) * rect.width / contentWidth).roundToInt()
+        val drawY = rect.y + (overlay.rulerY.coerceIn(0f, contentHeight.toFloat()) * rect.height / contentHeight).roundToInt()
         val nearVerticalLine = point.y in rect.y..(rect.y + rect.height) && kotlin.math.abs(point.x - drawX) <= 10
         val nearHorizontalLine = point.x in rect.x..(rect.x + rect.width) && kotlin.math.abs(point.y - drawY) <= 10
         return when {

@@ -397,12 +397,10 @@ internal fun AndyShell(
                             iosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
                             mirroredElsewhere = state.activeTargetId != null && state.activeTargetId in poppedOutTargetIds,
                             devicePaneWidth = state.workspaceState.liveDevicePaneWidth,
-                            controlsPaneHeight = state.workspaceState.liveControlsPaneHeight,
                             onStopEmulator = { state.stopEmulator(it) },
                             stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                             stopStatus = state.emulatorStopStatus,
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(liveDevicePaneWidth = width) } },
-                            onControlsPaneHeightChange = { height -> state.updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
                             onBugSaved = { state.navigateTo(AndyDestination.Bugs) },
                             onRecordingSaved = { state.navigateTo(AndyDestination.Recordings) },
                             logcatState = state.liveLogcatState,
@@ -420,6 +418,8 @@ internal fun AndyShell(
                             activeRunId = state.activeRunId,
                             terminalRunId = state.terminalRunId,
                             onActiveRunIdChange = { state.updateActiveRunId(it) },
+                            foldableHingeAngle = state.foldableHingeAngle,
+                            onFoldableHingeAngleChange = state::updateFoldableHingeAngle,
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -487,7 +487,15 @@ internal fun AndyShell(
                             startingEmulatorName = state.startingEmulatorName,
                             startStatus = state.emulatorStartStatus,
                         )
-                        AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, state.selectedSerial)
+                        AndyDestination.Controls -> ControlsScreen(
+                            devices = services.devices,
+                            mirror = services.mirror,
+                            serial = state.selectedSerial,
+                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                            avd = services.avd,
+                            hingeAngle = state.foldableHingeAngle,
+                            onHingeAngleChange = state::updateFoldableHingeAngle,
+                        )
                         AndyDestination.Design -> DesignScreen(
                             services,
                             state.selectedSerial,

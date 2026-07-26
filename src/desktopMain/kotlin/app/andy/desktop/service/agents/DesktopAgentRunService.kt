@@ -258,7 +258,7 @@ class DesktopAgentRunService(
     }
 
     /** Compose unmount: release the local viewer without killing tmux / the agent CLI. */
-    internal fun releaseTerminalViewer(taskId: String) = terminals.releaseViewerOnly(taskId)
+    override fun releaseTerminalViewer(taskId: String) = terminals.releaseViewerOnly(taskId)
 
     /**
      * Repairs tasks left [AgentStatus.Working]/[null] after the PTY

@@ -28,7 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
+import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -241,7 +241,7 @@ internal fun Sidebar(
                             StatusRow("Local only", "port 10000", true)
                         }
 
-                        HorizontalDivider(color = Border, thickness = 1.dp, modifier = Modifier.padding(vertical = 2.dp))
+                        AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = 2.dp))
 
                         if (updates != null) {
                             val updateText = when (updateState) {

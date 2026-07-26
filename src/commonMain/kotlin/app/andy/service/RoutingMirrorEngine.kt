@@ -128,6 +128,13 @@ class RoutingMirrorEngine(
         _session.value = null
     }
 
+    override suspend fun restartForDisplayChange(serial: String, config: MirrorVideoConfig): CommandResult {
+        val owner = engineFor(serial)
+        val result = owner.restartForDisplayChange(serial, config)
+        _session.value = owner.session.value
+        return result
+    }
+
     override suspend fun sendInput(input: MirrorInput): CommandResult {
         val active = _session.value?.serial ?: android().session.value?.serial ?: ios.session.value?.serial
         return if (active != null) engineFor(active).sendInput(input) else CommandResult.failure("No active mirror")

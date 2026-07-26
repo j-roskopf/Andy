@@ -1,13 +1,20 @@
 # Andy daemon (`andyd`) + CLI
 
 Andy’s center of gravity is a headless daemon that owns agent/project state and
-spawns agent CLIs into a dedicated tmux server. The Compose GUI and the Rust CLI
-are equal clients over a Unix domain socket.
+spawns agent CLIs into Andy-managed tmux sessions. The Compose GUI and the Rust
+CLI are equal clients over a Unix domain socket.
 
-## Dependencies
+The CLI is **macOS and Linux only** (not Windows). It auto-starts `andyd` when
+the socket is not already live.
 
-- **tmux** — required for agent sessions (`brew install tmux`)
-- Optional: set `ANDY_TMUX=/path/to/tmux` if it is not on `PATH`
+## Bundled tmux
+
+Andy installs a managed tmux binary at `~/.andy/bin/tmux` (via
+`install-andy.sh`, like bundled `scrcpy-server` for mirroring). `TmuxAndy`
+prefers that path before `ANDY_TMUX` or `PATH`. You do not need `brew install
+tmux` for agent sessions.
+
+Optional override: `ANDY_TMUX=/path/to/tmux`
 
 ## Paths
 
@@ -17,6 +24,9 @@ are equal clients over a Unix domain socket.
 | `~/.andy/andyd.pid` | Daemon pid / lock file |
 | `~/.andy/agents.db` | SQLDelight SQLite store for agent/project state |
 | `~/.andy/bin/andy` | Rust CLI binary |
+| `~/.andy/bin/andyd` | Daemon launcher script |
+| `~/.andy/andyd/andyd.jar` | Headless daemon fat JAR |
+| `~/.andy/bin/tmux` | Andy-managed tmux for agent sessions |
 | `~/.andy/bin/andy-status-hook.sh` | Stable vendor-hook helper (desktop / andyd / installer) |
 | `$PWD/.andy/active-task` | Gitignored pointer to the active task id for status hooks |
 | `$PWD/.andy/<taskId>/` | Per-task artifacts (`status.json`, plan/review, …) |
@@ -25,9 +35,17 @@ are equal clients over a Unix domain socket.
 
 ## Run the daemon
 
+`andy` starts `andyd` automatically. For manual control:
+
 ```sh
 ./gradlew runAndyd
 ./gradlew killAndyd   # stop a running daemon (reads ~/.andy/andyd.pid)
+```
+
+Or after `install-andy.sh` / `./gradlew installAndyd`:
+
+```sh
+~/.andy/bin/andyd
 ```
 
 This starts MCP on:
@@ -45,26 +63,22 @@ curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-an
 export PATH="$HOME/.andy/bin:$PATH"   # once; add to shell rc if you want
 ```
 
-The installer places `andy` and `andy-status-hook.sh` in `~/.andy/bin`. The desktop
-app and `andyd` also install the status helper on startup so agent vendor hooks can
-call a stable `"$HOME/.andy/bin/andy-status-hook.sh"` path; the active task is
-selected via gitignored `.andy/active-task` in the project directory.
+The installer places `andy`, `andyd`, `andyd.jar`, bundled `tmux`, and
+`andy-status-hook.sh` under `~/.andy`. Requires Java 21+.
 
 From a source checkout:
 
 ```sh
-./gradlew installAndyCli
+./gradlew installAndyCli installAndyd
 export PATH="$HOME/.andy/bin:$PATH"
 ```
 
-Release assets also include the raw binaries:
+Release assets:
 
-- `andy-<version>-macos-arm64`
-- `andy-<version>-linux-x86_64`
-- `andy-<version>-windows-x86_64.exe`
-- `install-andy.sh` / `andy-status-hook.sh` (stable names)
-
-Windows: download the `.exe` from the release page (the curl installer is bash-only).
+- `andy-<version>-macos-arm64` / `andy-<version>-linux-x86_64`
+- `andyd-<version>-<target>.jar`
+- `tmux-<version>-<target>`
+- `install-andy.sh` / `andy-status-hook.sh`
 
 Then:
 

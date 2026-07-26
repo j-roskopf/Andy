@@ -73,6 +73,8 @@ data class TerminalLaunchRequest(
     val mode: TerminalMode = TerminalMode.DirectPty,
     /** When [mode] is [TerminalMode.TmuxAttach], kill the tmux session on close. */
     val killTmuxOnClose: Boolean = false,
+    /** Alternate-screen insets and PTY sanitization for embedded agent CLIs. */
+    val agentCli: Boolean = false,
 )
 
 /** Platform factory — desktop creates a real PTY session; other targets are stubs. */

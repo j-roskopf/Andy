@@ -5,7 +5,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-d2f5981797/andy-status-hook.sh' working empty",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty",
                         "timeout": 5
                     }
                 ]
@@ -16,7 +16,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-d2f5981797/andy-status-hook.sh' done empty",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty",
                         "timeout": 5
                     }
                 ]
@@ -27,7 +27,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-d2f5981797/andy-status-hook.sh' blocked empty",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" blocked empty",
                         "timeout": 5
                     }
                 ]

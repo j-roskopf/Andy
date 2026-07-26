@@ -136,6 +136,8 @@ internal class MockAndroidDeviceEnvironment {
         return File(avdHome, "Pixel_8_API_36.avd/snapshots/$name")
     }
 
+    fun avdHome(): File = avdHome
+
     fun hardwareQemuLockPath(name: String = "Pixel_8_API_36"): File {
         return File(avdHome, "$name.avd/hardware-qemu.ini.lock")
     }
@@ -275,8 +277,8 @@ internal class MockAndroidDeviceEnvironment {
     }
 
     private fun runEmu(serial: String, args: List<String>): CommandResult {
-        return when (args) {
-            listOf("kill") -> {
+        return when {
+            args == listOf("kill") -> {
                 // Most kills remove the emulator from adb immediately; some leave a stale offline serial briefly.
                 adbDevicesOutput = adbDevicesOutput.lineSequence()
                     .mapNotNull { line ->
@@ -286,10 +288,14 @@ internal class MockAndroidDeviceEnvironment {
                     .joinToString("\n")
                 CommandResult.success("OK")
             }
-            listOf("avd", "snapshot", "list") -> CommandResult.success("default_boot\nmanual\n")
-            listOf("avd", "snapshot", "save", "manual") -> CommandResult.success("OK")
-            listOf("avd", "snapshot", "load", "manual") -> CommandResult.success("OK")
-            listOf("avd", "snapshot", "delete", "manual") -> CommandResult.success("OK")
+            args == listOf("avd", "snapshot", "list") -> CommandResult.success("default_boot\nmanual\n")
+            args == listOf("avd", "snapshot", "save", "manual") -> CommandResult.success("OK")
+            args == listOf("avd", "snapshot", "load", "manual") -> CommandResult.success("OK")
+            args == listOf("avd", "snapshot", "delete", "manual") -> CommandResult.success("OK")
+            args == listOf("fold") || args == listOf("unfold") -> CommandResult.success("OK")
+            args.size == 2 && args[0] == "posture" -> CommandResult.success("OK")
+            args.size == 4 && args.take(3) == listOf("sensor", "set", "hinge-angle0") -> CommandResult.success("OK")
+            args.size == 4 && args.take(3) == listOf("physics", "set", "hinge-angle0") -> CommandResult.success("OK")
             else -> CommandResult.failure("Unexpected emu command for $serial: ${args.joinToString(" ")}")
         }
     }

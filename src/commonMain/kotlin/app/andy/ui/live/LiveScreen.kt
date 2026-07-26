@@ -2,9 +2,8 @@ package app.andy.ui.live
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,8 +12,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,21 +54,19 @@ import app.andy.transfer.classifyLocalPaths
 import app.andy.ui.actions.DockPlacement
 import app.andy.ui.actions.TerminalDockDrawer
 import app.andy.ui.actions.TerminalDockToggleRow
-import app.andy.ui.components.Button
-import app.andy.ui.components.FilterPill
-import app.andy.ui.components.HorizontalPaneDivider
-import app.andy.ui.components.LabeledField
-import app.andy.ui.components.OutlinedButton
+import app.andy.model.VirtualDevice
 import app.andy.ui.components.PaneDivider
-import app.andy.ui.components.PanelCard
-import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.logcat.LogcatPanel
+import app.andy.ui.controls.FoldableDisplayProfile
+import app.andy.ui.controls.foldableDisplayProfile
+import app.andy.ui.controls.foldablePostureForAngle
+import app.andy.ui.controls.isFoldableEmulator
+import app.andy.ui.controls.parseWmSizePx
+import app.andy.ui.controls.setFoldableHingeAngle
+import app.andy.ui.controls.setFoldablePosture
+import app.andy.ui.controls.sizeForPosture
 import app.andy.ui.logcat.LogcatState
-import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
-import app.andy.ui.theme.Panel
 import app.andy.ui.theme.Rust
-import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.NonCancellable
@@ -189,12 +184,10 @@ internal fun LiveScreen(
     /** True when this device is currently shown in a pop-out window and should not mirror here. */
     mirroredElsewhere: Boolean = false,
     devicePaneWidth: Float,
-    controlsPaneHeight: Float,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
     stopStatus: String,
     onDevicePaneWidthChange: (Float) -> Unit,
-    onControlsPaneHeightChange: (Float) -> Unit,
     onBugSaved: () -> Unit,
     onRecordingSaved: () -> Unit,
     logcatState: LogcatState,
@@ -207,6 +200,8 @@ internal fun LiveScreen(
     activeRunId: String? = null,
     terminalRunId: String? = null,
     onActiveRunIdChange: (String?) -> Unit = {},
+    foldableHingeAngle: Float = 180f,
+    onFoldableHingeAngleChange: (Float) -> Unit = {},
 ) {
     val isIosTarget = iosTarget != null
     val mirrorReady = when {
@@ -222,7 +217,6 @@ internal fun LiveScreen(
     var connectResult by remember { mutableStateOf("") }
     val isWeb = services.capabilities.platform == app.andy.service.AndyPlatform.Web
     val acceleratedMirror = services.capabilities.acceleratedMirror
-    val controlsPaneMinHeight = if (acceleratedMirror) 320f else 280f
     val preferred = LiveMirrorSettings.config.value
     var maxSize by remember {
         mutableStateOf(if (preferred.maxSize == 0) "0" else preferred.maxSize.toString())
@@ -252,10 +246,9 @@ internal fun LiveScreen(
     var recordingRequestId by remember { mutableStateOf(0) }
     var recordingStartedAtMillis by remember { mutableStateOf<Long?>(null) }
     var recordingElapsedMillis by remember { mutableStateOf(0L) }
-    var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(680f)) }
-    var localControlsPaneHeight by remember(controlsPaneHeight, controlsPaneMinHeight) {
-        mutableStateOf(controlsPaneHeight.coerceIn(controlsPaneMinHeight, 520f))
-    }
+    var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth) }
+    var userResizedDevicePane by remember(serial) { mutableStateOf(false) }
+    var minDevicePaneWidth by remember(serial) { mutableStateOf(360f) }
     var terminalPlacement by remember { mutableStateOf<DockPlacement?>(null) }
     var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
     var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -307,12 +300,6 @@ internal fun LiveScreen(
     }
     LaunchedEffect(running) {
         terminalTabIds = terminalTabIds.filter { tabId -> running.any { it.runId == tabId } }
-    }
-    LaunchedEffect(controlsPaneMinHeight) {
-        if (localControlsPaneHeight < controlsPaneMinHeight) {
-            localControlsPaneHeight = controlsPaneMinHeight
-            onControlsPaneHeightChange(controlsPaneMinHeight)
-        }
     }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     fun sendHardware(input: MirrorInput) {
@@ -377,11 +364,15 @@ internal fun LiveScreen(
             delay(1_000)
         }
     }
-    fun reconnectMirror(config: MirrorVideoConfig) {
+    fun reconnectMirror(config: MirrorVideoConfig, force: Boolean = false, displayChange: Boolean = false) {
         LiveMirrorSettings.update(config)
         if (serial == null) return
         scope.launch {
-            val result = services.mirror.connect(serial, config)
+            val result = when {
+                displayChange -> services.mirror.restartForDisplayChange(serial, config)
+                force -> services.mirror.reconnect(serial, config)
+                else -> services.mirror.connect(serial, config)
+            }
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
     }
@@ -451,11 +442,92 @@ internal fun LiveScreen(
     val showLogcat = !isIosTarget
     val showMirrorStreamControls = !isIosTarget
     val iosSinglePane = isIosTarget
+    var virtualDevices by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
+    LaunchedEffect(device?.kind, device?.displayName) {
+        virtualDevices = if (device?.kind == DeviceKind.Emulator) {
+            runCatching { services.avd.listVirtualDevices() }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+    }
+    val foldable = !isIosTarget && isFoldableEmulator(device, virtualDevices)
+    val foldableProfile = remember(foldable, device?.displayName, virtualDevices) {
+        if (!foldable) return@remember null
+        val avdName = device?.displayName?.trim().orEmpty()
+        val avd = virtualDevices.firstOrNull { it.name.equals(avdName, ignoreCase = true) }
+        foldableDisplayProfile(avd)
+    }
+    var foldableCaptureHint by remember(serial) { mutableStateOf<MirrorSourceSize?>(null) }
+    fun hintForFoldableAngle(angle: Float, profile: FoldableDisplayProfile?): MirrorSourceSize? {
+        val size = profile?.sizeForPosture(foldablePostureForAngle(angle)) ?: return null
+        return MirrorSourceSize(size.first, size.second)
+    }
+    fun applyFoldableAndRefresh(label: String, angle: Float, block: suspend () -> CommandResult) {
+        if (serial == null) return
+        // Resize the Live host immediately to the expected outer/inner geometry.
+        foldableCaptureHint = hintForFoldableAngle(angle, foldableProfile) ?: foldableCaptureHint
+        userResizedDevicePane = false
+        scope.launch {
+            val result = block()
+            liveActionStatus = if (result.isSuccess) {
+                result.stdout.ifBlank { label }
+            } else {
+                result.stderr.ifBlank { result.stdout }.ifBlank { "$label failed" }
+            }
+            if (result.isSuccess) {
+                // Same stream settings would otherwise no-op connect(); force a full restart
+                // so scrcpy picks up the new display mode.
+                delay(250)
+                reconnectMirror(mirrorConfig(), displayChange = true)
+            }
+        }
+    }
+    LaunchedEffect(mirrorSession, foldableCaptureHint, foldableHingeAngle, foldableProfile) {
+        val hint = foldableCaptureHint ?: return@LaunchedEffect
+        val session = mirrorSession ?: return@LaunchedEffect
+        if (!session.readyForPresentation || session.width <= 1 || session.height <= 1) return@LaunchedEffect
+        val stream = MirrorSourceSize(session.width, session.height)
+        val profile = foldableProfile
+        if (profile == null) {
+            foldableCaptureHint = null
+            return@LaunchedEffect
+        }
+        val posture = foldablePostureForAngle(foldableHingeAngle)
+        if (foldableStreamMatchesPosture(stream, posture, profile)) {
+            foldableCaptureHint = null
+        }
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Row(Modifier.weight(1f).fillMaxWidth()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             val dialogsOpen = bugDialogVisible || clipDialogVisible
-            LiveDevicePane(
+            val devicePaneModifier = if (iosSinglePane) {
+                Modifier.weight(1f).fillMaxHeight()
+            } else {
+                Modifier.fillMaxHeight()
+            }
+            BoxWithConstraints(devicePaneModifier) {
+                val fittedDevicePaneWidth = liveDevicePaneFittedWidth(
+                    maxPaneHeight = maxHeight,
+                    device = device,
+                    frame = frame,
+                    showHardwareControls = !isIosTarget,
+                    showDeviceHeader = serial != null,
+                    showChromeControls = !isIosTarget,
+                    session = mirrorSession,
+                    captureHint = foldableCaptureHint,
+                    foldableProfile = foldableProfile,
+                    foldableHingeAngle = foldableHingeAngle,
+                )
+                minDevicePaneWidth = fittedDevicePaneWidth.value
+                // While a foldable open/close hint is active, follow the fitted outer/inner
+                // width even if the user previously dragged the divider wider.
+                val devicePaneWidthDp = if (userResizedDevicePane && foldableCaptureHint == null) {
+                    localDevicePaneWidth.dp.coerceAtLeast(fittedDevicePaneWidth)
+                } else {
+                    fittedDevicePaneWidth
+                }
+                LiveDevicePane(
                 serial = serial,
                 device = device,
                 displayName = iosTarget?.displayName ?: device?.displayName,
@@ -475,8 +547,8 @@ internal fun LiveScreen(
                 onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
                 modifier = Modifier
                     .then(
-                        if (iosSinglePane) Modifier.weight(1f)
-                        else Modifier.width(localDevicePaneWidth.dp).padding(end = 6.dp),
+                        if (iosSinglePane) Modifier.fillMaxSize()
+                        else Modifier.width(devicePaneWidthDp).padding(end = 6.dp),
                     )
                     .fillMaxHeight()
                     .onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
@@ -529,146 +601,77 @@ internal fun LiveScreen(
                 mirroredElsewhere = mirroredElsewhere,
                 mirroredInExternalApp = mirroredInExternalApp,
                 surfaceOccluded = dialogsOpen,
+                foldableEnabled = foldable,
+                foldableHingeAngle = foldableHingeAngle,
+                foldableProfile = foldableProfile,
+                foldableCaptureHint = foldableCaptureHint,
                 onInput = sendMirrorInput,
                 onConnect = {
                     reconnectMirror(mirrorConfig())
                 },
             )
+            }
         }
         if (!iosSinglePane) {
         PaneDivider(
-            onDrag = { dragX -> localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(560f, 1800f) },
-            onDragEnd = { onDevicePaneWidthChange(localDevicePaneWidth) },
+            onDrag = { dragX ->
+                userResizedDevicePane = true
+                localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(minDevicePaneWidth, 1800f)
+            },
+            onDragEnd = {
+                if (userResizedDevicePane) onDevicePaneWidthChange(localDevicePaneWidth)
+            },
         )
-        Column(Modifier.weight(1f).fillMaxHeight().padding(start = 6.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            PanelCard(
-                Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (showLogcat) Modifier.height(localControlsPaneHeight.dp)
-                        else Modifier.weight(1f),
-                    ),
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("Live workspace", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    TerminalDockToggleRow(
-                        terminalPlacement = terminalPlacement,
-                        onToggle = ::toggleTerminal,
-                    )
+        LiveSidePanel(
+            serial = serial,
+            device = device,
+            displayName = device?.displayName,
+            showLogcat = showLogcat,
+            showMirrorStreamControls = showMirrorStreamControls,
+            acceleratedMirror = acceleratedMirror,
+            isWeb = isWeb,
+            maxSize = maxSize,
+            bitRateMbps = bitRateMbps,
+            maxFps = maxFps,
+            rendererMode = rendererMode,
+            onMaxSizeChange = { maxSize = it },
+            onBitRateMbpsChange = { bitRateMbps = it },
+            onMaxFpsChange = { maxFps = it },
+            onRendererModeChange = { mode ->
+                rendererMode = mode
+                reconnectMirror(mirrorVideoConfig(maxSize, bitRateMbps, maxFps, mode))
+            },
+            onApplyPreset = { size, mbps -> applyPreset(size, mbps) },
+            onReconnectMirror = { reconnectMirror(mirrorConfig()) },
+            foldable = foldable,
+            foldableHingeAngle = foldableHingeAngle,
+            onFoldablePostureSelected = { posture ->
+                onFoldableHingeAngleChange(posture.defaultAngle)
+                applyFoldableAndRefresh("Posture ${posture.label}", posture.defaultAngle) {
+                    services.devices.setFoldablePosture(serial!!, posture)
                 }
-                if (showMirrorStreamControls) {
-                    Text("Stream settings", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterPill("720 edge", maxSize == "720", Cyan) { applyPreset("720", "4") }
-                        FilterPill("1080 edge", maxSize == "1080", Green) { applyPreset("1080", "8") }
-                        FilterPill("1440 edge", maxSize == "1440", Yellow) { applyPreset("1440", "12") }
-                        FilterPill("Native", maxSize == "0", Rust) { applyPreset("0", "16") }
-                    }
-                    if (acceleratedMirror) {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterPill("Auto", rendererMode == MirrorRendererMode.Auto, Cyan) {
-                                rendererMode = MirrorRendererMode.Auto
-                                reconnectMirror(mirrorConfig())
-                            }
-                            FilterPill("GPU", rendererMode == MirrorRendererMode.Accelerated, Green) {
-                                rendererMode = MirrorRendererMode.Accelerated
-                                reconnectMirror(mirrorConfig())
-                            }
-                            FilterPill("CPU", rendererMode == MirrorRendererMode.Legacy, Rust) {
-                                rendererMode = MirrorRendererMode.Legacy
-                                reconnectMirror(mirrorConfig())
-                            }
-                        }
-                    }
-                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        LabeledField("Max edge", maxSize, { maxSize = it.filter(Char::isDigit) }, Modifier.width(96.dp))
-                        LabeledField("Mbps", bitRateMbps, { bitRateMbps = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.width(88.dp))
-                        LabeledField("FPS", maxFps, { maxFps = it.filter(Char::isDigit) }, Modifier.width(78.dp))
-                        Box(Modifier.align(Alignment.Bottom).padding(bottom = 2.dp)) {
-                            Button(onClick = {
-                                reconnectMirror(mirrorConfig())
-                            }) { Text("Restart mirror") }
-                        }
-                    }
-                    Text("Max edge is the stream's longest side; 0 keeps the device's native resolution.", color = TextSecondary, fontSize = 10.sp)
-                    Text(
-                        if (acceleratedMirror) {
-                            if (isWeb) {
-                                "Auto uses WebCodecs/WebGL when the browser verifies hardware, otherwise CPU. GPU never falls back."
-                            } else {
-                                "Auto uses inline Metal when available and falls back to CPU. GPU never falls back."
-                            }
-                        } else {
-                            "This platform uses CPU presentation until a native GPU mirror is available."
-                        },
-                        color = TextSecondary,
-                        fontSize = 10.sp,
-                    )
-                }
-                Text("Capture", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CompactHardwareButton("Save bug", serial) { bugDialogVisible = true }
-                    if (transfer.busy) {
-                        OutlinedButton(onClick = { transfer.cancel() }) { Text("Cancel transfer") }
-                    }
-                    if (liveActionStatus.isNotBlank()) {
-                        Text(
-                            liveActionStatus,
-                            color = transferStatusColor(liveActionStatus),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = if (liveActionStatus.startsWith("App installed") || liveActionStatus.startsWith("App replaced") || liveActionStatus.startsWith("Installed ") || liveActionStatus.startsWith("Replaced ")) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(
-                        onClick = { device?.let(onStopEmulator) },
-                        enabled = device?.kind == DeviceKind.Emulator && serial != null && stoppingEmulatorSerial != serial,
-                    ) {
-                        Text(if (stoppingEmulatorSerial == serial) "Stopping" else "Stop emulator")
-                    }
-                    if (stopStatus.isNotBlank()) {
-                        Text(stopStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                if (bugSaveStatus.isNotBlank()) {
-                    Text(bugSaveStatus, color = Rust, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                }
-            }
-            if (showLogcat) {
-                HorizontalPaneDivider(
-                    onDrag = { dragY -> localControlsPaneHeight = (localControlsPaneHeight + dragY).coerceIn(controlsPaneMinHeight, 520f) },
-                    onDragEnd = { onControlsPaneHeightChange(localControlsPaneHeight) },
-                )
-                LogcatPanel(
-                    logcat = services.logcat,
-                    appsService = services.apps,
-                    serial = serial,
-                    selectedPackage = selectedPackage,
-                    onSelectedPackageChange = onSelectedPackageChange,
-                    modifier = Modifier.fillMaxWidth().weight(0.55f),
-                    compact = true,
-                    state = logcatState
-                )
-            }
-        }
+            },
+            transferBusy = transfer.busy,
+            onCancelTransfer = { transfer.cancel() },
+            liveActionStatus = liveActionStatus,
+            liveActionStatusColor = transferStatusColor(liveActionStatus),
+            onSaveBug = { bugDialogVisible = true },
+            onStopEmulator = { device?.let(onStopEmulator) },
+            stoppingEmulator = stoppingEmulatorSerial == serial,
+            stopStatus = stopStatus,
+            bugSaveStatus = bugSaveStatus,
+            terminalPlacement = terminalPlacement,
+            onTerminalToggle = ::toggleTerminal,
+            logcat = services.logcat,
+            appsService = services.apps,
+            selectedPackage = selectedPackage,
+            onSelectedPackageChange = onSelectedPackageChange,
+            logcatState = logcatState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .padding(start = 6.dp),
+        )
         }
         if (terminalPlacement == DockPlacement.Right) {
             TerminalDockDrawer(

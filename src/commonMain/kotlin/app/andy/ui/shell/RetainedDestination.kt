@@ -3,6 +3,7 @@ package app.andy.ui.shell
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -29,7 +30,7 @@ internal fun RetainedDestination(
     }
     if (!visited) return
     val parentSuppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
-    Box(if (active) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
+    Box(if (active) Modifier.fillMaxSize() else Modifier.size(0.dp).clipToBounds()) {
         CompositionLocalProvider(
             LocalSuppressHeavyweightSurfaces provides (!active || parentSuppressHeavyweight),
         ) {

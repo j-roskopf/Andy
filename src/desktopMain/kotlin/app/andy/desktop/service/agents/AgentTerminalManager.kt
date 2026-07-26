@@ -406,6 +406,7 @@ class AgentTerminalManager(
                             env = env,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.DirectPty,
+                            agentCli = true,
                         ),
                     )
                 }
@@ -754,9 +755,9 @@ class AgentTerminalManager(
         if (!TmuxAndy.isAvailable()) {
             if (mode == AgentTerminalMode.TmuxHeadless) {
                 error(
-                    "tmux is required for headless Andy agent sessions. " +
-                        "Install it (e.g. `brew install tmux`) or set ANDY_TMUX.",
-                )
+                "tmux is required for headless Andy agent sessions. " +
+                    "Re-run install-andy.sh or set ANDY_TMUX.",
+            )
             }
             // GUI soft-fallback so local dev still works without tmux.
             return AgentTerminalMode.DirectPty

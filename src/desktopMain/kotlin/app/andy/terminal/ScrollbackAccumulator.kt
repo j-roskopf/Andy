@@ -82,7 +82,15 @@ internal fun scrollbackSnapshotOverlap(
             val previous = captured[base + offset]
             val current = snapshot[offset]
             when {
-                previous.plain != current.plain -> score -= MISMATCH_PENALTY
+                previous.plain != current.plain -> {
+                    if (isVolatileTerminalChromeLine(previous.plain) &&
+                        isVolatileTerminalChromeLine(current.plain)
+                    ) {
+                        score += MATCH_REWARD
+                    } else {
+                        score -= MISMATCH_PENALTY
+                    }
+                }
                 !current.isBlank -> score += MATCH_REWARD
             }
         }

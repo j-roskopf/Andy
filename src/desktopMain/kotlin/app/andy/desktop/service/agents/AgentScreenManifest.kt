@@ -36,7 +36,14 @@ internal data class ScreenGate(
     val all: List<ScreenGate> = emptyList(),
     val any: List<ScreenGate> = emptyList(),
     val not: List<ScreenGate> = emptyList(),
-)
+) {
+    /**
+     * Needles are manifest constants and the manifests are built once, so fold them to
+     * lowercase here rather than on every screen evaluation. Outside the constructor, so
+     * it stays out of `equals`/`hashCode`/`copy`.
+     */
+    val containsLower: List<String> = contains.map { it.lowercase() }
+}
 
 internal data class ScreenRule(
     val id: String,
@@ -69,10 +76,17 @@ internal data class ManifestMatch(
 
 internal fun evaluateScreenManifest(agent: AgentKind, input: DetectionInput): ManifestMatch {
     val rules = screenManifestFor(agent)
+    // Rules overwhelmingly share a handful of regions, and every gate needs the same
+    // lowercased copy. Extracting and folding once per distinct region — instead of once
+    // per rule, plus once per nested gate — is the bulk of this function's cost.
+    val regions = HashMap<ScreenRegion, Pair<String, String>>()
     var best: ScreenRule? = null
     for (rule in rules) {
-        val regionText = extractRegion(input, rule.region)
-        if (!gateMatches(rule.gate, regionText)) continue
+        val (regionText, regionLower) = regions.getOrPut(rule.region) {
+            val text = extractRegion(input, rule.region)
+            text to text.lowercase()
+        }
+        if (!gateMatches(rule.gate, regionText, regionLower)) continue
         val prev = best
         if (prev == null || rule.priority > prev.priority) {
             best = rule
@@ -111,14 +125,17 @@ internal fun extractRegion(input: DetectionInput, region: ScreenRegion): String 
     is ScreenRegion.BottomLines -> bottomLines(input.screen, region.count)
 }
 
-internal fun gateMatches(gate: ScreenGate, text: String): Boolean {
-    val lower = text.lowercase()
-    if (gate.contains.any { !lower.contains(it.lowercase()) }) return false
+internal fun gateMatches(gate: ScreenGate, text: String): Boolean =
+    gateMatches(gate, text, text.lowercase())
+
+/** [lower] must be `text.lowercase()`; it is threaded through so nesting does not refold it. */
+private fun gateMatches(gate: ScreenGate, text: String, lower: String): Boolean {
+    if (gate.containsLower.any { !lower.contains(it) }) return false
     if (gate.regex.any { !it.containsMatchIn(text) }) return false
     if (gate.lineRegex.any { regex -> text.lineSequence().none { regex.containsMatchIn(it) } }) return false
-    if (gate.all.any { !gateMatches(it, text) }) return false
-    if (gate.any.isNotEmpty() && gate.any.none { gateMatches(it, text) }) return false
-    if (gate.not.any { gateMatches(it, text) }) return false
+    if (gate.all.any { !gateMatches(it, text, lower) }) return false
+    if (gate.any.isNotEmpty() && gate.any.none { gateMatches(it, text, lower) }) return false
+    if (gate.not.any { gateMatches(it, text, lower) }) return false
     return true
 }
 

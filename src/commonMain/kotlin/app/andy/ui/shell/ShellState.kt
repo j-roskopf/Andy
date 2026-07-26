@@ -46,6 +46,9 @@ internal class ShellState(
         private set
     var selectedIosUdid by mutableStateOf<String?>(null)
         private set
+    /** Shared Live/Controls hinge angle for foldable emulator previews (degrees, 0–180). */
+    var foldableHingeAngle by mutableStateOf(180f)
+        private set
 
     val activeTargetId: String?
         get() = selectedIosUdid ?: selectedSerial
@@ -96,6 +99,7 @@ internal class ShellState(
     }
 
     fun selectDevice(serial: String?) {
+        if (selectedSerial != serial) foldableHingeAngle = 180f
         selectedSerial = serial
         if (serial != null) selectedIosUdid = null
         persistSelectedTarget()
@@ -107,6 +111,10 @@ internal class ShellState(
             selectedSerial = null
         }
         persistSelectedTarget()
+    }
+
+    fun updateFoldableHingeAngle(angle: Float) {
+        foldableHingeAngle = if (angle.coerceIn(0f, 180f) < 90f) 0f else 180f
     }
 
     private fun persistSelectedTarget() {
@@ -125,6 +133,7 @@ internal class ShellState(
             selectedIosUdid = targetId
             selectedSerial = null
         } else {
+            if (selectedSerial != targetId) foldableHingeAngle = 180f
             selectedSerial = targetId
             selectedIosUdid = null
         }

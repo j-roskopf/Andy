@@ -72,6 +72,12 @@ internal object GpuMirrorJni {
         loadResult.isSuccess && decoderId != 0L && packet.isNotEmpty() &&
             runCatching { nativeConsumeH264(decoderId, packet) }.getOrDefault(false)
 
+    /** Clears the VideoToolbox session and cached SPS/PPS before a fold open/close restart. */
+    fun resetDecoderStream(decoderId: Long) {
+        if (!loadResult.isSuccess || decoderId == 0L) return
+        runCatching { nativeResetDecoderStream(decoderId) }
+    }
+
     /** Presents a solid BGRA color through the hub (used by presentation regression tests). */
     fun presentSolidBgra(
         decoderId: Long,
@@ -202,6 +208,7 @@ internal object GpuMirrorJni {
     private external fun nativeSetPresenterContentSize(presenterId: Long, width: Int, height: Int)
     private external fun nativeRepaintPresenter(presenterId: Long)
     private external fun nativeConsumeH264(decoderId: Long, packet: ByteArray): Boolean
+    private external fun nativeResetDecoderStream(decoderId: Long)
     private external fun nativePresentSolidBgra(
         decoderId: Long,
         width: Int,
