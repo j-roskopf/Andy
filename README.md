@@ -200,9 +200,9 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 
 ## CLI
 
-Andy ships a Rust CLI (`andy`) for driving agent chats from the terminal on
-**macOS and Linux only**. The CLI is not supported on Windows — use the
-[desktop app](#download) there instead.
+Andy ships a Rust CLI (`andy`) for driving agent chats **and** device/network
+automation from the terminal on **macOS and Linux only**. The CLI is not
+supported on Windows — use the [desktop app](#download) there instead.
 
 The CLI talks to the same control plane as the desktop app: a background daemon
 (`andyd`) that owns agent/project state, spawns provider CLIs into Andy-managed
@@ -216,8 +216,13 @@ tmux at `~/.andy/bin/tmux` (installed by `install-andy.sh`, like bundled
 
 ```sh
 curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
-export PATH="$HOME/.andy/bin:$PATH"
+
+# Permanently add ~/.andy/bin to your PATH (pick your shell):
+echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.zshrc   # zsh
+# echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.bashrc  # bash
 ```
+
+Restart your shell (or `source` the rc file you edited) so `andy` is on your `PATH`.
 
 Requires **Java 21+** for the `andyd` runtime. The installer places:
 
@@ -237,18 +242,38 @@ andy chat list
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
 andy tui
 andy attach <taskId>
+
+# Device / network scripting (same MCP socket)
+andy device list
+andy emulator start Pixel_7 --wait
+andy network rule upsert --url-pattern '*/api/*' --status-code 500
+andy device screenshot -o /tmp/screen.png
+andy tool list   # full MCP catalog; `andy tool call <name>` for any tool
 ```
 
 Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`.
 
+Device targeting: `--serial` on a command, or `ANDY_SERIAL`. Use global `--json`
+for machine-readable output. Agent/workflow MCP tools stay under
+`andy tool call` (no curated chat lifecycle wrappers beyond the existing
+`andy chat` commands).
+
 See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
 keybindings, remote access, and launchd packaging.
+
+## Testing
+
+PR CI runs `./gradlew desktopTest` (plus screenshot verify). Opt-in suites that need a
+device, Simulator, or live agent CLI — and how to run them locally — are documented in
+[docs/TESTS.md](docs/TESTS.md).
 
 ## Runtime Requirements
 
 - Android SDK platform tools for device and emulator access.
 - Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
-- mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
+- Network capture uses Andy's pinned mitmproxy runtime at `~/.andy/proxy/venv`
+  (provisioned automatically; needs Python 3.12+). Optional fallback:
+  `brew install mitmproxy`.
 - Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
   managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
   or the desktop app). Override with `ANDY_TMUX` if needed.

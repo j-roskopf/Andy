@@ -17,6 +17,17 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+# Show a progress bar for large assets when stderr is a TTY; stay quiet otherwise.
+download() {
+  local url="$1"
+  local dest="$2"
+  if [[ -t 2 ]]; then
+    curl -fL --progress-bar "${url}" -o "${dest}"
+  else
+    curl -fsSL "${url}" -o "${dest}"
+  fi
+}
+
 detect_target() {
   local os arch
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -63,10 +74,12 @@ find_release_asset() {
 download_release_asset() {
   local pattern="$1"
   local dest="$2"
+  local label="${3:-}"
   local url
   url="$(find_release_asset "${pattern}")"
   [[ -n "${url}" ]] || return 1
-  curl -fsSL "${url}" -o "${dest}"
+  [[ -n "${label}" ]] && log "${label}"
+  download "${url}" "${dest}"
 }
 
 need curl
@@ -118,7 +131,7 @@ fi
   die "could not find release asset andy-<version>-${TARGET} in latest GitHub release for ${REPO}"
 
 log "Downloading ${ASSET_NAME}…"
-curl -fsSL "${DOWNLOAD_URL}" -o "${TMP}/andy"
+download "${DOWNLOAD_URL}" "${TMP}/andy"
 chmod +x "${TMP}/andy"
 
 mkdir -p "${BIN_DIR}" "${RUNTIME_DIR}"
@@ -131,7 +144,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
 fi
 
 # andyd runtime (fat JAR + launcher)
-if download_release_asset "^andyd-.+-${TARGET}\\.jar$" "${RUNTIME_DIR}/andyd.jar"; then
+if download_release_asset "^andyd-.+-${TARGET}\\.jar$" "${RUNTIME_DIR}/andyd.jar" "Downloading andyd runtime…"; then
   log "Installed ${RUNTIME_DIR}/andyd.jar"
 else
   log "warning: no andyd-<version>-${TARGET}.jar in this release — run ./gradlew installAndyd from source or use the desktop app"
@@ -157,7 +170,7 @@ chmod +x "${BIN_DIR}/andyd"
 log "Installed ${BIN_DIR}/andyd"
 
 # Bundled tmux (Andy-managed, like scrcpy-server)
-if download_release_asset "^tmux-.+-${TARGET}$" "${TMP}/tmux"; then
+if download_release_asset "^tmux-.+-${TARGET}$" "${TMP}/tmux" "Downloading bundled tmux…"; then
   mv -f "${TMP}/tmux" "${BIN_DIR}/tmux"
   chmod +x "${BIN_DIR}/tmux"
   if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
@@ -216,7 +229,9 @@ chmod +x "${HOOK_DEST}"
 log "Installed ${BIN_DIR}/andy"
 log "Installed ${HOOK_DEST}"
 if ! command -v andy >/dev/null 2>&1 || [[ "$(command -v andy)" != "${BIN_DIR}/andy" ]]; then
-  log "Add to PATH if needed:"
-  log "  export PATH=\"\$HOME/.andy/bin:\$PATH\""
+  log "Add ~/.andy/bin to your PATH permanently (pick your shell):"
+  log "  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh"
+  log "  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash"
+  log "Then restart your shell or: source ~/.zshrc  # or ~/.bashrc"
 fi
 log "Try: andy chat list"

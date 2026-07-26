@@ -119,6 +119,18 @@ class ProxyJsonGoldenTest {
     }
 
     @Test
+    fun parseTlsPassthroughLine() {
+        val exchange = parseMitmproxyFlowLine(
+            """{"type":"tls_passthrough","id":"tls-passthrough-pinned.example-1","startedAtMillis":11,"completedAtMillis":11,"durationMillis":0,"method":"PASS","url":"https://pinned.example/","statusCode":null,"contentType":null,"sizeBytes":null,"requestHeaders":{},"responseHeaders":{},"requestBodyPreview":null,"responseBodyPreview":"Not decrypted — CA not trusted / pinned","error":"Not decrypted — CA not trusted / pinned","tlsStatus":"passthrough","matchedRuleId":null,"sni":"pinned.example","peer":null,"reason":"passthrough after client CA rejection"}""",
+        )
+        assertNotNull(exchange)
+        assertEquals("PASS", exchange.method)
+        assertEquals("passthrough", exchange.tlsStatus)
+        assertTrue(exchange.error!!.contains("Not decrypted"))
+        assertTrue(exchange.responseBodyPreview!!.contains("Not decrypted"))
+    }
+
+    @Test
     fun parseClientConnectedEvent() {
         val event = parseMitmproxyEvent(
             """{"type":"client_connected","id":"c1","startedAtMillis":9,"peer":"10.0.2.15:1"}""",

@@ -324,7 +324,7 @@ data class AgentTask(
     val changeBaselineTree: String? = null,
     /** Immutable repository changes captured when this chat last finished. */
     val completedChanges: AgentThreadChangeSnapshot? = null,
-    /** Null while [isQueued]; otherwise the single source of truth for badge + notifications. */
+    /** Null while pre-launch ([isQueued]); otherwise the source of truth for badge + notifications. */
     val status: AgentStatus? = null,
     /** User explicitly stopped the run; [status] is [AgentStatus.Done]. */
     val stoppedByUser: Boolean = false,
@@ -367,8 +367,9 @@ data class AgentTask(
     /** Final provider response for non-plan workflow stages and completed chats. */
     val completedResultText: String? = null,
 ) {
-    val isQueued: Boolean get() = startedAtMillis == null
-    val isActive: Boolean get() = !isQueued && (status == AgentStatus.Working || status == AgentStatus.Blocked)
+    /** True only before launch — both [status] and [startedAtMillis] are still unset. */
+    val isQueued: Boolean get() = status == null && startedAtMillis == null
+    val isActive: Boolean get() = status == AgentStatus.Working || status == AgentStatus.Blocked
     val needsInput: Boolean get() = status == AgentStatus.Blocked || userInputRequest != null
     val notificationTitle: String
         get() {

@@ -78,7 +78,7 @@ private fun AgentCommandCenter(
             tasks.firstOrNull { it.id == id && it.projectId == null }?.let { task ->
                 selectedTaskId = task.id
                 composing = false
-                services.agentRuns.markRead(task.id)
+                services.agentRuns.setChatViewing(task.id, viewing = true)
             }
             onRequestedTaskConsumed()
         }
@@ -118,7 +118,6 @@ private fun AgentCommandCenter(
         val taskId = selected?.id?.takeIf { active && !composing }
         if (taskId != null) {
             services.agentRuns.setChatViewing(taskId, viewing = true)
-            services.agentRuns.markRead(taskId)
         }
         onDispose {
             if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
@@ -175,7 +174,7 @@ private fun AgentCommandCenter(
                             onClick = {
                                 selectedTaskId = task.id
                                 composing = false
-                                services.agentRuns.markRead(task.id)
+                                services.agentRuns.setChatViewing(task.id, viewing = true)
                             },
                             onMarkUnread = { services.agentRuns.markUnread(task.id) },
                             onArchive = if (showArchived) {

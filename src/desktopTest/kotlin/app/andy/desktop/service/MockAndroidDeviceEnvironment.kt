@@ -49,6 +49,10 @@ internal class MockAndroidDeviceEnvironment {
     var persistedCaInstalled: Boolean = false
     var keepStoppedEmulatorInAdbAsOffline: Boolean = false
     var httpProxyValue: String = "10.0.2.2:8888"
+    val globalSettings: MutableMap<String, String> = mutableMapOf(
+        "captive_portal_mode" to "1",
+        "captive_portal_detection_enabled" to "1",
+    )
     var connectivityDump: String = "NetworkAgentInfo [WIFI () - 100]\n"
     var routeToProxyOutput: String = "10.0.2.2 dev eth0 src 10.0.2.15\n"
     var macProxyOutput: String = """
@@ -311,6 +315,17 @@ internal class MockAndroidDeviceEnvironment {
         if (shell == listOf("settings", "get", "global", "http_proxy")) {
             return CommandResult.success(httpProxyValue)
         }
+        if (shell.size == 4 && shell.take(3) == listOf("settings", "get", "global") &&
+            shell[3] in setOf("captive_portal_mode", "captive_portal_detection_enabled")
+        ) {
+            return CommandResult.success(globalSettings[shell[3]] ?: "null")
+        }
+        if (shell.size == 5 && shell.take(3) == listOf("settings", "put", "global") &&
+            shell[3] in setOf("captive_portal_mode", "captive_portal_detection_enabled")
+        ) {
+            globalSettings[shell[3]] = shell[4]
+            return CommandResult.success()
+        }
         if (shell.size == 5 && shell.take(4) == listOf("settings", "put", "global", "global_http_proxy_host")) {
             return CommandResult.success()
         }
@@ -318,6 +333,7 @@ internal class MockAndroidDeviceEnvironment {
             return CommandResult.success()
         }
         if (shell.size == 4 && shell.take(3) == listOf("settings", "delete", "global")) {
+            globalSettings.remove(shell[3])
             return CommandResult.success()
         }
         if (shell == listOf("dumpsys", "connectivity")) {

@@ -1,20 +1,35 @@
+mod args;
 mod attach;
 mod chats;
 mod compose;
 mod daemon;
+mod device_cli;
+mod device_map;
+mod dispatch;
 mod mcp;
 mod tmux;
+mod tool_cmd;
 mod tui;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use device_cli::{
+    AppCmd, AvdCmd, DeviceCmd, EmulatorCmd, FileCmd, InputCmd, IntentCmd, NetworkCmd, SnapshotCmd,
+    SystemImageCmd,
+};
 use mcp::{default_socket_path, McpClient};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Command;
+use tool_cmd::ToolCmd;
 
 #[derive(Parser, Debug)]
-#[command(name = "andy", about = "Andy CLI — drive andyd over ~/.andy/andyd.sock")]
+#[command(
+    name = "andy",
+    about = "Andy CLI — drive andyd over ~/.andy/andyd.sock",
+    long_about = "Scripting client for andyd. Device/emulator/network commands wrap MCP tools; \
+use `andy tool call` for any MCP tool by name. Device serial: --serial or ANDY_SERIAL."
+)]
 struct Cli {
     /// Path to andyd unix socket
     #[arg(long, global = true)]
@@ -23,6 +38,10 @@ struct Cli {
     /// SSH host to tunnel the andyd socket from (macOS/Linux remote)
     #[arg(long, global = true)]
     remote: Option<String>,
+
+    /// Print raw MCP / machine-readable JSON
+    #[arg(long, global = true)]
+    json: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -38,15 +57,45 @@ enum Commands {
     Chat(ChatCmd),
     #[command(subcommand)]
     Project(ProjectCmd),
+    /// Connected devices, shell, screenshot, logcat
+    #[command(subcommand)]
+    Device(DeviceCmd),
+    /// Start / stop emulators
+    #[command(subcommand)]
+    Emulator(EmulatorCmd),
+    /// AVD create / clone / delete / list
+    #[command(subcommand)]
+    Avd(AvdCmd),
+    /// System images
+    #[command(name = "system-image", subcommand)]
+    SystemImage(SystemImageCmd),
+    /// Emulator snapshots
+    #[command(subcommand)]
+    Snapshot(SnapshotCmd),
+    /// Tap / swipe / text / key
+    #[command(subcommand)]
+    Input(InputCmd),
+    /// Installed apps
+    #[command(subcommand)]
+    App(AppCmd),
+    /// Send intents / deeplinks
+    #[command(subcommand)]
+    Intent(IntentCmd),
+    /// Device filesystem
+    #[command(subcommand)]
+    File(FileCmd),
+    /// Network proxy, mock rules, recorded requests
+    #[command(subcommand)]
+    Network(NetworkCmd),
+    /// Generic MCP tool list / call (full parity escape hatch)
+    #[command(subcommand)]
+    Tool(ToolCmd),
 }
 
 #[derive(Subcommand, Debug)]
 enum ChatCmd {
     /// List chats grouped by project (use --json for raw MCP payload)
-    List {
-        #[arg(long)]
-        json: bool,
-    },
+    List,
     Start {
         #[arg(long)]
         agent: String,
@@ -83,15 +132,16 @@ async fn main() -> Result<()> {
         daemon::ensure_running(&socket).await?;
     }
     let mut client = McpClient::new(socket);
+    let json_out = cli.json;
 
     match cli.command {
         Commands::Tui => tui::run_dashboard(client).await?,
         Commands::Attach { task_id } => attach::attach_or_reattach(&mut client, &task_id).await?,
-        Commands::Chat(ChatCmd::List { json }) => {
+        Commands::Chat(ChatCmd::List) => {
             let raw = client
                 .call_tool("chat.list", Value::Object(Default::default()))
                 .await?;
-            if json {
+            if json_out {
                 println!("{raw}");
             } else {
                 let entries = chats::grouped_entries(chats::parse_chats(&raw));
@@ -167,6 +217,19 @@ async fn main() -> Result<()> {
                 .await?;
             println!("{raw}");
         }
+        Commands::Device(cmd) => device_cli::run_device(&mut client, cmd, json_out).await?,
+        Commands::Emulator(cmd) => device_cli::run_emulator(&mut client, cmd, json_out).await?,
+        Commands::Avd(cmd) => device_cli::run_avd(&mut client, cmd, json_out).await?,
+        Commands::SystemImage(cmd) => {
+            device_cli::run_system_image(&mut client, cmd, json_out).await?
+        }
+        Commands::Snapshot(cmd) => device_cli::run_snapshot(&mut client, cmd, json_out).await?,
+        Commands::Input(cmd) => device_cli::run_input(&mut client, cmd, json_out).await?,
+        Commands::App(cmd) => device_cli::run_app(&mut client, cmd, json_out).await?,
+        Commands::Intent(cmd) => device_cli::run_intent(&mut client, cmd, json_out).await?,
+        Commands::File(cmd) => device_cli::run_file(&mut client, cmd, json_out).await?,
+        Commands::Network(cmd) => device_cli::run_network(&mut client, cmd, json_out).await?,
+        Commands::Tool(cmd) => tool_cmd::run_tool(&mut client, cmd, json_out).await?,
     }
     Ok(())
 }

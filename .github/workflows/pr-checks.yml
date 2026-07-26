@@ -34,7 +34,10 @@ jobs:
   desktop:
     name: Desktop checks (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      # Opt-in harnesses that are safe / free to run on every PR.
+      ANDY_PROXY_CONFORMANCE: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +59,11 @@ jobs:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           java-version: ${{ env.JAVA_VERSION }}
 
+      - name: Set up Python (pinned mitmproxy venv / conformance)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -72,6 +80,34 @@ jobs:
       - name: Install tmux (agent terminal executor)
         if: matrix.os == 'macos'
         run: brew install tmux || true
+
+      - name: Boot iOS Simulator for Live smoke
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          # Prefer an already-available iPhone runtime; create nothing new.
+          UDID="$(
+            xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  name = device.get("name") or ""
+                  if device.get("isAvailable") and "iPhone" in name:
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator device found")
+          '
+          )"
+          echo "Booting iOS Simulator $UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          # Some SimulatorKit paths expect the Simulator app process.
+          open -a Simulator --args -CurrentDeviceUDID "$UDID" || true
+          echo "ANDY_IOS_SIM_UDID=$UDID" >> "$GITHUB_ENV"
+          echo "ANDY_IOS_SIM_SMOKE=1" >> "$GITHUB_ENV"
 
       - name: Run macOS checks
         if: matrix.os == 'macos'

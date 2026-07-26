@@ -45,6 +45,7 @@ data class ProxyWarning(
 enum class ProxyWarningKind {
     ClientTlsFailure,
     UpstreamTlsFailure,
+    TlsPassthrough,
     CaptureDropped,
     AddonMismatch,
     AddonError,
@@ -77,6 +78,11 @@ enum class NetworkFailureMode {
     CorporateTlsInspection,
     CaNotInstalled,
     UnsupportedProtocol,
+    TlsPassthrough,
+}
+
+enum class NetworkDiagnosisAction {
+    DisableUpstreamVerification,
 }
 
 enum class NetworkDiagnosisSeverity {
@@ -91,6 +97,8 @@ data class NetworkDiagnosis(
     val title: String,
     val detail: String,
     val fix: String,
+    val action: NetworkDiagnosisAction? = null,
+    val actionLabel: String? = null,
 )
 
 data class NetworkRouteDiagnostics(
@@ -165,8 +173,10 @@ fun diagnoseNetworkTraffic(
         )
     }
 
+    val passthroughExchanges = exchanges.filter { it.tlsStatus == "passthrough" || it.method == "PASS" }
+    val passthroughWarnings = warnings.filter { it.kind == ProxyWarningKind.TlsPassthrough }
     val successfulHttps = exchanges.any { it.tlsStatus == "tls" && it.error == null && it.statusCode != null }
-    val successfulAny = exchanges.any { it.error == null && (it.statusCode != null || it.method != "TLS") }
+    val successfulAny = exchanges.any { it.error == null && (it.statusCode != null || it.method !in setOf("TLS", "PASS")) }
     if (successfulHttps || (successfulAny && exchanges.none { it.error != null })) {
         val chaining = routeDiagnostics?.hostUpstreamProxy
         return (
@@ -178,7 +188,7 @@ fun diagnoseNetworkTraffic(
                     detail = "HTTPS flows are reaching Andy and completing successfully.",
                     fix = "",
                 ),
-            ) + addonOperationalDiagnoses(warnings)
+            ) + passthroughDiagnoses(passthroughExchanges, passthroughWarnings) + addonOperationalDiagnoses(warnings)
             ).distinctBy { it.mode to it.title }
     }
 
@@ -195,25 +205,38 @@ fun diagnoseNetworkTraffic(
             mode = NetworkFailureMode.CorporateTlsInspection,
             severity = NetworkDiagnosisSeverity.Red,
             title = "Upstream TLS verification failed — corporate TLS inspection",
-            detail = "Andy appears to be behind a corporate TLS-inspection proxy ($proxyLabel). mitmproxy cannot verify the real server certificate because it was re-signed by the corporate root.",
+            detail = "Andy appears to be behind a corporate TLS-inspection proxy ($proxyLabel). mitmproxy cannot verify the real server certificate because it was re-signed by the corporate root. Andy already tries the host OS trust store; if that is not enough, disable upstream verification to restore connectivity.",
             fix = if (hasMitigation) {
                 "Corporate CA / insecure-upstream is configured; restart the proxy if traffic still fails."
             } else {
-                "Add your corporate root CA path or enable insecure-upstream in Network setup / Settings, then restart the proxy."
+                "One-click disable upstream verification below, or add your corporate root CA path, then restart the proxy."
             },
+            action = if (hasMitigation) null else NetworkDiagnosisAction.DisableUpstreamVerification,
+            actionLabel = if (hasMitigation) null else "Disable upstream verification",
         )
     }
 
-    if (tlsFailed.isNotEmpty() || clientWarnings.isNotEmpty()) {
-        val host = tlsFailed.firstOrNull()?.url?.removePrefix("https://")?.substringBefore('/')
-            ?: clientWarnings.firstOrNull()?.sni
+    diagnoses += passthroughDiagnoses(passthroughExchanges, passthroughWarnings)
+
+    val passthroughHosts = (passthroughExchanges.mapNotNull { it.url.removePrefix("https://").substringBefore('/').takeIf(String::isNotBlank) } +
+        passthroughWarnings.mapNotNull { it.sni }).map { it.lowercase() }.toSet()
+    val unresolvedTlsFailures = tlsFailed.filter { exchange ->
+        val host = exchange.url.removePrefix("https://").substringBefore('/').lowercase()
+        host !in passthroughHosts
+    }
+    val unresolvedClientWarnings = clientWarnings.filter { warning ->
+        warning.sni?.lowercase() !in passthroughHosts
+    }
+    if (unresolvedTlsFailures.isNotEmpty() || unresolvedClientWarnings.isNotEmpty()) {
+        val host = unresolvedTlsFailures.firstOrNull()?.url?.removePrefix("https://")?.substringBefore('/')
+            ?: unresolvedClientWarnings.firstOrNull()?.sni
             ?: "the app"
         diagnoses += NetworkDiagnosis(
             mode = NetworkFailureMode.ClientRejectedCa,
             severity = NetworkDiagnosisSeverity.Red,
             title = "$host rejected Andy's CA",
-            detail = "The app connected to Andy but rejected the proxy certificate during the TLS handshake. Likely certificate pinning, a custom TrustManager/SSLSocketFactory, or missing user-CA trust.",
-            fix = "Disable pinning in your debug build, trust user CAs via network_security_config, or install Andy's System CA.",
+            detail = "The app connected to Andy but rejected the proxy certificate during the TLS handshake. Likely certificate pinning, a custom TrustManager/SSLSocketFactory, or missing user-CA trust. Andy will passthrough this host on retry so the app keeps working (uncaptured).",
+            fix = "Disable pinning in your debug build, trust user CAs via network_security_config, or install Andy's System CA to capture traffic.",
         )
     }
 
@@ -240,6 +263,25 @@ fun diagnoseNetworkTraffic(
         )
     }
     return diagnoses.distinctBy { it.mode to it.title }
+}
+
+internal fun passthroughDiagnoses(
+    passthroughExchanges: List<NetworkExchange>,
+    passthroughWarnings: List<ProxyWarning>,
+): List<NetworkDiagnosis> {
+    if (passthroughExchanges.isEmpty() && passthroughWarnings.isEmpty()) return emptyList()
+    val host = passthroughExchanges.firstOrNull()?.url?.removePrefix("https://")?.substringBefore('/')
+        ?: passthroughWarnings.firstOrNull()?.sni
+        ?: "a host"
+    return listOf(
+        NetworkDiagnosis(
+            mode = NetworkFailureMode.TlsPassthrough,
+            severity = NetworkDiagnosisSeverity.Amber,
+            title = "Not decrypted — CA not trusted / pinned ($host)",
+            detail = "Andy raw-tunneled TLS for this host after the client rejected Andy's CA. The app keeps working; traffic is not captured.",
+            fix = "Install Andy's CA (and disable pinning in debug builds) to decrypt and inspect these requests.",
+        ),
+    )
 }
 
 /** Surfaced from mitm addon stdout events so Python-side failures stay visible even when capture works. */

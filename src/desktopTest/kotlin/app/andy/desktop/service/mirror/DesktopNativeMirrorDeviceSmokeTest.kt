@@ -3,6 +3,7 @@ package app.andy.desktop.service.mirror
 import app.andy.MirrorVideoSurface
 import app.andy.desktop.service.DesktopDeviceService
 import app.andy.desktop.service.createDesktopServices
+import app.andy.desktop.test.OptInGates
 import app.andy.model.DeviceConnectionState
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorBackendKind
@@ -26,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 
 internal fun batterySaverIsEnabled(settingsValue: String): Boolean = settingsValue.trim() == "1"
 private const val TARGET_DISPLAY_FPS = 60f
@@ -44,12 +46,15 @@ class DesktopNativeMirrorDeviceSmokeTest {
 
     @Test
     fun videoToolboxMetalPresentsFramesFromConnectedDevice() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_NATIVE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceNativeSmoke()
         val useGpuHub = GpuMirrorJni.isAvailable()
-        if (!useGpuHub && !NativeMirrorJni.isAvailable()) return@runBlocking
+        assumeTrue("Native/GPU mirror JNI unavailable on this host", useGpuHub || NativeMirrorJni.isAvailable())
         // The in-process JAWT route is the supported accelerated path once Metal presents into
         // the realized Compose host (verified by the screen-capture check below).
-        if (!useGpuHub && !NativeMirrorJni.isEmbeddedPresentationSupported()) return@runBlocking
+        assumeTrue(
+            "Embedded presentation unsupported without GPU hub",
+            useGpuHub || NativeMirrorJni.isEmbeddedPresentationSupported(),
+        )
 
         val services = createDesktopServices()
         val requestedSerial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }

@@ -147,9 +147,17 @@ class DesktopProxyServiceTest {
         val failingResult = failing.start(9099, emptyList())
 
         assertFalse(missingDetection.isSuccess)
-        assertTrue(missingDetection.stderr.contains("brew install mitmproxy"))
+        assertTrue(
+            missingDetection.stderr.contains("brew install mitmproxy") ||
+                missingDetection.stderr.contains("~/.andy/proxy/venv"),
+            missingDetection.stderr,
+        )
         assertFalse(missingResult.isSuccess)
-        assertTrue(missingResult.stderr.contains("brew install mitmproxy"))
+        assertTrue(
+            missingResult.stderr.contains("brew install mitmproxy") ||
+                missingResult.stderr.contains("~/.andy/proxy/venv"),
+            missingResult.stderr,
+        )
         assertFalse(failingResult.isSuccess)
         assertTrue(failingResult.stderr.contains("boom"))
     }
@@ -177,6 +185,49 @@ class DesktopProxyServiceTest {
         val command = env.proxyCommands.single()
         assertTrue(command.windowed(2).any { it == listOf("--mode", "upstream:http://proxy.example.test:8080") })
         assertTrue(result.stdout.contains("via Mac proxy http://proxy.example.test:8080"))
+    }
+
+    @Test
+    fun startUsesEagerDefaultsWithoutIgnoreHostsRemap() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val services = env.services()
+
+        assertTrue(services.proxy.start(8888, emptyList()).isSuccess)
+        val command = env.proxyCommands.single()
+        assertTrue(command.none { it.contains("connection_strategy") }, command.toString())
+        assertTrue(command.none { it.contains("ignore_hosts") }, command.toString())
+    }
+
+    @Test
+    fun configureDeviceProxyDisablesCaptivePortalAndClearRestoresIt() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-proxy-captive").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            env.globalSettings["captive_portal_mode"] = "1"
+            env.globalSettings["captive_portal_detection_enabled"] = "1"
+            val service = DesktopProxyService(
+                env.runner,
+                env.devices,
+                mitmdumpExecutable = { "/usr/bin/mitmdump" },
+                processStarter = { _, _, _ -> MockProxyProcess() },
+                hostOsName = { env.hostOsName },
+            )
+
+            assertTrue(service.configureDeviceProxy("emulator-5554", "10.0.2.2", 8888).isSuccess)
+            assertEquals("0", env.globalSettings["captive_portal_mode"])
+            assertEquals("0", env.globalSettings["captive_portal_detection_enabled"])
+            assertTrue(File(testHome, ".andy/proxy/device-state-emulator-5554.json").isFile)
+
+            assertTrue(service.clearDeviceProxy("emulator-5554").isSuccess)
+            assertEquals("1", env.globalSettings["captive_portal_mode"])
+            assertEquals("1", env.globalSettings["captive_portal_detection_enabled"])
+            assertFalse(File(testHome, ".andy/proxy/device-state-emulator-5554.json").exists())
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
     }
 
     @Test

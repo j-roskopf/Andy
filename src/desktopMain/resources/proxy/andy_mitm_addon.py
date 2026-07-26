@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import hashlib
 import json
 import os
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 import uuid
+import zlib
 from mitmproxy import http
 
 RULES_PATH = os.environ.get("ANDY_RULES_PATH")
@@ -16,8 +18,19 @@ RULES_PATH = os.environ.get("ANDY_RULES_PATH")
 # bodies (256KB+) fills the OS pipe and blocks mitmdump mid-response.
 PREVIEW_LIMIT = 8192
 EVENT_QUEUE_MAX = 2000
-IPV4_CACHE_TTL_SEC = 300
-ADDON_VERSION = 1
+ADDON_VERSION = 3
+
+# mitmproxy calls asyncio.open_connection without Happy Eyeballs (RFC 8305), so
+# dual-stack hosts with a dead AAAA hang ~15–20s before IPv4. Browsers, curl,
+# Charles/Proxyman (via OS stacks) race families instead. Patch open_connection
+# for this mitmdump process; delay is the standard ~250ms first-family lead.
+# Override with ANDY_HAPPY_EYEBALLS_DELAY (seconds); set 0 to disable.
+try:
+    _HE_DELAY = float(os.environ.get("ANDY_HAPPY_EYEBALLS_DELAY", "0.25"))
+except ValueError:
+    _HE_DELAY = 0.25
+_he_installed = False
+_real_open_connection = asyncio.open_connection
 
 _event_queue = queue.Queue(maxsize=EVENT_QUEUE_MAX)
 _dropped_count = 0
@@ -28,8 +41,25 @@ _writer_lock = threading.Lock()
 _rules_cache = []
 _rules_mtime_ns = None
 
-_ipv4_cache = {}
-_ipv4_cache_lock = threading.Lock()
+# Hosts that rejected Andy's CA (pinning / missing trust). Subsequent
+# ClientHellos for these SNIs are raw-tunneled so the app keeps working.
+_passthrough_hosts = set()
+_passthrough_lock = threading.Lock()
+
+
+async def _open_connection_happy_eyeballs(*args, happy_eyeballs_delay=_HE_DELAY, **kwargs):
+    # Default delay enables HE; callers that pass an explicit value keep it.
+    return await _real_open_connection(
+        *args, happy_eyeballs_delay=happy_eyeballs_delay, **kwargs
+    )
+
+
+def _install_happy_eyeballs():
+    global _he_installed
+    if _he_installed or _HE_DELAY <= 0:
+        return
+    asyncio.open_connection = _open_connection_happy_eyeballs
+    _he_installed = True
 
 
 def _addon_sha256():
@@ -167,6 +197,7 @@ def _emit_event(payload):
 
 
 def load(loader):
+    _install_happy_eyeballs()
     _ensure_writer()
     _emit_event(
         {
@@ -174,56 +205,28 @@ def load(loader):
             "sha256": _addon_sha256(),
             "version": ADDON_VERSION,
             "startedAtMillis": int(time.time() * 1000),
+            "happyEyeballsDelay": _HE_DELAY if _HE_DELAY > 0 else None,
         }
     )
 
 
-def _cached_ipv4(host):
-    now = time.time()
-    with _ipv4_cache_lock:
-        entry = _ipv4_cache.get(host)
-        if entry and entry[1] > now:
-            return entry[0]
-        if entry:
-            _ipv4_cache.pop(host, None)
-    return None
-
-
-def _store_ipv4(host, ipv4):
-    with _ipv4_cache_lock:
-        _ipv4_cache[host] = (ipv4, time.time() + IPV4_CACHE_TTL_SEC)
-
-
 async def server_connect(data):
-    # mitmproxy / Happy Eyeballs may dial AAAA first. Some hosts (e.g. NCEI)
-    # publish unreachable IPv6 and hang ~15s, stalling apps that await that
-    # source. Prefer IPv4 — including when address is already an IPv6 literal
-    # (recover the hostname from SNI and remap).
+    # If mitmproxy already resolved to a single IP, Happy Eyeballs cannot race
+    # families. Restore the hostname from SNI when available so open_connection
+    # gets a name and can try AAAA then A (same as browsers / OS stacks).
     try:
         server = getattr(data, "server", None)
         address = getattr(server, "address", None) if server is not None else None
         if not address or len(address) < 2:
             return
         host, port = address[0], address[1]
-        if not host or _is_ipv4_literal(host):
+        if not host:
             return
-        lookup_host = _lookup_hostname(server, host)
-        if not lookup_host:
+        if not _is_ipv4_literal(host) and not _is_ipv6_literal(host):
             return
-        cached = _cached_ipv4(lookup_host)
-        if cached:
-            server.address = (cached, port)
-            return
-        loop = asyncio.get_running_loop()
-        infos = await asyncio.wait_for(
-            loop.getaddrinfo(lookup_host, port, family=socket.AF_INET, type=socket.SOCK_STREAM),
-            timeout=2.0,
-        )
-        if not infos:
-            return
-        ipv4 = infos[0][4][0]
-        _store_ipv4(lookup_host, ipv4)
-        server.address = (ipv4, port)
+        hostname = _lookup_hostname(server, host)
+        if hostname:
+            server.address = (hostname, port)
     except Exception:
         return
 
@@ -258,19 +261,56 @@ def _preview(content):
         return repr(data)
 
 
+def _try_decompress_bounded(snippet, encoding):
+    """Best-effort decompress of a bounded snippet — never touches the full body."""
+    if not snippet or not encoding:
+        return None
+    enc = encoding.lower().strip()
+    try:
+        if enc in ("gzip", "x-gzip"):
+            return gzip.decompress(snippet)
+        if enc == "deflate":
+            try:
+                return zlib.decompress(snippet)
+            except zlib.error:
+                return zlib.decompress(snippet, -zlib.MAX_WBITS)
+        if enc in ("br", "brotli"):
+            try:
+                import brotli  # type: ignore
+
+                return brotli.decompress(snippet)
+            except Exception:
+                return None
+    except Exception:
+        return None
+    return None
+
+
 def _message_preview(message):
+    """Cheap body preview: never call the decompressed content property (stalls the event loop)."""
     if not message:
         return None
-    # Prefer decompressed content so gzip/br responses are readable in Andy.
-    # Skip decompressing huge bodies — that only stalls the response path.
     raw = getattr(message, "raw_content", None)
-    if raw is not None and len(raw) > 512 * 1024:
-        return f"[body {len(raw)} bytes; preview skipped]"
+    if raw is None:
+        return None
+    if len(raw) == 0:
+        return None
+    snippet = raw[:PREVIEW_LIMIT]
+    encoding = None
     try:
-        content = message.content
+        headers = getattr(message, "headers", None)
+        if headers is not None:
+            encoding = headers.get("content-encoding")
     except Exception:
-        content = raw
-    return _preview(content)
+        encoding = None
+    if encoding:
+        decompressed = _try_decompress_bounded(snippet, encoding)
+        if decompressed is not None:
+            return _preview(decompressed)
+    if len(raw) > PREVIEW_LIMIT:
+        preview = _preview(snippet)
+        return f"{preview}\n…[truncated; {len(raw)} raw bytes]" if preview else f"[body {len(raw)} bytes; preview truncated]"
+    return _preview(snippet)
 
 
 def _headers(headers):
@@ -426,6 +466,9 @@ def tls_failed_client(data):
         if not reason:
             reason = "client TLS handshake failed"
         host = sni or "unknown-host"
+        if sni:
+            with _passthrough_lock:
+                _passthrough_hosts.add(str(sni).lower())
         now = int(time.time() * 1000)
         flow_id = getattr(conn, "id", None) or str(uuid.uuid4())
         _emit_event(
@@ -463,6 +506,55 @@ def tls_failed_client(data):
         )
 
 
+def tls_clienthello(data):
+    """Raw-tunnel hosts that previously rejected Andy's CA so apps keep working."""
+    try:
+        client_hello = getattr(data, "client_hello", None)
+        sni = getattr(client_hello, "sni", None) if client_hello is not None else None
+        if not sni:
+            return
+        host = str(sni).lower()
+        with _passthrough_lock:
+            should_passthrough = host in _passthrough_hosts
+        if not should_passthrough:
+            return
+        data.ignore_connection = True
+        now = int(time.time() * 1000)
+        _emit_event(
+            {
+                "type": "tls_passthrough",
+                "id": f"tls-passthrough-{host}-{now}",
+                "startedAtMillis": now,
+                "completedAtMillis": now,
+                "durationMillis": 0,
+                "method": "PASS",
+                "url": f"https://{sni}/",
+                "statusCode": None,
+                "contentType": None,
+                "sizeBytes": None,
+                "requestHeaders": {},
+                "responseHeaders": {},
+                "requestBodyPreview": None,
+                "responseBodyPreview": "Not decrypted — CA not trusted / pinned",
+                "error": "Not decrypted — CA not trusted / pinned",
+                "tlsStatus": "passthrough",
+                "matchedRuleId": None,
+                "sni": sni,
+                "peer": None,
+                "reason": "passthrough after client CA rejection",
+            }
+        )
+    except Exception as e:
+        _emit_event(
+            {
+                "type": "addon_error",
+                "id": str(uuid.uuid4()),
+                "startedAtMillis": int(time.time() * 1000),
+                "error": f"tls_clienthello hook: {e}",
+            }
+        )
+
+
 def _emit(flow, matched_rule_id=None, error=None, is_request=False, include_bodies=True):
     response = flow.response if (hasattr(flow, "response") and flow.response) else None
     started = flow.metadata.get("andy_started_at")
@@ -483,11 +575,8 @@ def _emit(flow, matched_rule_id=None, error=None, is_request=False, include_bodi
         if raw is not None:
             size_bytes = len(raw)
         else:
-            try:
-                content = response.content
-                size_bytes = len(content) if content is not None else None
-            except Exception:
-                size_bytes = None
+            # Avoid full decompress on the hot path for size.
+            size_bytes = None
 
     busy = _event_queue.qsize() >= EVENT_QUEUE_MAX // 2
     include_bodies = include_bodies and not busy

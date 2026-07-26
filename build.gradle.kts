@@ -806,7 +806,9 @@ tasks.register<Copy>("installAndyCli") {
 
         println("Installed ${dest.absolutePath}")
         println("Installed ${hookDest.absolutePath}")
-        println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
+        println("Add ~/.andy/bin to PATH permanently if needed:")
+        println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
+        println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")
     }
 }
 
@@ -850,7 +852,9 @@ tasks.register("installAndyd") {
 
         println("Installed ${launcherDest.absolutePath}")
         println("Installed ${jarDest.absolutePath}")
-        println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
+        println("Add ~/.andy/bin to PATH permanently if needed:")
+        println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
+        println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")
     }
 }
 

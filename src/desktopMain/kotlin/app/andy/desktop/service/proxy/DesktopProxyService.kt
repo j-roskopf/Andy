@@ -30,7 +30,11 @@ import kotlin.coroutines.coroutineContext
 class DesktopProxyService(
     private val runner: CommandRunner,
     private val devices: DesktopDeviceService,
-    private val mitmdumpExecutable: () -> String? = { findMitmdumpExecutable() },
+    /**
+     * When non-null, used as an authoritative override (tests). Production leaves this
+     * null so [MitmRuntime] owns resolution (pinned venv → supported system mitmdump).
+     */
+    private val mitmdumpExecutable: (() -> String?)? = null,
     private val processStarter: (List<String>, File, Map<String, String>) -> ProxyProcess = { command, directory, environment ->
         RealProxyProcess(command, directory, environment)
     },
@@ -55,18 +59,35 @@ class DesktopProxyService(
     private val expectedAddonSha256: String by lazy { MitmAddon.getAddonSourceSha256() }
 
     override suspend fun detectMitmproxy(): CommandResult = withContext(Dispatchers.IO) {
-        val executable = mitmdumpExecutable()
-        if (executable == null) {
-            CommandResult.failure("mitmdump not found. Install mitmproxy with `brew install mitmproxy`.")
+        val resolved = resolveMitmdump(provision = true)
+        if (resolved.executable == null) {
+            CommandResult.failure(resolved.message)
         } else {
-            CommandResult.success(executable)
+            CommandResult.success(resolved.message)
         }
     }
 
     override suspend fun ensureCertificateAuthority(): CommandResult = withContext(Dispatchers.IO) {
         proxyDir.mkdirs()
         writeAddon()
+        resolveMitmdump(provision = true)
         CommandResult.success("mitmproxy CA will be generated at ${certificateAuthorityPath()}")
+    }
+
+    private fun resolveMitmdump(provision: Boolean): MitmRuntime.ResolveResult {
+        mitmdumpExecutable?.let { provider ->
+            val path = provider()
+            return if (path != null) {
+                MitmRuntime.ResolveResult(path, MitmRuntime.ResolveResult.Source.System, path)
+            } else {
+                MitmRuntime.ResolveResult(null, MitmRuntime.ResolveResult.Source.None, MitmRuntime.installInstructions())
+            }
+        }
+        return MitmRuntime.resolveMitmdump(
+            userHome = File(System.getProperty("user.home")),
+            provisionIfNeeded = provision,
+            onStatus = { message -> status.value = message },
+        )
     }
 
     override suspend fun certificateAuthorityPath(): String = withContext(Dispatchers.IO) {
@@ -74,7 +95,9 @@ class DesktopProxyService(
     }
 
     override suspend fun start(port: Int, rules: List<ProxyRule>, options: ProxyStartOptions): CommandResult = withContext(Dispatchers.IO) {
-        val executable = mitmdumpExecutable() ?: return@withContext CommandResult.failure("mitmdump not found. Install mitmproxy with `brew install mitmproxy`.")
+        val resolved = resolveMitmdump(provision = true)
+        val executable = resolved.executable
+            ?: return@withContext CommandResult.failure(resolved.message)
         stopCurrentProcess(updateStatus = false)
         killOrphanedProxies()
         proxyDir.mkdirs()
@@ -83,10 +106,13 @@ class DesktopProxyService(
         warnings.value = emptyList()
         clientConnectionCount.value = 0
         val hostProxy = detectHostProxyState()
-        val trustedCa = options.upstreamTrustedCaPath?.trim()?.takeIf { it.isNotBlank() }?.let(::File)
-        if (trustedCa != null && !trustedCa.isFile) {
-            return@withContext CommandResult.failure("Corporate root CA not found at ${trustedCa.absolutePath}")
+        val userTrustedCa = options.upstreamTrustedCaPath?.trim()?.takeIf { it.isNotBlank() }?.let(::File)
+        if (userTrustedCa != null && !userTrustedCa.isFile) {
+            return@withContext CommandResult.failure("Corporate root CA not found at ${userTrustedCa.absolutePath}")
         }
+        // Prefer explicit corporate CA; otherwise export the host OS trust store so
+        // corp roots already installed on the Mac are honored while staying strict.
+        val trustedCa = userTrustedCa ?: exportHostTrustedCas()
         val command = buildList {
             add(executable)
             hostProxy.upstreamProxy?.let { upstream ->
@@ -100,31 +126,40 @@ class DesktopProxyService(
                     "--set", "confdir=${proxyDir.absolutePath}",
                     "-s", addonFile.absolutePath,
                     "--set", "termlog_verbosity=warn",
-                    // Defer upstream dial until after ClientHello so server_connect
-                    // can remap unreachable IPv6 literals using SNI (NCEI, etc.).
-                    "--set", "connection_strategy=lazy",
-                    // Passthrough Android network-validation hosts so generate_204
-                    // succeeds with system CAs. MITM on these marks the network
-                    // PARTIAL_CONNECTIVITY and can make apps feel offline/slow.
-                    "--set",
-                    "ignore_hosts=^(.+\\.)?(google\\.com|gstatic\\.com|googleapis\\.com|googleusercontent\\.com):443$",
+                    // Eager (mitmproxy default): restore upstream cert/ALPN mirroring.
+                    // Captive-portal disable + TLS passthrough cover validation / pinning.
                 ),
             )
             if (options.sslInsecure) {
                 add("--ssl-insecure")
             }
-            if (trustedCa != null) {
+            // User-supplied corp CA is always passed; host OS trust is only used when
+            // staying strict (ssl-insecure already skips verification).
+            val caForVerify = when {
+                userTrustedCa != null -> userTrustedCa
+                !options.sslInsecure -> trustedCa
+                else -> null
+            }
+            if (caForVerify != null) {
                 add("--set")
-                add("ssl_verify_upstream_trusted_ca=${trustedCa.absolutePath}")
+                add("ssl_verify_upstream_trusted_ca=${caForVerify.absolutePath}")
+            }
+        }
+        val environment = buildMap {
+            put("ANDY_RULES_PATH", rulesFile.absolutePath)
+            // Addon enables Happy Eyeballs (0.25s) by default. Forward override when set.
+            if (System.getenv().containsKey("ANDY_HAPPY_EYEBALLS_DELAY")) {
+                put("ANDY_HAPPY_EYEBALLS_DELAY", System.getenv("ANDY_HAPPY_EYEBALLS_DELAY").orEmpty())
             }
         }
         runCatching {
-            process = processStarter(command, proxyDir, mapOf("ANDY_RULES_PATH" to rulesFile.absolutePath))
+            process = processStarter(command, proxyDir, environment)
             status.value = buildString {
                 append("mitmdump listening on 0.0.0.0:$port")
                 hostProxy.upstreamProxy?.let { append(" via Mac proxy $it") }
                 if (options.sslInsecure) append(" (insecure upstream)")
-                if (trustedCa != null) append(" (corp CA ${trustedCa.name})")
+                if (userTrustedCa != null) append(" (corp CA ${userTrustedCa.name})")
+                else if (!options.sslInsecure && trustedCa != null) append(" (host OS trust)")
             }
             pumpProcess(process!!)
             CommandResult.success(status.value)
@@ -133,6 +168,9 @@ class DesktopProxyService(
             CommandResult.failure(status.value)
         }
     }
+
+    private suspend fun exportHostTrustedCas(): File? =
+        HostTrustedCas.exportTo(proxyDir, hostOsName(), runner)
 
     override suspend fun updateRules(rules: List<ProxyRule>): CommandResult = withContext(Dispatchers.IO) {
         proxyDir.mkdirs()
@@ -176,6 +214,7 @@ class DesktopProxyService(
     override suspend fun configureDeviceProxy(serial: String, host: String, port: Int): CommandResult {
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
         activatePersistedCertificateAuthority(adb, serial)
+        snapshotAndDisableCaptivePortal(adb, serial)
         val commands = listOf(
             listOf("settings", "put", "global", "http_proxy", "$host:$port"),
             listOf("settings", "put", "global", "global_http_proxy_host", host),
@@ -204,12 +243,57 @@ class DesktopProxyService(
         )
         val proxyCleared = runAdbShellSequence(adb, serial, commands, "Device proxy cleared")
         if (!proxyCleared.isSuccess) return proxyCleared
+        restoreCaptivePortal(adb, serial)
         val restart = restartDeviceInternet(adb, serial)
         return CommandResult.success(
             listOf(proxyCleared.stdout, restart.stdout.ifBlank { restart.stderr })
                 .filter { it.isNotBlank() }
                 .joinToString(". "),
         )
+    }
+
+    private suspend fun snapshotAndDisableCaptivePortal(adb: String, serial: String) {
+        // Deterministically disable Android network validation while Andy's proxy is
+        // configured so generate_204 failures cannot mark the network no-internet.
+        val mode = readGlobalSetting(adb, serial, "captive_portal_mode")
+        val detection = readGlobalSetting(adb, serial, "captive_portal_detection_enabled")
+        DeviceProxyStateStore.save(
+            proxyDir,
+            DeviceCaptivePortalSnapshot(
+                serial = serial,
+                captivePortalMode = mode,
+                captivePortalDetectionEnabled = detection,
+            ),
+        )
+        runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_mode", "0"), 10)
+        runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_detection_enabled", "0"), 10)
+    }
+
+    private suspend fun restoreCaptivePortal(adb: String, serial: String) {
+        val snapshot = DeviceProxyStateStore.load(proxyDir, serial)
+        if (snapshot == null) {
+            // Best-effort restore to Android defaults when we have no snapshot.
+            runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_mode", "1"), 10)
+            runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_detection_enabled", "1"), 10)
+            return
+        }
+        restoreGlobalSetting(adb, serial, "captive_portal_mode", snapshot.captivePortalMode)
+        restoreGlobalSetting(adb, serial, "captive_portal_detection_enabled", snapshot.captivePortalDetectionEnabled)
+        DeviceProxyStateStore.clear(proxyDir, serial)
+    }
+
+    private suspend fun readGlobalSetting(adb: String, serial: String, key: String): String? {
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "settings", "get", "global", key), 10)
+        if (!result.isSuccess) return null
+        return result.stdout.trim().takeIf { it.isNotBlank() && it != "null" }
+    }
+
+    private suspend fun restoreGlobalSetting(adb: String, serial: String, key: String, value: String?) {
+        if (value == null) {
+            runner.run(listOf(adb, "-s", serial, "shell", "settings", "delete", "global", key), 10)
+        } else {
+            runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", key, value), 10)
+        }
     }
 
     override suspend fun diagnoseDeviceProxyRoute(serial: String, host: String, port: Int): NetworkRouteDiagnostics = withContext(Dispatchers.IO) {
@@ -701,17 +785,28 @@ class DesktopProxyService(
                         is MitmproxyEvent.Exchange -> {
                             val exchange = event.exchange
                             upsertExchange(exchange)
-                            if (isClientTlsRejectionError(exchange.error) || exchange.method == "TLS") {
-                                pushWarning(
-                                    ProxyWarningKind.ClientTlsFailure,
-                                    exchange.error ?: "Client TLS handshake failed",
-                                    sni = exchange.url.removePrefix("https://").substringBefore('/').takeIf { it.isNotBlank() },
-                                )
-                            } else if (isUpstreamTlsVerificationError(exchange.error)) {
-                                pushWarning(
-                                    ProxyWarningKind.UpstreamTlsFailure,
-                                    exchange.error ?: "Upstream TLS verification failed",
-                                )
+                            when {
+                                exchange.tlsStatus == "passthrough" || exchange.method == "PASS" -> {
+                                    pushWarning(
+                                        ProxyWarningKind.TlsPassthrough,
+                                        exchange.error
+                                            ?: "Not decrypted — CA not trusted / pinned for ${exchange.url}",
+                                        sni = exchange.url.removePrefix("https://").substringBefore('/').takeIf { it.isNotBlank() },
+                                    )
+                                }
+                                isClientTlsRejectionError(exchange.error) || exchange.method == "TLS" -> {
+                                    pushWarning(
+                                        ProxyWarningKind.ClientTlsFailure,
+                                        exchange.error ?: "Client TLS handshake failed",
+                                        sni = exchange.url.removePrefix("https://").substringBefore('/').takeIf { it.isNotBlank() },
+                                    )
+                                }
+                                isUpstreamTlsVerificationError(exchange.error) -> {
+                                    pushWarning(
+                                        ProxyWarningKind.UpstreamTlsFailure,
+                                        exchange.error ?: "Upstream TLS verification failed",
+                                    )
+                                }
                             }
                         }
                         is MitmproxyEvent.ClientConnected -> {

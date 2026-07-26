@@ -90,12 +90,76 @@ internal suspend fun defaultCertificateSpkiFingerprint(runner: CommandRunner, ce
 internal fun shellQuote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
 
 internal fun resolveLanIp(): String {
-    return NetworkInterface.getNetworkInterfaces().toList().asSequence()
-        .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-        .flatMap { it.inetAddresses.toList().asSequence() }
-        .filterIsInstance<Inet4Address>()
-        .firstOrNull { !it.isLoopbackAddress && !it.hostAddress.startsWith("169.254.") }
-        ?.hostAddress
-        ?: "127.0.0.1"
+    // Prefer real LAN NICs over VPN/Tailscale (often utun*/100.64/10 CGNAT). Phones on
+    // Wi‑Fi cannot reach the Mac's Tailscale address, which looks like "Wi‑Fi fine, no apps".
+    data class Candidate(val interfaceName: String, val address: Inet4Address)
+
+    val candidates = NetworkInterface.getNetworkInterfaces().toList().asSequence()
+        .filter { iface ->
+            iface.isUp &&
+                !iface.isLoopback &&
+                !iface.isVirtual &&
+                !isVpnLikeInterfaceName(iface.name)
+        }
+        .flatMap { iface ->
+            iface.inetAddresses.toList().asSequence()
+                .filterIsInstance<Inet4Address>()
+                .filter { address -> isReachableLanIpv4(address) }
+                .map { address -> Candidate(iface.name, address) }
+        }
+        .toList()
+
+    val preferred = candidates
+        .sortedWith(
+            compareByDescending<Candidate> { isRfc1918(it.address) }
+                .thenByDescending { isPreferredLanInterfaceName(it.interfaceName) }
+                .thenBy { it.interfaceName },
+        )
+        .firstOrNull()
+    return preferred?.address?.hostAddress ?: "127.0.0.1"
+}
+
+internal fun isVpnLikeInterfaceName(name: String): Boolean {
+    val lower = name.lowercase()
+    return lower.startsWith("utun") ||
+        lower.startsWith("tun") ||
+        lower.startsWith("tap") ||
+        lower.startsWith("ppp") ||
+        lower.startsWith("ipsec") ||
+        lower.startsWith("wg") ||
+        lower.startsWith("tailscale") ||
+        lower.contains("tailscale")
+}
+
+internal fun isPreferredLanInterfaceName(name: String): Boolean {
+    val lower = name.lowercase()
+    return lower.startsWith("en") || lower.startsWith("eth") || lower.startsWith("wlan") || lower.startsWith("wl")
+}
+
+internal fun isReachableLanIpv4(address: Inet4Address): Boolean {
+    if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isAnyLocalAddress) return false
+    val host = address.hostAddress ?: return false
+    if (host.startsWith("169.254.")) return false
+    // Carrier-grade NAT / Tailscale / many VPN overlays — not reachable from phone Wi‑Fi.
+    if (isCarrierGradeNat(host)) return false
+    return true
+}
+
+internal fun isCarrierGradeNat(host: String): Boolean {
+    val parts = host.split('.')
+    if (parts.size != 4) return false
+    val a = parts[0].toIntOrNull() ?: return false
+    val b = parts[1].toIntOrNull() ?: return false
+    // 100.64.0.0/10
+    return a == 100 && b in 64..127
+}
+
+internal fun isRfc1918(address: Inet4Address): Boolean {
+    val host = address.hostAddress ?: return false
+    val parts = host.split('.')
+    if (parts.size != 4) return false
+    val a = parts[0].toIntOrNull() ?: return false
+    val b = parts[1].toIntOrNull() ?: return false
+    return a == 10 || (a == 172 && b in 16..31) || (a == 192 && b == 168)
 }
 

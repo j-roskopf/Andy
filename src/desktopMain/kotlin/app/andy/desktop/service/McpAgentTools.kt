@@ -1,6 +1,7 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.AgentWorkflowArtifacts
+import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.appendAgentStatus
 import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
@@ -90,6 +91,14 @@ fun Server.registerAgentProjectTools(
                         put("unread", task.unread)
                         put("archived", task.archived)
                         put("createdAtMillis", task.createdAtMillis)
+                        put("startedAtMillis", task.startedAtMillis ?: 0L)
+                        put("finishedAtMillis", task.finishedAtMillis ?: 0L)
+                        put("resumable", task.resumable)
+                        put("interrupted", task.interrupted)
+                        put("stoppedByUser", task.stoppedByUser)
+                        put("statusConfident", task.statusConfident)
+                        put("exitCode", task.exitCode ?: Int.MIN_VALUE)
+                        put("vendorSessionId", task.vendorSessionId.orEmpty())
                         put("tmuxSession", TmuxAndy.sessionName(task.id))
                         put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(task.id))
                     },
@@ -266,6 +275,98 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         agentRuns.stop(id)
         textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.mark_read",
+        description = "Clear the unread badge for a chat (e.g. when opened)",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        agentRuns.markRead(id)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.set_viewing",
+        description = "Track which chat the user is viewing so unread badges and status attention are suppressed",
+        properties = mapOf(
+            "taskId" to buildJsonObject {
+                put("type", "string")
+                put("description", "Omit to clear all viewing state")
+            },
+            "viewing" to buildJsonObject { put("type", "boolean") },
+        ),
+        required = listOf("viewing"),
+    ) { args ->
+        val viewing = args["viewing"]?.jsonPrimitive?.booleanOrNull ?: error("viewing required")
+        val id = str(args, "taskId")
+        agentRuns.setChatViewing(id, viewing)
+        textResult("""{"ok":true,"viewing":$viewing,"id":"${id.orEmpty()}"}""")
+    }
+
+    register(
+        name = "chat.mark_unread",
+        description = "Mark a chat unread so list/dock badges show again",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        agentRuns.markUnread(id)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.archive",
+        description = "Hide a finished chat from the default list without deleting it",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        agentRuns.archive(id)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.unarchive",
+        description = "Restore an archived chat to the default list",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        agentRuns.unarchive(id)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.reconcile",
+        description = "Repair a chat left in a contradictory Working/finished state after a crash or stale scrape",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        (agentRuns as? DesktopAgentRunService)?.reconcileStaleActiveTaskIfNeeded(id)
+        val task = agentRuns.tasks.value.firstOrNull { it.id == id }
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("id", id)
+                put("status", task?.status?.name.orEmpty())
+                put("unread", task?.unread ?: false)
+                put("finishedAtMillis", task?.finishedAtMillis ?: 0L)
+            }.toString(),
+        )
     }
 
     register(
@@ -574,6 +675,12 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.composer_options",
     "chat.start",
     "chat.stop",
+    "chat.mark_read",
+    "chat.set_viewing",
+    "chat.mark_unread",
+    "chat.archive",
+    "chat.unarchive",
+    "chat.reconcile",
     "chat.delete",
     "chat.resume",
     "chat.respond",

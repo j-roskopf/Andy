@@ -8,8 +8,8 @@ import app.andy.desktop.service.mirror.GpuMirrorSessions
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.mirror.awaitGpuMirrorHost
-import app.andy.desktop.service.mirror.isMacArm64
 import app.andy.desktop.service.mirror.mirrorHostContainsNonBlackPixels
+import app.andy.desktop.test.OptInGates
 import app.andy.model.DeviceConnectionState
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
@@ -52,20 +52,37 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assume.assumeTrue
 
 /**
  * Device-backed iOS simulator Live regressions.
  *
- * Auto-runs when a simulator is already Booted (set `ANDY_IOS_SIM_SMOKE=0` to skip).
- * Optionally pin with `ANDY_IOS_SIM_UDID` / `ANDY_IOS_SIM_SMOKE=1`.
+ * Opt-in: set `ANDY_IOS_SIM_SMOKE=1` (and optionally `ANDY_IOS_SIM_UDID`).
+ * PR CI boots a simulator on macOS and sets those env vars. A casually Booted
+ * local simulator must not make plain `./gradlew desktopTest` appear hung.
  */
 class IosSimMirrorDeviceSmokeTest {
+    private fun requireBootedSimulatorUdid(): String {
+        val udid = resolveIosSimSmokeUdid()
+        OptInGates.requireIosSimSmokeUdid(udid)
+        assumeTrue("NativeIosSimJni unavailable", NativeIosSimJni.isAvailable())
+        return checkNotNull(udid)
+    }
+
+    private fun requireBootedSimulatorWithGpu(): String {
+        val udid = requireBootedSimulatorUdid()
+        assumeTrue("GpuMirrorJni unavailable", GpuMirrorJni.isAvailable())
+        return udid
+    }
+
     @Test
     fun simulatorPresentsFramesAndAcceptsInput() = runBlocking {
-        val udid = resolveIosSimSmokeUdid() ?: return@runBlocking
-        if (!NativeIosSimJni.isAvailable()) return@runBlocking
+        val udid = requireBootedSimulatorUdid()
         val useGpuHub = GpuMirrorJni.isAvailable()
-        if (!useGpuHub && !NativeMirrorJni.isEmbeddedPresentationSupported()) return@runBlocking
+        assumeTrue(
+            "Neither GPU hub nor embedded native presentation is available",
+            useGpuHub || NativeMirrorJni.isEmbeddedPresentationSupported(),
+        )
 
         // Faithfully mirror the GUI: mirror routing keys off IosTargetRegistry, so an unregistered
         // UDID falls through to the Android engine and never runs the SimulatorKit path.
@@ -180,8 +197,7 @@ class IosSimMirrorDeviceSmokeTest {
      */
     @Test
     fun guiSwipeOnCanvasReachesSimulator() = runBlocking {
-        val udid = resolveIosSimSmokeUdid() ?: return@runBlocking
-        if (!NativeIosSimJni.isAvailable() || !GpuMirrorJni.isAvailable()) return@runBlocking
+        val udid = requireBootedSimulatorWithGpu()
         IosTargetRegistry.update(
             listOf(IosTarget(udid, "sim click", IosTargetKind.Simulator, IosTargetState.Booted)),
         )
@@ -266,8 +282,7 @@ class IosSimMirrorDeviceSmokeTest {
      */
     @Test
     fun liveScreenFirstClickReachesAlreadyRunningSimulatorHid() = runBlocking {
-        val udid = resolveIosSimSmokeUdid() ?: return@runBlocking
-        if (!NativeIosSimJni.isAvailable() || !GpuMirrorJni.isAvailable()) return@runBlocking
+        val udid = requireBootedSimulatorWithGpu()
         val target = IosTarget(udid, "sim Live startup", IosTargetKind.Simulator, IosTargetState.Booted)
         IosTargetRegistry.update(listOf(target))
         val tapFixture = launchSimulatorTapFixture(udid)
@@ -371,12 +386,15 @@ class IosSimMirrorDeviceSmokeTest {
 
     @Test
     fun liveScreenStaysNonBlackAcrossIosAndroidIosSwitch() = runBlocking {
-        val udid = resolveIosSimSmokeUdid() ?: return@runBlocking
-        if (!NativeIosSimJni.isAvailable() || !GpuMirrorJni.isAvailable()) return@runBlocking
+        val udid = requireBootedSimulatorWithGpu()
         val services = createDesktopServices()
-        val android = services.devices.listDevices()
+        val androidDevice = services.devices.listDevices()
             .firstOrNull { it.state == DeviceConnectionState.Online }
-            ?: return@runBlocking
+        assumeTrue(
+            "iOS↔Android switch smoke needs an online Android device in addition to the simulator",
+            androidDevice != null,
+        )
+        val android = checkNotNull(androidDevice)
         val ios = IosTarget(udid, "sim switch return", IosTargetKind.Simulator, IosTargetState.Booted)
         IosTargetRegistry.update(listOf(ios))
         val selectedSerial = androidx.compose.runtime.mutableStateOf(ios.udid)
@@ -557,9 +575,8 @@ private fun simulatorScreenshotChanged(beforeFile: File, afterFile: File): Boole
 
 internal fun iosSimSmokeEnabled(): Boolean =
     when (System.getenv("ANDY_IOS_SIM_SMOKE")?.lowercase()) {
-        "0", "false", "no" -> false
         "1", "true", "yes" -> true
-        else -> isMacArm64() && firstBootedSimulatorUdid() != null
+        else -> false
     }
 
 internal fun resolveIosSimSmokeUdid(): String? {

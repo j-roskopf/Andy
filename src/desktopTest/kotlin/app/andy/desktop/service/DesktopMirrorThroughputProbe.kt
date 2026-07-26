@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.test.OptInGates
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorVideoConfig
@@ -22,12 +23,12 @@ import kotlin.test.Test
  * legitimately yields near-zero fps; this probe forces sustained motion (fling
  * scrolling in Settings) and reports the peak rolling fps the pipeline delivers.
  *
- * Gated behind ANDY_DEVICE_SMOKE=1 so it never runs in CI.
+ * Gated behind ANDY_DEVICE_SMOKE=1 (needs a connected Android device; not on PR CI).
  */
 class DesktopMirrorThroughputProbe {
     @Test
     fun measuresThroughputUnderMotion() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
         val services = createDesktopServices()
         val serial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
             ?: services.devices.listDevices().first { it.state.name == "Online" }.serial
@@ -88,7 +89,7 @@ class DesktopMirrorThroughputProbe {
 
     @Test
     fun grpcTouchInputChangesTheScreen() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
         val services = createDesktopServices()
         val serial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
             ?: services.devices.listDevices().first { it.state.name == "Online" }.serial
@@ -115,7 +116,7 @@ class DesktopMirrorThroughputProbe {
 
     @Test
     fun keyboardTypesIntoFocusedField() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
         val services = createDesktopServices()
         val serial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
             ?: services.devices.listDevices().first { it.state.name == "Online" }.serial

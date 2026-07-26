@@ -46,15 +46,32 @@ class AndydProcessTest {
 
     @Test
     fun isExternalDaemonLiveRequiresPidAndSocket() {
-        assertFalse(AndydProcess.isExternalDaemonLive())
+        // Isolate from a developer machine that may already be running andyd /
+        // runDistributable against ~/.andy/andyd.{pid,sock}.
+        val home = Files.createTempDirectory("andy-andyd-absent").toFile()
+        try {
+            val sock = File(home, "andyd.sock")
+            val pid = File(home, "andyd.pid")
+            assertFalse(AndydProcess.isExternalDaemonLive(socketPath = sock, pidPath = pid))
+
+            pid.writeText("${ProcessHandle.current().pid()}\n")
+            assertFalse(
+                AndydProcess.isExternalDaemonLive(socketPath = sock, pidPath = pid),
+                "live pid without a live socket is not an external daemon",
+            )
+        } finally {
+            home.deleteRecursively()
+        }
     }
 
     @Test
     fun devJavaLaunchCommandUsesCurrentClasspath() {
-        val command = AndydProcess.resolveLaunchCommand()
         if (System.getProperty("java.class.path").isNullOrBlank()) {
             return
         }
+        // Exercise the classpath launcher directly: resolveLaunchCommand() may
+        // prefer ~/.andy/bin/andyd or a packaged binary when present locally.
+        val command = AndydProcess.devJavaLaunchCommand()
         assertNotNull(command)
         assertTrue(command.contains("app.andy.desktop.AndydMainKt"))
         assertTrue(

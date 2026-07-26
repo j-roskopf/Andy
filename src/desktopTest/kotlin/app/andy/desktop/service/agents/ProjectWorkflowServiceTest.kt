@@ -46,7 +46,9 @@ class ProjectWorkflowServiceTest {
     fun manualCompleteBuildAttemptAdvancesWorkflow() = runBlocking {
         withHarness(
             WorkflowAdapter(
-                buildKeepAliveSeconds = 120,
+                // Long enough for the test to observe the active build and call
+                // completeWorkflowRun; keep short so desktopTest doesn't look hung.
+                buildKeepAliveSeconds = 20,
                 reviewOutcomes = ArrayDeque(listOf("approved")),
             ),
         ) { harness ->
@@ -796,7 +798,7 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun stopCurrentTerminatesTheRunAndRequiresAttention() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 5_000)) { harness ->
+        withHarness(WorkflowAdapter(stageDelayMillis = 1_500)) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Running }
@@ -814,7 +816,7 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun stoppingAndDeletingASpecRefineRestoresCompletedAndDropsTheAttempt() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 5_000)) { harness ->
+        withHarness(WorkflowAdapter(stageDelayMillis = 1_500)) { harness ->
             val service = harness.service
             val specId = service.saveSpec(
                 ProjectSpecDraft(
@@ -894,7 +896,8 @@ class ProjectWorkflowServiceTest {
         val store = DesktopAgentTaskStore(File(root, "agents.db"))
         store.save(
             AgentStoreState(
-                binaryOverrides = mapOf(AgentKind.Codex.cliName to workflowShellBinary()),
+                // Cover every AgentKind so init-time locateAll never probes real CLIs.
+                binaryOverrides = workflowBinaryOverrides(),
                 projectWorkflows = mapOf(
                     "project-1" to app.andy.model.ProjectWorkflowState(
                         projectId = "project-1",
@@ -1044,7 +1047,7 @@ class ProjectWorkflowServiceTest {
         store.save(
             AgentStoreState(
                 tasks = listOf(run),
-                binaryOverrides = mapOf(AgentKind.Codex.cliName to workflowShellBinary()),
+                binaryOverrides = workflowBinaryOverrides(),
                 projectWorkflows = mapOf("project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(build, verification))),
             ),
         )
@@ -1163,7 +1166,10 @@ private suspend fun withHarness(
         ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
     )
     val store = DesktopAgentTaskStore(File(root, "agents.db"))
-    store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to workflowShellBinary())))
+    // Override every AgentKind to the shell stub so AgentCliLocator.locateAll()
+    // never runs a login-shell PATH scan or `--version` probes against real CLIs
+    // (each harness constructs a DesktopAgentRunService that refreshCliStatuses on init).
+    store.save(AgentStoreState(binaryOverrides = workflowBinaryOverrides()))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var service: DesktopAgentRunService? = null
     try {
@@ -1347,6 +1353,10 @@ private fun workflowShellBinary(): String = if (isWindows()) {
 } else {
     "/bin/sh"
 }
+
+/** Shell stub for every AgentKind so locateAll short-circuits without real CLI probes. */
+private fun workflowBinaryOverrides(): Map<String, String> =
+    AgentKind.entries.associate { it.cliName to workflowShellBinary() }
 
 private class MutableActionConfig(var value: ActionsConfig) : ActionConfigStore {
     override suspend fun load(): ActionsConfig = value

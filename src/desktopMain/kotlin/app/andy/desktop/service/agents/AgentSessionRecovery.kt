@@ -8,6 +8,9 @@ import java.io.File
 /**
  * Distinguishes a finished turn (hook/session "done") from "idle at prompt mid-session"
  * and "mid-turn when the app quit", using hook artifacts, scrollback, and live session status.
+ *
+ * Repairs lifecycle/status fields only — never [AgentTask.unread]. Attention badges are
+ * applied separately via [statusNeedsUnread] when a reconcile actually changes status.
  */
 internal fun recoverInterruptedTaskStatus(
     task: AgentTask,
@@ -18,6 +21,14 @@ internal fun recoverInterruptedTaskStatus(
 
     if (task.status == AgentStatus.Blocked) {
         return task
+    }
+    // Turn already finalized but badge left on Working (stale scrape / remount noise).
+    if (task.finishedAtMillis != null && task.status == AgentStatus.Working) {
+        return task.copy(
+            status = AgentStatus.Done,
+            resumable = task.resumable || task.exitCode == 0,
+            statusConfident = true,
+        )
     }
     if (task.resumable) {
         return if (inferCompletedTurn(task.agent, artifactDir, scrollback)) {
@@ -115,7 +126,6 @@ private fun AgentTask.asCompletedTurn(): AgentTask = copy(
     status = AgentStatus.Done,
     exitCode = exitCode ?: 0,
     finishedAtMillis = finishedAtMillis ?: System.currentTimeMillis(),
-    unread = true,
 )
 
 internal fun readLatestHookStatus(artifactDir: File): AgentStatus? {
