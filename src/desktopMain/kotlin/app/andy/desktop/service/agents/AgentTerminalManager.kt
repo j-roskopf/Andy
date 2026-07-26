@@ -814,7 +814,7 @@ class AgentTerminalManager(
                 }
             is KetraTermBackend ->
                 session.captureStyledRows(captureRows).ifEmpty {
-                    styledRowsFromAnsiText(session.scrollbackAnsi())
+                    styledRowsFromAnsiText(resolveScrollbackForReplay(session.scrollbackAnsi()))
                 }
             else -> captureTmuxRows(handle.taskId, captureRows)
         }

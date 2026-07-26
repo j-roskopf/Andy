@@ -6,6 +6,8 @@
 
 [![Featured in Android Weekly Issue #736](https://img.shields.io/badge/Featured%20in-Android%20Weekly%20Issue%20%23736-blue?logo=android&logoColor=white)](https://androidweekly.net/issues/issue-736)
 [![As Seen In - jetc.dev Newsletter Issue #323](https://img.shields.io/badge/As_Seen_In-jetc.dev_Newsletter_Issue_%23323-blue?logo=Jetpack+Compose&logoColor=white)](https://jetc.dev/issues/323.html)
+[![Featured in Kotlin Weekly Issue #521](https://img.shields.io/badge/Featured%20in-Kotlin%20Weekly%20Issue%20%23521-blue?logo=kotlin&logoColor=white)](https://mailchi.mp/kotlinweekly/kotlin-weekly-521)
+
 
 Andy is a desktop helper for Android, Kotlin, and Compose Multiplatform
 developers. Use it to manage devices and emulators, mirror screens, inspect
@@ -18,6 +20,8 @@ of Andy is also available on the web at
 boot and shut them down, open Simulator.app, and stream a live mirror with
 touch input. Android remains the primary platform; iOS coverage is intentionally
 limited today.
+
+In my own words as the author: I find myself in Android Studio less these days, but still want some of the tooling offered in Android Studio in a lower performance overhead option. 
 
 ## Download
 

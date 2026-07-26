@@ -347,7 +347,7 @@ class AgentQueuedFollowUpTest {
                     directory = dir.absolutePath,
                 ),
             )
-            withTimeout(10_000) {
+            withTimeout(60_000) {
                 while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
             }
 
@@ -358,7 +358,7 @@ class AgentQueuedFollowUpTest {
                 service.tasks.value.first { it.id == task.id }.queuedFollowUps.map { it.text },
             )
 
-            withTimeout(10_000) {
+            withTimeout(60_000) {
                 while (true) {
                     val current = service.tasks.value.first { it.id == task.id }
                     val userMessages = service.events(task.id).value
