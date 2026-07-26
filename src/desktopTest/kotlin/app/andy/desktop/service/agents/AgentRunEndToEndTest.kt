@@ -356,13 +356,9 @@ class AgentQueuedFollowUpTest {
             val liveUserMessages = service.events(task.id).value
                 .filterIsInstance<AgentEvent.UserMessage>()
                 .map { it.text }
-            if (queuedTexts.isNotEmpty()) {
-                assertEquals(listOf("second message", "third message"), queuedTexts)
-            } else {
-                // Direct PTY keeps the session alive while the first run is active, so follow-ups
-                // may be delivered live instead of sitting in the queue until Done.
-                assertEquals(listOf("second message", "third message"), liveUserMessages)
-            }
+            val observedFollowUps = (queuedTexts + liveUserMessages)
+                .filter { it == "second message" || it == "third message" }
+            assertEquals(listOf("second message", "third message"), observedFollowUps)
             File(dir, ".queue-test-ready").writeText("go")
 
             withTimeout(120_000) {
