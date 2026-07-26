@@ -7,18 +7,32 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.dp
 import app.andy.horizontalResizeCursor
+import app.andy.ui.theme.AndyStroke
+import app.andy.ui.theme.Border
 import app.andy.ui.theme.PaneDividerTint
 import app.andy.verticalResizeCursor
+
+@Composable
+internal fun AndyHorizontalDivider(
+    modifier: Modifier = Modifier,
+    color: Color = Border,
+) {
+    HorizontalDivider(
+        modifier = modifier,
+        thickness = AndyStroke.Hairline,
+        color = color,
+    )
+}
 
 @Composable
 internal fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
@@ -26,10 +40,10 @@ internal fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
     val density = LocalDensity.current.density
     Box(
-        Modifier.width(14.dp)
+        Modifier
+            .width(AndyStroke.PaneHandleHitWidth)
             .fillMaxHeight()
             .horizontalResizeCursor()
-            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragEnd = { latestOnDragEnd() },
@@ -37,7 +51,13 @@ internal fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
                 ) { _, drag -> latestOnDrag(drag.x / density) }
             },
     ) {
-        Box(Modifier.align(Alignment.Center).width(3.dp).fillMaxHeight().background(PaneDividerTint))
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .width(AndyStroke.Hairline)
+                .fillMaxHeight()
+                .background(PaneDividerTint),
+        )
     }
 }
 
@@ -47,10 +67,10 @@ internal fun HorizontalPaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Uni
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
     val density = LocalDensity.current.density
     Box(
-        Modifier.fillMaxWidth()
-            .height(18.dp)
+        Modifier
+            .fillMaxWidth()
+            .height(AndyStroke.PaneHandleHitHeight)
             .verticalResizeCursor()
-            .background(PaneDividerTint.copy(alpha = 0.18f), RoundedCornerShape(4.dp))
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragEnd = { latestOnDragEnd() },
@@ -58,6 +78,12 @@ internal fun HorizontalPaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Uni
                 ) { _, drag -> latestOnDrag(drag.y / density) }
             },
     ) {
-        Box(Modifier.align(Alignment.Center).fillMaxWidth().height(4.dp).background(PaneDividerTint, RoundedCornerShape(2.dp)))
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .height(AndyStroke.Hairline)
+                .background(PaneDividerTint),
+        )
     }
 }

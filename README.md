@@ -6,6 +6,8 @@
 
 [![Featured in Android Weekly Issue #736](https://img.shields.io/badge/Featured%20in-Android%20Weekly%20Issue%20%23736-blue?logo=android&logoColor=white)](https://androidweekly.net/issues/issue-736)
 [![As Seen In - jetc.dev Newsletter Issue #323](https://img.shields.io/badge/As_Seen_In-jetc.dev_Newsletter_Issue_%23323-blue?logo=Jetpack+Compose&logoColor=white)](https://jetc.dev/issues/323.html)
+[![Featured in Kotlin Weekly Issue #521](https://img.shields.io/badge/Featured%20in-Kotlin%20Weekly%20Issue%20%23521-blue?logo=kotlin&logoColor=white)](https://mailchi.mp/kotlinweekly/kotlin-weekly-521)
+
 
 Andy is a desktop helper for Android, Kotlin, and Compose Multiplatform
 developers. Use it to manage devices and emulators, mirror screens, inspect
@@ -18,6 +20,8 @@ of Andy is also available on the web at
 boot and shut them down, open Simulator.app, and stream a live mirror with
 touch input. Android remains the primary platform; iOS coverage is intentionally
 limited today.
+
+In my own words as the author: I find myself in Android Studio less these days, but still want some of the tooling offered in Android Studio in a lower performance overhead option. 
 
 ## Download
 
@@ -194,16 +198,64 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |
 
-### Runtime Requirements
+## CLI
+
+Andy ships a Rust CLI (`andy`) for driving agent chats from the terminal on
+**macOS and Linux only**. The CLI is not supported on Windows — use the
+[desktop app](#download) there instead.
+
+The CLI talks to the same control plane as the desktop app: a background daemon
+(`andyd`) that owns agent/project state, spawns provider CLIs into Andy-managed
+tmux sessions, and serves MCP over `~/.andy/andyd.sock`.
+
+**`andy` auto-starts `andyd` when needed.** Agent sessions use Andy's bundled
+tmux at `~/.andy/bin/tmux` (installed by `install-andy.sh`, like bundled
+`scrcpy-server` for mirroring). You do not need to install tmux separately.
+
+### Installation
+
+```sh
+curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
+export PATH="$HOME/.andy/bin:$PATH"
+```
+
+Requires **Java 21+** for the `andyd` runtime. The installer places:
+
+| Path | Role |
+| --- | --- |
+| `~/.andy/bin/andy` | CLI |
+| `~/.andy/bin/andyd` | Daemon launcher |
+| `~/.andy/andyd/andyd.jar` | Daemon runtime |
+| `~/.andy/bin/tmux` | Andy-managed tmux for agent sessions |
+
+From source: `./gradlew installAndyCli installAndyd`
+
+### Quick start
+
+```sh
+andy chat list
+andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
+andy tui
+andy attach <taskId>
+```
+
+Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`.
+
+See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
+keybindings, remote access, and launchd packaging.
+
+## Runtime Requirements
 
 - Android SDK platform tools for device and emulator access.
 - Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
 - mitmproxy for Network capture and rewrite rules: `brew install mitmproxy`.
-- scrcpy does not need to be installed separately for embedded Android mirroring; Andy bundles `scrcpy-server`.
+- Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
+  managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
+  or the desktop app). Override with `ANDY_TMUX` if needed.
 - Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
 
-### Icon Attribution
+## Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>
 
-### Inspiration
+## Inspiration
 A lot of visual and functional inspiration was borrowed, with love, from [Emu](https://emu.marathonlabs.io/)

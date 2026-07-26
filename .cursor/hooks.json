@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "hooks": {
+        "beforeSubmitPrompt": [
+            {
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
+            }
+        ],
+        "stop": [
+            {
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty"
+            }
+        ]
+    }
+}

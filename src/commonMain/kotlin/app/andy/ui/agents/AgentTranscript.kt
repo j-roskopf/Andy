@@ -10,12 +10,6 @@ package app.andy.ui.agents
  */
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -97,6 +91,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -476,16 +471,16 @@ private fun AgentEvent.isToolTranscriptEvent(): Boolean =
 
 @Composable
 private fun AgentThinkingIndicator() {
-    val pulse = rememberInfiniteTransition(label = "agent_thinking_pulse")
-    val alpha by pulse.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "agent_thinking_alpha",
-    )
+    // Coarse timer instead of rememberInfiniteTransition: infinite Compose clocks
+    // invalidate Skiko at display refresh and bypass TerminalRepaintThrottle.
+    var bright by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(450)
+            bright = !bright
+        }
+    }
+    val alpha = if (bright) 1f else 0.35f
     Row(
         Modifier
             .fillMaxWidth()

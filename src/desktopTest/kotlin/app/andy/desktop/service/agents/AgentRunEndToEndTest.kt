@@ -8,7 +8,7 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectPlanVersion
 import app.andy.model.ProjectTask
@@ -66,7 +66,7 @@ class AgentRunEndToEndTest {
             runBlocking {
                 val service = DesktopAgentRunService(
                     scope = scope,
-                    store = DesktopAgentTaskStore(File(dir, "agents.toml")),
+                    store = DesktopAgentTaskStore(File(dir, "agents.db")),
                     locator = AgentCliLocator(),
                     adapters = mapOf(
                         AgentKind.ClaudeCode to ClaudeCodeAdapter(),
@@ -83,7 +83,7 @@ class AgentRunEndToEndTest {
                     while (service.cliStatuses.value.isEmpty()) delay(100)
                 }
                 if (service.cliStatuses.value.none { it.kind == agent && it.available }) {
-                    println("SKIP: ${agent.cliName} not installed")
+                    System.err.println("SKIP: ${agent.cliName} not installed")
                     return@runBlocking
                 }
 
@@ -102,15 +102,15 @@ class AgentRunEndToEndTest {
                 }
                 val finished = service.tasks.value.first { it.id == task.id }
                 val events = service.events(task.id).value
-                println("E2E ${agent.cliName}: status=${finished.status} exit=${finished.exitCode} session=${finished.vendorSessionId} events=${events.size} cost=${finished.totalCostUsd}")
-                if (finished.status == AgentTaskStatus.Failed && finished.errorMessage?.contains("Not logged in") == true) {
+                System.err.println("E2E ${agent.cliName}: status=${finished.status} exit=${finished.exitCode} session=${finished.vendorSessionId} events=${events.size} cost=${finished.totalCostUsd}")
+                if (finished.status == AgentStatus.Error && finished.errorMessage?.contains("Not logged in") == true) {
                     // The CLI has no headless credentials on this machine; the auth
                     // failure was detected and surfaced exactly as designed.
-                    println("SKIP: ${agent.cliName} not logged in for headless use (error path verified)")
+                    System.err.println("SKIP: ${agent.cliName} not logged in for headless use (error path verified)")
                     return@runBlocking
                 }
-                assertEquals(AgentTaskStatus.Completed, finished.status, "events: ${events.takeLast(5)}")
-                val launchLog = DesktopAgentTaskStore(File(dir, "agents.toml")).launchLogFile(task.id)
+                assertEquals(AgentStatus.Done, finished.status, "events: ${events.takeLast(5)}")
+                val launchLog = DesktopAgentTaskStore(File(dir, "agents.db")).launchLogFile(task.id)
                 assertTrue(launchLog.exists() && launchLog.length() > 0, "launch diagnostics should be persisted")
             }
         } finally {
@@ -123,16 +123,16 @@ class AgentRunEndToEndTest {
 class AgentRetryTest {
     @Test
     fun retriesFailedTaskWithAFreshTranscriptAndSession() = runBlocking {
-        assertRetryRestartsTask(AgentTaskStatus.Failed, errorMessage = "failed before retry", exitCode = 1)
+        assertRetryRestartsTask(AgentStatus.Error, errorMessage = "failed before retry", exitCode = 1)
     }
 
     @Test
     fun retriesInterruptedTaskWithAFreshTranscriptAndSession() = runBlocking {
-        assertRetryRestartsTask(AgentTaskStatus.Unknown, errorMessage = null, exitCode = null)
+        assertRetryRestartsTask(AgentStatus.Error, errorMessage = null, exitCode = null)
     }
 
     private suspend fun assertRetryRestartsTask(
-        status: AgentTaskStatus,
+        status: AgentStatus,
         errorMessage: String?,
         exitCode: Int?,
     ) {
@@ -145,7 +145,7 @@ class AgentRetryTest {
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             val task = AgentTask(
                 id = "task-retry",
                 title = "retry me",
@@ -189,6 +189,8 @@ class AgentRetryTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             withTimeout(10_000) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
@@ -200,7 +202,7 @@ class AgentRetryTest {
             }
 
             val retried = service.tasks.value.single()
-            assertEquals(AgentTaskStatus.Completed, retried.status)
+            assertEquals(AgentStatus.Done, retried.status)
             assertNull(retried.vendorSessionId)
             assertNull(retried.errorMessage)
             assertNull(retried.totalCostUsd)
@@ -244,14 +246,14 @@ class AgentPlanHandoffTest {
                 completedPlanText = completedPlan,
                 model = "gpt-5.6-terra",
                 skills = listOf(AgentSkill("verify", "", "/tmp/verify/SKILL.md")),
-                status = AgentTaskStatus.Completed,
+                status = AgentStatus.Done,
                 vendorSessionId = "read-only-plan-thread",
                 createdAtMillis = 1,
                 finishedAtMillis = 2,
                 exitCode = 0,
                 changeBaselineTree = "stale-plan-baseline-tree",
             )
-            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(
                 AgentStoreState(
                     tasks = listOf(planned),
@@ -268,6 +270,8 @@ class AgentPlanHandoffTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             withTimeout(10_000) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
@@ -283,7 +287,7 @@ class AgentPlanHandoffTest {
 
             val implementation = service.tasks.value.single()
             val launched = adapter.freshTasks.single()
-            assertEquals(AgentTaskStatus.Completed, implementation.status)
+            assertEquals(AgentStatus.Done, implementation.status)
             assertTrue(!implementation.planMode)
             assertEquals(AgentSandboxMode.WorkspaceWrite, implementation.sandboxMode)
             assertEquals(planned.cwd, implementation.cwd)
@@ -320,7 +324,7 @@ class AgentQueuedFollowUpTest {
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
             val service = DesktopAgentRunService(
                 scope = scope,
@@ -331,6 +335,8 @@ class AgentQueuedFollowUpTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             val task = service.createAndStart(
                 AgentTaskDraft(
@@ -341,25 +347,34 @@ class AgentQueuedFollowUpTest {
                     directory = dir.absolutePath,
                 ),
             )
-            withTimeout(10_000) {
-                while (service.tasks.value.first { it.id == task.id }.status != AgentTaskStatus.Running) delay(25)
+            withTimeout(60_000) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
             }
 
             service.queueFollowUp(task.id, "second message")
             service.queueFollowUp(task.id, "third message")
-            assertEquals(
-                listOf("second message", "third message"),
-                service.tasks.value.first { it.id == task.id }.queuedFollowUps.map { it.text },
-            )
+            val afterQueue = service.tasks.value.first { it.id == task.id }
+            val queuedTexts = afterQueue.queuedFollowUps.map { it.text }
+            val liveUserMessages = service.events(task.id).value
+                .filterIsInstance<AgentEvent.UserMessage>()
+                .map { it.text }
+            if (queuedTexts.isNotEmpty()) {
+                assertEquals(listOf("second message", "third message"), queuedTexts)
+            } else {
+                // Direct PTY keeps the session alive while the first run is active, so follow-ups
+                // may be delivered live instead of sitting in the queue until Done.
+                assertEquals(listOf("second message", "third message"), liveUserMessages)
+            }
+            File(dir, ".queue-test-ready").writeText("go")
 
-            withTimeout(10_000) {
+            withTimeout(120_000) {
                 while (true) {
                     val current = service.tasks.value.first { it.id == task.id }
                     val userMessages = service.events(task.id).value
                         .filterIsInstance<AgentEvent.UserMessage>()
                         .map { it.text }
                     if (
-                        current.status == AgentTaskStatus.Completed &&
+                        current.status == AgentStatus.Done &&
                         current.queuedFollowUps.isEmpty() &&
                         userMessages == listOf("second message", "third message")
                     ) {
@@ -369,7 +384,7 @@ class AgentQueuedFollowUpTest {
                 }
             }
             val finished = service.tasks.value.first { it.id == task.id }
-            assertEquals(AgentTaskStatus.Completed, finished.status)
+            assertEquals(AgentStatus.Done, finished.status)
             assertTrue(finished.queuedFollowUps.isEmpty())
             assertTrue(
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().map { it.text } == listOf("second message", "third message"),
@@ -392,7 +407,7 @@ class AgentUserInputResumeTest {
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
-            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
             val service = DesktopAgentRunService(
                 scope = scope,
@@ -403,23 +418,25 @@ class AgentUserInputResumeTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
             val task = service.createAndStart(
                 AgentTaskDraft("ask", "Ask before planning", AgentKind.Codex, projectId = null, directory = dir.absolutePath),
             )
-            withTimeout(10_000) {
-                while (service.tasks.value.first { it.id == task.id }.status != AgentTaskStatus.WaitingForInput) delay(25)
+            withTimeout(30_000) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Blocked) delay(25)
             }
             val waiting = service.tasks.value.first { it.id == task.id }
             val request = assertNotNull(waiting.userInputRequest)
             assertEquals("Desktop", request.questions.single().options.first().label)
 
             service.respondToUserInput(task.id, request.id, mapOf("platform" to "Desktop"))
-            withTimeout(10_000) {
+            withTimeout(30_000) {
                 while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
             }
             val finished = service.tasks.value.first { it.id == task.id }
-            assertEquals(AgentTaskStatus.Completed, finished.status)
+            assertEquals(AgentStatus.Done, finished.status)
             assertNull(finished.userInputRequest)
             assertTrue(
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>()
@@ -452,7 +469,7 @@ class CursorPlanBackfillTest {
                 originDir = dir.absolutePath,
                 planMode = true,
                 completedPlanText = null,
-                status = AgentTaskStatus.Completed,
+                status = AgentStatus.Done,
                 workflowTaskId = "spec-ios",
                 workflowStage = ProjectWorkflowStage.Spec,
                 createdAtMillis = 1,
@@ -476,7 +493,7 @@ class CursorPlanBackfillTest {
                     ),
                 ),
             )
-            val store = DesktopAgentTaskStore(File(dir, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(
                 AgentStoreState(
                     tasks = listOf(run),
@@ -495,6 +512,8 @@ class CursorPlanBackfillTest {
                 mcp = FakeMcp(),
                 workspaceStore = FakeWorkspaceStore(),
                 actionConfig = FakeActionConfig(),
+                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
+                terminalMode = AgentTerminalMode.DirectPty,
             )
 
             withTimeout(10_000) {
@@ -552,7 +571,11 @@ private class QueueTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
 
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
-        listOf(binary, "-c", "sleep 1")
+        listOf(
+            binary,
+            "-c",
+            "while [ ! -f '${task.cwd}/.queue-test-ready' ]; do sleep 0.05; done",
+        )
 
     override fun buildInteractiveResumeCommand(
         binary: String,

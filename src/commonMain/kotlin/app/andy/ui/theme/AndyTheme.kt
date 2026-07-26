@@ -252,6 +252,15 @@ internal object AndyRadius {
     val Pill = 999.dp
 }
 
+internal object AndyStroke {
+    /** Hairline separators between rows, sections, and rail edges. */
+    val Hairline = 0.5.dp
+    /** Invisible drag target width for vertical pane resize handles. */
+    val PaneHandleHitWidth = 8.dp
+    /** Invisible drag target height for horizontal pane resize handles. */
+    val PaneHandleHitHeight = 10.dp
+}
+
 internal val MonoFont = FontFamily.Monospace
 /**
  * Human-facing workspace labels use the platform sans face; paths, commands, and
@@ -262,7 +271,7 @@ internal val Ink get() = AndyColors.Neutral900
 internal val Panel get() = AndyColors.Neutral800
 internal val PanelSoft get() = AndyColors.Neutral700
 internal val Border get() = AndyColors.tonalPaletteBorder
-internal val PaneDividerTint get() = AndyColors.OrangeBorder.copy(alpha = 0.72f)
+internal val PaneDividerTint get() = AndyColors.OrangeBorder.copy(alpha = 0.42f)
 internal val TextPrimary get() = AndyColors.Neutral200
 internal val TextSecondary get() = AndyColors.Neutral400
 internal val Rust get() = AndyColors.Orange

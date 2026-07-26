@@ -121,6 +121,138 @@ jobs:
           if-no-files-found: error
           path: release-artifacts/*
 
+  andy-cli:
+    name: Andy CLI (${{ matrix.target }})
+    needs:
+      - version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary: andy
+          - os: macos-latest
+            target: macos-arm64
+            binary: andy
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release CLI
+        shell: bash
+        run: cargo build --release --manifest-path cli/andy/Cargo.toml
+
+      - name: Collect CLI artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          src="cli/andy/target/release/${BINARY}"
+          if [[ ! -f "${src}" ]]; then
+            echo "::error::Missing CLI binary at ${src}"
+            exit 1
+          fi
+          dest="release-artifacts/andy-${VERSION}-${TARGET}"
+          cp "${src}" "${dest}"
+          chmod +x "${dest}" || true
+          ls -la "${dest}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+
+      - name: Stage bundled tmux
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install tmux
+            TMUX_SRC="$(brew --prefix tmux)/bin/tmux"
+          else
+            sudo apt-get update
+            sudo apt-get install -y tmux
+            TMUX_SRC="$(command -v tmux)"
+          fi
+          dest="release-artifacts/tmux-${VERSION}-${TARGET}"
+          cp "${TMUX_SRC}" "${dest}"
+          chmod +x "${dest}"
+          ls -la "${dest}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: andy-cli-${{ matrix.target }}
+          if-no-files-found: error
+          path: release-artifacts/*
+
+  andyd-runtime:
+    name: andyd runtime (${{ matrix.target }})
+    needs:
+      - version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build andyd fat JAR
+        run: ./gradlew andydFatJar -Pandy.versionName=${{ needs.version.outputs.version }}
+
+      - name: Collect andyd artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          jar="$(find build/libs -name 'andyd-*.jar' -print -quit)"
+          if [[ -z "${jar}" ]]; then
+            echo "::error::Could not find andyd fat JAR"
+            exit 1
+          fi
+          dest="release-artifacts/andyd-${VERSION}-${TARGET}.jar"
+          cp "${jar}" "${dest}"
+          ls -la "${dest}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload andyd artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: andyd-runtime-${{ matrix.target }}
+          if-no-files-found: error
+          path: release-artifacts/*
 
   linux:
     name: Linux release
@@ -503,7 +635,9 @@ jobs:
       - windows
       - macos
       - tracebox
-    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success'
+      - andy-cli
+      - andyd-runtime
+    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success' && needs.andy-cli.result == 'success' && needs.andyd-runtime.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -513,6 +647,22 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
+
+      - name: Checkout install scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+          path: andy-src
+
+      - name: Stage CLI install assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          cp andy-src/scripts/install-andy.sh release-artifacts/install-andy.sh
+          cp andy-src/scripts/andy-status-hook.sh release-artifacts/andy-status-hook.sh
+          chmod +x release-artifacts/install-andy.sh release-artifacts/andy-status-hook.sh
+          ls -la release-artifacts/install-andy.sh release-artifacts/andy-status-hook.sh
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -525,10 +675,18 @@ jobs:
             release-artifacts/**/*.flatpak
             release-artifacts/**/*.msi
             release-artifacts/**/*.dmg
+            release-artifacts/**/andy-*-linux-x86_64
+            release-artifacts/**/andy-*-macos-arm64
+            release-artifacts/**/andyd-*-linux-x86_64.jar
+            release-artifacts/**/andyd-*-macos-arm64.jar
+            release-artifacts/**/tmux-*-linux-x86_64
+            release-artifacts/**/tmux-*-macos-arm64
             release-artifacts/**/andy-tracebox
             release-artifacts/**/andy-tracebox-bin-*
             release-artifacts/**/andy-tracebox-SHA256SUMS
             release-artifacts/**/andy-tracebox-LICENSE.txt
+            release-artifacts/install-andy.sh
+            release-artifacts/andy-status-hook.sh
 
   web:
     name: Web release

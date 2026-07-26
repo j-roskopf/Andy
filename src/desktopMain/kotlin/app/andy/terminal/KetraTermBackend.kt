@@ -41,6 +41,8 @@ class KetraTermBackend(
     private val cols: Int = 120,
     private val rows: Int = 32,
     appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
+    /** Agent CLIs on the alternate screen — tighter insets and PTY sanitization. */
+    private val agentCliMode: Boolean = false,
 ) : TerminalSession {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
@@ -52,16 +54,39 @@ class KetraTermBackend(
     private var scrapeJob: Job? = null
     private val appearanceRef = AtomicReference(appearance)
     private val settingsRef = AtomicReference(
-        appearance.toSwingSettings(columns = cols, rows = rows, scrollbackLines = DEFAULT_MAX_HISTORY),
+        swingSettingsFor(appearance, cols, rows, agentCliMode),
     )
     private val scrollbackTee = ScrollbackAnsiTee()
     private val historyStore by lazy { AndyCommandHistoryStore.shared() }
+
+    /**
+     * Whether this session is the one the user is looking at. Backgrounded chats still need
+     * their screen observed (status detection reads [bufferSnapshots]) but not four times a
+     * second. Wired by [TmuxAttachBackend] for the GUI viewer; direct sessions stay foreground.
+     */
+    @Volatile
+    var foregroundProvider: () -> Boolean = { true }
+
+    /**
+     * Bumped by anything that can change the screen without host bytes arriving — today only
+     * a resize, which reflows the grid. Read alongside [ScrollbackAnsiTee.outputGeneration]
+     * so the scrape loop can tell "nothing happened" from "something did".
+     */
+    private val localGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
+    private fun screenGeneration(): Long = scrollbackTee.outputGeneration() + localGeneration.get()
 
     private val _exitCode = MutableStateFlow<Int?>(null)
     override val exitCode: StateFlow<Int?> = _exitCode.asStateFlow()
 
     private val _bufferSnapshots = MutableSharedFlow<String>(extraBufferCapacity = 8, replay = 1)
     override val bufferSnapshots: SharedFlow<String> = _bufferSnapshots.asSharedFlow()
+
+    private val _windowTitle = MutableStateFlow("")
+    override val windowTitle: StateFlow<String> = _windowTitle.asStateFlow()
+
+    private val _oscProgress = MutableStateFlow("")
+    override val oscProgress: StateFlow<String> = _oscProgress.asStateFlow()
 
     override val isAlive: Boolean
         get() = process?.isAlive == true
@@ -85,13 +110,15 @@ class KetraTermBackend(
         return captureNewReadableLines(session.terminal, seenKeys)
     }
 
+    /** Newest [maxRows] rows of history + screen, styling intact, for durable replay. */
+    fun captureStyledRows(maxRows: Int = SCROLLBACK_CAPTURE_ROWS): List<StyledTerminalRow> {
+        val session = ketraSession ?: return emptyList()
+        return runCatching { session.readStyledScrollbackRows(maxRows) }.getOrDefault(emptyList())
+    }
+
     fun updateAppearance(appearance: TerminalAppearanceSnapshot) {
         appearanceRef.set(appearance)
-        val settings = appearance.toSwingSettings(
-            columns = cols,
-            rows = rows,
-            scrollbackLines = DEFAULT_MAX_HISTORY,
-        )
+        val settings = swingSettingsFor(appearance, cols, rows, agentCliMode)
         settingsRef.set(settings)
         val terminal = swingTerminal ?: return
         val session = ketraSession
@@ -120,7 +147,7 @@ class KetraTermBackend(
         }
 
         val pty = PtyProcessBuilder()
-            .setDirectory(cwd)
+            .setDirectory(resolveTerminalWorkingDirectory(cwd))
             .setCommand(argv.toTypedArray())
             .setEnvironment(environment)
             .setInitialColumns(cols)
@@ -132,7 +159,11 @@ class KetraTermBackend(
 
         val connector = PtyConnector(pty)
         ptyConnector = connector
-        val tee = TeeTerminalConnector(connector, scrollbackTee)
+        val transport = if (agentCliMode) {
+            AgentCliTeeTerminalConnector(connector, scrollbackTee)
+        } else {
+            TeeTerminalConnector(connector, scrollbackTee)
+        }
         val buffer = TerminalBuffers.create(
             width = cols,
             height = rows,
@@ -142,10 +173,11 @@ class KetraTermBackend(
             sessionId = sessionId,
             historyStore = historyStore,
             sessionProvider = { ketraSession },
+            onWindowTitle = { title -> _windowTitle.value = title },
         )
         val session = KetraSession.create(
             terminal = buffer,
-            connector = tee,
+            connector = transport,
             hostEvents = hostSink,
             hostPolicy = HostPolicy(notificationPolicy = HostControlPolicy.ALLOW),
             inputPolicy = PtyOptions.defaultInputPolicy(),
@@ -156,6 +188,7 @@ class KetraTermBackend(
         swingTerminal = onSwingEdt {
             SwingTerminal(
                 settingsProvider = { settingsRef.get() },
+                hostServices = andySwingHostServices(),
             ).also { terminal ->
                 terminal.bind(session)
             }
@@ -168,16 +201,26 @@ class KetraTermBackend(
         }
         scrapeJob = scope.launch {
             var last = ""
+            // Screen generation the last emitted snapshot was built from. Re-reading the
+            // buffer when it has not moved meant walking every cell of the grid and building
+            // a String only to compare it equal — per session, four times a second, forever.
+            var lastGeneration = -1L
             while (isActive && pty.isAlive) {
-                val snap = bufferSnapshot()
-                if (snap != last) {
-                    last = snap
-                    _bufferSnapshots.emit(snap)
+                val generation = screenGeneration()
+                if (generation != lastGeneration) {
+                    lastGeneration = generation
+                    val snap = bufferSnapshot()
+                    if (snap != last) {
+                        last = snap
+                        _bufferSnapshots.emit(snap)
+                    }
+                    refreshOscFromTee()
                 }
-                delay(250)
+                delay(if (foregroundProvider()) FOREGROUND_SCRAPE_MS else BACKGROUND_SCRAPE_MS)
             }
             val finalSnap = bufferSnapshot()
             if (finalSnap != last) _bufferSnapshots.emit(finalSnap)
+            refreshOscFromTee()
         }
     }
 
@@ -194,6 +237,9 @@ class KetraTermBackend(
 
     override fun resize(cols: Int, rows: Int) {
         val session = ketraSession ?: return
+        // Reflow changes the screen without the host sending anything, so the scrape loop
+        // would otherwise sit on a stale snapshot until the next output arrived.
+        localGeneration.incrementAndGet()
         onSwingEdt {
             runCatching { session.resize(cols, rows) }
         }
@@ -202,6 +248,15 @@ class KetraTermBackend(
     override fun bufferSnapshot(): String {
         val session = ketraSession ?: return ""
         return runCatching { session.terminal.getScreenAsString().trimEnd() }.getOrDefault("")
+    }
+
+    private fun refreshOscFromTee() {
+        // The tee parses OSC as bytes arrive, so this is a field read rather than a
+        // copy-and-rescan of the whole scrollback buffer on every poll.
+        // HostEventSink titles win for live updates; tee backfills and supplies progress.
+        val teedTitle = scrollbackTee.latestOscTitle()
+        if (teedTitle.isNotEmpty()) _windowTitle.value = teedTitle
+        _oscProgress.value = scrollbackTee.latestOscProgress()
     }
 
     override fun close() {
@@ -231,8 +286,45 @@ class KetraTermBackend(
     }
 
     companion object {
+        /** Screen-observation cadence for the chat on screen. */
+        private const val FOREGROUND_SCRAPE_MS = 250L
+
+        /**
+         * Cadence for chats the user is not looking at. Their snapshots still drive status
+         * detection, which reacts on the order of seconds, so paying 4Hz for them bought
+         * nothing.
+         */
+        private const val BACKGROUND_SCRAPE_MS = 1_000L
+
         /** Scrollback lines retained by the emulator (~5MB ANSI soft-cap philosophy). */
         const val DEFAULT_MAX_HISTORY: Int = 10_000
+
+        /**
+         * Rows read per periodic scrollback capture. Far more than a screen can scroll
+         * between flushes, so successive windows always overlap enough to stitch.
+         */
+        const val SCROLLBACK_CAPTURE_ROWS: Int = 500
+        const val SCROLLBACK_BACKGROUND_CAPTURE_ROWS: Int = 80
+
+        private fun swingSettingsFor(
+            appearance: TerminalAppearanceSnapshot,
+            cols: Int,
+            rows: Int,
+            agentCliMode: Boolean,
+        ): io.github.ketraterm.ui.swing.settings.SwingSettings =
+            if (agentCliMode) {
+                appearance.toAgentCliSwingSettings(
+                    columns = cols,
+                    rows = rows,
+                    scrollbackLines = DEFAULT_MAX_HISTORY,
+                )
+            } else {
+                appearance.toSwingSettings(
+                    columns = cols,
+                    rows = rows,
+                    scrollbackLines = DEFAULT_MAX_HISTORY,
+                )
+            }
     }
 }
 
@@ -240,17 +332,22 @@ private class AndyHostEventSink(
     private val sessionId: String,
     private val historyStore: AndyCommandHistoryStore,
     private val sessionProvider: () -> KetraSession?,
+    private val onWindowTitle: (String) -> Unit,
 ) : HostEventSink {
     override fun bell() = Unit
 
-    override fun iconTitleChanged(title: String) = Unit
+    override fun iconTitleChanged(title: String) {
+        onWindowTitle(title)
+    }
 
-    override fun windowTitleChanged(title: String) = Unit
+    override fun windowTitleChanged(title: String) {
+        onWindowTitle(title)
+    }
 
     override fun resizeWindow(rows: Int, columns: Int) = Unit
 
     override fun showNotification(title: String, body: String, level: NotificationLevel) {
-        AndyDesktopNotificationManager.showNotification(title, body, level)
+        AndyDesktopNotificationManager.showNotification(title, body, level, sessionId = sessionId)
     }
 
     override fun shellIntegrationMarker(event: ShellIntegrationEvent) {

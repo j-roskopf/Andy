@@ -15,7 +15,9 @@ class CodexAdapter : AgentCliAdapter {
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> = buildList {
         add(binary)
         addCodexImageFlags(task.imagePaths)
-        task.cwd?.let { add("-C"); add(it) }
+        // Resolve here too so a stale task.cwd never reaches Codex even if a caller
+        // builds argv before DesktopAgentRunService rewrites the task.
+        task.cwd?.let { add("-C"); add(AgentScratchWorkspace.resolveCwd(it)) }
         task.modelForCli()?.let { add("--model"); add(it) }
         task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
         when (if (task.planMode) AgentSandboxMode.ReadOnly else task.sandboxMode ?: task.autonomy.defaultSandboxMode()) {

@@ -1,0 +1,99 @@
+CREATE TABLE store_meta (
+  key TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE agent_task (
+  id TEXT NOT NULL PRIMARY KEY,
+  status TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  created_at_millis INTEGER NOT NULL,
+  updated_at_millis INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+
+CREATE TABLE project_workflow (
+  project_id TEXT NOT NULL PRIMARY KEY,
+  updated_at_millis INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+
+CREATE TABLE binary_override (
+  name TEXT NOT NULL PRIMARY KEY,
+  path TEXT NOT NULL
+);
+
+CREATE TABLE provider_defaults (
+  agent TEXT NOT NULL PRIMARY KEY,
+  payload TEXT NOT NULL
+);
+
+CREATE TABLE quota_access (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  claude_account_access INTEGER NOT NULL DEFAULT 0,
+  cursor_account_access INTEGER NOT NULL DEFAULT 0,
+  antigravity_account_access INTEGER NOT NULL DEFAULT 0
+);
+
+getMeta:
+SELECT value FROM store_meta WHERE key = ?;
+
+setMeta:
+INSERT OR REPLACE INTO store_meta(key, value) VALUES (?, ?);
+
+selectAllTasks:
+SELECT id, status, agent, created_at_millis, updated_at_millis, payload FROM agent_task ORDER BY created_at_millis DESC;
+
+selectTask:
+SELECT id, status, agent, created_at_millis, updated_at_millis, payload FROM agent_task WHERE id = ?;
+
+upsertTask:
+INSERT OR REPLACE INTO agent_task(id, status, agent, created_at_millis, updated_at_millis, payload)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteTask:
+DELETE FROM agent_task WHERE id = ?;
+
+deleteAllTasks:
+DELETE FROM agent_task;
+
+selectAllWorkflows:
+SELECT project_id, updated_at_millis, payload FROM project_workflow;
+
+upsertWorkflow:
+INSERT OR REPLACE INTO project_workflow(project_id, updated_at_millis, payload)
+VALUES (?, ?, ?);
+
+deleteWorkflow:
+DELETE FROM project_workflow WHERE project_id = ?;
+
+deleteAllWorkflows:
+DELETE FROM project_workflow;
+
+selectBinaryOverrides:
+SELECT name, path FROM binary_override;
+
+upsertBinaryOverride:
+INSERT OR REPLACE INTO binary_override(name, path) VALUES (?, ?);
+
+deleteAllBinaryOverrides:
+DELETE FROM binary_override;
+
+selectProviderDefaults:
+SELECT agent, payload FROM provider_defaults;
+
+upsertProviderDefaults:
+INSERT OR REPLACE INTO provider_defaults(agent, payload) VALUES (?, ?);
+
+deleteAllProviderDefaults:
+DELETE FROM provider_defaults;
+
+selectQuotaAccess:
+SELECT claude_account_access, cursor_account_access, antigravity_account_access FROM quota_access WHERE id = 1;
+
+upsertQuotaAccess:
+INSERT OR REPLACE INTO quota_access(id, claude_account_access, cursor_account_access, antigravity_account_access)
+VALUES (1, ?, ?, ?);
+
+countTasks:
+SELECT COUNT(*) FROM agent_task;

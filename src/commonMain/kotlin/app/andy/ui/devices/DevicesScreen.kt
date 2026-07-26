@@ -46,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PendingConfirmation
 import app.andy.model.AndroidDevice
@@ -131,7 +133,13 @@ internal fun DevicesScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    val onlineEmulatorCount = devices.count {
+        it.kind == DeviceKind.Emulator && it.state == DeviceConnectionState.Online
+    }
+    // Re-list AVDs when emulator presence changes. `listVirtualDevices()` sets `running`
+    // from adb; without this refresh a stopped emulator can stay `running=true` in local
+    // state and disappear from the Created emulators list until a manual Refresh.
+    LaunchedEffect(onlineEmulatorCount) {
         refreshAvds()
     }
     val filteredDevices = devices.filter { device ->
@@ -623,7 +631,7 @@ private fun AndroidDevicesTab(
                         },
                         onClone = { state.cloneSource = avd },
                         onDelete = {
-                            state.pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This removes the AVD from Android SDK device manager.") {
+                            state.pendingConfirmation = PendingConfirmation("Delete ${avd.name}?", "This permanently removes the AVD and its files from disk.") {
                                 scope.launch {
                                     val result = state.avd.deleteVirtualDevice(avd.name)
                                     state.avdStatus = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${avd.name}" } else result.stderr.ifBlank { result.stdout }
@@ -956,12 +964,20 @@ private fun CreateVirtualDeviceDialog(
         status = "${profiles.size} profiles · ${images.size} images"
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = Panel,
-        title = { Text("Create virtual device", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(Modifier.width(760.dp).heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            Modifier
+                .width(820.dp)
+                .background(Panel, RoundedCornerShape(AndyRadius.R3))
+                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("Create virtual device", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Column(Modifier.heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterPill("Profile", step == 1, Rust) { step = 1 }
                     FilterPill("Image", step == 2, Rust) { step = 2 }
@@ -969,7 +985,7 @@ private fun CreateVirtualDeviceDialog(
                 }
                 Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 when (step) {
-                    1 -> LazyColumn(Modifier.height(390.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    1 -> LazyColumn(Modifier.height(420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         profiles.groupBy { it.category }.entries.sortedBy { it.key.ordinal }.forEach { (category, rows) ->
                             item { Text(category.name, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
                             items(rows) { profile ->
@@ -977,23 +993,21 @@ private fun CreateVirtualDeviceDialog(
                                     selectedProfile = profile
                                     name = profile.name.replace(Regex("""\W+"""), "_")
                                 }) {
-                                    MonoCell(profile.name, 220.dp, if (profile == selectedProfile) Rust else TextPrimary)
-                                    MonoCell(profile.resolution ?: "-", 150.dp, TextSecondary)
-                                    MonoCell(profile.density ?: "-", 90.dp, TextSecondary)
+                                    MonoCell(profile.name, 180.dp, if (profile == selectedProfile) Rust else TextPrimary)
+                                    MonoCell(profile.resolution ?: "-", 120.dp, TextSecondary)
+                                    MonoCell(profile.density ?: "-", 72.dp, TextSecondary)
                                     MonoCell(profile.id, 1.dp, TextSecondary, Modifier.weight(1f))
                                 }
                             }
                         }
                     }
-                    2 -> LazyColumn(Modifier.height(390.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    2 -> LazyColumn(Modifier.height(420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(images.take(240)) { image ->
-                            TableRow(Modifier.clickable { selectedImage = image }) {
-                                MonoCell("API ${image.api}", 82.dp, if (image == selectedImage) Rust else TextPrimary)
-                                MonoCell(image.variant, 220.dp, TextPrimary)
-                                MonoCell(image.abi, 140.dp, TextSecondary)
-                                MonoCell(if (image.installed) "Installed" else "Available", 110.dp, if (image.installed) Green else TextSecondary)
-                                MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
-                            }
+                            SystemImagePickerRow(
+                                image = image,
+                                selected = image == selectedImage,
+                                onClick = { selectedImage = image },
+                            )
                         }
                     }
                     else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -1027,53 +1041,116 @@ private fun CreateVirtualDeviceDialog(
                     }
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val profile = selectedProfile ?: return@Button
-                    val image = selectedImage ?: return@Button
-                    scope.launch {
-                        status = if (image.installed) "Creating $name..." else "Installing ${image.packageId}..."
-                        if (!image.installed) {
-                            val install = avd.installSystemImage(image.packageId)
-                            if (!install.isSuccess) {
-                                status = install.stderr.ifBlank { install.stdout }
-                                return@launch
-                            }
-                        }
-                        val result = avd.createVirtualDevice(
-                            AvdCreationConfig(
-                                name = name,
-                                profileId = profile.id,
-                                systemImagePackage = image.packageId,
-                                orientation = orientation,
-                                ramMb = ram.toIntOrNull(),
-                                storageMb = storage.toIntOrNull(),
-                                cpuCores = cores.toIntOrNull(),
-                                gpuMode = gpuMode.ifBlank { "auto" },
-                                backCamera = backCamera,
-                                frontCamera = frontCamera,
-                                locale = locale,
-                                hardwareKeyboard = keyboard,
-                                startAfterCreate = startAfterCreate,
-                            ),
-                        )
-                        if (result.isSuccess) onCreated(result.stdout.ifBlank { "Created $name" }) else status = result.stderr.ifBlank { result.stdout }
-                    }
-                },
-                enabled = selectedProfile != null && selectedImage != null && name.isNotBlank(),
-                colors = primaryButtonColors(),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
-                Text(if (step < 3) "Create" else "Create")
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (step > 1) OutlinedButton(onClick = { step-- }) { Text("Back") }
                 if (step < 3) OutlinedButton(onClick = { step++ }) { Text("Next") }
                 OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+                Button(
+                    onClick = {
+                        val profile = selectedProfile ?: return@Button
+                        val image = selectedImage ?: return@Button
+                        scope.launch {
+                            status = if (image.installed) "Creating $name..." else "Installing ${image.packageId}..."
+                            if (!image.installed) {
+                                val install = avd.installSystemImage(image.packageId)
+                                if (!install.isSuccess) {
+                                    status = install.stderr.ifBlank { install.stdout }
+                                    return@launch
+                                }
+                            }
+                            val result = avd.createVirtualDevice(
+                                AvdCreationConfig(
+                                    name = name,
+                                    profileId = profile.id,
+                                    systemImagePackage = image.packageId,
+                                    orientation = orientation,
+                                    ramMb = ram.toIntOrNull(),
+                                    storageMb = storage.toIntOrNull(),
+                                    cpuCores = cores.toIntOrNull(),
+                                    gpuMode = gpuMode.ifBlank { "auto" },
+                                    backCamera = backCamera,
+                                    frontCamera = frontCamera,
+                                    locale = locale,
+                                    hardwareKeyboard = keyboard,
+                                    startAfterCreate = startAfterCreate,
+                                ),
+                            )
+                            if (result.isSuccess) onCreated(result.stdout.ifBlank { "Created $name" }) else status = result.stderr.ifBlank { result.stdout }
+                        }
+                    },
+                    enabled = selectedProfile != null && selectedImage != null && name.isNotBlank(),
+                    colors = primaryButtonColors(),
+                ) {
+                    Text("Create")
+                }
             }
-        },
-    )
+        }
+    }
+}
+
+@Composable
+private fun SystemImagePickerRow(
+    image: SystemImage,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 44.dp)
+            .background(AndyColors.Neutral900.copy(alpha = 0.72f))
+            .border(1.dp, Color.White.copy(alpha = 0.05f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "API ${image.api}",
+                modifier = Modifier.width(72.dp),
+                color = if (selected) Rust else TextPrimary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                image.variant,
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                color = TextPrimary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                image.abi,
+                modifier = Modifier.width(100.dp),
+                color = TextSecondary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (image.installed) "Installed" else "Available",
+                modifier = Modifier.width(88.dp),
+                color = if (image.installed) Green else TextSecondary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+        Text(
+            image.packageId,
+            color = TextSecondary,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
 }

@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
+import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectNote
 import app.andy.service.ActionConfigStore
@@ -14,29 +15,27 @@ import java.io.File
 
 class DesktopActionConfigStore(
     private val file: File = File(System.getProperty("user.home"), ".andy/actions.toml"),
-    private val starterFile: File? = File(System.getProperty("user.dir"), ".andy/actions.toml"),
+    private val discoveryRootsProvider: () -> List<String> = { listOf(System.getProperty("user.dir")) },
 ) : ActionConfigStore {
     override suspend fun load(): ActionsConfig = withContext(Dispatchers.IO) {
-        val starter = starterFile
-            ?.takeIf { it.isFile }
-            ?.let { source ->
-                decode(source).getOrElse { ActionsConfig() }
-                    .resolveRelativeProjectPaths(source.parentFile?.parentFile ?: File(System.getProperty("user.dir")))
-            }
-            ?: ActionsConfig()
         val personalFileExists = file.isFile
-        var seedMissingProjects = !personalFileExists
         val personal = if (!personalFileExists) {
             ActionsConfig()
         } else {
-            decode(file).getOrElse {
+            decode(file, ConfigSource.Global).getOrElse {
                 file.copyTo(File(file.absolutePath + ".corrupt"), overwrite = true)
-                // Unreadable personal config is not an intentional project deletion.
-                seedMissingProjects = true
                 ActionsConfig()
             }
         }
-        personal.mergeMissingStarterActions(starter, seedMissingProjects = seedMissingProjects)
+        val roots = runCatching { discoveryRootsProvider() }.getOrDefault(emptyList()).distinct()
+        val discoveredProjects = roots.mapNotNull { rootPath ->
+            val rootDir = File(rootPath)
+            val repoFile = File(rootDir, ".andy/actions.toml")
+            if (!repoFile.isFile) return@mapNotNull null
+            val decoded = decode(repoFile, ConfigSource.Repo).getOrNull() ?: return@mapNotNull null
+            decoded.resolveRelativeProjectPaths(rootDir).stripRepoEnv(repoFile)
+        }
+        personal.mergeDiscoveredProjects(discoveredProjects)
     }
 
     override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
@@ -48,8 +47,10 @@ class DesktopActionConfigStore(
         file.writeText(content.trimEnd() + "\n")
     }
 
-    private fun decode(source: File): Result<ActionsConfig> = runCatching {
-        Toml { ignoreUnknownKeys = true }.decodeFromString(ActionsFileDto.serializer(), source.readText()).toModel()
+    private fun decode(sourceFile: File, source: ConfigSource = ConfigSource.Global): Result<ActionsConfig> = runCatching {
+        Toml { ignoreUnknownKeys = true }
+            .decodeFromString(ActionsFileDto.serializer(), sourceFile.readText())
+            .toModel(source)
     }
 }
 
@@ -89,7 +90,7 @@ private data class NoteDto(
     val completed: Boolean = false,
 )
 
-private fun ActionsFileDto.toModel(): ActionsConfig {
+private fun ActionsFileDto.toModel(source: ConfigSource = ConfigSource.Global): ActionsConfig {
     val actionsByProject = actions.groupBy { it.projectId }
     val notesByProject = notes.groupBy { it.projectId }
     return ActionsConfig(
@@ -99,6 +100,7 @@ private fun ActionsFileDto.toModel(): ActionsConfig {
                 name = project.name,
                 contextDir = project.contextDir,
                 env = project.env,
+                source = source,
                 actions = actionsByProject[project.id].orEmpty().map { action ->
                     ProjectAction(
                         id = action.id,
@@ -107,6 +109,7 @@ private fun ActionsFileDto.toModel(): ActionsConfig {
                         command = action.command,
                         cwd = action.cwd.takeIf { it.isNotBlank() },
                         env = action.env,
+                        source = source,
                     )
                 },
                 notes = notesByProject[project.id].orEmpty().map { note ->
@@ -115,6 +118,7 @@ private fun ActionsFileDto.toModel(): ActionsConfig {
                         title = note.title,
                         body = note.body,
                         completed = note.completed,
+                        source = source,
                     )
                 },
             )
@@ -122,40 +126,51 @@ private fun ActionsFileDto.toModel(): ActionsConfig {
     )
 }
 
-private fun ActionsConfig.toFileDto(): ActionsFileDto = ActionsFileDto(
-    projects = projects.map { project ->
-        ProjectDto(
-            id = project.id,
-            name = project.name,
-            contextDir = project.contextDir,
-            env = project.env,
-        )
-    },
-    actions = projects.flatMap { project ->
-        project.actions.map { action ->
-            ActionDto(
-                id = action.id,
-                projectId = project.id,
-                name = action.name,
-                icon = action.icon,
-                command = action.command,
-                cwd = action.cwd.orEmpty(),
-                env = action.env,
-            )
+private fun ActionsConfig.toFileDto(): ActionsFileDto {
+    val globalProjects = projects.mapNotNull { project ->
+        val globalActions = project.actions.filter { it.source == ConfigSource.Global }
+        val globalNotes = project.notes.filter { it.source == ConfigSource.Global }
+        if (project.source == ConfigSource.Global || globalActions.isNotEmpty() || globalNotes.isNotEmpty()) {
+            project.copy(actions = globalActions, notes = globalNotes)
+        } else {
+            null
         }
-    },
-    notes = projects.flatMap { project ->
-        project.notes.map { note ->
-            NoteDto(
-                id = note.id,
-                projectId = project.id,
-                title = note.title,
-                body = note.body,
-                completed = note.completed,
+    }
+    return ActionsFileDto(
+        projects = globalProjects.map { project ->
+            ProjectDto(
+                id = project.id,
+                name = project.name,
+                contextDir = project.contextDir,
+                env = project.env,
             )
-        }
-    },
-)
+        },
+        actions = globalProjects.flatMap { project ->
+            project.actions.map { action ->
+                ActionDto(
+                    id = action.id,
+                    projectId = project.id,
+                    name = action.name,
+                    icon = action.icon,
+                    command = action.command,
+                    cwd = action.cwd.orEmpty(),
+                    env = action.env,
+                )
+            }
+        },
+        notes = globalProjects.flatMap { project ->
+            project.notes.map { note ->
+                NoteDto(
+                    id = note.id,
+                    projectId = project.id,
+                    title = note.title,
+                    body = note.body,
+                    completed = note.completed,
+                )
+            }
+        },
+    )
+}
 
 private fun ActionsConfig.resolveRelativeProjectPaths(workspace: File): ActionsConfig = copy(
     projects = projects.map { project ->
@@ -166,35 +181,51 @@ private fun ActionsConfig.resolveRelativeProjectPaths(workspace: File): ActionsC
     },
 )
 
-/**
- * Merges checkout-provided starter data without persisting it.
- *
- * Missing starter *projects* are only seeded when the user has no personal
- * actions.toml yet. Once that file exists, deleted projects stay deleted;
- * matching projects still receive any new starter actions in memory.
- */
-private fun ActionsConfig.mergeMissingStarterActions(
-    starter: ActionsConfig,
-    seedMissingProjects: Boolean,
+private fun ActionsConfig.stripRepoEnv(sourceFile: File): ActionsConfig {
+    var hadEnv = false
+    val cleanedProjects = projects.map { project ->
+        if (project.env.isNotEmpty()) hadEnv = true
+        val cleanedActions = project.actions.map { action ->
+            if (action.env.isNotEmpty()) hadEnv = true
+            action.copy(env = emptyMap())
+        }
+        project.copy(env = emptyMap(), actions = cleanedActions)
+    }
+    if (hadEnv) {
+        System.err.println("WARNING: Ignoring env in repo action config at ${sourceFile.absolutePath}")
+    }
+    return copy(projects = cleanedProjects)
+}
+
+private fun ActionsConfig.mergeDiscoveredProjects(
+    discoveredConfigs: List<ActionsConfig>,
 ): ActionsConfig {
     val merged = projects.toMutableList()
-    starter.projects.forEach { starterProject ->
-        val existingIndex = merged.indexOfFirst { project ->
-            project.contextDir == starterProject.contextDir || project.id == starterProject.id
-        }
-        if (existingIndex < 0) {
-            if (seedMissingProjects) {
-                merged += starterProject
+    discoveredConfigs.forEach { discoveredConfig ->
+        discoveredConfig.projects.forEach { repoProject ->
+            val existingIndex = merged.indexOfFirst { project ->
+                project.contextDir == repoProject.contextDir || project.id == repoProject.id
             }
-        } else {
-            val existing = merged[existingIndex]
-            val additions = starterProject.actions.filter { starterAction ->
-                existing.actions.none { action ->
-                    action.id == starterAction.id || action.command == starterAction.command
+            if (existingIndex < 0) {
+                merged += repoProject
+            } else {
+                val existing = merged[existingIndex]
+                val actionAdditions = repoProject.actions.filter { repoAction ->
+                    existing.actions.none { action ->
+                        action.id == repoAction.id || action.command == repoAction.command
+                    }
                 }
-            }
-            if (additions.isNotEmpty()) {
-                merged[existingIndex] = existing.copy(actions = existing.actions + additions)
+                val noteAdditions = repoProject.notes.filter { repoNote ->
+                    existing.notes.none { note ->
+                        note.id == repoNote.id
+                    }
+                }
+                if (actionAdditions.isNotEmpty() || noteAdditions.isNotEmpty()) {
+                    merged[existingIndex] = existing.copy(
+                        actions = existing.actions + actionAdditions,
+                        notes = existing.notes + noteAdditions,
+                    )
+                }
             }
         }
     }

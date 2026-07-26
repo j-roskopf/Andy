@@ -26,6 +26,8 @@ void andy_hub_set_presenter_content_size(int64_t presenter_id, int width, int he
 void andy_hub_repaint_presenter(int64_t presenter_id);
 
 bool andy_hub_consume_h264(int64_t decoder_id, const uint8_t *bytes, size_t length);
+/** Drops the VT session and cached parameter sets so the next access unit can rebind. */
+void andy_hub_reset_decoder_stream(int64_t decoder_id);
 void andy_hub_render_pixel_buffer(int64_t decoder_id, CVPixelBufferRef pixels, bool input_changed_probe,
                                   uint64_t packet_ticks, uint64_t transport_ticks,
                                   bool record_presentation_metrics);

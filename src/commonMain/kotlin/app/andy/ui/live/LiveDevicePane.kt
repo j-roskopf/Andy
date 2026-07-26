@@ -62,6 +62,10 @@ import app.andy.ui.actions.DockPlacement
 import app.andy.ui.actions.TerminalDockToggleRow
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.controls.FoldableDisplayProfile
+import app.andy.ui.controls.FoldablePosture
+import app.andy.ui.controls.foldablePostureForAngle
+import app.andy.ui.controls.sizeForPosture
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -77,24 +81,195 @@ import org.jetbrains.compose.resources.painterResource
 
 internal data class MirrorSourceSize(val width: Int, val height: Int)
 
+internal data class FoldableStreamContext(
+    val profile: FoldableDisplayProfile,
+    val hingeAngle: Float,
+)
+
 /**
- * Size used for the Live host aspect ratio. Prefer the active stream frame so Compose and
- * Metal letterboxing stay aligned; fall back to [AndroidDevice.screenSize], then a tall-phone
- * default (not the old 720x1280 fallback, which made first-boot Live look too wide).
+ * Size used for the Live host aspect ratio. Prefer an explicit [captureHint] (foldable
+ * outer/inner after open/close) so the host can resize while the mirror restarts; then the
+ * active stream frame; then the mirror session (GPU paths often omit CPU frames); then
+ * device screen size; then a tall-phone default.
  */
-internal fun liveMirrorSourceSize(device: AndroidDevice?, frame: MirrorFrame?): MirrorSourceSize {
-    if (frame != null && frame.width > 1 && frame.height > 1) {
-        return MirrorSourceSize(frame.width, frame.height)
+internal fun liveMirrorSourceSize(
+    device: AndroidDevice?,
+    frame: MirrorFrame?,
+    session: MirrorSession? = null,
+    captureHint: MirrorSourceSize? = null,
+    foldableProfile: FoldableDisplayProfile? = null,
+    foldableHingeAngle: Float = 180f,
+): MirrorSourceSize = liveMirrorLayoutSize(
+    device = device,
+    frame = frame,
+    session = session,
+    captureHint = captureHint,
+    foldableProfile = foldableProfile,
+    foldableHingeAngle = foldableHingeAngle,
+    allowDeviceScreenFallback = true,
+)
+
+/**
+ * Mirror box aspect during foldable open/close. Uses [captureHint] and AVD profile when the
+ * live stream still reflects the previous posture so the host does not briefly letterbox open
+ * content into a closed box (or vice versa).
+ */
+internal fun liveMirrorLayoutSize(
+    device: AndroidDevice?,
+    frame: MirrorFrame?,
+    session: MirrorSession? = null,
+    captureHint: MirrorSourceSize? = null,
+    foldableProfile: FoldableDisplayProfile? = null,
+    foldableHingeAngle: Float = 180f,
+    allowDeviceScreenFallback: Boolean = false,
+): MirrorSourceSize {
+    if (captureHint != null && captureHint.width > 1 && captureHint.height > 1) {
+        return captureHint
     }
-    val raw = device?.screenSize
-    if (raw != null) {
-        val width = raw.substringBefore('x').toIntOrNull()
-        val height = raw.substringAfter('x').toIntOrNull()
-        if (width != null && height != null && width > 1 && height > 1 && 'x' in raw) {
-            return MirrorSourceSize(width, height)
+    val foldable = foldableProfile?.let { FoldableStreamContext(it, foldableHingeAngle) }
+    val stream = resolveLiveMirrorSourceSize(
+        device = device,
+        frame = frame,
+        session = session,
+        captureHint = null,
+        foldable = foldable,
+        allowDeviceScreenFallback = allowDeviceScreenFallback,
+    )
+    val profile = foldableProfile ?: return stream
+    val posture = foldablePostureForAngle(foldableHingeAngle)
+    if (!foldableStreamMatchesPosture(stream, posture, profile)) {
+        val (width, height) = profile.sizeForPosture(posture)
+        return MirrorSourceSize(width, height)
+    }
+    return stream
+}
+
+/**
+ * Scrcpy stream dimensions for touch mapping. Never uses physical `wm size` from
+ * [AndroidDevice.screenSize] — that lags fold/unfold and ignores max_size scaling.
+ */
+internal fun liveMirrorStreamSize(
+    device: AndroidDevice?,
+    frame: MirrorFrame?,
+    session: MirrorSession? = null,
+    foldableProfile: FoldableDisplayProfile? = null,
+    foldableHingeAngle: Float = 180f,
+): MirrorSourceSize = resolveLiveMirrorSourceSize(
+    device = device,
+    frame = frame,
+    session = session,
+    captureHint = null,
+    foldable = foldableProfile?.let { FoldableStreamContext(it, foldableHingeAngle) },
+    allowDeviceScreenFallback = false,
+)
+
+private fun resolveLiveMirrorSourceSize(
+    device: AndroidDevice?,
+    frame: MirrorFrame?,
+    session: MirrorSession?,
+    captureHint: MirrorSourceSize?,
+    foldable: FoldableStreamContext?,
+    allowDeviceScreenFallback: Boolean,
+): MirrorSourceSize {
+    if (captureHint != null && captureHint.width > 1 && captureHint.height > 1) {
+        return captureHint
+    }
+    val frameSize = frame
+        ?.takeIf { it.width > 1 && it.height > 1 }
+        ?.let { MirrorSourceSize(it.width, it.height) }
+    val sessionSize = session
+        ?.takeIf { it.width > 1 && it.height > 1 }
+        ?.let { MirrorSourceSize(it.width, it.height) }
+    if (frameSize != null && sessionSize != null && frameSize != sessionSize) {
+        return pickMismatchedStreamSize(
+            frameSize = frameSize,
+            sessionSize = sessionSize,
+            sessionReady = session?.readyForPresentation == true,
+            foldable = foldable,
+        )
+    }
+    if (sessionSize != null) return sessionSize
+    if (frameSize != null) return frameSize
+    if (allowDeviceScreenFallback) {
+        val raw = device?.screenSize
+        if (raw != null) {
+            val width = raw.substringBefore('x').toIntOrNull()
+            val height = raw.substringAfter('x').toIntOrNull()
+            if (width != null && height != null && width > 1 && height > 1 && 'x' in raw) {
+                return MirrorSourceSize(width, height)
+            }
         }
     }
     return MirrorSourceSize(1080, 2400)
+}
+
+private fun pickMismatchedStreamSize(
+    frameSize: MirrorSourceSize,
+    sessionSize: MirrorSourceSize,
+    sessionReady: Boolean,
+    foldable: FoldableStreamContext?,
+): MirrorSourceSize {
+    val frameAspect = frameSize.width.toFloat() / frameSize.height
+    val sessionAspect = sessionSize.width.toFloat() / sessionSize.height
+    if (kotlin.math.abs(frameAspect - sessionAspect) < 0.06f) {
+        return if (sessionReady) sessionSize else frameSize
+    }
+    foldable?.let { context ->
+        val posture = foldablePostureForAngle(context.hingeAngle)
+        val (expectedWidth, expectedHeight) = context.profile.sizeForPosture(posture)
+        val expectedAspect = expectedWidth.toFloat() / expectedHeight
+        val frameMatches = kotlin.math.abs(frameAspect - expectedAspect) < 0.06f
+        val sessionMatches = kotlin.math.abs(sessionAspect - expectedAspect) < 0.06f
+        if (frameMatches && !sessionMatches) return frameSize
+        if (sessionMatches && !frameMatches) return sessionSize
+    }
+    return frameSize
+}
+
+/** True when [stream] matches the aspect ratio of [posture] on this AVD (scaled stream is OK). */
+internal fun foldableStreamMatchesPosture(
+    stream: MirrorSourceSize,
+    posture: FoldablePosture,
+    profile: FoldableDisplayProfile,
+): Boolean {
+    val (expectedWidth, expectedHeight) = profile.sizeForPosture(posture)
+    val streamAspect = stream.width.toFloat() / stream.height.toFloat()
+    val expectedAspect = expectedWidth.toFloat() / expectedHeight.toFloat()
+    return kotlin.math.abs(streamAspect - expectedAspect) < 0.06f
+}
+
+/** Minimum pane width to show the hardware toolbar plus a height-fitted mirror. */
+internal fun liveDevicePaneFittedWidth(
+    maxPaneHeight: Dp,
+    device: AndroidDevice?,
+    frame: MirrorFrame?,
+    showHardwareControls: Boolean,
+    showDeviceHeader: Boolean,
+    showChromeControls: Boolean,
+    showContainerChrome: Boolean = true,
+    session: MirrorSession? = null,
+    captureHint: MirrorSourceSize? = null,
+    foldableProfile: FoldableDisplayProfile? = null,
+    foldableHingeAngle: Float = 180f,
+): Dp {
+    val source = liveMirrorSourceSize(
+        device = device,
+        frame = frame,
+        session = session,
+        captureHint = captureHint,
+        foldableProfile = foldableProfile,
+        foldableHingeAngle = foldableHingeAngle,
+    )
+    val aspect = source.width.toFloat() / source.height.toFloat()
+    val horizontalChrome = if (showContainerChrome) AndySpace.S4 * 2 else 0.dp
+    val verticalChrome = if (showContainerChrome) AndySpace.S4 * 2 else 0.dp
+    val toolbarWidth = if (showHardwareControls) 68.dp else 0.dp
+    val toolbarGap = if (showHardwareControls) 10.dp else 0.dp
+    val headerBlock = if (showDeviceHeader) 42.dp else 0.dp
+    val navHeight = if (showChromeControls) 60.dp else 0.dp
+    val mirrorViewportHeight = (maxPaneHeight - verticalChrome - headerBlock - navHeight).coerceAtLeast(1.dp)
+    val mirrorWidth = mirrorViewportHeight * aspect
+    return toolbarWidth + toolbarGap + horizontalChrome + mirrorWidth
 }
 
 @Composable
@@ -162,6 +337,11 @@ internal fun LiveDevicePane(
     registerNativeHostFill: Boolean = false,
     mirrorStreamKey: Any? = null,
     surfaceOccluded: Boolean = false,
+    foldableEnabled: Boolean = false,
+    foldableHingeAngle: Float = 180f,
+    foldableProfile: FoldableDisplayProfile? = null,
+    /** Verified/expected capture size after foldable open/close (outer vs inner). */
+    foldableCaptureHint: MirrorSourceSize? = null,
     onInput: (MirrorInput) -> Unit,
     onConnect: () -> Unit,
 ) {
@@ -203,11 +383,26 @@ internal fun LiveDevicePane(
             )
         }
 
-        Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             if (showDeviceHeader && serial != null) {
-                val streamChips = remember(mirrorSession, frame, mirrorStatus, mirrorTelemetry) {
-                    val structured = liveStreamChips(mirrorSession, frame, mirrorStatus)
-                    if (structured.isNotEmpty()) structured else mirrorTelemetry.takeIf { it.isNotBlank() }?.let { listOf(LiveStreamChip(it)) } ?: emptyList()
+                val streamChips = remember(
+                    mirrorSession,
+                    frame,
+                    mirrorStatus,
+                    mirrorTelemetry,
+                    foldableEnabled,
+                    foldableHingeAngle,
+                ) {
+                    val structured = liveStreamChips(mirrorSession, frame, mirrorStatus).toMutableList()
+                    if (foldableEnabled) {
+                        val posture = foldablePostureForAngle(foldableHingeAngle)
+                        structured += LiveStreamChip("Posture: ${posture.label}")
+                    }
+                    if (structured.isNotEmpty()) {
+                        structured
+                    } else {
+                        mirrorTelemetry.takeIf { it.isNotBlank() }?.let { listOf(LiveStreamChip(it)) }.orEmpty()
+                    }
                 }
                 LiveStreamHeader(
                     chips = streamChips,
@@ -221,17 +416,29 @@ internal fun LiveDevicePane(
             }
 
             BoxWithConstraints(
-                Modifier.weight(1f).fillMaxWidth(),
+                Modifier.weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
                 val viewportWidth = maxWidth
                 val zoomFactor = zoom.coerceIn(0.5f, 4f)
-                // Prefer the live stream size so the Compose host matches Metal letterboxing.
-                // device.screenSize can lag or disagree on first emulator boot.
-                val source = liveMirrorSourceSize(device, frame)
-                val sourceWidth = source.width
-                val sourceHeight = source.height
-                val aspect = sourceWidth.toFloat() / sourceHeight.toFloat()
+                val streamSource = liveMirrorStreamSize(
+                    device = device,
+                    frame = frame,
+                    session = mirrorSession,
+                    foldableProfile = foldableProfile.takeIf { foldableEnabled },
+                    foldableHingeAngle = foldableHingeAngle,
+                )
+                val layoutSource = liveMirrorLayoutSize(
+                    device = device,
+                    frame = frame,
+                    session = mirrorSession,
+                    captureHint = foldableCaptureHint,
+                    foldableProfile = foldableProfile.takeIf { foldableEnabled },
+                    foldableHingeAngle = foldableHingeAngle,
+                )
+                val sourceWidth = streamSource.width
+                val sourceHeight = streamSource.height
+                val aspect = layoutSource.width.toFloat() / layoutSource.height.toFloat()
                 val navHeight = if (showChromeControls) 60.dp else 0.dp
                 val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)
                 val baseWidth = minOf(viewportWidth, viewportHeight * aspect)
@@ -260,8 +467,7 @@ internal fun LiveDevicePane(
                             contentAlignment = Alignment.Center,
                         ) {
                             val mirrorLoading = isMirrorSurfaceLoading(serial, frame, mirrorSession, mirrorStatus)
-                            // Heavyweight desktop surfaces render above Compose. Defer the GPU
-                            // host until a decoded frame is buffered so this overlay stays visible.
+                            // Defer the GPU host until a decoded frame is buffered so the loading overlay stays visible.
                             if (mirroredElsewhere) {
                                 Column(
                                     Modifier.fillMaxSize().padding(24.dp),
@@ -312,6 +518,8 @@ internal fun LiveDevicePane(
                                     referenceImageKey = referenceImageKey,
                                     referenceImageOpacity = referenceImageOpacity,
                                 )
+                                val deferNative = mirrorLoading && device != null
+                                val inputEnabled = passThroughInput
                                 if (frameFlow != null) {
                                     MirrorVideoSurface(
                                         frames = frameFlow,
@@ -319,13 +527,13 @@ internal fun LiveDevicePane(
                                         modifier = Modifier.fillMaxSize(),
                                         onInput = onInput,
                                         onHoverColor = onHoverColor,
-                                        passThroughInput = passThroughInput,
+                                        passThroughInput = inputEnabled,
                                         onPickerClick = onPickerClick,
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
-                                        deferNativePresentation = mirrorLoading && device != null,
+                                        deferNativePresentation = deferNative,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
                                         gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
@@ -336,13 +544,13 @@ internal fun LiveDevicePane(
                                         modifier = Modifier.fillMaxSize(),
                                         onInput = onInput,
                                         onHoverColor = onHoverColor,
-                                        passThroughInput = passThroughInput,
+                                        passThroughInput = inputEnabled,
                                         onPickerClick = onPickerClick,
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
-                                        deferNativePresentation = mirrorLoading && device != null,
+                                        deferNativePresentation = deferNative,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
                                         gpuMirrorStreamKey = serial.takeIf { registerNativeHost },

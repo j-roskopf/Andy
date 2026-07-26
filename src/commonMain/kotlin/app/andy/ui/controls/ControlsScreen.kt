@@ -22,6 +22,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +37,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.model.AndroidDevice
+import app.andy.model.VirtualDevice
+import app.andy.service.AvdService
 import app.andy.service.DeviceService
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
@@ -55,11 +59,28 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial: String?) {
+internal fun ControlsScreen(
+    devices: DeviceService,
+    mirror: MirrorEngine,
+    serial: String?,
+    device: AndroidDevice? = null,
+    avd: AvdService? = null,
+    hingeAngle: Float = 180f,
+    onHingeAngleChange: (Float) -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("Ready") }
     var fontScale by remember { mutableStateOf("1.0") }
     var animationScale by remember { mutableStateOf("1.0") }
+    var virtualDevices by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
+    LaunchedEffect(device?.kind, device?.displayName, avd) {
+        virtualDevices = if (avd != null && device?.kind == app.andy.model.DeviceKind.Emulator) {
+            runCatching { avd.listVirtualDevices() }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+    }
+    val foldable = isFoldableEmulator(device, virtualDevices)
 
     fun run(label: String, command: List<String>) {
         if (serial == null) {
@@ -79,11 +100,31 @@ internal fun ControlsScreen(devices: DeviceService, mirror: MirrorEngine, serial
         }
     }
 
+    fun applyPosture(posture: FoldablePosture) {
+        if (serial == null) {
+            status = "Select an online device"
+            return
+        }
+        onHingeAngleChange(posture.defaultAngle)
+        scope.launch {
+            val result = devices.setFoldablePosture(serial, posture)
+            status = if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
+        }
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Toolbar("Device controls", status)
+
+        if (foldable) {
+            FoldableControlsPanel(
+                hingeAngle = hingeAngle,
+                enabled = serial != null,
+                onPostureSelected = ::applyPosture,
+            )
+        }
 
         ControlSectionsLayout(
             radiosAndDisplay = {

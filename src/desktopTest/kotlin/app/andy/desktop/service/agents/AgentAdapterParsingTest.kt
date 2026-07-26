@@ -6,6 +6,7 @@ import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.followUpCliPayload
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -195,13 +196,41 @@ class CodexInteractiveAdapterTest {
 
     @Test
     fun interactiveCommandIsNotExecJson() {
-        val argv = adapter.buildInteractiveCommand("/bin/codex", task(AgentKind.Codex), mcpUrl = null)
-        assertEquals("/bin/codex", argv.first())
-        assertTrue("exec" !in argv)
-        assertTrue("--json" !in argv)
-        assertTrue("-C" in argv && "/tmp/repo" in argv)
-        assertTrue("--sandbox" in argv && "workspace-write" in argv)
-        assertEquals("do the thing", argv.last())
+        val repo = File.createTempFile("andy-codex-repo", null).also { it.delete(); it.mkdirs() }
+        try {
+            val argv = adapter.buildInteractiveCommand(
+                "/bin/codex",
+                task(AgentKind.Codex).copy(cwd = repo.absolutePath),
+                mcpUrl = null,
+            )
+            assertEquals("/bin/codex", argv.first())
+            assertTrue("exec" !in argv)
+            assertTrue("--json" !in argv)
+            assertTrue("-C" in argv && repo.absolutePath in argv)
+            assertTrue("--sandbox" in argv && "workspace-write" in argv)
+            assertEquals("do the thing", argv.last())
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interactiveCommandResolvesMissingCwdToScratch() {
+        val missing = "/definitely/not/a/real/andy/path-${System.nanoTime()}"
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex).copy(cwd = missing),
+            mcpUrl = null,
+        )
+        val cIdx = argv.indexOf("-C")
+        assertTrue(cIdx >= 0 && cIdx + 1 < argv.size, "argv=$argv")
+        val resolved = argv[cIdx + 1]
+        assertTrue(File(resolved).isDirectory, "resolved cwd missing: $resolved")
+        assertTrue(missing !in argv, "stale cwd must not reach Codex: $argv")
+        assertTrue(
+            AgentScratchWorkspace.isScratch(resolved),
+            "missing cwd should fall back to scratch, got=$resolved",
+        )
     }
 
     @Test

@@ -1,5 +1,6 @@
 package app.andy.terminal
 
+import app.andy.desktop.service.AgentNotificationDedup
 import io.github.ketraterm.protocol.NotificationLevel
 import java.awt.Color
 import java.awt.Font
@@ -29,10 +30,14 @@ object AndyDesktopNotificationManager {
         title: String,
         body: String,
         level: NotificationLevel = NotificationLevel.INFO,
+        sessionId: String? = null,
     ) {
+        if (sessionId != null && AgentNotificationDedup.shouldSuppress(sessionId)) return
+
         val displayTitle = title.trim().take(MAX_TITLE).ifBlank { "Andy" }
         val displayBody = body.trim().take(MAX_BODY)
         if (displayBody.isEmpty() && title.isBlank()) return
+        if (sessionId != null) AgentNotificationDedup.markNotified(sessionId)
 
         SwingUtilities.invokeLater {
             if (!SystemTray.isSupported()) return@invokeLater

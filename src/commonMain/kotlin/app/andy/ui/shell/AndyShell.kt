@@ -98,11 +98,6 @@ internal fun AndyShell(
     } else {
         remember { mutableStateOf(emptyList<AgentTask>()) }
     }
-    val sessionStatuses by if (capabilities.hostAutomation) {
-        services.agentRuns.sessionStatuses.collectAsState()
-    } else {
-        remember { mutableStateOf(emptyMap()) }
-    }
     val pendingUpdateInstallConfirmation by if (capabilities.updates) {
         services.updates.pendingInstallConfirmation.collectAsState()
     } else {
@@ -219,6 +214,9 @@ internal fun AndyShell(
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
             .noiseGridOverlay(0.035f)
     ) {
+        val knownProjectIds = remember(state.actionsConfig.projects) {
+            state.actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
+        }
         Row(Modifier.fillMaxSize().padding(top = contentTopPadding, start = 14.dp, end = 14.dp, bottom = 14.dp)) {
             Sidebar(
                 current = state.destination,
@@ -227,10 +225,13 @@ internal fun AndyShell(
                 iosSelectionActive = state.isIosSelection,
                 // Project chats are owned by Actions. Keep their unread state out of
                 // the standalone Agent destination.
-                hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
-                hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
+                hasUnreadAgentTasks = agentTasks.any { !it.archived && it.unread && it.projectId == null },
+                hasUnreadProjectAgentTasks = agentTasks.any { task ->
+                    !task.archived && task.unread && task.workflowTaskId == null &&
+                        task.projectId != null && task.projectId in knownProjectIds
+                },
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
-                    task.projectId != null && isSessionWorking(task.isActive, sessionStatuses[task.id])
+                    task.projectId != null && isSessionWorking(task)
                 },
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
@@ -396,12 +397,10 @@ internal fun AndyShell(
                             iosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
                             mirroredElsewhere = state.activeTargetId != null && state.activeTargetId in poppedOutTargetIds,
                             devicePaneWidth = state.workspaceState.liveDevicePaneWidth,
-                            controlsPaneHeight = state.workspaceState.liveControlsPaneHeight,
                             onStopEmulator = { state.stopEmulator(it) },
                             stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                             stopStatus = state.emulatorStopStatus,
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(liveDevicePaneWidth = width) } },
-                            onControlsPaneHeightChange = { height -> state.updateWorkspace { it.copy(liveControlsPaneHeight = height) } },
                             onBugSaved = { state.navigateTo(AndyDestination.Bugs) },
                             onRecordingSaved = { state.navigateTo(AndyDestination.Recordings) },
                             logcatState = state.liveLogcatState,
@@ -419,6 +418,8 @@ internal fun AndyShell(
                             activeRunId = state.activeRunId,
                             terminalRunId = state.terminalRunId,
                             onActiveRunIdChange = { state.updateActiveRunId(it) },
+                            foldableHingeAngle = state.foldableHingeAngle,
+                            onFoldableHingeAngleChange = state::updateFoldableHingeAngle,
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -486,7 +487,15 @@ internal fun AndyShell(
                             startingEmulatorName = state.startingEmulatorName,
                             startStatus = state.emulatorStartStatus,
                         )
-                        AndyDestination.Controls -> ControlsScreen(services.devices, services.mirror, state.selectedSerial)
+                        AndyDestination.Controls -> ControlsScreen(
+                            devices = services.devices,
+                            mirror = services.mirror,
+                            serial = state.selectedSerial,
+                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                            avd = services.avd,
+                            hingeAngle = state.foldableHingeAngle,
+                            onHingeAngleChange = state::updateFoldableHingeAngle,
+                        )
                         AndyDestination.Design -> DesignScreen(
                             services,
                             state.selectedSerial,

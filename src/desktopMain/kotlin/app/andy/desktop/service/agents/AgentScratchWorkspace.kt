@@ -28,8 +28,33 @@ object AgentScratchWorkspace {
 
     /** Creates the scratch root (and a tiny README so the folder is obviously Andy-owned). */
     fun ensure(home: File = File(System.getProperty("user.home"))): File {
-        val root = path(home)
-        root.mkdirs()
+        val candidates = listOf(
+            path(home),
+            File(home, ".andy-tasks-scratch"),
+            File(System.getProperty("java.io.tmpdir"), "andy-scratch"),
+        )
+        for (candidate in candidates) {
+            writableDirectory(candidate)?.let { return seedReadme(it) }
+        }
+        error("unable to create Andy scratch workspace under ${home.absolutePath}")
+    }
+
+    fun resolveCwd(explicit: String?, home: File = File(System.getProperty("user.home"))): String {
+        val trimmed = explicit?.takeIf { it.isNotBlank() }
+        if (trimmed != null) {
+            val dir = File(trimmed).absoluteFile.normalize()
+            if (dir.isDirectory) return dir.absolutePath
+        }
+        return ensure(home).absolutePath
+    }
+
+    private fun writableDirectory(candidate: File): File? {
+        if (candidate.exists() && !candidate.isDirectory) return null
+        candidate.mkdirs()
+        return candidate.takeIf { it.isDirectory }
+    }
+
+    private fun seedReadme(root: File): File {
         val readme = File(root, "README.txt")
         if (!readme.isFile) {
             readme.writeText(
@@ -38,12 +63,6 @@ object AgentScratchWorkspace {
             )
         }
         return root
-    }
-
-    fun resolveCwd(explicit: String?, home: File = File(System.getProperty("user.home"))): String {
-        val trimmed = explicit?.takeIf { it.isNotBlank() }
-        if (trimmed != null) return File(trimmed).absoluteFile.normalize().absolutePath
-        return ensure(home).absoluteFile.normalize().absolutePath
     }
 
     fun isScratch(cwd: String?, home: File = File(System.getProperty("user.home"))): Boolean {

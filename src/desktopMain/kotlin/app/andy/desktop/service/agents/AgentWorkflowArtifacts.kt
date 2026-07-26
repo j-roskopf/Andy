@@ -54,6 +54,7 @@ class AgentWorkflowArtifacts(
     val events: SharedFlow<Event> = _events.asSharedFlow()
 
     private val closed = AtomicBoolean(false)
+    private val paused = AtomicBoolean(false)
     private var job: Job? = null
     private val seen = mutableSetOf<String>()
 
@@ -65,18 +66,35 @@ class AgentWorkflowArtifacts(
     val statusFile get() = File(root, "status.json")
 
     fun start() {
+        if (closed.get() || paused.get()) return
         root.mkdirs()
+        startPolling()
+    }
+
+    fun pause() {
+        if (!paused.compareAndSet(false, true)) return
+        job?.cancel()
+        job = null
+    }
+
+    fun resume() {
+        if (closed.get() || !paused.compareAndSet(true, false)) return
+        startPolling()
+    }
+
+    private fun startPolling() {
         job = scope.launch {
-            while (isActive && !closed.get()) {
-                pollOnce()
+            pollOnce()
+            while (isActive && !closed.get() && !paused.get()) {
                 delay(350)
+                pollOnce()
             }
         }
     }
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
-        job?.cancel()
+        pause()
     }
 
     fun writeAnswer(text: String) {
@@ -84,6 +102,8 @@ class AgentWorkflowArtifacts(
         answerFile.writeText(
             """{"answer":${JsonPrimitive(text)}}""",
         )
+        // Drop the question so a resumed run's artifact watcher does not re-Block.
+        questionFile.delete()
     }
 
     private suspend fun pollOnce() {

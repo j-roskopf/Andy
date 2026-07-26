@@ -43,11 +43,9 @@ class DesktopOsNotificationService : OsNotificationService {
     override fun show(event: AgentAttentionEvent) {
         PendingAgentTaskOpen.offer(OpenAgentTaskRequest(event.taskId, event.projectId))
         val subtitle = when (event.kind) {
-            AgentAttentionKind.NeedsInput, AgentAttentionKind.Blocked -> "Needs your input"
-            AgentAttentionKind.Completed, AgentAttentionKind.Done -> "Agent completed"
-            AgentAttentionKind.Failed -> "Agent failed"
-            AgentAttentionKind.Working -> "Agent working"
-            AgentAttentionKind.Idle -> "Agent idle"
+            AgentAttentionKind.Blocked -> "Needs your input"
+            AgentAttentionKind.Done -> "Agent completed"
+            AgentAttentionKind.Error -> "Agent failed"
         }
         val os = System.getProperty("os.name").orEmpty()
         when {

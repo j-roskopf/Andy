@@ -99,11 +99,17 @@ internal fun TopChrome(
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.width(260.dp)) {
+        Column(Modifier.weight(1f).padding(end = 10.dp)) {
             Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
-            Text(selectedIosTarget?.displayName ?: selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+            Text(
+                selectedIosTarget?.displayName ?: selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                maxLines = 1,
+            )
         }
-        Spacer(Modifier.weight(1f))
         actions()
         if (destination != AndyDestination.Network && proxyRunning) {
             ProxyToolbarIndicator()

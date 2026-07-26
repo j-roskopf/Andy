@@ -39,11 +39,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -79,7 +82,9 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentTask
 import app.andy.model.AndroidDevice
+import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
+import app.andy.model.ProjectNote
 import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
@@ -95,6 +100,12 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
+import app.andy.ui.components.WorkspaceCanvas
+import app.andy.ui.components.WorkspaceEmptyCanvas
+import app.andy.ui.components.WorkspaceItemRow
+import app.andy.ui.components.WorkspaceRail
+import app.andy.ui.components.WorkspaceRailHeader
+import app.andy.ui.components.WorkspaceSectionLabel
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentTaskComposerPane
@@ -134,6 +145,12 @@ internal fun actionIconMarker(icon: String): String = when (icon.trim().lowercas
 
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
+private data class ProjectChatLists(val active: List<AgentTask>, val archived: List<AgentTask>)
+
+private val ProjectChatSort =
+    compareByDescending<AgentTask> { it.isActive }
+        .thenByDescending { it.unread }
+        .thenByDescending { it.createdAtMillis }
 
 private enum class ProjectCanvas(val label: String) { Chat("chat"), Tasks("tasks"), Runbook("runbook"), Scratchpad("scratchpad") }
 
@@ -188,6 +205,20 @@ private fun ProjectCockpit(
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
     val projectWorkflow = loadedProjectWorkflow
+
+    fun requestDeleteChat(task: AgentTask) {
+        pendingConfirmation = PendingConfirmation(
+            title = "Delete chat?",
+            message = "Permanently removes \"${task.title}\" and its saved transcript.",
+            confirmLabel = "Delete",
+        ) {
+            scope.launch {
+                transcriptScrollMemory.remove(task.id)
+                services.agentRuns.delete(task.id, task.ownsWorktree)
+                if (selectedTaskId == task.id) selectedTaskId = null
+            }
+        }
+    }
 
     fun selectTerminalTab(runId: String) {
         if (runId !in terminalTabIds) terminalTabIds = terminalTabIds + runId
@@ -276,10 +307,23 @@ private fun ProjectCockpit(
             query.isBlank() || project.name.contains(query, true) || project.contextDir.contains(query, true)
         }
     }
-    val unreadProjectIds = remember(agentTasks) {
+    val unreadProjectIds = remember(agentTasks, config.projects) {
+        val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
-            task.projectId?.takeIf { task.unread && !task.archived }
+            task.projectId?.takeIf { task.unread && !task.archived && task.workflowTaskId == null && it in validProjectIds }
         }
+    }
+    val projectChatLists = remember(agentTasks) {
+        agentTasks
+            .asSequence()
+            .filter { it.workflowTaskId == null && it.projectId != null }
+            .groupBy { it.projectId!! }
+            .mapValues { (_, tasks) ->
+                ProjectChatLists(
+                    active = tasks.filter { !it.archived }.sortedWith(ProjectChatSort),
+                    archived = tasks.filter { it.archived }.sortedByDescending { it.createdAtMillis },
+                )
+            }
     }
     val projectTasks = project?.let { item ->
         agentTasks
@@ -309,32 +353,41 @@ private fun ProjectCockpit(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val railWidth = 264.dp
+        val railWidth = 248.dp
         val chatMinWidth = if (docks.right != null) 280.dp else 520.dp
         val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
         val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
 
         Column(
             Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(
-                    Modifier.width(railWidth).fillMaxHeight().background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4)).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Toolbar("Projects", "${config.projects.size} current projects", onPrimary = { editingProject = EditingProject(null) }, primaryLabel = "New")
-                    TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Find a project", color = TextSecondary, fontFamily = MonoFont) })
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                WorkspaceRail(Modifier.width(railWidth).fillMaxHeight()) {
+                    WorkspaceRailHeader(
+                        title = "Projects",
+                        subtitle = "${config.projects.size} workspaces",
+                        actions = {
+                            Toolbar(
+                                "Projects",
+                                "",
+                                onPrimary = { editingProject = EditingProject(null) },
+                                primaryLabel = "New",
+                            )
+                        },
+                    )
+                    TextField(
+                        query,
+                        { query = it },
+                        Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Search", color = TextSecondary, fontFamily = MonoFont) },
+                    )
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
                         items(projects, key = { it.id }) { item ->
-                            val sessions = agentTasks.filter {
-                                it.projectId == item.id && !it.archived && it.workflowTaskId == null
-                            }
-                                .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
-                            val archivedSessions = agentTasks.filter {
-                                it.projectId == item.id && it.archived && it.workflowTaskId == null
-                            }
-                                .sortedByDescending { it.createdAtMillis }
+                            val chatLists = projectChatLists[item.id] ?: ProjectChatLists(emptyList(), emptyList())
+                            val sessions = chatLists.active
+                            val archivedSessions = chatLists.archived
                             val viewingArchived = viewingArchivedForProjectId == item.id
                             val sessionsCollapsed = item.id in collapsedProjectIds
                             ProjectSessionGroup(
@@ -354,7 +407,6 @@ private fun ProjectCockpit(
                                 showMore = !sessionsCollapsed && !viewingArchived &&
                                     sessions.size > RecentSessionsPerProject &&
                                     expandedProjectSessionsId != item.id,
-                                sessionStatus = { taskId -> services.agentRuns.sessionStatus(taskId) },
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
                                         collapsedProjectIds = if (sessionsCollapsed) {
@@ -383,6 +435,7 @@ private fun ProjectCockpit(
                                     if (selectedTaskId == task.id) selectedTaskId = null
                                 },
                                 onUnarchiveSession = { task -> services.agentRuns.unarchive(task.id) },
+                                onDeleteSession = ::requestDeleteChat,
                                 onShowMore = { expandedProjectSessionsId = item.id },
                                 onToggleArchived = {
                                     viewingArchivedForProjectId = if (viewingArchived) null else item.id
@@ -403,9 +456,12 @@ private fun ProjectCockpit(
                 }
                 val current = project
                 if (current == null) {
-                    EmptyState("Create a project to start", Modifier.weight(1f).fillMaxHeight())
+                    WorkspaceCanvas(Modifier.weight(1f).fillMaxHeight()) {
+                        WorkspaceEmptyCanvas("Create a project to start")
+                    }
                 } else {
-                    Column(Modifier.widthIn(min = chatMinWidth).weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WorkspaceCanvas(Modifier.widthIn(min = chatMinWidth).weight(1f).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
@@ -416,9 +472,8 @@ private fun ProjectCockpit(
                             },
                             onDockToggle = ::onDockToggle,
                         )
-                        PanelCard(
+                        Box(
                             Modifier.fillMaxSize().testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
-                            accent = if (canvas == ProjectCanvas.Chat) Cyan else null,
                         ) {
                             when (canvas) {
                                 ProjectCanvas.Chat -> {
@@ -439,13 +494,7 @@ private fun ProjectCockpit(
                                                 services,
                                                 selected,
                                                 nowMillis,
-                                                onDelete = { task ->
-                                                    scope.launch {
-                                                        transcriptScrollMemory.remove(task.id)
-                                                        services.agentRuns.delete(task.id, task.ownsWorktree)
-                                                        selectedTaskId = null
-                                                    }
-                                                },
+                                                onDelete = ::requestDeleteChat,
                                                 transcriptScrollMemory = transcriptScrollMemory,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
@@ -511,6 +560,7 @@ private fun ProjectCockpit(
                                 )
                             }
                         }
+                        }
                     }
                     docks.right?.let { rightKind ->
                         ProjectAuxDock(
@@ -555,7 +605,7 @@ private fun ProjectCockpit(
             project = edit.project,
             existingProjects = config.projects,
             onDismiss = { editingProject = null },
-            onDelete = edit.project?.let { project ->
+            onDelete = edit.project?.takeIf { it.source != ConfigSource.Repo }?.let { project ->
                 {
                     editingProject = null
                     pendingConfirmation = PendingConfirmation(
@@ -723,12 +773,12 @@ private fun ProjectSessionGroup(
     viewingArchived: Boolean,
     archivedCount: Int,
     showMore: Boolean,
-    sessionStatus: (String) -> kotlinx.coroutines.flow.StateFlow<app.andy.model.AgentSessionStatus?>,
     onToggleProject: () -> Unit,
     onOpenSession: (AgentTask) -> Unit,
     onMarkSessionUnread: (AgentTask) -> Unit,
     onArchiveSession: (AgentTask) -> Unit,
     onUnarchiveSession: (AgentTask) -> Unit,
+    onDeleteSession: (AgentTask) -> Unit,
     onShowMore: () -> Unit,
     onToggleArchived: () -> Unit,
     onNewChat: () -> Unit,
@@ -736,67 +786,45 @@ private fun ProjectSessionGroup(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
-            Modifier.fillMaxWidth()
-                .background(if (selectedProject) AndyColors.Neutral700 else Color.Transparent, RoundedCornerShape(AndyRadius.R3))
-                .hoverable(interactionSource)
-                .clickable(onClick = onToggleProject)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                if (sessionsCollapsed) ">" else "v",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-            )
-            Text(
-                project.name,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            AnimatedVisibility(
-                visible = hovered,
-                enter = fadeIn(tween(120)) + expandHorizontally(tween(160), expandFrom = Alignment.End),
-                exit = fadeOut(tween(90)) + shrinkHorizontally(tween(120), shrinkTowards = Alignment.End),
-            ) {
-                Text(
-                    "Edit",
-                    color = Cyan,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    modifier = Modifier.clickable(onClick = onEditProject).padding(end = 2.dp),
-                )
-            }
-            NewProjectChatButton(onClick = onNewChat, size = 15.dp)
-            if (hasUnread) UnreadDot()
-        }
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        WorkspaceItemRow(
+            title = project.name,
+            selected = selectedProject,
+            onClick = onToggleProject,
+            trailing = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (project.source == ConfigSource.Repo) {
+                        RepoSourceBadge()
+                    } else if (hovered) {
+                        Text(
+                            "Edit",
+                            color = Cyan,
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            modifier = Modifier.clickable(onClick = onEditProject),
+                        )
+                    }
+                    NewProjectChatButton(onClick = onNewChat, size = 14.dp)
+                    if (hasUnread) UnreadDot()
+                }
+            },
+            modifier = Modifier.hoverable(interactionSource),
+        )
         AnimatedVisibility(
             visible = !sessionsCollapsed,
             enter = fadeIn(tween(120)) + expandVertically(tween(160)),
             exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 if (viewingArchived) {
-                    Text(
-                        "Archived chats",
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(start = 14.dp, bottom = 2.dp),
-                    )
+                    WorkspaceSectionLabel("Archived chats")
                 }
                 sessions.forEach { task ->
-                    val status by sessionStatus(task.id).collectAsState()
                     ProjectSessionRow(
                         task = task,
-                        sessionStatus = status,
                         selected = task.id == selectedSessionId,
                         onOpen = { onOpenSession(task) },
                         onMarkUnread = { onMarkSessionUnread(task) },
@@ -804,6 +832,7 @@ private fun ProjectSessionGroup(
                             if (viewingArchived) onUnarchiveSession(task) else onArchiveSession(task)
                         },
                         archiveLabel = if (viewingArchived) "Unarchive" else "Archive",
+                        onDelete = { onDeleteSession(task) },
                     )
                 }
                 if (showMore) {
@@ -811,17 +840,23 @@ private fun ProjectSessionGroup(
                         "Show more",
                         color = TextSecondary,
                         fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(start = 22.dp, top = 2.dp).clickable(onClick = onShowMore).padding(vertical = 2.dp),
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .padding(start = 12.dp, top = 2.dp)
+                            .clickable(onClick = onShowMore)
+                            .padding(vertical = 4.dp),
                     )
                 }
                 if (archivedCount > 0 || viewingArchived) {
                     Text(
                         if (viewingArchived) "Back to chats" else "Archived ($archivedCount)",
-                        color = if (viewingArchived) Cyan else TextSecondary,
+                        color = if (viewingArchived) Cyan else TextSecondary.copy(alpha = 0.78f),
                         fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(start = 22.dp, top = 2.dp).clickable(onClick = onToggleArchived).padding(vertical = 2.dp),
+                        fontSize = 10.sp,
+                        modifier = Modifier
+                            .padding(start = 12.dp, top = 2.dp)
+                            .clickable(onClick = onToggleArchived)
+                            .padding(vertical = 4.dp),
                     )
                 }
             }
@@ -832,55 +867,40 @@ private fun ProjectSessionGroup(
 @Composable
 private fun ProjectSessionRow(
     task: AgentTask,
-    sessionStatus: app.andy.model.AgentSessionStatus?,
     selected: Boolean,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
     archiveLabel: String = "Archive",
+    onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
-        Row(
-            Modifier.fillMaxWidth()
-                .padding(start = 14.dp)
-                .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                .pointerInput(task.id) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            if (event.type != PointerEventType.Press) continue
-                            val change = event.changes.firstOrNull() ?: continue
-                            if (event.buttons.isSecondaryPressed) {
-                                menuExpanded = true
-                                change.consume()
-                            }
+        WorkspaceItemRow(
+            title = task.title,
+            selected = selected,
+            indented = true,
+            onClick = onOpen,
+            leading = {
+                when {
+                    isSessionWorking(task) -> ProjectActivityIndicator(8.dp)
+                    task.unread -> UnreadDot()
+                }
+            },
+            modifier = Modifier.pointerInput(task.id) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Press) continue
+                        val change = event.changes.firstOrNull() ?: continue
+                        if (event.buttons.isSecondaryPressed) {
+                            menuExpanded = true
+                            change.consume()
                         }
                     }
                 }
-                .clickable(onClick = onOpen)
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            Box(
-                modifier = Modifier.size(9.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                when {
-                    isSessionWorking(task.isActive, sessionStatus) -> ProjectActivityIndicator(9.dp)
-                    task.unread -> UnreadDot()
-                }
-            }
-            Text(
-                task.title,
-                color = if (selected) TextPrimary else TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+            },
+        )
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
@@ -902,6 +922,13 @@ private fun ProjectSessionRow(
                 },
                 enabled = archiveLabel == "Unarchive" || !task.isActive,
             )
+            DropdownMenuItem(
+                text = { Text("Delete", color = Red, fontFamily = MonoFont, fontSize = 12.sp) },
+                onClick = {
+                    menuExpanded = false
+                    onDelete()
+                },
+            )
         }
     }
 }
@@ -914,10 +941,29 @@ private fun ProjectChatToolbar(
     onCanvasChange: (ProjectCanvas) -> Unit,
     onDockToggle: (DockPlacement, DockKind) -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(Modifier.weight(1f)) {
-            Text(project.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(project.contextDir, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                project.name,
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                project.contextDir,
+                color = TextSecondary.copy(alpha = 0.78f),
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ProjectCanvas.entries.filter { it != ProjectCanvas.Chat }.forEach { tab ->
@@ -1012,33 +1058,74 @@ private fun ProjectRunbook(
         Text("Runbook", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
         Button(onClick = onNewAction) { Text("Add action") }
     }
-    if (project.actions.isEmpty()) {
+    if (project.actions.isEmpty() && project.notes.isEmpty()) {
         EmptyState("Add the commands you use most")
     } else {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
-            items(project.actions, key = { it.id }) { action ->
-                val expanded = expandedActionId == action.id
-                Column(
-                    Modifier.fillMaxWidth()
-                        .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
-                        .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.R3))
-                        .clickable { onExpandedActionChange(if (expanded) null else action.id) }
-                        .animateContentSize(animationSpec = tween(220))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(actionIconMarker(action.icon), color = Rust, fontFamily = MonoFont)
-                        Text(action.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        OutlinedButton(onClick = { onEditAction(action) }) { Text("Edit") }
-                        Button(onClick = { onRunAction(action) }) { Text("Run") }
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+            if (project.actions.isNotEmpty()) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f, fill = false)) {
+                    items(project.actions, key = { it.id }) { action ->
+                        val expanded = expandedActionId == action.id
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .clickable { onExpandedActionChange(if (expanded) null else action.id) }
+                                .animateContentSize(animationSpec = tween(220))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(actionIconMarker(action.icon), color = Rust, fontFamily = MonoFont)
+                                Text(action.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                if (action.source == ConfigSource.Repo) {
+                                    RepoSourceBadge()
+                                    OutlinedButton(onClick = {}, enabled = false) { Text("Edit") }
+                                } else {
+                                    OutlinedButton(onClick = { onEditAction(action) }) { Text("Edit") }
+                                }
+                                Button(onClick = { onRunAction(action) }) { Text("Run") }
+                            }
+                            AnimatedVisibility(
+                                visible = expanded,
+                                enter = fadeIn(tween(160)) + expandVertically(tween(220)),
+                                exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
+                            ) {
+                                Text(action.command, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
-                    AnimatedVisibility(
-                        visible = expanded,
-                        enter = fadeIn(tween(160)) + expandVertically(tween(220)),
-                        exit = fadeOut(tween(100)) + shrinkVertically(tween(160)),
-                    ) {
-                        Text(action.command, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (project.notes.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Notes", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    project.notes.forEach { note ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
+                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Checkbox(
+                                checked = note.completed,
+                                onCheckedChange = null,
+                                enabled = note.source != ConfigSource.Repo,
+                            )
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(note.title, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    if (note.source == ConfigSource.Repo) {
+                                        RepoSourceBadge()
+                                    }
+                                }
+                                if (note.body.isNotBlank()) {
+                                    Text(note.body, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1090,13 +1177,13 @@ private fun ProjectDialog(
                         ),
                     )
                 },
-                enabled = name.isNotBlank() && contextDir.isNotBlank(),
+                enabled = project?.source != ConfigSource.Repo && name.isNotBlank() && contextDir.isNotBlank(),
                 colors = primaryButtonColors(),
             ) { Text("Save") }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (onDelete != null) {
+                if (onDelete != null && project?.source != ConfigSource.Repo) {
                     OutlinedButton(
                         onClick = onDelete,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
@@ -1191,4 +1278,21 @@ private fun nextActionId(prefix: String, label: String, existing: Set<String>): 
         index++
     }
     return id
+}
+
+@Composable
+private fun RepoSourceBadge() {
+    Surface(
+        color = AndyColors.Neutral800,
+        shape = RoundedCornerShape(AndyRadius.R2),
+        border = BorderStroke(1.dp, AndyColors.Neutral600),
+    ) {
+        Text(
+            "from repo",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
 }

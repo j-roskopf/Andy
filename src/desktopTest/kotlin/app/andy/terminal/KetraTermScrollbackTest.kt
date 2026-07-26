@@ -1,14 +1,17 @@
 package app.andy.terminal
 
 import app.andy.desktop.service.agents.AgentTerminalManager
+import app.andy.desktop.service.agents.AgentTerminalMode
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.TerminalThemePreset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +81,21 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun looksLikeRawAnsiTeeAcceptsStyledTranscripts() {
+        // Persisted history is SGR-only; it must replay verbatim, not get flattened.
+        assertFalse(looksLikeRawAnsiTee("\u001b[38;5;39mhello\u001b[0m\n\u001b[1mbold\u001b[0m\n"))
+        assertFalse(looksLikeRawAnsiTee("\u001b[0m╭──────╮\u001b[0m\n\u001b[0m│ hi   │\u001b[0m\n"))
+    }
+
+    @Test
+    fun scrollbackReplayColumnsFitWidestVisibleRow() {
+        val content = "\u001b[32m" + "x".repeat(180) + "\u001b[0m\nshort\n"
+        assertTrue(scrollbackReplayColumns(content) >= 181)
+        assertEquals(100, scrollbackReplayColumns("tiny\n"))
+        assertEquals(120, scrollbackReplayColumns("y".repeat(500), maxColumns = 120))
+    }
+
+    @Test
     fun resolveScrollbackForReplayCollapsesSpinnerRedraws() {
         AndyKetraTermConfig.ensureInitialized()
         val noisy = buildString {
@@ -138,6 +156,7 @@ class KetraTermScrollbackTest {
             val manager = AgentTerminalManager(
                 scope = scope,
                 scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
             )
             val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
             val taskId = "scroll-task-1"
@@ -145,7 +164,7 @@ class KetraTermScrollbackTest {
                 id = taskId,
                 title = "scroll",
                 agent = AgentKind.ClaudeCode,
-                status = AgentTaskStatus.Running,
+                status = AgentStatus.Working,
                 prompt = "test",
                 cwd = dir.absolutePath,
                 createdAtMillis = System.currentTimeMillis(),
@@ -160,9 +179,8 @@ class KetraTermScrollbackTest {
             manager.stop(taskId)
 
             val file = File(dir, "$taskId/scrollback.ansi")
-            assertTrue(file.isFile, "scrollback file should exist after stop")
+            awaitScrollbackContains(file, "first-run-output")
             val first = file.readText()
-            assertTrue(first.contains("first-run-output"), "first run missing: ${first.take(300)}")
             assertFalse(looksLikeRawAnsiTee(first), "persisted scrollback should be resolved text")
 
             val argv2 = if (isWindows) {
@@ -174,6 +192,7 @@ class KetraTermScrollbackTest {
             withTimeout(15_000) { manager.awaitExit(taskId) }
             manager.stop(taskId)
 
+            awaitScrollbackContains(file, "second-run-output")
             val second = file.readText()
             assertTrue(second.contains("first-run-output"), "cumulative should keep first run")
             assertTrue(second.contains("second-run-output"), "cumulative should append second run")
@@ -182,6 +201,55 @@ class KetraTermScrollbackTest {
                 "expected session separator between runs",
             )
             assertTrue(second.length > first.length, "appended scrollback should grow")
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun persistedScrollbackKeepsTerminalStyling() = runBlocking {
+        if (System.getProperty("os.name").contains("windows", ignoreCase = true)) return@runBlocking
+        val dir = File.createTempFile("andy-scrollback-styled", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            val taskId = "styled-task"
+            val task = AgentTask(
+                id = taskId,
+                title = "styled",
+                agent = AgentKind.ClaudeCode,
+                status = AgentStatus.Working,
+                prompt = "test",
+                cwd = dir.absolutePath,
+                createdAtMillis = System.currentTimeMillis(),
+            )
+            manager.start(
+                task,
+                listOf("/bin/sh", "-c", "printf '\\033[31mred-line\\033[0m\\n    indented-line\\n'"),
+                emptyMap(),
+            )
+            withTimeout(15_000) { manager.awaitExit(taskId) }
+            manager.stop(taskId)
+
+            val file = File(dir, "$taskId/scrollback.ansi")
+            awaitScrollbackContains(file, "red-line")
+            val replay = manager.scrollbackReplayText(taskId)
+            assertNotNull(replay)
+            assertTrue(replay.contains("red-line"), "missing output: ${replay.take(300)}")
+            assertTrue(replay.contains("\u001b["), "styling was stripped: ${replay.take(300)}")
+            assertTrue(
+                replay.lines().any { it.contains("    indented-line") },
+                "indentation was trimmed: ${replay.take(300)}",
+            )
+            assertFalse(replay.contains("\n\n\n"), "replay should not be re-spaced")
         } finally {
             scope.cancel()
             dir.deleteRecursively()
@@ -199,11 +267,123 @@ class KetraTermScrollbackTest {
             val manager = AgentTerminalManager(
                 scope = scope,
                 scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
             )
             assertFalse(manager.hasScrollback("no-such-task"))
+            assertNull(manager.openScrollbackReplay("no-such-task"))
+            assertNull(manager.scrollbackReplayText("no-such-task"))
         } finally {
             scope.cancel()
             dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun styledHistoryReplaysVerbatim() {
+        val dir = File.createTempFile("andy-scrollback-flush", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "flush-task"
+            val saved = "\u001b[36m> earlier user prompt\u001b[0m\n    \u001b[32massistant reply line\u001b[0m"
+            File(dir, "$taskId/scrollback.ansi").also { file ->
+                file.parentFile.mkdirs()
+                file.writeText("$saved\n")
+            }
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            assertEquals(saved, manager.scrollbackReplayText(taskId))
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun openScrollbackReplayBuildsViewer() {
+        val dir = File.createTempFile("andy-scrollback-replay", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "replay-task"
+            val scrollback = File(dir, "$taskId/scrollback.ansi").also { file ->
+                file.parentFile.mkdirs()
+                file.writeText("hello from finished chat\r\n")
+            }
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            assertTrue(manager.hasScrollback(taskId))
+            assertTrue(scrollback.isFile)
+            val widget = manager.openScrollbackReplay(taskId)
+            assertNotNull(widget)
+            // READ-ONLY history must not take keyboard focus / accept typing.
+            assertFalse(widget.isFocusable)
+            assertTrue(widget.mouseWheelListeners.isNotEmpty(), "scrollback replay must handle wheel without focus")
+            disposeScrollbackReplayTerminal(widget)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun replayGridIsAsWideAsTheLiveAlternateScreen() {
+        val appearance = TerminalAppearanceSnapshot()
+        // Sweep widths: the normal buffer's extra chrome only costs a column at some sizes,
+        // and one lost column is enough to wrap the right border off every saved row.
+        for (width in 900..1400 step 37) {
+            val pixels = java.awt.Dimension(width, 640)
+            val live = altScreenGridSize(appearance, pixels)
+            val replay = createScrollbackReplayTerminal("history", cols = 120, rows = 32, appearance = appearance)
+            try {
+                val grid = onSwingEdt {
+                    replay.setSize(pixels)
+                    replay.doLayout()
+                    replay.visibleGridSize()
+                }
+                assertEquals(
+                    live.width,
+                    grid.width,
+                    "replay lost columns to normal-buffer chrome at ${pixels.width}px, so saved rows wrap",
+                )
+            } finally {
+                disposeScrollbackReplayTerminal(replay)
+            }
+        }
+    }
+
+    /** Grid an agent CLI draws into: a live terminal on the alternate screen. */
+    private fun altScreenGridSize(
+        appearance: TerminalAppearanceSnapshot,
+        pixels: java.awt.Dimension,
+    ): java.awt.Dimension = onSwingEdt {
+        val buffer = io.github.ketraterm.core.TerminalBuffers.create(width = 120, height = 32, maxHistory = 100)
+        val session = io.github.ketraterm.session.TerminalSession.create(
+            terminal = buffer,
+            connector = ParkedTerminalConnector(),
+        )
+        session.start(120, 32)
+        val altScreen = "\u001b[?1049h".toByteArray()
+        session.onBytes(altScreen, 0, altScreen.size)
+        val widget = io.github.ketraterm.ui.swing.api.SwingTerminal(
+            settingsProvider = { appearance.toSwingSettings(columns = 120, rows = 32) },
+        )
+        widget.bind(session)
+        widget.setSize(pixels)
+        widget.doLayout()
+        widget.visibleGridSize().also {
+            widget.dispose()
+            session.close()
         }
     }
 
@@ -255,29 +435,12 @@ class KetraTermScrollbackTest {
         }
     }
 
-    @Test
-    fun ansiReplayConnectorServesAllBytesThenParks() {
-        val payload = "hi".encodeToByteArray()
-        val connector = AnsiReplayConnector(payload)
-        val received = java.util.concurrent.atomic.AtomicReference<ByteArray?>(null)
-        val closed = java.util.concurrent.CountDownLatch(1)
-        connector.start(
-            object : io.github.ketraterm.transport.TerminalConnectorListener {
-                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
-                    received.set(bytes.copyOfRange(offset, offset + length))
-                }
-
-                override fun onClosed(exitCode: Int?) {
-                    closed.countDown()
-                }
-
-                override fun onError(error: Throwable) = Unit
-            },
-        )
-        // Allow reader thread to feed bytes.
-        Thread.sleep(50)
-        assertEquals("hi", received.get()?.decodeToString())
-        connector.close()
-        assertTrue(closed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    private suspend fun awaitScrollbackContains(file: File, text: String, timeoutMs: Long = 30_000) {
+        withTimeout(timeoutMs) {
+            while (true) {
+                if (file.isFile && file.readText().contains(text)) return@withTimeout
+                delay(100)
+            }
+        }
     }
 }

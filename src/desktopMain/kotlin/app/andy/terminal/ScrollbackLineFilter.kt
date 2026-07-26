@@ -12,17 +12,56 @@ private val EllipsisPathLine = Regex("""\.\.\.""")
 private val TruncatedReviewLine = Regex("""truncated.*ctrl\+r to review""", RegexOption.IGNORE_CASE)
 private val ShellEchoLine = Regex("""^".+"\s+2>&1""")
 private val EarlierItemsHiddenLine = Regex("""…\s+\d+\s+earlier items hidden""")
+/** ASCII or Unicode horizontal rules from Ink/TUI chrome (incl. `─── ───` session marks). */
+private val RuleLine = Regex("""^[─━═\-_|▕▏\s]{3,}$""")
+/** Antigravity/Cursor slash-command palette rows (`/agents  … description`). */
+private val SlashCommandMenuLine = Regex("""^\s*>?\s*/[a-z0-9][a-z0-9_-]*\s{2,}\S""", RegexOption.IGNORE_CASE)
+private val SlashMenuChromeLine = Regex(
+    """↑/↓|esc to cancel|↓\s*\d+\s+more|tab complete|enter select""",
+    RegexOption.IGNORE_CASE,
+)
+private val ProviderStatusFooter = Regex("""·\s*(high|medium|low|auto)\s*$""", RegexOption.IGNORE_CASE)
+private val BannerEmailLine = Regex("""^\S+@\S+\.\S+(\s+\([^)]+\))?$""")
+private val BannerModelLine = Regex(
+    """^(Gemini|Claude|GPT|Sonnet|Opus|Flash)\b.*\((High|Medium|Low|Auto)\)\s*$""",
+    RegexOption.IGNORE_CASE,
+)
+
+/** Cursor model / progress footer (`Cursor Grok … · 54.6% · 12 files edited`). */
+private val CursorAgentStatusFooter = Regex("""(?i)cursor .+ · \d""")
+
+private val ColonStatusLine = Regex("""^:+\s*(Working|Running|Thinking|Grepping|Reading|Loading)\b""")
+private val StatusWordLine = Regex("""\b(Working|Running|Loading|Thinking)\b""")
+private val TaskCountLine = Regex("""^\d+\s+tasks?$""")
+private val ShellPromptLine = Regex("""^\$\s+""")
+private val DurationOnlyLine = Regex("""^\d+ms$""")
+/** Matched against an already-lowercased line, so no [RegexOption.IGNORE_CASE]. */
+private val ExitCodeLine = Regex("""exit\s+\d+""")
+private val VersionBannerLine = Regex("""v\d{4}\.\d{2}\.\d{2}.*""")
+private val EditedSummaryLine = Regex("""\bEdited\b.*\+\d+""")
+
+/**
+ * Lines that agent TUIs repaint in place (status footers, spinners) rather than append.
+ * Used by [scrollbackSnapshotOverlap] so a changing % does not look like unrelated content.
+ */
+internal fun isVolatileTerminalChromeLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (trimmed.isEmpty()) return true
+    if (isScrollbackNoiseLine(trimmed)) return true
+    if (CursorAgentStatusFooter.containsMatchIn(trimmed) && trimmed.length < 120) return true
+    return false
+}
 
 /** Drop TUI chrome and spinner redraw lines that make replay unreadable. */
 internal fun isScrollbackNoiseLine(line: String): Boolean {
     val trimmed = line.trim()
     if (trimmed.isEmpty()) return true
     val lower = trimmed.lowercase()
-    if (Regex("""^:+\s*(Working|Running|Thinking|Grepping|Reading|Loading)\b""").containsMatchIn(trimmed)) return true
+    if (ColonStatusLine.containsMatchIn(trimmed)) return true
     if (SpinnerStatusLine.containsMatchIn(trimmed)) return true
     if (TokenStatusLine.containsMatchIn(trimmed)) return true
     if (SpinnerTokenLine.containsMatchIn(trimmed)) return true
-    if (Regex("""\b(Working|Running|Loading|Thinking)\b""").containsMatchIn(trimmed) &&
+    if (StatusWordLine.containsMatchIn(trimmed) &&
         trimmed.length < 80 &&
         !trimmed.contains('?')
     ) {
@@ -30,12 +69,12 @@ internal fun isScrollbackNoiseLine(line: String): Boolean {
     }
     if (trimmed == "→ Add a follow-up" || lower.contains("ctrl+c to stop")) return true
     if (lower.contains("run everything")) return true
-    if (Regex("""^\d+\s+tasks?$""").containsMatchIn(trimmed)) return true
+    if (TaskCountLine.containsMatchIn(trimmed)) return true
     if (AutoPercentLine.containsMatchIn(trimmed)) return true
     if (PathStatusLine.containsMatchIn(trimmed)) return true
-    if (Regex("""^\$\s+""").containsMatchIn(trimmed)) return true
-    if (Regex("""^\d+ms$""").containsMatchIn(trimmed)) return true
-    if (Regex("""exit\s+\d+""").containsMatchIn(lower) && trimmed.length < 40) return true
+    if (ShellPromptLine.containsMatchIn(trimmed)) return true
+    if (DurationOnlyLine.containsMatchIn(trimmed)) return true
+    if (ExitCodeLine.containsMatchIn(lower) && trimmed.length < 40) return true
     return false
 }
 
@@ -47,23 +86,45 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     val lower = trimmed.lowercase()
     if (lower.startsWith("tip:")) return true
     if (lower.startsWith("cursor agent")) return true
-    if (lower.matches(Regex("""v\d{4}\.\d{2}\.\d{2}.*"""))) return true
+    if (lower.startsWith("antigravity cli")) return true
+    if (VersionBannerLine.matches(lower)) return true
     if (ToolProgressLine.containsMatchIn(trimmed)) return true
-    if (Regex("""\bEdited\b.*\+\d+""").containsMatchIn(trimmed)) return true
+    if (EditedSummaryLine.containsMatchIn(trimmed)) return true
     if (EarlierItemsHiddenLine.containsMatchIn(trimmed)) return true
     if (TruncatedReviewLine.containsMatchIn(trimmed)) return true
     if (ShellEchoLine.containsMatchIn(trimmed)) return true
     if (trimmed == "→" || trimmed == "Auto ·") return true
-    if (lower.startsWith("~/cod")) return true
+    if (trimmed == ">" || trimmed == "> /" || trimmed == "/") return true
+    if (lower.startsWith("~/cod") || (lower.startsWith("~/") && !lower.contains(' ') && trimmed.length < 80)) {
+        return true
+    }
     if (lower.startsWith("run this command?")) return true
     if (lower.startsWith("not in allowlist:")) return true
     if (lower.startsWith("add shell(")) return true
     if (lower.startsWith("skip & tell the agent")) return true
-    if (Regex("""^-{10,}$""").containsMatchIn(trimmed)) return true
+    if (RuleLine.matches(trimmed)) return true
+    if (SlashCommandMenuLine.containsMatchIn(trimmed)) return true
+    if (SlashMenuChromeLine.containsMatchIn(trimmed)) return true
+    if (ProviderStatusFooter.containsMatchIn(trimmed) && trimmed.length < 80) return true
+    if (BannerEmailLine.matches(trimmed)) return true
+    if (BannerModelLine.matches(trimmed)) return true
     if (lower.contains("waiting for approval")) return true
     if (lower.startsWith("→ run (once)")) return true
     return false
 }
+
+/** tmux status bar rows (`[andy-task0:node* … "Cursor Agent" 09:14`) that leaked into pre-fix captures. */
+private val TmuxStatusBarLine = Regex("""^\[[A-Za-z0-9_-]+:\S*\s""")
+
+/**
+ * Pre-fix history was saved as de-duplicated, unstyled rows scraped from the tmux
+ * viewer, so it can never regain terminal styling. Keep its line structure and
+ * indentation — that still reads like a terminal — and drop the redraw debris.
+ */
+internal fun formatLegacyScrollbackForReplay(raw: String): String = raw.lines()
+    .filterNot { line -> isScrollbackNoiseLine(line) || TmuxStatusBarLine.containsMatchIn(line.trimStart()) }
+    .joinToString("\n")
+    .trimEnd()
 
 internal fun isScrollbackDiffLine(line: String): Boolean {
     val trimmed = line.trim()

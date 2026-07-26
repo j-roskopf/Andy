@@ -14,13 +14,14 @@ import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaSource
 import app.andy.model.AgentQuotaAccess
-import app.andy.model.AgentSessionStatus
+
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.ConfigSource
 import app.andy.model.AgentSandboxMode
 import app.andy.model.grillMeInteractivePromptAddendum
 import app.andy.model.ProjectAgentProfile
@@ -48,6 +49,7 @@ import app.andy.model.providerDefaults
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.toTerminalAppearance
+import app.andy.terminal.TmuxAndy
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
 import app.andy.service.AgentRunService
@@ -97,6 +99,7 @@ class DesktopAgentRunService(
     private val workspaceStore: WorkspaceStore,
     private val actionConfig: ActionConfigStore,
     private val enableProbes: Boolean = true,
+    terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -112,6 +115,7 @@ class DesktopAgentRunService(
             }
         },
         scrollbackFile = { id -> store.scrollbackFile(id) },
+        mode = terminalMode,
     )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -145,7 +149,7 @@ class DesktopAgentRunService(
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
-    private val previousSessionStatuses = ConcurrentHashMap<String, AgentSessionStatus>()
+    private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
@@ -160,7 +164,9 @@ class DesktopAgentRunService(
 
     init {
         Runtime.getRuntime().addShutdownHook(Thread {
-            snapshotActiveTasksBeforeShutdown()
+            // Best-effort: never let a shutdown-time persist failure (e.g. the store
+            // already torn down) throw uncaught out of the shutdown thread.
+            runCatching { snapshotActiveTasksBeforeShutdown() }
             handles.keys.toList().forEach(terminals::stop)
         })
         scope.launch {
@@ -184,9 +190,6 @@ class DesktopAgentRunService(
             backfillCursorPlansFromTranscripts()
             ready.complete(Unit)
             refreshCliStatuses()
-            scope.launch {
-                terminals.sessionStatuses.collect(::onSessionStatusesChanged)
-            }
             if (enableProbes) {
                 refreshProviderQuotas()
                 while (isActive) {
@@ -205,16 +208,73 @@ class DesktopAgentRunService(
     /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the SwingPanel mounts when the PTY appears. */
     internal val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
 
-    internal val attachedTerminalTaskIds: StateFlow<Set<String>> get() = terminals.attachedTaskIds
+    override val attachedTerminalTaskIds: StateFlow<Set<String>> get() = terminals.attachedTaskIds
 
     /** Cumulative scrollback file for finished-chat replay (may not exist yet). */
     internal fun scrollbackFile(taskId: String): File = store.scrollbackFile(taskId)
 
     internal fun hasScrollback(taskId: String): Boolean = terminals.hasScrollback(taskId)
 
-    override fun sessionStatus(taskId: String): StateFlow<AgentSessionStatus?> = terminals.statusFlow(taskId)
+    /**
+     * Read-only KetraTerm scrollback viewer for ended chats. Caller owns dispose.
+     * Does not restart the provider CLI — use [reattachSession] / [resume] for that.
+     */
+    internal fun openScrollbackReplay(taskId: String) =
+        terminals.openScrollbackReplay(taskId)
 
-    override val sessionStatuses: StateFlow<Map<String, AgentSessionStatus>> = terminals.sessionStatuses
+    /**
+     * Flush live capture then build the same read-only replay finished chats get, so a
+     * running chat's history peek is styled identically to the live terminal.
+     */
+    internal fun flushScrollbackReplay(taskId: String) =
+        terminals.flushScrollbackReplay(taskId)
+
+    /** True while the embedded PTY or underlying tmux session is still running for [taskId]. */
+    override fun isTerminalLive(taskId: String): Boolean = terminals.isAlive(taskId)
+
+    override val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = terminals.interactiveTaskIds
+
+    override fun isViewing(taskId: String): Boolean = taskId in viewingTaskIds
+
+    /** True while the local Swing/PTY viewer attached to tmux is still running. */
+    internal fun isViewerAlive(taskId: String): Boolean = terminals.isViewerAlive(taskId)
+
+    /**
+     * Reattach a KetraTerm viewer to a live tmux session (GUI reopen while daemon/agent continues).
+     */
+    internal suspend fun attachTerminalIfNeeded(taskId: String) {
+        if (terminals.terminalWidget(taskId) != null) return
+        val task = currentTask(taskId)
+        val preferredStatus = task?.status?.let { status ->
+            AgentStatusSnapshot(status, confident = task.statusConfident)
+        }
+        terminals.attachExisting(
+            taskId = taskId,
+            agent = task?.agent ?: AgentKind.ClaudeCode,
+            cwd = task?.cwd,
+            preferredStatus = preferredStatus,
+            onStatusSnapshot = { snapshot -> applyStatusSnapshot(taskId, snapshot) },
+        )
+    }
+
+    /** Compose unmount: release the local viewer without killing tmux / the agent CLI. */
+    override fun releaseTerminalViewer(taskId: String) = terminals.releaseViewerOnly(taskId)
+
+    /**
+     * Repairs tasks left [AgentStatus.Working]/[null] after the PTY
+     * exited without a clean [finishTask] (e.g. crash). Safe to call when opening history.
+     * Does not mark stale while a `tmux -L andy` session for the task still exists.
+     */
+    internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.isActive && task.status != AgentStatus.Blocked) return
+        val jobActive = handles[taskId]?.job?.isActive == true
+        if (jobActive || terminals.isAlive(taskId)) return
+        val recovered = recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+        if (recovered == task) return
+        updateTask(taskId) { recovered }
+        scope.launch { persist() }
+    }
 
     override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
         val normalizedDirectory = directory
@@ -574,7 +634,7 @@ class DesktopAgentRunService(
             .sortedByDescending { it.createdAtMillis }
             .firstOrNull { attempt ->
                 currentTask(attempt.runId)?.let { run ->
-                    run.isActive || run.status == AgentTaskStatus.WaitingForInput
+                    run.isActive || run.status == AgentStatus.Blocked
                 } == true
             }
             ?.runId
@@ -768,7 +828,7 @@ class DesktopAgentRunService(
             skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
             maxBudgetUsd = draft.maxBudgetUsd,
-            status = AgentTaskStatus.Queued,
+            status = null,
             vendorSessionId = null,
             createdAtMillis = now,
         )
@@ -776,7 +836,7 @@ class DesktopAgentRunService(
         val binary = binaryFor(task.agent)
         if (binary == null) {
             task = task.copy(
-                status = AgentTaskStatus.Failed,
+                status = AgentStatus.Error,
                 errorMessage = unavailableCliMessage(task.agent),
                 finishedAtMillis = now,
             )
@@ -789,7 +849,7 @@ class DesktopAgentRunService(
             val originDir = task.originDir
             if (originDir == null) {
                 task = task.copy(
-                    status = AgentTaskStatus.Failed,
+                    status = AgentStatus.Error,
                     errorMessage = "a project directory is required to create a worktree",
                     finishedAtMillis = System.currentTimeMillis(),
                 )
@@ -802,13 +862,13 @@ class DesktopAgentRunService(
                 onSuccess = { task.copy(cwd = it.path, worktreePath = it.path, branchName = it.branch, ownsWorktree = true) },
                 onFailure = {
                     task.copy(
-                        status = AgentTaskStatus.Failed,
+                        status = AgentStatus.Error,
                         errorMessage = "worktree creation failed: ${it.message}",
                         finishedAtMillis = System.currentTimeMillis(),
                     )
                 },
             )
-            if (task.status == AgentTaskStatus.Failed) {
+            if (task.status == AgentStatus.Error) {
                 upsertTask(task)
                 persist()
                 return task
@@ -837,6 +897,9 @@ class DesktopAgentRunService(
         return task
     }
 
+    private fun isLaunchInProgress(taskId: String): Boolean =
+        handles[taskId]?.job?.isActive == true
+
     override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
         val task = currentTask(taskId) ?: return
         if (task.userInputRequest != null) return
@@ -857,19 +920,26 @@ class DesktopAgentRunService(
             appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths)))
             updateTask(taskId) {
                 it.copy(
-                    status = AgentTaskStatus.Running,
+                    status = AgentStatus.Working,
                     exitCode = null,
                     errorMessage = null,
                     finishedAtMillis = null,
                     unread = false,
                 )
             }
-            terminals.write(taskId, task.followUpPromptForLiveTerminal(followUp, imagePaths, selectedSkills))
-            scope.launch { persist() }
+            val liveText = task.followUpPromptForLiveTerminal(followUp, imagePaths, selectedSkills)
+            scope.launch {
+                // A tmux session can outlive the app that spawned it. Mount a viewer before
+                // typing so a chat resumed from read-only replay comes back interactive.
+                attachTerminalIfNeeded(taskId)
+                terminals.write(taskId, liveText)
+                persist()
+            }
             return
         }
 
-        if (task.isActive) return
+        if (task.isActive && isLaunchInProgress(taskId)) return
+        // Working without a live session means a failed reattach/resume — relaunch below.
         // Only keep a stored agy conversation id when we can prove it belongs to
         // this Andy task (history/transcript contains the original prompt).
         val resolvedAgyId = if (task.agent == AgentKind.Antigravity) {
@@ -897,8 +967,11 @@ class DesktopAgentRunService(
 
         val now = System.currentTimeMillis()
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths)))
+        val resolvedCwd = AgentScratchWorkspace.resolveCwd(taskForResume.cwd)
         val queued = taskForResume.copy(
-            status = AgentTaskStatus.Queued,
+            cwd = resolvedCwd,
+            latestPrompt = followUp.trim().ifBlank { taskForResume.latestPrompt },
+            status = null,
             exitCode = null,
             errorMessage = null,
             finishedAtMillis = null,
@@ -950,13 +1023,21 @@ class DesktopAgentRunService(
 
     override fun canReattachSession(taskId: String): Boolean {
         val task = currentTask(taskId) ?: return false
-        if (task.isActive || terminals.isAlive(taskId) || task.userInputRequest != null) return false
+        if (task.userInputRequest != null) return false
+        val broken = TmuxAndy.isAvailable() && TmuxAndy.sessionLooksBroken(taskId)
+        if (!broken && (task.isActive || terminals.isAlive(taskId))) return false
         return resumeTaskForReattach(task) != null
     }
 
     override fun reattachSession(taskId: String) {
         val task = currentTask(taskId) ?: return
-        if (task.isActive || terminals.isAlive(taskId) || task.userInputRequest != null) return
+        if (task.userInputRequest != null) return
+        val broken = TmuxAndy.isAvailable() && TmuxAndy.sessionLooksBroken(taskId)
+        if (!broken && (task.isActive || terminals.isAlive(taskId))) return
+        if (broken) {
+            handles.remove(taskId)?.job?.cancel()
+            terminals.stop(taskId)
+        }
         val taskForResume = resumeTaskForReattach(task) ?: return
         val adapter = adapters[task.agent] ?: return
         runCatching {
@@ -970,16 +1051,18 @@ class DesktopAgentRunService(
         }.getOrNull() ?: return
 
         val queued = taskForResume.copy(
-            status = AgentTaskStatus.Queued,
+            cwd = AgentScratchWorkspace.resolveCwd(taskForResume.cwd),
+            status = null,
             exitCode = null,
             errorMessage = null,
             finishedAtMillis = null,
             unread = false,
         )
+        val rollbackSnapshot = taskForResume
         upsertTask(queued)
         scope.launch {
             persist()
-            launchRunAwaitingTerminal(queued, writeAfterStart = null) { resumeAdapter, binary, mcpUrl ->
+            val terminalReady = launchRun(queued, writeAfterStart = null) { resumeAdapter, binary, mcpUrl ->
                 resumeAdapter.buildInteractiveResumeCommand(
                     binary,
                     currentTask(taskId) ?: queued,
@@ -987,6 +1070,17 @@ class DesktopAgentRunService(
                     followUp = null,
                     followUpImagePaths = emptyList(),
                 ) ?: error("interactive resume not supported")
+            }
+            val launched = withTimeoutOrNull(20_000) { terminalReady.await() } == true
+            if (!launched && !terminals.isAlive(taskId)) {
+                upsertTask(
+                    rollbackSnapshot.copy(
+                        status = AgentStatus.Done,
+                        resumable = true,
+                        finishedAtMillis = rollbackSnapshot.finishedAtMillis ?: System.currentTimeMillis(),
+                    ),
+                )
+                persist()
             }
         }
     }
@@ -1018,7 +1112,7 @@ class DesktopAgentRunService(
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         val task = currentTask(taskId) ?: return
         val request = task.userInputRequest?.takeIf { it.id == requestId } ?: return
-        if (task.status != AgentTaskStatus.WaitingForInput) return
+        if (task.status != AgentStatus.Blocked) return
         val normalizedAnswers = request.questions.associate { question ->
             question.id to answers[question.id].orEmpty().trim()
         }
@@ -1033,7 +1127,7 @@ class DesktopAgentRunService(
         if (terminals.isAlive(taskId)) {
             updateTask(taskId) {
                 it.copy(
-                    status = AgentTaskStatus.Running,
+                    status = AgentStatus.Working,
                     userInputRequest = null,
                     exitCode = null,
                     errorMessage = null,
@@ -1041,13 +1135,16 @@ class DesktopAgentRunService(
                     unread = false,
                 )
             }
-            terminals.write(taskId, response)
-            scope.launch { persist() }
+            scope.launch {
+                attachTerminalIfNeeded(taskId)
+                terminals.write(taskId, response)
+                persist()
+            }
             return
         }
 
         val next = task.copy(
-            status = AgentTaskStatus.Queued,
+            status = null,
             userInputRequest = null,
             exitCode = null,
             errorMessage = null,
@@ -1072,7 +1169,7 @@ class DesktopAgentRunService(
         ready.await()
         val task = currentTask(taskId) ?: return
         val completedPlan = task.completedPlanText?.takeIf { it.isNotBlank() } ?: return
-        if (task.status != AgentTaskStatus.Completed || !task.planMode || task.isActive || task.workflowTaskId != null) return
+        if (task.status != AgentStatus.Done || !task.planMode || task.isActive || task.workflowTaskId != null) return
 
         _lastUsedAgent.value = task.agent
         val now = System.currentTimeMillis()
@@ -1085,7 +1182,7 @@ class DesktopAgentRunService(
             sandboxMode = AgentSandboxMode.WorkspaceWrite,
             implementationPrompt = implementationPrompt,
             vendorSessionId = null,
-            status = AgentTaskStatus.Queued,
+            status = null,
             startedAtMillis = null,
             finishedAtMillis = null,
             exitCode = null,
@@ -1129,12 +1226,19 @@ class DesktopAgentRunService(
         if (terminals.isAlive(taskId)) {
             val now = System.currentTimeMillis()
             appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths)))
+            updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
             terminals.write(taskId, task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills))
+            return
+        }
+
+        if (task.isActive && !isLaunchInProgress(taskId)) {
+            resume(taskId, text, imagePaths, selectedSkills)
             return
         }
 
         updateTask(taskId) { current ->
             current.copy(
+                latestPrompt = text.ifBlank { current.latestPrompt },
                 queuedFollowUps = current.queuedFollowUps + AgentQueuedFollowUp(
                     text = text,
                     imagePaths = imagePaths,
@@ -1157,14 +1261,14 @@ class DesktopAgentRunService(
     override suspend fun retry(taskId: String) {
         ready.await()
         val task = currentTask(taskId) ?: return
-        if (task.status != AgentTaskStatus.Failed && task.status != AgentTaskStatus.Unknown) return
+        if (task.status != AgentStatus.Error && task.status != AgentStatus.Error) return
 
         _lastUsedAgent.value = task.agent
 
         // A retry is a fresh run of the same chat, rather than a provider-specific
         // resume. In particular, Claude needs a new caller-assigned session id.
         val retried = task.copy(
-            status = AgentTaskStatus.Queued,
+            status = null,
             vendorSessionId = null,
             startedAtMillis = null,
             finishedAtMillis = null,
@@ -1221,9 +1325,19 @@ class DesktopAgentRunService(
                     terminalReady.complete(false)
                     return@withPermit
                 }
-                runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
-                    terminalReady.complete(true)
-                })
+                try {
+                    runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
+                        terminalReady.complete(true)
+                    })
+                } catch (error: Throwable) {
+                    terminals.stop(task.id)
+                    finishTask(
+                        task.id,
+                        AgentStatus.Error,
+                        exitCode = null,
+                        error = error.message ?: "agent run failed unexpectedly",
+                    )
+                }
             }
         }
         handle.job?.invokeOnCompletion {
@@ -1254,47 +1368,59 @@ class DesktopAgentRunService(
         val adapter = adapters.getValue(task.agent)
         val binary = binaryFor(task.agent)
         if (binary == null) {
-            finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = unavailableCliMessage(task.agent))
+            finishTask(taskId, AgentStatus.Error, exitCode = null, error = unavailableCliMessage(task.agent))
             return
         }
 
-        if (task.agent == AgentKind.Cursor) {
-            ensureCursorVendorSession(taskId, binary, task.cwd)
+        // Resolve cwd before argv / vendor preflight so Codex `-C`, Cursor create-chat,
+        // and Antigravity conversation lookup all see a directory that still exists.
+        val resolvedCwd = AgentScratchWorkspace.resolveCwd(task.cwd)
+        val taskForLaunch = if (resolvedCwd != task.cwd) {
+            updateTask(taskId) { it.copy(cwd = resolvedCwd) }
+            persist()
+            task.copy(cwd = resolvedCwd)
+        } else {
+            task
         }
 
-        val mcpUrl = if (task.attachAndyMcp) {
-            runCatching { prepareMcp(task.agent) }.getOrElse { error ->
-                finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
+        if (taskForLaunch.agent == AgentKind.Cursor) {
+            ensureCursorVendorSession(taskId, binary, taskForLaunch.cwd)
+        }
+
+        val mcpUrl = if (taskForLaunch.attachAndyMcp) {
+            runCatching { prepareMcp(taskForLaunch.agent) }.getOrElse { error ->
+                finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
                 return
             }
         } else {
             null
         }
         val argv = runCatching { argvBuilder(adapter, binary, mcpUrl) }.getOrElse {
-            finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = it.message ?: "failed to build command")
+            finishTask(taskId, AgentStatus.Error, exitCode = null, error = it.message ?: "failed to build command")
             return
         }
-        val projectEnv = task.projectId?.let { projectId ->
+        val projectEnv = taskForLaunch.projectId?.let { projectId ->
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
         val env = buildAgentLaunchEnvironment(projectEnv)
 
-        updateTask(taskId) { it.copy(status = AgentTaskStatus.Running, startedAtMillis = System.currentTimeMillis()) }
+        updateTask(taskId) { it.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis()) }
         persist()
         reconcileWorkflowRun(taskId)
 
         if (handle.stopRequested) {
-            finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
+            finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
             return
         }
 
-        val agyBeforeConversationId = if (task.agent == AgentKind.Antigravity) {
-            AntigravityConversationIds.lastForWorkspace(task.cwd)
+        val launchTask = currentTask(taskId) ?: taskForLaunch
+        val agyBeforeConversationId = if (launchTask.agent == AgentKind.Antigravity) {
+            AntigravityConversationIds.lastForWorkspace(launchTask.cwd)
         } else {
             null
         }
         val agyLaunchStartedAt = System.currentTimeMillis()
-        val agyLaunchedPrompt = if (task.agent == AgentKind.Antigravity) {
+        val agyLaunchedPrompt = if (launchTask.agent == AgentKind.Antigravity) {
             promptFromInteractiveArgv(argv)
         } else {
             null
@@ -1302,23 +1428,23 @@ class DesktopAgentRunService(
 
         val terminalHandle = runCatching {
             terminals.start(
-                task = currentTask(taskId) ?: task,
+                task = launchTask,
                 argv = argv,
                 env = env,
-                isTabSeen = { taskId in viewingTaskIds },
+                onStatusSnapshot = { snapshot -> applyStatusSnapshot(taskId, snapshot) },
             )
         }.getOrElse { error ->
-            finishTask(taskId, AgentTaskStatus.Failed, exitCode = null, error = "failed to start: ${error.message}")
+            finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to start: ${error.message}")
             return
         }
         writeLaunchDiagnostics(taskId, binary, argv, projectEnv)
         onTerminalStarted()
 
-        if (task.agent == AgentKind.Antigravity) {
+        if (launchTask.agent == AgentKind.Antigravity) {
             scope.launch(Dispatchers.IO) {
                 captureAntigravityConversationId(
                     taskId = taskId,
-                    cwd = task.cwd,
+                    cwd = launchTask.cwd,
                     before = agyBeforeConversationId,
                     launchedPrompt = agyLaunchedPrompt,
                     startedAtMillis = agyLaunchStartedAt,
@@ -1334,7 +1460,7 @@ class DesktopAgentRunService(
 
         if (handle.stopRequested) {
             terminals.stop(taskId)
-            finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
+            finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
             return
         }
 
@@ -1342,9 +1468,9 @@ class DesktopAgentRunService(
         val artifacts = terminalHandle.artifacts
         val sessionMonitorJob = scope.launch {
             var sawWorking = false
-            terminalHandle.statusTracker.status.collect { status ->
+            terminalHandle.statusTracker.status.collect { snapshot ->
                 if (outcomeHandled.get()) return@collect
-                if (status == AgentSessionStatus.Working) sawWorking = true
+                if (snapshot.status == AgentStatus.Working) sawWorking = true
                 val current = currentTask(taskId) ?: return@collect
                 if (current.workflowStage != ProjectWorkflowStage.Build) return@collect
                 val scrollback = terminals.bufferSnapshot(taskId)
@@ -1353,7 +1479,7 @@ class DesktopAgentRunService(
                         agent = current.agent,
                         artifactDir = terminalHandle.artifactDir,
                         scrollback = scrollback,
-                        liveSessionStatus = status,
+                        liveSessionStatus = snapshot.status,
                         sawWorking = sawWorking,
                     )
                 ) {
@@ -1361,8 +1487,13 @@ class DesktopAgentRunService(
                 }
                 outcomeHandled.set(true)
                 terminalHandle.statusTracker.markPhaseFinished()
-                terminals.stop(taskId)
-                finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                finishTask(
+                    taskId = taskId,
+                    status = AgentStatus.Done,
+                    exitCode = 0,
+                    error = null,
+                    resumable = true,
+                )
             }
         }
         val monitorJob = scope.launch {
@@ -1375,23 +1506,38 @@ class DesktopAgentRunService(
                         val current = currentTask(taskId) ?: return@collect
                         if (current.planMode || current.workflowStage == ProjectWorkflowStage.Spec) {
                             outcomeHandled.set(true)
-                            terminals.stop(taskId)
-                            finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                            finishTask(
+                                taskId = taskId,
+                                status = AgentStatus.Done,
+                                exitCode = 0,
+                                error = null,
+                                resumable = true,
+                            )
                         }
                     }
                     is AgentWorkflowArtifacts.Event.ReviewReady -> {
                         updateTask(taskId) { current -> current.copy(completedResultText = event.json) }
                         terminalHandle.statusTracker.markPhaseFinished()
                         outcomeHandled.set(true)
-                        terminals.stop(taskId)
-                        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                        finishTask(
+                            taskId = taskId,
+                            status = AgentStatus.Done,
+                            exitCode = 0,
+                            error = null,
+                            resumable = true,
+                        )
                     }
                     is AgentWorkflowArtifacts.Event.VerificationReady -> {
                         updateTask(taskId) { current -> current.copy(completedResultText = event.json) }
                         terminalHandle.statusTracker.markPhaseFinished()
                         outcomeHandled.set(true)
-                        terminals.stop(taskId)
-                        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+                        finishTask(
+                            taskId = taskId,
+                            status = AgentStatus.Done,
+                            exitCode = 0,
+                            error = null,
+                            resumable = true,
+                        )
                     }
                     is AgentWorkflowArtifacts.Event.QuestionReady -> {
                         waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
@@ -1405,7 +1551,16 @@ class DesktopAgentRunService(
         sessionMonitorJob.cancel()
 
         if (outcomeHandled.get()) return
-        if (currentTask(taskId)?.status == AgentTaskStatus.WaitingForInput) return
+        if (currentTask(taskId)?.status == AgentStatus.Blocked) return
+        // If the question artifact landed while we were tearing down the monitor, still wait.
+        if (!artifacts.answerFile.isFile) {
+            artifacts.questionFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+                ?.let { raw -> AgentWorkflowArtifacts.parseQuestionJson(raw) }
+                ?.let { request ->
+                    waitForUserInput(taskId, request, exitCode = exitCode, keepTerminal = true)
+                    return
+                }
+        }
 
         val current = currentTask(taskId) ?: return
         val planFromDisk = artifacts.planFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
@@ -1413,11 +1568,11 @@ class DesktopAgentRunService(
         val verificationFromDisk = artifacts.verificationFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
 
         val status = when {
-            handle.stopRequested -> AgentTaskStatus.Stopped
-            exitCode == 0 -> AgentTaskStatus.Completed
-            else -> AgentTaskStatus.Failed
+            handle.stopRequested -> AgentStatus.Done
+            exitCode == 0 -> AgentStatus.Done
+            else -> AgentStatus.Error
         }
-        val completedPlanText = if (status == AgentTaskStatus.Completed && current.planMode) {
+        val completedPlanText = if (status == AgentStatus.Done && current.planMode) {
             planFromDisk ?: current.completedPlanText
         } else {
             null
@@ -1425,7 +1580,7 @@ class DesktopAgentRunService(
         val completedResultText = when {
             reviewFromDisk != null -> reviewFromDisk
             verificationFromDisk != null -> verificationFromDisk
-            status == AgentTaskStatus.Completed -> current.completedResultText
+            status == AgentStatus.Done -> current.completedResultText
             else -> current.completedResultText
         }
         updateTask(taskId) { task ->
@@ -1434,7 +1589,7 @@ class DesktopAgentRunService(
                 completedResultText = completedResultText ?: task.completedResultText,
             )
         }
-        val failureError = if (status == AgentTaskStatus.Failed) {
+        val failureError = if (status == AgentStatus.Error) {
             agentFailureMessage(
                 lastError = null,
                 authHint = null,
@@ -1445,7 +1600,7 @@ class DesktopAgentRunService(
         } else {
             null
         }
-        if (status == AgentTaskStatus.Failed) {
+        if (status == AgentStatus.Error) {
             appendLaunchDiagnostics(
                 taskId,
                 buildString {
@@ -1462,6 +1617,8 @@ class DesktopAgentRunService(
             status = status,
             exitCode = exitCode,
             error = failureError,
+            stoppedByUser = handle.stopRequested,
+            resumable = status == AgentStatus.Done && exitCode == 0 && terminals.isAlive(taskId),
         )
     }
 
@@ -1532,13 +1689,13 @@ class DesktopAgentRunService(
             if (handle.stopRequested || !terminals.isAlive(taskId)) return
             val buffer = terminals.bufferSnapshot(taskId)
             if (buffer.isNotBlank()) sawOutput = true
-            val idle = terminals.statusFlow(taskId).value == AgentSessionStatus.Idle
-            if (sawOutput && (terminalLooksReadyForInput(buffer) || idle)) {
+            val readyAtPrompt = terminals.liveSessionStatus(taskId) == AgentStatus.Done
+            if (sawOutput && (terminalLooksReadyForInput(buffer) || readyAtPrompt)) {
                 delay(300)
                 if (handle.stopRequested || !terminals.isAlive(taskId)) return
                 terminals.submitText(taskId, text.trimEnd('\r', '\n'))
                 wrote = true
-                appendLaunchDiagnostics(taskId, "initialPromptWritten=true readyIdle=$idle\n")
+                appendLaunchDiagnostics(taskId, "initialPromptWritten=true readyAtPrompt=$readyAtPrompt\n")
                 return
             }
             delay(150)
@@ -1554,7 +1711,7 @@ class DesktopAgentRunService(
 
     private fun snapshotActiveTasksBeforeShutdown() {
         val updated = _tasks.value.map { task ->
-            if (task.status != AgentTaskStatus.Running) return@map task
+            if (task.status != AgentStatus.Working) return@map task
             val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
             val scrollback = terminals.bufferSnapshot(task.id).ifBlank {
                 store.scrollbackFile(task.id).takeIf { it.isFile }?.readText().orEmpty()
@@ -1563,14 +1720,14 @@ class DesktopAgentRunService(
             when {
                 inferCompletedTurn(task.agent, artifactDir, scrollback, liveStatus) ->
                     task.copy(
-                        status = AgentTaskStatus.Completed,
+                        status = AgentStatus.Done,
                         exitCode = task.exitCode ?: 0,
                         finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
                         unread = true,
                     )
                 inferPausedAtPrompt(task.agent, artifactDir, scrollback, liveStatus) ->
                     task.copy(
-                        status = AgentTaskStatus.Paused,
+                        status = AgentStatus.Done,
                         finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
                         unread = true,
                     )
@@ -1603,16 +1760,17 @@ class DesktopAgentRunService(
         keepTerminal: Boolean = false,
     ) {
         updateTask(taskId) { task ->
-            if (task.status == AgentTaskStatus.Running || task.status == AgentTaskStatus.WaitingForInput) {
+            // A question artifact is authoritative even if scrape/exit already published Done.
+            if (task.status == AgentStatus.Error && task.userInputRequest == null) {
+                task
+            } else {
                 task.copy(
-                    status = AgentTaskStatus.WaitingForInput,
+                    status = AgentStatus.Blocked,
                     userInputRequest = request,
                     exitCode = exitCode,
                     finishedAtMillis = System.currentTimeMillis(),
                     unread = true,
                 )
-            } else {
-                task
             }
         }
         if (!keepTerminal) {
@@ -1636,17 +1794,26 @@ class DesktopAgentRunService(
         val task = currentTask(taskId) ?: return
         if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
         handles[taskId]?.stopRequested = true
-        terminals.stop(taskId)
-        finishTask(taskId, AgentTaskStatus.Completed, exitCode = 0, error = null)
+        // Mark Completed before stopping the terminal. finishTask stops the session
+        // itself (after atomically setting the status), so the run pipeline's own
+        // awaitExit wakes only once the task is already inactive — otherwise it would
+        // race in and overwrite this completion with Stopped/Failed.
+        finishTask(
+            taskId = taskId,
+            status = AgentStatus.Done,
+            exitCode = 0,
+            error = null,
+            forceKillTerminal = true,
+        )
     }
 
     override fun stop(taskId: String) {
-        val waiting = currentTask(taskId)?.takeIf { it.status == AgentTaskStatus.WaitingForInput }
+        val waiting = currentTask(taskId)?.takeIf { it.status == AgentStatus.Blocked }
         if (waiting != null) {
             terminals.stop(taskId)
             updateTask(taskId) {
                 it.copy(
-                    status = AgentTaskStatus.Stopped,
+                    status = AgentStatus.Done,
                     userInputRequest = null,
                     errorMessage = null,
                     finishedAtMillis = System.currentTimeMillis(),
@@ -1666,7 +1833,7 @@ class DesktopAgentRunService(
         scope.launch(Dispatchers.IO) {
             terminals.stop(taskId)
             if (handle.job?.isActive != true) {
-                finishTask(taskId, AgentTaskStatus.Stopped, exitCode = null, error = null)
+                finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
             }
         }
     }
@@ -1688,7 +1855,7 @@ class DesktopAgentRunService(
                 withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
             }
         }
-        persist()
+        persist(allowEmptyTaskList = true)
     }
 
     private fun detachDeletedWorkflowRun(projectTaskId: String, runId: String) {
@@ -1725,9 +1892,15 @@ class DesktopAgentRunService(
 
     override fun interactiveResumeCommand(taskId: String): String? {
         val task = currentTask(taskId) ?: return null
+        // Prefer tmux attach when the Andy tmux session is alive.
+        if (app.andy.terminal.TmuxAndy.isAvailable() &&
+            app.andy.terminal.TmuxAndy.hasSession(taskId)
+        ) {
+            return app.andy.terminal.TmuxAndy.attachArgv(taskId).joinToString(" ") { shellQuote(it) }
+        }
         val adapter = adapters[task.agent] ?: return null
         val binary = binaryFor(task.agent) ?: task.agent.cliName
-        val changeDirectory = task.cwd?.let { "cd ${shellQuote(it)} && " }.orEmpty()
+        val changeDirectory = "cd ${shellQuote(AgentScratchWorkspace.resolveCwd(task.cwd))} && "
         return changeDirectory + adapter.interactiveResumeCommand(binary, task)
     }
 
@@ -1879,7 +2052,7 @@ class DesktopAgentRunService(
     private fun unavailableCliMessage(agent: AgentKind): String {
         val issue = _cliStatuses.value.firstOrNull { it.kind == agent }?.issue
         return issue?.let { "${it.title}: ${it.detail}" }
-            ?: "${agent.cliName} CLI not found — install it or set a binary override in ~/.andy/agents.toml"
+            ?: "${agent.cliName} CLI not found — install it or set a binary override"
     }
 
     private fun defaultProjectState(projectId: String): ProjectWorkflowState {
@@ -1924,8 +2097,10 @@ class DesktopAgentRunService(
         )
     }
 
-    private suspend fun projectDirectory(projectId: String): String? =
+    override suspend fun projectContextDir(projectId: String): String? =
         runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.contextDir }.getOrNull()
+
+    private suspend fun projectDirectory(projectId: String): String? = projectContextDir(projectId)
 
     fun close() {
         terminals.stopAll()
@@ -2430,11 +2605,10 @@ class DesktopAgentRunService(
                     isRecoveryFollowUp,
                 ),
                 state = when (run.status) {
-                    AgentTaskStatus.Queued -> ProjectTaskState.Queued
-                    AgentTaskStatus.Running -> ProjectTaskState.Running
-                    AgentTaskStatus.WaitingForInput -> ProjectTaskState.Waiting
-                    AgentTaskStatus.Paused -> ProjectTaskState.Waiting
-                    AgentTaskStatus.Completed -> ProjectTaskState.Waiting
+                    null -> ProjectTaskState.Queued
+                    AgentStatus.Working -> ProjectTaskState.Running
+                    AgentStatus.Blocked -> ProjectTaskState.Waiting
+                    AgentStatus.Done -> ProjectTaskState.Waiting
                     else -> ProjectTaskState.NeedsAttention
                 },
                 updatedAtMillis = System.currentTimeMillis(),
@@ -2460,7 +2634,7 @@ class DesktopAgentRunService(
         if (task == null) return false
         if (task.state == ProjectTaskState.Queued || task.state == ProjectTaskState.Running) return true
         val run = task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let(::currentTask) ?: return false
-        return run.status == AgentTaskStatus.WaitingForInput
+        return run.status == AgentStatus.Blocked
     }
 
     private fun setPairAttention(build: ProjectTask, message: String) {
@@ -2483,27 +2657,27 @@ class DesktopAgentRunService(
         val run = currentTask(runId) ?: return
         val projectTaskId = run.workflowTaskId ?: return
         val typedTask = projectTask(projectTaskId) ?: return
-        if (run.status == AgentTaskStatus.WaitingForInput || run.status == AgentTaskStatus.Paused) {
+        if (run.status == AgentStatus.Blocked) {
             updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.Waiting, lastError = null) }
             persist()
             return
         }
         if (run.isActive) {
             updateProjectTask(projectTaskId) {
-                it.copy(state = if (run.status == AgentTaskStatus.Queued) ProjectTaskState.Queued else ProjectTaskState.Running)
+                it.copy(state = if (run.status == null) ProjectTaskState.Queued else ProjectTaskState.Running)
             }
             persist()
             return
         }
-        if (run.status != AgentTaskStatus.Completed) {
+        if (run.status != AgentStatus.Done) {
             val message = run.errorMessage ?: when (run.status) {
-                AgentTaskStatus.Unknown -> "the app restarted while this workflow stage was active"
-                AgentTaskStatus.Stopped -> "workflow stage was stopped"
+                AgentStatus.Error -> "the app restarted while this workflow stage was active"
+                AgentStatus.Done -> "workflow stage was stopped"
                 else -> "workflow stage failed"
             }
             if (typedTask.kind == ProjectTaskKind.Spec) {
                 // A stopped/failed refine shouldn't bury a previously completed plan.
-                if (run.status == AgentTaskStatus.Stopped && typedTask.planVersions.isNotEmpty()) {
+                if (run.stoppedByUser && typedTask.planVersions.isNotEmpty()) {
                     updateProjectTask(projectTaskId) {
                         it.copy(state = ProjectTaskState.Completed, lastError = null, updatedAtMillis = System.currentTimeMillis())
                     }
@@ -2521,7 +2695,15 @@ class DesktopAgentRunService(
             ProjectWorkflowStage.Spec -> {
                 val plan = run.completedPlanText?.takeIf { it.isNotBlank() }
                 if (plan == null) {
-                    updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.NeedsAttention, lastError = "the planning run returned no final plan") }
+                    if (run.stoppedByUser && typedTask.planVersions.isNotEmpty()) {
+                        updateProjectTask(projectTaskId) {
+                            it.copy(state = ProjectTaskState.Completed, lastError = null, updatedAtMillis = System.currentTimeMillis())
+                        }
+                    } else {
+                        updateProjectTask(projectTaskId) {
+                            it.copy(state = ProjectTaskState.NeedsAttention, lastError = "the planning run returned no final plan")
+                        }
+                    }
                 } else {
                     updateProjectTask(projectTaskId) { task ->
                         if (task.planVersions.any { it.runId == run.id }) task else task.copy(
@@ -2775,7 +2957,7 @@ class DesktopAgentRunService(
 
     private fun latestCompletedBuildRun(build: ProjectTask): AgentTask? {
         val latest = build.attempts.filter { it.stage == ProjectWorkflowStage.Build }.maxByOrNull { it.createdAtMillis } ?: return null
-        return currentTask(latest.runId)?.takeIf { it.status == AgentTaskStatus.Completed }
+        return currentTask(latest.runId)?.takeIf { it.status == AgentStatus.Done }
     }
 
     private fun currentReviewApproval(review: ProjectTask?, buildRunId: String, generation: Int): ProjectReviewVerdict? =
@@ -2808,7 +2990,7 @@ class DesktopAgentRunService(
         val interruptedIds = state.tasks.mapNotNull { workflowTask ->
             val lastRun = workflowTask.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { id -> tasks.firstOrNull { it.id == id } }
             workflowTask.id.takeIf {
-                workflowTask.state in setOf(ProjectTaskState.Queued, ProjectTaskState.Running, ProjectTaskState.Waiting) && lastRun?.status == AgentTaskStatus.Unknown
+                workflowTask.state in setOf(ProjectTaskState.Queued, ProjectTaskState.Running, ProjectTaskState.Waiting) && lastRun?.status == AgentStatus.Error
             }
         }.toSet()
         val affectedBuildIds = state.tasks.mapNotNull { workflowTask ->
@@ -2868,13 +3050,14 @@ class DesktopAgentRunService(
         var changedWorkflows = false
         val projectIdsToClear = mutableSetOf<String>()
         config.projects.forEach { project ->
-            if (project.notes.isEmpty()) return@forEach
+            val globalNotes = project.notes.filter { it.source == ConfigSource.Global }
+            if (globalNotes.isEmpty()) return@forEach
             val existing = _projects.value[project.id] ?: defaultProjectState(project.id)
             projectIdsToClear += project.id
             if (existing.legacyNotesMigrated) return@forEach
             val block = buildString {
                 append("## Migrated todos\n")
-                project.notes.forEach { note ->
+                globalNotes.forEach { note ->
                     append("- [").append(if (note.completed) 'x' else ' ').append("] ").append(note.title.trim()).append('\n')
                     if (note.body.isNotEmpty()) {
                         note.body.lines().forEach { append("  ").append(it).append('\n') }
@@ -2889,7 +3072,7 @@ class DesktopAgentRunService(
         if (projectIdsToClear.isEmpty()) return
         actionConfig.save(
             config.copy(projects = config.projects.map { project ->
-                if (project.id in projectIdsToClear) project.copy(notes = emptyList()) else project
+                if (project.id in projectIdsToClear) project.copy(notes = project.notes.filterNot { it.source == ConfigSource.Global }) else project
             }),
         )
     }
@@ -2912,7 +3095,7 @@ class DesktopAgentRunService(
                     "backups/pre-legacy-chat-archive-${System.currentTimeMillis()}",
                 )
                 backupDir.mkdirs()
-                store.storeFile.copyTo(File(backupDir, "agents.toml"), overwrite = true)
+                store.storeFile.copyTo(File(backupDir, "agents.db"), overwrite = true)
                 File(backupDir, "archived-task-ids.txt").writeText(
                     candidates.joinToString("\n") { "${it.id}\t${it.title}" },
                 )
@@ -2935,7 +3118,7 @@ class DesktopAgentRunService(
                 .filter { task ->
                     task.agent == AgentKind.Cursor &&
                         task.planMode &&
-                        task.status == AgentTaskStatus.Completed &&
+                        task.status == AgentStatus.Done &&
                         task.completedPlanText.isNullOrBlank()
                 }
                 .mapNotNull { task ->
@@ -2993,7 +3176,6 @@ class DesktopAgentRunService(
     }
 
     override fun markRead(taskId: String) {
-        terminals.markSeen(taskId)
         val task = currentTask(taskId) ?: return
         if (!task.unread) return
         updateTask(taskId) { it.copy(unread = false) }
@@ -3002,21 +3184,51 @@ class DesktopAgentRunService(
 
     override fun setChatViewing(taskId: String?, viewing: Boolean) {
         when {
-            taskId == null -> viewingTaskIds.clear()
-            viewing -> viewingTaskIds.add(taskId)
-            else -> viewingTaskIds.remove(taskId)
+            taskId == null -> {
+                viewingTaskIds.clear()
+                terminals.clearForeground()
+            }
+            viewing -> {
+                viewingTaskIds.add(taskId)
+                terminals.setOnlyForeground(taskId)
+            }
+            else -> {
+                viewingTaskIds.remove(taskId)
+                terminals.setForeground(taskId, false)
+            }
         }
     }
 
-    private fun onSessionStatusesChanged(statuses: Map<String, AgentSessionStatus>) {
-        statuses.forEach { (taskId, status) ->
-            val previous = previousSessionStatuses.put(taskId, status)
-            if (previous == null || previous == status) return@forEach
-            val task = currentTask(taskId) ?: return@forEach
-            if (!sessionStatusNeedsUnread(task, previous, status, taskId in viewingTaskIds)) return@forEach
+    private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
+        val task = currentTask(taskId) ?: return
+        if (shouldIgnoreStatusSnapshot(task, snapshot)) return
+        val terminalLive = terminals.isAlive(taskId)
+        val previous = previousTaskStatuses.put(taskId, snapshot.status)
+        val clearResumable = snapshot.status == AgentStatus.Working ||
+            snapshot.status == AgentStatus.Blocked
+        if (task.status != snapshot.status ||
+            task.statusConfident != snapshot.confident ||
+            (clearResumable && task.resumable)
+        ) {
+            updateTask(taskId) {
+                it.copy(
+                    status = snapshot.status,
+                    statusConfident = snapshot.confident,
+                    resumable = if (clearResumable) false else it.resumable,
+                )
+            }
+        }
+        if (previous != null && previous != snapshot.status &&
+            statusNeedsUnread(
+                task = task,
+                previous = previous,
+                next = snapshot.status,
+                viewing = taskId in viewingTaskIds,
+                terminalLive = terminalLive,
+            )
+        ) {
             markUnread(taskId)
         }
-        previousSessionStatuses.keys.retainAll(statuses.keys)
     }
 
     override fun markUnread(taskId: String) {
@@ -3040,7 +3252,17 @@ class DesktopAgentRunService(
         scope.launch { persist() }
     }
 
-    private fun finishTask(taskId: String, status: AgentTaskStatus, exitCode: Int?, error: String?) {
+    private fun finishTask(
+        taskId: String,
+        status: AgentStatus,
+        exitCode: Int?,
+        error: String?,
+        stoppedByUser: Boolean = false,
+        resumable: Boolean = false,
+        interrupted: Boolean = false,
+        statusConfident: Boolean = true,
+        forceKillTerminal: Boolean = false,
+    ) {
         val completedChanges = currentTask(taskId)?.let { task ->
             val baseline = task.changeBaselineTree
             task.cwd?.takeIf { baseline != null }?.let { cwd ->
@@ -3048,13 +3270,18 @@ class DesktopAgentRunService(
             }
         }
         updateTask(taskId) { task ->
-            if (task.isActive) {
+            val shouldFinalize = task.finishedAtMillis == null && (task.isActive || task.status != null)
+            if (shouldFinalize) {
                 task.copy(
                     status = status,
+                    stoppedByUser = stoppedByUser,
+                    resumable = resumable,
+                    interrupted = interrupted,
+                    statusConfident = statusConfident,
                     exitCode = exitCode,
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
-                    unread = true,
+                    unread = taskId !in viewingTaskIds,
                     completedChanges = completedChanges ?: task.completedChanges,
                 )
             } else {
@@ -3063,7 +3290,15 @@ class DesktopAgentRunService(
         }
         val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
         handles.remove(taskId)
-        if (status == AgentTaskStatus.Completed && queuedFollowUp != null) {
+        val keepViewerMounted = resumable || taskId in viewingTaskIds
+        when {
+            forceKillTerminal || stoppedByUser -> terminals.stop(taskId)
+            terminals.isAlive(taskId) && keepViewerMounted -> Unit
+            terminals.isAlive(taskId) -> terminals.detach(taskId)
+            else -> terminals.stop(taskId)
+        }
+        previousTaskStatuses.remove(taskId)
+        if (status == AgentStatus.Done && queuedFollowUp != null) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
         } else {
@@ -3074,7 +3309,7 @@ class DesktopAgentRunService(
         }
     }
 
-    private suspend fun persist() {
+    private suspend fun persist(allowEmptyTaskList: Boolean = false) {
         persistMutex.withLock {
             store.save(
                 AgentStoreState(
@@ -3087,6 +3322,7 @@ class DesktopAgentRunService(
                     projectWorkflows = _projects.value,
                     legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
                 ),
+                allowEmptyTaskList = allowEmptyTaskList,
             )
         }
     }

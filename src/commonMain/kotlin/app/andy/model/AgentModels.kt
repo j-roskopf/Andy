@@ -212,22 +212,43 @@ internal fun antigravityModelBaseId(selected: String): String = when (selected) 
     else -> stripProviderModelVariant(selected).baseId
 }
 
-enum class AgentTaskStatus {
-    Queued,
-    Running,
-    /** The agent stopped at an explicit decision point and is awaiting a response in Andy. */
-    WaitingForInput,
-    /**
-     * Interactive session was idle at a prompt when the app quit; the turn finished
-     * and the chat can be resumed interactively.
-     */
-    Paused,
-    Completed,
-    Failed,
-    Stopped,
+/**
+ * Unified live badge and task lifecycle status.
+ *
+ * Queued (pre-launch) tasks have [AgentTask.status] null — derive from [AgentTask.isQueued].
+ * Recovery/pre-run edge cases use [AgentTask.stoppedByUser], [AgentTask.resumable],
+ * and [AgentTask.interrupted] rather than extra enum values.
+ */
+enum class AgentStatus {
+    /** Agent actively running (green). */
+    Working,
+    /** Paused mid-task, needs input/approval to continue (rust/amber). */
+    Blocked,
+    /** Turn finished, your move — stable until the next message (cyan). */
+    Done,
+    /** Crashed / non-zero exit / failed (red). */
+    Error,
+}
 
-    /** Was Running or Queued when the app restarted; the process is gone. */
-    Unknown,
+/** Result of mapping a legacy persisted status string to the unified model. */
+data class LegacyStatusMigration(
+    val status: AgentStatus?,
+    val stoppedByUser: Boolean = false,
+    val resumable: Boolean = false,
+    val interrupted: Boolean = false,
+)
+
+/** Maps legacy persisted task status names to the unified model. */
+fun migrateLegacyTaskStatus(legacy: String): LegacyStatusMigration = when (legacy) {
+    "Queued" -> LegacyStatusMigration(null)
+    "Running" -> LegacyStatusMigration(AgentStatus.Working)
+    "WaitingForInput" -> LegacyStatusMigration(AgentStatus.Blocked)
+    "Completed" -> LegacyStatusMigration(AgentStatus.Done)
+    "Failed" -> LegacyStatusMigration(AgentStatus.Error)
+    "Stopped" -> LegacyStatusMigration(AgentStatus.Done, stoppedByUser = true)
+    "Paused" -> LegacyStatusMigration(AgentStatus.Done, resumable = true)
+    "Unknown" -> LegacyStatusMigration(AgentStatus.Error, interrupted = true)
+    else -> LegacyStatusMigration(null)
 }
 
 /** A follow-up held until the agent's current response completes. */
@@ -303,7 +324,19 @@ data class AgentTask(
     val changeBaselineTree: String? = null,
     /** Immutable repository changes captured when this chat last finished. */
     val completedChanges: AgentThreadChangeSnapshot? = null,
-    val status: AgentTaskStatus = AgentTaskStatus.Queued,
+    /** Null while [isQueued]; otherwise the single source of truth for badge + notifications. */
+    val status: AgentStatus? = null,
+    /** User explicitly stopped the run; [status] is [AgentStatus.Done]. */
+    val stoppedByUser: Boolean = false,
+    /** Idle at prompt when the app quit; [status] is [AgentStatus.Done] and session can resume. */
+    val resumable: Boolean = false,
+    /** Was active when the app restarted and the process is gone; [status] is [AgentStatus.Error]. */
+    val interrupted: Boolean = false,
+    /**
+     * True when [status] was set from a high-confidence source (hook, file protocol,
+     * process exit, question artifact). OS notifications fire only on confident transitions.
+     */
+    val statusConfident: Boolean = false,
     val vendorSessionId: String? = null,
     val createdAtMillis: Long,
     val startedAtMillis: Long? = null,
@@ -329,10 +362,20 @@ data class AgentTask(
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
     val workflowAttempt: Int? = null,
+    /** Most recent follow-up prompt sent to the task (null when only initial prompt exists). */
+    val latestPrompt: String? = null,
     /** Final provider response for non-plan workflow stages and completed chats. */
     val completedResultText: String? = null,
 ) {
-    val isActive: Boolean get() = status == AgentTaskStatus.Queued || status == AgentTaskStatus.Running
+    val isQueued: Boolean get() = startedAtMillis == null
+    val isActive: Boolean get() = !isQueued && (status == AgentStatus.Working || status == AgentStatus.Blocked)
+    val needsInput: Boolean get() = status == AgentStatus.Blocked || userInputRequest != null
+    val notificationTitle: String
+        get() {
+            val text = latestPrompt?.takeIf { it.isNotBlank() } ?: return title
+            val flat = text.replace('\n', ' ').trim()
+            return if (flat.length <= 60) flat else flat.take(59) + "…"
+        }
 }
 
 /** A provider-reported account limit window. Percentages are absent when a CLI only reports its reset time. */

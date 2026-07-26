@@ -8,7 +8,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Finds the vendor CLI binaries. GUI-launched JVMs get a minimal PATH, so we
  * ask the user's login shell first, then probe known install locations, then
- * honor explicit per-agent overrides from agents.toml.
+ * honor explicit per-agent binary overrides.
  */
 class AgentCliLocator {
     fun locateAll(overrides: Map<String, String>): List<AgentCliStatus> {

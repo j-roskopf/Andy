@@ -67,6 +67,8 @@ import app.andy.ui.components.Toolbar
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
@@ -227,7 +229,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                 }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-                    val paneGuttersWidth = 38.dp // Two 12.dp gaps plus two 14.dp resize dividers.
+                    val paneGuttersWidth = AndySpace.S3 * 2 + AndyStroke.PaneHandleHitWidth * 2
                     val minimumVideoWidth = 260.dp
                     val minimumStepsWidth = 220.dp
                     val minimumDetailsWidth = 220.dp

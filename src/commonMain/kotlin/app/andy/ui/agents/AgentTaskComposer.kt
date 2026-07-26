@@ -49,6 +49,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
@@ -123,29 +124,20 @@ internal fun AgentTaskComposerPane(
             )
         } else {
             Column(
-                Modifier.fillMaxWidth().weight(1f).padding(horizontal = 48.dp),
+                Modifier.fillMaxWidth().weight(1f),
                 verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    AgentMark(form.state.agent)
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            projectContext?.let { "Make progress in ${it.name}" } ?: "Give an agent its next move",
-                            color = TextPrimary,
-                            fontFamily = DisplayFont,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 28.sp,
-                        )
-                        Text(
-                            "Write the outcome you want. Add context, an image, or a / skill when it helps.",
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                        )
-                    }
-                }
+                AgentMark(form.state.agent)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    projectContext?.let { "What should we build in ${it.name}?" } ?: "What can I help you with?",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 24.sp,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
         AgentCliIssueNotices(

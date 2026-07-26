@@ -58,6 +58,12 @@ class DesktopDeviceService(
         return runner.run(listOf(adb, "-s", serial, "shell") + command)
     }
 
+    override suspend fun emu(serial: String, command: List<String>): CommandResult {
+        if (command.isEmpty()) return CommandResult.failure("Missing emulator console command")
+        val adb = discoverSdk().adbPath ?: return CommandResult.failure("ADB not found")
+        return runner.run(listOf(adb, "-s", serial, "emu") + command, 8)
+    }
+
     override suspend fun pair(host: String, port: Int, code: String): CommandResult {
         val adb = discoverSdk().adbPath ?: return CommandResult.failure("ADB not found")
         val result = runner.run(listOf(adb, "pair", "$host:$port", code), 30)

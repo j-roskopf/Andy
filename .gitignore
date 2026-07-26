@@ -20,6 +20,7 @@ build/
 .cxx
 .kotlin
 node_modules/
+cli/andy/target/
 playwright-report/
 test-results/
 iosApp/Vendor/GoogleCastSDK/

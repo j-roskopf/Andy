@@ -7,9 +7,10 @@ import io.github.ketraterm.session.TerminalSession as KetraSession
 import io.github.ketraterm.transport.TerminalConnector
 import io.github.ketraterm.transport.TerminalConnectorListener
 import io.github.ketraterm.ui.swing.api.SwingTerminal
+import java.awt.event.MouseWheelListener
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.WeakHashMap
 import javax.swing.SwingUtilities
 
 /** Soft cap for cumulative `scrollback.ansi` files (~5 MB). */
@@ -27,23 +28,104 @@ class ScrollbackAnsiTee(
     private val lock = Any()
     private val buffer = StringBuilder()
 
+    /**
+     * Latest OSC title/progress, and how far the buffer has been scanned for them.
+     *
+     * Callers poll these a few times a second, and answering by rescanning meant copying
+     * and regex-scanning up to [SCROLLBACK_MAX_BYTES] per poll per session — the dominant
+     * idle cost. Instead each byte is scanned once, on read, so [append] stays as cheap as
+     * it was: it sits on the PTY read path ahead of the emulator, and work added there
+     * delays output reaching the screen.
+     */
+    private var latestTitle: String = ""
+
+    private var latestProgress: String = ""
+
+    private var scanPos: Int = 0
+
+    /**
+     * Bytes ever appended. The tee sits on the PTY read path ahead of the emulator, so this
+     * only moves when the host actually sent something — which makes it a sound "the screen
+     * may have changed" signal for pollers. Unchanged is proof of *no* change; a change is
+     * merely possible (a chunk can be pure OSC), so acting on it costs at most one wasted
+     * poll while never missing an update.
+     */
+    @Volatile
+    private var bytesSeen: Long = 0L
+
+    /** Monotonic counter of bytes read from the host. See [bytesSeen]. */
+    fun outputGeneration(): Long = bytesSeen
+
     fun append(bytes: ByteArray, offset: Int, length: Int) {
         if (length <= 0) return
         val chunk = String(bytes, offset, length, StandardCharsets.UTF_8)
         synchronized(lock) {
             buffer.append(chunk)
-            if (buffer.length > maxBytes) {
-                val capped = capScrollbackSize(buffer.toString(), maxBytes)
-                buffer.setLength(0)
-                buffer.append(capped)
-            }
+            trimToCap()
+            bytesSeen += length
         }
     }
 
     fun snapshot(): String = synchronized(lock) { buffer.toString() }
 
+    /** Latest OSC 0/2 title seen on the stream, or empty. */
+    fun latestOscTitle(): String = synchronized(lock) {
+        scanPending()
+        latestTitle
+    }
+
+    /** Latest ConEmu/OSC 9 progress payload (`4;…`), or empty. */
+    fun latestOscProgress(): String = synchronized(lock) {
+        scanPending()
+        latestProgress
+    }
+
     fun clear() {
-        synchronized(lock) { buffer.setLength(0) }
+        synchronized(lock) {
+            buffer.setLength(0)
+            scanPos = 0
+            latestTitle = ""
+            latestProgress = ""
+        }
+    }
+
+    /**
+     * Drop oldest complete lines once the buffer runs [TRIM_SLACK] past the cap. Trimming on
+     * every append instead re-copied the whole buffer per PTY read once the cap was reached.
+     */
+    private fun trimToCap() {
+        if (buffer.length <= maxBytes + TRIM_SLACK) return
+        var cut = buffer.length - maxBytes
+        while (cut < buffer.length && buffer[cut] != '\n' && buffer[cut] != '\r') cut++
+        if (cut < buffer.length) cut++
+        buffer.delete(0, cut)
+        scanPos = (scanPos - cut).coerceAtLeast(0)
+    }
+
+    /**
+     * Scan only what has arrived since the last read, re-covering [OSC_CARRY_MAX] chars so a
+     * sequence split across reads is still matched. Re-matching a sequence is harmless — the
+     * fields hold "latest wins", and the overlap is a contiguous suffix, so order is kept.
+     */
+    private fun scanPending() {
+        if (scanPos >= buffer.length) return
+        val start = (scanPos - OSC_CARRY_MAX).coerceAtLeast(0)
+        for (match in OSC_PATTERN.findAll(buffer.substring(start))) {
+            val payload = match.groupValues[2]
+            when (match.groupValues[1]) {
+                "0", "2" -> latestTitle = payload
+                "9" -> latestProgress = if (payload.startsWith("4;")) payload else ""
+            }
+        }
+        scanPos = buffer.length
+    }
+
+    private companion object {
+        /** Appends tolerated past the cap before paying for a trim. */
+        private const val TRIM_SLACK = 64 * 1024
+
+        /** Longest partial OSC sequence carried between chunks. Titles are far shorter. */
+        private const val OSC_CARRY_MAX = 4096
     }
 }
 
@@ -72,19 +154,6 @@ internal fun atomicWriteText(file: File, content: String) {
         file.writeText(content)
         tmp.delete()
     }
-}
-
-/**
- * True when [content] looks like a raw PTY tee (spinner redraws, cursor motion, etc.)
- * rather than resolved scrollback text from [io.github.ketraterm.core.api.TerminalInspector.getAllAsString].
- */
-internal fun looksLikeRawAnsiTee(content: String): Boolean {
-    if (!content.contains('\u001b')) return false
-    var escapes = 0
-    for (ch in content) {
-        if (ch == '\u001b' && ++escapes > 8) return true
-    }
-    return false
 }
 
 /**
@@ -130,31 +199,99 @@ internal fun replayCaptureReadableLines(
 }
 
 /**
+ * Widest visible row in [content], the column count a replay needs to reproduce the
+ * original layout instead of hard-wrapping every boxed TUI line.
+ */
+internal fun scrollbackReplayColumns(
+    content: String,
+    minColumns: Int = 100,
+    maxColumns: Int = 400,
+): Int {
+    val widest = content.lineSequence().maxOfOrNull { stripAnsi(it).trimEnd().length } ?: 0
+    // One spare column: a row exactly as wide as the terminal triggers an auto-wrap
+    // that turns the following newline into a blank line.
+    return (widest + 1).coerceIn(minColumns, maxColumns)
+}
+
+/**
  * Build a read-only [SwingTerminal] that replays [content] instantly and stays
  * open for scrolling. User keystrokes are discarded by the parked connector.
+ *
+ * [content] is written to the emulator verbatim so colors, indentation and box
+ * drawing land exactly as they did live. Legacy raw PTY tees must be collapsed to
+ * text by the caller first — replaying their cursor motion paints overlapping garbage.
+ *
+ * Dispose with [disposeScrollbackReplayTerminal] so the replay session goes with the widget.
  */
 fun createScrollbackReplayTerminal(
     content: String,
-    cols: Int = 120,
+    cols: Int = 0,
     rows: Int = 32,
     appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
 ): SwingTerminal {
-    val resolved = resolveScrollbackForReplay(content, cols, rows)
-    val payload = (resolved + "\n\u001b[?25l").toByteArray(StandardCharsets.UTF_8)
-    val connector = AnsiReplayConnector(payload)
-    val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
-    val session = KetraSession.create(terminal = buffer, connector = connector)
-    session.start(cols, rows)
+    val display = content.trimEnd().ifBlank { "(no readable history for this chat)" }
+    val columns = if (cols > 0) cols else scrollbackReplayColumns(display)
+    val payload = (display.replace("\r\n", "\n").replace("\n", "\r\n") + "\u001b[0m\u001b[?25l")
+        .toByteArray(StandardCharsets.UTF_8)
+    val buffer = TerminalBuffers.create(
+        width = columns,
+        height = rows,
+        maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
+    )
+    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
+    session.start(columns, rows)
+    session.onBytes(payload, 0, payload.size)
     return onSwingEdt {
-        val settings = appearance.toSwingSettings(columns = cols, rows = rows)
-        SwingTerminal(settingsProvider = { settings }).also { terminal ->
+        val settings = appearance.toScrollbackReplaySettings(columns = columns, rows = rows)
+        SwingTerminal(
+            settingsProvider = { settings },
+            hostServices = andyScrollbackSwingHostServices(),
+        ).also { terminal ->
             terminal.bind(session)
-            SwingUtilities.invokeLater {
-                // Give the emulator a beat to consume the buffer, then jump to end.
-                runCatching { terminal.repaint() }
-            }
+            // History is view-only — keep focus out of the widget so typing goes to
+            // the follow-up composer (or elsewhere), not the parked replay session.
+            terminal.isFocusable = false
+            installScrollbackReplayWheelHandler(terminal)
+            scrollbackReplaySessions[terminal] = session
         }
     }
+}
+
+/**
+ * Dispose a widget built by [createScrollbackReplayTerminal], closing its replay session.
+ *
+ * [SwingTerminal.dispose] only unbinds, so disposing alone leaks the session's render worker
+ * thread — one per history peek — for the life of the app.
+ */
+fun disposeScrollbackReplayTerminal(terminal: SwingTerminal) {
+    val session = onSwingEdt {
+        runCatching { terminal.dispose() }
+        scrollbackReplaySessions.remove(terminal)
+    } ?: return
+    // TerminalSession.close awaits its render worker, so keep it off the EDT.
+    Thread({ runCatching { session.close() } }, "andy-scrollback-replay-close").apply {
+        isDaemon = true
+        start()
+    }
+}
+
+/** Replay session per viewer widget, so disposal can close it. EDT only. */
+private val scrollbackReplaySessions = WeakHashMap<SwingTerminal, KetraSession>()
+
+/**
+ * KetraTerm only scrolls on wheel when the terminal is focused. Replay viewers stay
+ * unfocusable so follow-up typing stays in the composer, so wheel deltas are applied
+ * explicitly here.
+ */
+internal fun installScrollbackReplayWheelHandler(terminal: SwingTerminal) {
+    terminal.addMouseWheelListener(
+        MouseWheelListener { event ->
+            val delta = terminalWheelScrollDelta(event)
+            if (delta != 0.0) {
+                terminal.scrollViewportBy(delta)
+            }
+        },
+    )
 }
 
 /** Forwards transport events while teeing host→emulator stdout into [tee]. */
@@ -168,6 +305,35 @@ internal class TeeTerminalConnector(
                 override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
                     tee.append(bytes, offset, length)
                     listener.onBytes(bytes, offset, length)
+                }
+
+                override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)
+
+                override fun onError(error: Throwable) = listener.onError(error)
+            },
+        )
+    }
+
+    override fun write(bytes: ByteArray, offset: Int, length: Int) =
+        delegate.write(bytes, offset, length)
+
+    override fun resize(columns: Int, rows: Int) = delegate.resize(columns, rows)
+
+    override fun close() = delegate.close()
+}
+
+/** [TeeTerminalConnector] that strips agent-CLI redraw noise before the emulator sees it. */
+internal class AgentCliTeeTerminalConnector(
+    private val delegate: TerminalConnector,
+    private val tee: ScrollbackAnsiTee,
+) : TerminalConnector {
+    override fun start(listener: TerminalConnectorListener) {
+        delegate.start(
+            object : TerminalConnectorListener {
+                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
+                    val (sanitized, off, len) = sanitizeAgentCliPtyChunk(bytes, offset, length)
+                    tee.append(sanitized, off, len)
+                    listener.onBytes(sanitized, off, len)
                 }
 
                 override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)
@@ -208,46 +374,6 @@ internal class SynchronousAnsiConnector(
     override fun resize(columns: Int, rows: Int) = Unit
 
     override fun close() = Unit
-}
-
-/**
- * Feeds [ansi] bytes once, then parks until [close] so the replay session stays
- * connected for scrollback viewing. Writes are ignored (read-only).
- */
-internal class AnsiReplayConnector(
-    private val ansi: ByteArray,
-) : TerminalConnector {
-    private val closed = AtomicBoolean(false)
-    private var listener: TerminalConnectorListener? = null
-    private var reader: Thread? = null
-
-    override fun start(listener: TerminalConnectorListener) {
-        check(this.listener == null) { "connector already started" }
-        this.listener = listener
-        reader = Thread({
-            if (ansi.isNotEmpty()) {
-                listener.onBytes(ansi, 0, ansi.size)
-            }
-            while (!closed.get()) {
-                runCatching { Thread.sleep(200) }
-            }
-            listener.onClosed(0)
-        }, "andy-scrollback-replay").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    override fun write(bytes: ByteArray, offset: Int, length: Int) {
-        // Read-only replay — discard input.
-    }
-
-    override fun resize(columns: Int, rows: Int) = Unit
-
-    override fun close() {
-        closed.set(true)
-        reader?.interrupt()
-    }
 }
 
 internal fun <T> onSwingEdt(block: () -> T): T {

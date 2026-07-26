@@ -3,6 +3,7 @@ package app.andy.service
 import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -10,6 +11,12 @@ interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
     suspend fun listDevices(): List<AndroidDevice>
     suspend fun shell(serial: String, command: List<String>): CommandResult
+    /**
+     * Sends an emulator console command via `adb -s SERIAL emu …`.
+     * Used for foldable posture/hinge and other virtual-device controls.
+     */
+    suspend fun emu(serial: String, command: List<String>): CommandResult =
+        CommandResult.failure("Emulator console commands are unavailable")
     suspend fun pair(host: String, port: Int, code: String): CommandResult
     suspend fun connect(host: String, port: Int): CommandResult
     suspend fun disconnect(serial: String): CommandResult
@@ -87,6 +94,20 @@ interface MirrorEngine {
      * for shutdown, device changes, or other cases that must tear down now.
      */
     suspend fun disconnect(immediate: Boolean = false)
+    /**
+     * Tear down and start a fresh mirror session. Use after foldable display switches where
+     * [connect] would otherwise no-op because the video config is unchanged.
+     */
+    suspend fun reconnect(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult {
+        disconnect(immediate = true)
+        return connect(serial, config)
+    }
+    /**
+     * Restart scrcpy transport after a fold/unfold display change without tearing down the GPU
+     * decode pipeline or Metal presenters. Falls back to [reconnect] when no live session exists.
+     */
+    suspend fun restartForDisplayChange(serial: String, config: MirrorVideoConfig = MirrorVideoConfig()): CommandResult =
+        reconnect(serial, config)
     suspend fun sendInput(input: MirrorInput): CommandResult
     suspend fun screenshot(serial: String): ByteArray?
 }
@@ -264,17 +285,12 @@ interface WorkspaceStore {
 }
 
 enum class AgentAttentionKind {
-    Completed,
-    NeedsInput,
-    Failed,
-    /** Embedded terminal is actively working (informational; not notified by default). */
-    Working,
-    /** Quiescent at a prompt. */
-    Idle,
-    /** Blocked on approval/question — fires OS notification (herdr parity). */
+    /** Blocked on approval/question. */
     Blocked,
-    /** Phase/process finished while unseen — fires OS notification (herdr parity). */
+    /** Turn finished while unseen. */
     Done,
+    /** Crashed or failed. */
+    Error,
 }
 
 data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
@@ -303,6 +319,9 @@ interface ActionRunService {
     fun stop(runId: String)
     fun clear(runId: String)
 }
+
+/** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
+private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 interface AgentRunService {
     val tasks: StateFlow<List<AgentTask>>
@@ -348,6 +367,18 @@ interface AgentRunService {
     /** Reopens a stored provider session so the live interactive terminal UI comes back. */
     fun reattachSession(taskId: String)
     fun canReattachSession(taskId: String): Boolean
+    /** True while the embedded PTY or underlying tmux session is still running. */
+    fun isTerminalLive(taskId: String): Boolean = false
+    /**
+     * Chats this app run still hosts an interactive session for. Sessions that only
+     * survive in tmux from an earlier run are deliberately absent: reopening Andy puts
+     * those chats back in read-only replay until a follow-up resumes them.
+     */
+    val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
+    /** Chats whose embedded terminal widget is currently mounted in the UI. */
+    val attachedTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
+    /** True while the embedded chat for [taskId] is currently on screen. */
+    fun isViewing(taskId: String): Boolean = false
     /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
     fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
     /** Holds a follow-up until the active run completes successfully. */
@@ -368,6 +399,8 @@ interface AgentRunService {
     fun markUnread(taskId: String)
     /** Tracks whether an embedded chat is currently on screen (not merely opened before). */
     fun setChatViewing(taskId: String?, viewing: Boolean)
+    /** Drops the local Swing viewer while keeping the underlying session alive. */
+    fun releaseTerminalViewer(taskId: String) = Unit
     /** Hides a finished chat from the default list without deleting it. */
     fun archive(taskId: String)
     /** Restores an archived chat to the default list. */
@@ -377,10 +410,6 @@ interface AgentRunService {
      * the PTY buffer is the transcript. Kept for call-site compatibility during migration.
      */
     fun events(taskId: String): StateFlow<List<AgentEvent>>
-    /** Live working/idle/blocked/done badge state for embedded sessions. */
-    fun sessionStatus(taskId: String): StateFlow<app.andy.model.AgentSessionStatus?>
-    /** Latest session badge per active task id (empty when no embedded session). */
-    val sessionStatuses: StateFlow<Map<String, app.andy.model.AgentSessionStatus>>
     fun interactiveResumeCommand(taskId: String): String?
     /** @deprecated Prefer the embedded terminal pane; retained as a copy/paste escape hatch. */
     suspend fun openInTerminal(taskId: String): CommandResult
@@ -394,6 +423,8 @@ interface AgentRunService {
 
 interface ProjectWorkflowService {
     val projects: StateFlow<Map<String, ProjectWorkflowState>>
+    /** Absolute context directory for [projectId], if the project is configured. */
+    suspend fun projectContextDir(projectId: String): String?
     suspend fun ensureProject(projectId: String)
     suspend fun updateScratchpad(projectId: String, text: String)
     suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile)

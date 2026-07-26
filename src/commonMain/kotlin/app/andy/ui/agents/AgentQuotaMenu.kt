@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.HorizontalDivider
+import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -131,7 +131,7 @@ private fun ProviderUsagePanel(
             }
         }
 
-        HorizontalDivider(color = Border)
+        AndyHorizontalDivider(color = Border)
 
         if (!accountAccessEnabled && agent != AgentKind.Codex) {
             AccountAccessPrompt(agent, onEnableAccountAccess)
@@ -170,7 +170,7 @@ private fun ProviderUsagePanel(
             }
         }
 
-        HorizontalDivider(color = Border)
+        AndyHorizontalDivider(color = Border)
 
         Text("local activity", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AndySpace.S4)) {

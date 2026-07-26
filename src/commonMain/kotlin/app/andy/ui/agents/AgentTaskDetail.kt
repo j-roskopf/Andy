@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -31,7 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
+import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,7 +72,7 @@ import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import app.andy.model.modelConfigurationLabel
@@ -112,7 +113,6 @@ internal fun AgentTaskDetail(
 ) {
     val scope = rememberCoroutineScope()
     val copyText = rememberCopyText()
-    val sessionStatus by services.agentRuns.sessionStatus(task.id).collectAsState()
     val skillDirectory = task.worktreePath ?: task.cwd
     val availableSkills by remember(task.agent, skillDirectory) {
         services.agentRuns.skills(task.agent, skillDirectory)
@@ -151,10 +151,15 @@ internal fun AgentTaskDetail(
     }
 
     val supportsResume = true
+    val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
+    val attachedTerminalIds by services.agentRuns.attachedTerminalTaskIds.collectAsState()
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
     // unless the user has staged images that should ship with the next composed message.
-    val terminalSessionActive = task.isActive || task.status == AgentTaskStatus.WaitingForInput
-    val showFollowUpComposer = supportsResume && (!terminalSessionActive || followUpImagePaths.isNotEmpty())
+    val terminalSessionActive = isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
+    val terminalComposerActive = terminalSessionActive &&
+        (isChatLaunching(task) || task.id in attachedTerminalIds)
+    val showFollowUpComposer = supportsResume &&
+        showsChatFollowUpComposer(terminalComposerActive, followUpImagePaths.isNotEmpty())
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val slashCommand = findActiveSlashCommand(followUp)
     val matchingCommands = slashCommand?.let { command ->
@@ -239,7 +244,7 @@ internal fun AgentTaskDetail(
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        if (task.status == AgentTaskStatus.Unknown) {
+        if (task.status == AgentStatus.Error) {
             Text(
                 "interrupted by an app restart — retry for a fresh run, or continue interactively to pick the session back up",
                 color = TextSecondary,
@@ -247,9 +252,11 @@ internal fun AgentTaskDetail(
                 fontSize = 11.sp,
             )
         }
-        if (task.status == AgentTaskStatus.Paused) {
+        // Redundant while the live CLI is on screen — showing it steals height from the
+        // terminal and the SwingPanel resize reads as a flash on every idle↔working flip.
+        if (task.status == AgentStatus.Done && !terminalSessionActive) {
             Text(
-                "idle at prompt — continue interactively to send your next message",
+                "done at prompt — continue interactively to send your next message",
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
@@ -258,8 +265,8 @@ internal fun AgentTaskDetail(
         if (showHeader) {
             AgentTaskHeader(
                 task = task,
+                terminalLive = terminalSessionActive,
                 nowMillis = nowMillis,
-                sessionStatus = sessionStatus,
                 onStop = { services.agentRuns.stop(task.id) },
                 onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
@@ -267,7 +274,6 @@ internal fun AgentTaskDetail(
                     null
                 },
                 onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
-                onResume = { services.agentRuns.resume(task.id, "Continue where you left off.", emptyList(), emptyList()) },
                 onDelete = { onDelete(task) },
                 onCopyPrompt = { copyText(task.prompt) },
             )
@@ -278,16 +284,23 @@ internal fun AgentTaskDetail(
                 onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
             )
         }
-        AgentTerminalSurface(
-            services = services,
-            taskId = task.id,
-            sessionActive = terminalSessionActive,
-            onImagesStaged = { staged ->
-                followUpImagePaths = (followUpImagePaths + staged).distinct()
-            },
-            modifier = Modifier.weight(1f).fillMaxWidth().heightIn(min = 280.dp),
-        )
-        changeSummary?.takeIf { it.files.isNotEmpty() }?.let { summary ->
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .heightIn(min = 280.dp),
+        ) {
+            AgentTerminalSurface(
+                services = services,
+                taskId = task.id,
+                sessionActive = terminalSessionActive,
+                onImagesStaged = { staged ->
+                    followUpImagePaths = (followUpImagePaths + staged).distinct()
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
             AgentChangeSummaryCard(
                 summary = summary,
                 showAllFiles = showAllChangedFiles,
@@ -343,7 +356,7 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (task.status == AgentTaskStatus.Completed && task.planMode && task.workflowTaskId == null) {
+        if (task.status == AgentStatus.Done && task.planMode && task.workflowTaskId == null) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -619,27 +632,24 @@ internal fun AgentTaskDetail(
 @Composable
 private fun AgentTaskHeader(
     task: AgentTask,
+    terminalLive: Boolean,
     nowMillis: Long,
-    sessionStatus: app.andy.model.AgentSessionStatus? = null,
     onStop: () -> Unit,
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
-    onResume: () -> Unit,
     onDelete: () -> Unit,
     onCopyPrompt: () -> Unit,
 ) {
-    var expanded by remember(task.id) { mutableStateOf(true) }
+    var expanded by remember(task.id) { mutableStateOf(false) }
     val elapsedEnd = rememberElapsedEndMillis(
         taskId = task.id,
         finishedAtMillis = task.finishedAtMillis,
-        isActive = task.isActive,
-        sessionStatus = sessionStatus,
+        task = task,
     )
     Column(
         Modifier.fillMaxWidth()
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
             .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-            .animateContentSize(tween(180))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -662,6 +672,7 @@ private fun AgentTaskHeader(
             Column(
                 Modifier
                     .weight(1f)
+                    .animateContentSize(tween(180))
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable { expanded = !expanded },
                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -684,12 +695,7 @@ private fun AgentTaskHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (sessionStatus != null && task.isActive) {
-                StatusTag(agentSessionStatusLabel(sessionStatus), agentSessionStatusColor(sessionStatus))
-            } else {
-                StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
-            }
-            val terminalLive = task.isActive || task.status == AgentTaskStatus.WaitingForInput
+            StatusTag(agentStatusLabel(task), agentStatusColor(task.status))
             if (!terminalLive) {
                 StatusTag("READ-ONLY", TextSecondary)
             }
@@ -706,31 +712,15 @@ private fun AgentTaskHeader(
                     colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text(if (task.status == AgentTaskStatus.WaitingForInput) "cancel" else "stop", fontSize = 11.sp) }
+                ) { Text(if (task.status == AgentStatus.Blocked) "cancel" else "stop", fontSize = 11.sp) }
             }
-            if (task.status == AgentTaskStatus.Failed || task.status == AgentTaskStatus.Unknown) {
+            if (task.status == AgentStatus.Error) {
                 Button(
                     onClick = onRetry,
                     colors = primaryButtonColors(),
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                 ) { Text("retry", fontSize = 11.sp) }
-            }
-            if (task.status == AgentTaskStatus.Stopped && task.vendorSessionId != null && task.agent != AgentKind.Antigravity) {
-                Button(
-                    onClick = onResume,
-                    colors = primaryButtonColors(),
-                    modifier = Modifier.height(30.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text("resume", fontSize = 11.sp) }
-            }
-            if (task.status == AgentTaskStatus.Paused) {
-                Button(
-                    onClick = onResume,
-                    colors = primaryButtonColors(),
-                    modifier = Modifier.height(30.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text("continue", fontSize = 11.sp) }
             }
             OutlinedButton(
                 onClick = onDelete,
@@ -769,7 +759,7 @@ private fun AgentTaskHeader(
 
                 AgentContextWindowIndicator(task)
 
-                HorizontalDivider(color = Border)
+                AndyHorizontalDivider(color = Border)
 
                 Row(
                     Modifier.fillMaxWidth(),

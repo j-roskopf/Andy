@@ -1,0 +1,37 @@
+{
+    "hooks": {
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ],
+        "PermissionRequest": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" blocked empty",
+                        "timeout": 5
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -433,7 +433,7 @@ internal object ScreenshotServices {
     }
 
     private object ScreenshotAgentRuns : AgentRunService {
-        private val task = AgentTask("task-1", "Tighten checkout validation", "Fix the empty postal code validation and add a regression test.", AgentKind.Codex, "garden", "/workspace/sample-app", "/workspace/sample-app", status = AgentTaskStatus.Completed, createdAtMillis = now - 40_000, startedAtMillis = now - 39_000, finishedAtMillis = now - 3_000, totalCostUsd = 0.18, inputTokens = 2_420, outputTokens = 860, contextTokens = 12_400, contextWindowTokens = 128_000, unread = true)
+        private val task = AgentTask("task-1", "Tighten checkout validation", "Fix the empty postal code validation and add a regression test.", AgentKind.Codex, "garden", "/workspace/sample-app", "/workspace/sample-app", status = AgentStatus.Done, createdAtMillis = now - 40_000, startedAtMillis = now - 39_000, finishedAtMillis = now - 3_000, totalCostUsd = 0.18, inputTokens = 2_420, outputTokens = 860, contextTokens = 12_400, contextWindowTokens = 128_000, unread = true)
         override val tasks = MutableStateFlow(listOf(task))
         override val cliStatuses = MutableStateFlow(AgentKind.entries.map { AgentCliStatus(it, "/usr/local/bin/${it.cliName}", "1.0.0") })
         override val providerModels = MutableStateFlow(emptyMap<AgentKind, List<app.andy.model.AgentModelOption>>())
@@ -453,6 +453,8 @@ internal object ScreenshotServices {
         override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
         override fun reattachSession(taskId: String) = Unit
         override fun canReattachSession(taskId: String): Boolean = false
+        override fun isTerminalLive(taskId: String): Boolean = false
+        override fun isViewing(taskId: String): Boolean = false
         override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
         override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
@@ -464,8 +466,6 @@ internal object ScreenshotServices {
         override fun archive(taskId: String) = Unit
         override fun unarchive(taskId: String) = Unit
         override fun events(taskId: String) = MutableStateFlow(listOf<AgentEvent>(AgentEvent.UserMessage(now - 39_000, task.prompt), AgentEvent.ToolCall(now - 31_000, "rg", "Find validation reducer"), AgentEvent.AssistantText(now - 5_000, "Updated the reducer and added a focused test."), AgentEvent.TaskResult(now - 3_000, true, "Checkout validation is covered.", 0.18, inputTokens = 2420, outputTokens = 860, durationMs = 36_000)))
-        override fun sessionStatus(taskId: String) = MutableStateFlow(null)
-        override val sessionStatuses = MutableStateFlow(emptyMap<String, app.andy.model.AgentSessionStatus>())
         override fun interactiveResumeCommand(taskId: String) = "codex resume task-1"
         override suspend fun openInTerminal(taskId: String) = CommandResult.success()
         override suspend fun openSkill(path: String) = CommandResult.success()
@@ -635,6 +635,7 @@ internal object ScreenshotServices {
                 ),
             ),
         )
+        override suspend fun projectContextDir(projectId: String): String? = null
         override suspend fun ensureProject(projectId: String) = Unit
         override suspend fun updateScratchpad(projectId: String, text: String) = Unit
         override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit

@@ -56,9 +56,9 @@ class TerminalSessionTest {
         ) as KetraTermBackend
         try {
             withTimeout(15_000) { session.exitCode.first { it != null } }
-            val tee = session.scrollbackAnsi()
+            val exported = session.scrollbackAnsi()
             val screen = session.bufferSnapshot()
-            val combined = tee + "\n" + screen
+            val combined = exported + "\n" + screen
             assertFalse(
                 combined.contains("should-be-scrubbed"),
                 "NODE_OPTIONS should be scrubbed before PTY spawn, got=${combined.take(300)}",

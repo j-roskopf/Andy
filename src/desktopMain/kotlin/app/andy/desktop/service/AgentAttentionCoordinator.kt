@@ -1,8 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.model.AgentNotificationTiming
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
 import app.andy.service.AgentAttentionCoordinator
 import app.andy.service.AgentAttentionEvent
 import app.andy.service.AgentAttentionKind
@@ -20,32 +20,45 @@ class DesktopAgentAttentionCoordinator(
     private val isForeground: () -> Boolean,
     private val notifications: OsNotificationService,
     private val sounds: NotificationSoundPlayer,
+    private val isViewing: (String) -> Boolean = { false },
 ) : AgentAttentionCoordinator {
-    private val previousStatuses = mutableMapOf<String, AgentTaskStatus>()
+    private data class TrackedStatus(
+        val status: AgentStatus?,
+        val confident: Boolean,
+    )
+
+    private val previous = mutableMapOf<String, TrackedStatus>()
     private var seeded = false
+
     override fun start() { scope.launch { tasks.collect(::onTasksChanged) } }
+
     override fun onTasksChanged(tasks: List<AgentTask>) {
-        if (!seeded) { tasks.forEach { previousStatuses[it.id] = it.status }; seeded = true; return }
+        if (!seeded) {
+            tasks.forEach { previous[it.id] = TrackedStatus(it.status, it.statusConfident) }
+            seeded = true
+            return
+        }
         tasks.forEach { task ->
-            val previous = previousStatuses.put(task.id, task.status)
+            val prior = previous.put(task.id, TrackedStatus(task.status, task.statusConfident))
+            if (prior == null) return@forEach
             val kind = when (task.status) {
-                AgentTaskStatus.Completed -> AgentAttentionKind.Done
-                AgentTaskStatus.WaitingForInput -> AgentAttentionKind.Blocked
-                AgentTaskStatus.Failed -> AgentAttentionKind.Failed
-                AgentTaskStatus.Paused -> AgentAttentionKind.Idle
+                AgentStatus.Blocked -> AgentAttentionKind.Blocked
+                AgentStatus.Done -> AgentAttentionKind.Done
+                AgentStatus.Error -> AgentAttentionKind.Error
                 else -> null
             }
-            // A task that first appears already terminal is not an observed status
-            // transition. This also keeps restored/imported tasks quiet.
-            if (previous == null || previous == task.status || kind == null ||
-                (kind == AgentAttentionKind.Done && task.queuedFollowUps.isNotEmpty())
-            ) return@forEach
+            val statusChanged = prior.status != task.status
+            val becameConfident = task.statusConfident && !prior.confident
+            if (kind == null || (!statusChanged && !becameConfident) || !task.statusConfident) return@forEach
+            if (isViewing(task.id)) return@forEach
+            if (kind == AgentAttentionKind.Done && task.queuedFollowUps.isNotEmpty()) return@forEach
             val prefs = workspace()
             if (prefs.agentNotificationTiming == AgentNotificationTiming.BackgroundOnly && isForeground()) return@forEach
-            val event = AgentAttentionEvent(task.id, task.projectId, task.title, kind)
+            if (!AgentNotificationDedup.tryMarkNotified(task.id, kind.name)) return@forEach
+            val event = AgentAttentionEvent(task.id, task.projectId, task.notificationTitle, kind)
             if (prefs.agentOsNotificationsEnabled) notifications.show(event)
             if (prefs.agentNotificationSoundEnabled) sounds.play(prefs.agentNotificationSoundId)
         }
-        previousStatuses.keys.retainAll(tasks.map { it.id }.toSet())
+        previous.keys.retainAll(tasks.map { it.id }.toSet())
     }
 }

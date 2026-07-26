@@ -5,17 +5,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' done"
-                    }
-                ]
-            }
-        ],
-        "SubagentStop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' done"
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done"
                     }
                 ]
             }
@@ -25,7 +15,37 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "'/Users/joer/Code/Andy/Andy/.andy/task-2bfa681e08/andy-status-hook.sh' blocked"
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" blocked"
+                    }
+                ],
+                "matcher": "permission_prompt|agent_needs_input|elicitation_dialog"
+            },
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done"
+                    }
+                ],
+                "matcher": "idle_prompt|agent_completed"
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working"
+                    }
+                ]
+            }
+        ],
+        "PermissionRequest": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" blocked"
                     }
                 ]
             }
