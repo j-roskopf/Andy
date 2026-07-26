@@ -62,8 +62,6 @@ class ProxyConformanceTest {
 
         val dir = kotlin.io.path.createTempDirectory("andy-proxy-conformance").toFile()
         proxyDir = dir
-        val addon = File(dir, "andy_mitm_addon.py").also { it.writeBytes(MitmAddon.getAddonSource()) }
-        File(dir, "rules.json").writeText("""{"rules":[]}""")
 
         val ipv4Origin = startOrigin(bindHost = "127.0.0.1")
         val ipv6Origin = runCatching { startOrigin(bindHost = "::1") }.getOrNull()
@@ -74,7 +72,6 @@ class ProxyConformanceTest {
             "--listen-host", "127.0.0.1",
             "--listen-port", listenPort.toString(),
             "--set", "confdir=${dir.absolutePath}",
-            "-s", addon.absolutePath,
             "--set", "termlog_verbosity=error",
             "--set", "ssl_insecure=true",
             // Conformance origins bind to loopback; mitmproxy blocks literal IPs by default.
