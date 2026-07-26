@@ -8,13 +8,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.io.File
 
 class AgentWorkflowArtifactsTest {
     @Test
-    fun reviewJsonEmitsReviewReady() = runTest {
+    fun reviewJsonEmitsReviewReady() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob())
         val root = File.createTempFile("andy-artifacts-review", null).also { it.delete(); it.mkdirs() }
         try {
             root.resolve("review.json").writeText(
@@ -32,12 +37,13 @@ class AgentWorkflowArtifactsTest {
                 }
                 """.trimIndent(),
             )
-            val artifacts = AgentWorkflowArtifacts(this, "task-review", root)
+            val artifacts = AgentWorkflowArtifacts(scope, "task-review", root)
             artifacts.start()
-            val event = artifacts.events.first()
+            val event = withTimeout(5_000) { artifacts.events.first() }
             assertTrue(event is AgentWorkflowArtifacts.Event.ReviewReady)
             artifacts.close()
         } finally {
+            scope.cancel()
             root.deleteRecursively()
         }
     }

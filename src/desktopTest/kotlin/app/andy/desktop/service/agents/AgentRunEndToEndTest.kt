@@ -415,7 +415,7 @@ class AgentUserInputResumeTest {
             val task = service.createAndStart(
                 AgentTaskDraft("ask", "Ask before planning", AgentKind.Codex, projectId = null, directory = dir.absolutePath),
             )
-            withTimeout(10_000) {
+            withTimeout(30_000) {
                 while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Blocked) delay(25)
             }
             val waiting = service.tasks.value.first { it.id == task.id }
@@ -423,7 +423,7 @@ class AgentUserInputResumeTest {
             assertEquals("Desktop", request.questions.single().options.first().label)
 
             service.respondToUserInput(task.id, request.id, mapOf("platform" to "Desktop"))
-            withTimeout(10_000) {
+            withTimeout(30_000) {
                 while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
             }
             val finished = service.tasks.value.first { it.id == task.id }

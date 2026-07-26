@@ -669,7 +669,17 @@ class AgentTerminalManager(
                         else -> 0
                     }
                 }
-                else -> handle.session.exitCode.first { it != null } ?: -1
+                else -> {
+                    val code = handle.session.exitCode.first { it != null } ?: -1
+                    withContext(Dispatchers.IO) {
+                        repeat(20) {
+                            persistScrollback(handle)
+                            if (handle.scrollbackPath.isFile && handle.scrollbackPath.length() > 0L) return@withContext
+                            delay(100)
+                        }
+                    }
+                    code
+                }
             }
         }
         // Headless wait when only tmux remains.

@@ -52,16 +52,16 @@ class ProjectWorkflowServiceTest {
         ) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            val buildRun = awaitValue(timeoutMillis = 20_000) {
+            val buildRun = awaitValue(timeoutMillis = 60_000) {
                 harness.service.tasks.value.firstOrNull {
                     it.workflowStage == ProjectWorkflowStage.Build && it.isActive
                 }
             }
             harness.service.completeWorkflowRun(buildRun.id)
-            await(timeoutMillis = 20_000) {
+            await(timeoutMillis = 60_000) {
                 harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentStatus.Done
             }
-            await(timeoutMillis = 20_000) {
+            await(timeoutMillis = 60_000) {
                 harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
             }
         }

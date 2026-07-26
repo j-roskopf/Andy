@@ -89,6 +89,10 @@ class AgentWorkflowArtifacts(
                 delay(350)
             }
         }
+        // Prime watchers so pre-existing artifacts are not missed until the first delay.
+        scope.launch {
+            pollOnce()
+        }
     }
 
     fun close() {
