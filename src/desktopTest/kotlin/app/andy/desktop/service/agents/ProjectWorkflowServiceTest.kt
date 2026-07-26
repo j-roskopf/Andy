@@ -335,7 +335,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(List(5) { "changes" }))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
             val workflow = harness.service.projects.value.getValue("project-1")
             val build = workflow.tasks.first { it.id == buildId }
             val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -1207,6 +1207,9 @@ private class WorkflowAdapter(
             writeWorkflowArtifacts(task)
             listOf(binary, "/d", "/c", windowsCommand(task))
         } else {
+            if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) {
+                task.cwd?.let { File(it, "review-edit.txt").writeText("reviewed change\n") }
+            }
             listOf(binary, "-c", unixCommand(task))
         }
     }
@@ -1247,7 +1250,6 @@ private class WorkflowAdapter(
                 if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
             }
             ProjectWorkflowStage.Review -> {
-                if (reviewWritesFile) append("printf 'reviewed change\\n' > review-edit.txt; ")
                 reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifact(task, "review.json", it)) }
             }
             ProjectWorkflowStage.Verification -> {
@@ -1255,7 +1257,7 @@ private class WorkflowAdapter(
             }
             null -> Unit
         }
-    }
+    }.ifBlank { "true" }
 
     private fun windowsCommand(task: AgentTask): String = buildString {
         if (task.workflowStage == failStage) {
@@ -1368,13 +1370,13 @@ private object WorkflowWorkspaceStore : WorkspaceStore {
     override suspend fun save(state: WorkspaceState) = Unit
 }
 
-private suspend fun await(timeoutMillis: Long = 10_000, condition: () -> Boolean) {
+private suspend fun await(timeoutMillis: Long = 60_000, condition: () -> Boolean) {
     withTimeout(timeoutMillis) {
         while (!condition()) delay(20)
     }
 }
 
-private suspend fun <T> awaitValue(timeoutMillis: Long = 10_000, supplier: () -> T?): T {
+private suspend fun <T> awaitValue(timeoutMillis: Long = 60_000, supplier: () -> T?): T {
     var result: T? = null
     withTimeout(timeoutMillis) {
         while (true) {

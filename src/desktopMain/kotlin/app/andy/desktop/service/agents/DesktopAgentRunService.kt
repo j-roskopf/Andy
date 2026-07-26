@@ -3270,7 +3270,8 @@ class DesktopAgentRunService(
             }
         }
         updateTask(taskId) { task ->
-            if (task.isActive) {
+            val shouldFinalize = task.finishedAtMillis == null && (task.isActive || task.status != null)
+            if (shouldFinalize) {
                 task.copy(
                     status = status,
                     stoppedByUser = stoppedByUser,

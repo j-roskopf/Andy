@@ -179,9 +179,8 @@ class KetraTermScrollbackTest {
             manager.stop(taskId)
 
             val file = File(dir, "$taskId/scrollback.ansi")
-            assertTrue(file.isFile, "scrollback file should exist after stop")
+            awaitScrollbackContains(file, "first-run-output")
             val first = file.readText()
-            assertTrue(first.contains("first-run-output"), "first run missing: ${first.take(300)}")
             assertFalse(looksLikeRawAnsiTee(first), "persisted scrollback should be resolved text")
 
             val argv2 = if (isWindows) {
@@ -193,6 +192,7 @@ class KetraTermScrollbackTest {
             withTimeout(15_000) { manager.awaitExit(taskId) }
             manager.stop(taskId)
 
+            awaitScrollbackContains(file, "second-run-output")
             val second = file.readText()
             assertTrue(second.contains("first-run-output"), "cumulative should keep first run")
             assertTrue(second.contains("second-run-output"), "cumulative should append second run")
@@ -239,6 +239,8 @@ class KetraTermScrollbackTest {
             withTimeout(15_000) { manager.awaitExit(taskId) }
             manager.stop(taskId)
 
+            val file = File(dir, "$taskId/scrollback.ansi")
+            awaitScrollbackContains(file, "red-line")
             val replay = manager.scrollbackReplayText(taskId)
             assertNotNull(replay)
             assertTrue(replay.contains("red-line"), "missing output: ${replay.take(300)}")
@@ -433,4 +435,12 @@ class KetraTermScrollbackTest {
         }
     }
 
+    private suspend fun awaitScrollbackContains(file: File, text: String, timeoutMs: Long = 15_000) {
+        withTimeout(timeoutMs) {
+            while (true) {
+                if (file.isFile && file.readText().contains(text)) return@withTimeout
+                delay(100)
+            }
+        }
+    }
 }
