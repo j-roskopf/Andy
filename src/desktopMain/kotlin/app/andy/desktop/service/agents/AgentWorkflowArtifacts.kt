@@ -84,14 +84,11 @@ class AgentWorkflowArtifacts(
 
     private fun startPolling() {
         job = scope.launch {
-            while (isActive && !closed.get() && !paused.get()) {
-                pollOnce()
-                delay(350)
-            }
-        }
-        // Prime watchers so pre-existing artifacts are not missed until the first delay.
-        scope.launch {
             pollOnce()
+            while (isActive && !closed.get() && !paused.get()) {
+                delay(350)
+                pollOnce()
+            }
         }
     }
 

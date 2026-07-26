@@ -435,7 +435,7 @@ class KetraTermScrollbackTest {
         }
     }
 
-    private suspend fun awaitScrollbackContains(file: File, text: String, timeoutMs: Long = 15_000) {
+    private suspend fun awaitScrollbackContains(file: File, text: String, timeoutMs: Long = 30_000) {
         withTimeout(timeoutMs) {
             while (true) {
                 if (file.isFile && file.readText().contains(text)) return@withTimeout

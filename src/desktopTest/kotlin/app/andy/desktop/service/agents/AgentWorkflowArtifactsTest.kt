@@ -19,7 +19,7 @@ import java.io.File
 class AgentWorkflowArtifactsTest {
     @Test
     fun reviewJsonEmitsReviewReady() = runBlocking {
-        val scope = CoroutineScope(SupervisorJob())
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
         val root = File.createTempFile("andy-artifacts-review", null).also { it.delete(); it.mkdirs() }
         try {
             root.resolve("review.json").writeText(

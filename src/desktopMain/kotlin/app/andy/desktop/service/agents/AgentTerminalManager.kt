@@ -673,7 +673,7 @@ class AgentTerminalManager(
                 else -> {
                     val code = handle.session.exitCode.first { it != null } ?: -1
                     withContext(Dispatchers.IO) {
-                        repeat(20) {
+                        repeat(50) {
                             persistScrollback(handle)
                             if (handle.scrollbackPath.isFile && handle.scrollbackPath.length() > 0L) return@withContext
                             delay(100)
@@ -812,7 +812,10 @@ class AgentTerminalManager(
                         session.captureStyledRows(captureRows)
                     }
                 }
-            is KetraTermBackend -> session.captureStyledRows(captureRows)
+            is KetraTermBackend ->
+                session.captureStyledRows(captureRows).ifEmpty {
+                    styledRowsFromAnsiText(session.scrollbackAnsi())
+                }
             else -> captureTmuxRows(handle.taskId, captureRows)
         }
         if (snapshot.isNotEmpty()) handle.scrollback.merge(snapshot)

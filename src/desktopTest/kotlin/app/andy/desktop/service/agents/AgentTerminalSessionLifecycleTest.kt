@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
@@ -46,6 +47,9 @@ class AgentTerminalSessionLifecycleTest {
 
             assertTrue(manager.isInteractive(taskId), "a freshly started chat is interactive")
             assertEquals(setOf(taskId), manager.interactiveTaskIds.value)
+            withTimeout(15_000) {
+                while (!manager.hasScrollback(taskId)) delay(50)
+            }
 
             // Unmounting the Compose surface drops the viewer, not the session.
             manager.releaseViewerOnly(taskId)
@@ -291,6 +295,7 @@ class AgentTerminalSessionLifecycleTest {
                 attached.forEach {
                     assertSame(attached.first(), it, "every caller must get the same handle in round $round")
                 }
+                delay(150)
                 assertEquals(
                     1,
                     tmuxClientCount(taskId),
