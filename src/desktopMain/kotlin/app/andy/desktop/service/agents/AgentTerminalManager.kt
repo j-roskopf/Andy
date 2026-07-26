@@ -690,6 +690,8 @@ class AgentTerminalManager(
             handle.artifacts.close()
             handle.waitJob?.cancel()
             runCatching { handle.session.close() }
+            // Direct PTY output can land in the buffer just after process exit.
+            runCatching { persistScrollback(handle) }
         } else if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
             TmuxAndy.killSession(taskId)
         }

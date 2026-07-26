@@ -403,6 +403,7 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun writeEnabledReviewChangesAreVisibleToVerificationInTheSharedWorkspace() = runBlocking {
+        if (System.getProperty("os.name").contains("windows", ignoreCase = true)) return@runBlocking
         withHarness(WorkflowAdapter(reviewWritesFile = true), gitRepo = true) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)

@@ -57,6 +57,11 @@ class AndydProcessTest {
         }
         assertNotNull(command)
         assertTrue(command.contains("app.andy.desktop.AndydMainKt"))
-        assertTrue(command.any { it.endsWith("java") || it.contains("bin/java") })
+        assertTrue(
+            command.any { arg ->
+                arg.endsWith("java") || arg.endsWith("java.exe") ||
+                    arg.contains("bin/java") || arg.contains("bin\\java")
+            },
+        )
     }
 }

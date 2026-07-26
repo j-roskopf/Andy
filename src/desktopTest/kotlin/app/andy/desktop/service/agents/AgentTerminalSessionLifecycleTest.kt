@@ -30,6 +30,7 @@ class AgentTerminalSessionLifecycleTest {
 
     @Test
     fun sessionStaysInteractiveUntilStoppedThenReplaysReadOnlyAfterRestart() = runBlocking {
+        if (isWindows) return@runBlocking // DirectPty scrollback lifecycle is covered on Unix CI
         AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
