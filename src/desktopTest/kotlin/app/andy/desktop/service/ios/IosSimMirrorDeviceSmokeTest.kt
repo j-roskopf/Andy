@@ -322,8 +322,9 @@ class IosSimMirrorDeviceSmokeTest {
         }
 
         try {
+            val gpuHostTimeoutMs = if (System.getenv("CI") != null) 30_000L else 10_000L
             val host = assertNotNull(
-                awaitGpuMirrorHost(10_000),
+                awaitGpuMirrorHost(gpuHostTimeoutMs),
                 "LiveScreen did not realize its GPU host without pre-seeded metadata",
             )
             val sessionDeadline = System.nanoTime() + 15_000_000_000L
