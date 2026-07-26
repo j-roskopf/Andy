@@ -117,8 +117,11 @@ internal object AndydProcess {
 
     private fun devJavaLaunchCommand(): List<String>? {
         val classpath = System.getProperty("java.class.path")?.takeIf { it.isNotBlank() } ?: return null
-        val java = File(System.getProperty("java.home"), "bin/java")
-        if (!java.isFile || !java.canExecute()) return null
+        val javaBin = File(System.getProperty("java.home"), "bin")
+        val java = sequenceOf("java.exe", "java")
+            .map { File(javaBin, it) }
+            .firstOrNull { it.isFile && it.canExecute() }
+            ?: return null
         return listOf(
             java.absolutePath,
             "-Djdk.lang.Process.launchMechanism=FORK",

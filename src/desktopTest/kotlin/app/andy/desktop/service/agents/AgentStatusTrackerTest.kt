@@ -886,7 +886,7 @@ class AgentStatusTrackerTest {
         val repoScript = File("scripts/andy-status-hook.sh")
         if (!repoScript.isFile) return
         assertEquals(
-            repoScript.readText(),
+            repoScript.readText().replace("\r\n", "\n"),
             AndyStatusHookInstaller.scriptContent,
             "Keep AndyStatusHookInstaller.scriptContent in sync with scripts/andy-status-hook.sh",
         )

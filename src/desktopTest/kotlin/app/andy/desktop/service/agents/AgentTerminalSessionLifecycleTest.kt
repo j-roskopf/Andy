@@ -361,7 +361,7 @@ class AgentTerminalSessionLifecycleTest {
     }
 
     private fun longRunningArgv(): List<String> = if (isWindows) {
-        listOf("cmd", "/c", "echo $MARKER && pause")
+        listOf("cmd", "/c", "echo $MARKER && timeout /t 3600 /nobreak >nul")
     } else {
         listOf("/bin/sh", "-c", "echo $MARKER; cat")
     }

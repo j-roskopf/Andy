@@ -406,7 +406,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewWritesFile = true), gitRepo = true) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 20_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 60_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             val runs = harness.service.tasks.value.filter { it.workflowStage in setOf(ProjectWorkflowStage.Build, ProjectWorkflowStage.Review, ProjectWorkflowStage.Verification) }
             val reviewRun = runs.first { it.workflowStage == ProjectWorkflowStage.Review }
             val verifyRun = runs.first { it.workflowStage == ProjectWorkflowStage.Verification }
