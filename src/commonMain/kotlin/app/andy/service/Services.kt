@@ -3,6 +3,7 @@ package app.andy.service
 import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 
@@ -264,17 +265,12 @@ interface WorkspaceStore {
 }
 
 enum class AgentAttentionKind {
-    Completed,
-    NeedsInput,
-    Failed,
-    /** Embedded terminal is actively working (informational; not notified by default). */
-    Working,
-    /** Quiescent at a prompt. */
-    Idle,
-    /** Blocked on approval/question — fires OS notification (herdr parity). */
+    /** Blocked on approval/question. */
     Blocked,
-    /** Phase/process finished while unseen — fires OS notification (herdr parity). */
+    /** Turn finished while unseen. */
     Done,
+    /** Crashed or failed. */
+    Error,
 }
 
 data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
@@ -303,6 +299,9 @@ interface ActionRunService {
     fun stop(runId: String)
     fun clear(runId: String)
 }
+
+/** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
+private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 interface AgentRunService {
     val tasks: StateFlow<List<AgentTask>>
@@ -348,6 +347,18 @@ interface AgentRunService {
     /** Reopens a stored provider session so the live interactive terminal UI comes back. */
     fun reattachSession(taskId: String)
     fun canReattachSession(taskId: String): Boolean
+    /** True while the embedded PTY or underlying tmux session is still running. */
+    fun isTerminalLive(taskId: String): Boolean = false
+    /**
+     * Chats this app run still hosts an interactive session for. Sessions that only
+     * survive in tmux from an earlier run are deliberately absent: reopening Andy puts
+     * those chats back in read-only replay until a follow-up resumes them.
+     */
+    val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
+    /** Chats whose embedded terminal widget is currently mounted in the UI. */
+    val attachedTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
+    /** True while the embedded chat for [taskId] is currently on screen. */
+    fun isViewing(taskId: String): Boolean = false
     /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
     fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
     /** Holds a follow-up until the active run completes successfully. */
@@ -377,10 +388,6 @@ interface AgentRunService {
      * the PTY buffer is the transcript. Kept for call-site compatibility during migration.
      */
     fun events(taskId: String): StateFlow<List<AgentEvent>>
-    /** Live working/idle/blocked/done badge state for embedded sessions. */
-    fun sessionStatus(taskId: String): StateFlow<app.andy.model.AgentSessionStatus?>
-    /** Latest session badge per active task id (empty when no embedded session). */
-    val sessionStatuses: StateFlow<Map<String, app.andy.model.AgentSessionStatus>>
     fun interactiveResumeCommand(taskId: String): String?
     /** @deprecated Prefer the embedded terminal pane; retained as a copy/paste escape hatch. */
     suspend fun openInTerminal(taskId: String): CommandResult

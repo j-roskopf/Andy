@@ -98,11 +98,6 @@ internal fun AndyShell(
     } else {
         remember { mutableStateOf(emptyList<AgentTask>()) }
     }
-    val sessionStatuses by if (capabilities.hostAutomation) {
-        services.agentRuns.sessionStatuses.collectAsState()
-    } else {
-        remember { mutableStateOf(emptyMap()) }
-    }
     val pendingUpdateInstallConfirmation by if (capabilities.updates) {
         services.updates.pendingInstallConfirmation.collectAsState()
     } else {
@@ -219,6 +214,9 @@ internal fun AndyShell(
             .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
             .noiseGridOverlay(0.035f)
     ) {
+        val knownProjectIds = remember(state.actionsConfig.projects) {
+            state.actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
+        }
         Row(Modifier.fillMaxSize().padding(top = contentTopPadding, start = 14.dp, end = 14.dp, bottom = 14.dp)) {
             Sidebar(
                 current = state.destination,
@@ -227,10 +225,13 @@ internal fun AndyShell(
                 iosSelectionActive = state.isIosSelection,
                 // Project chats are owned by Actions. Keep their unread state out of
                 // the standalone Agent destination.
-                hasUnreadAgentTasks = agentTasks.any { it.unread && it.projectId == null },
-                hasUnreadProjectAgentTasks = agentTasks.any { it.unread && it.projectId != null },
+                hasUnreadAgentTasks = agentTasks.any { !it.archived && it.unread && it.projectId == null },
+                hasUnreadProjectAgentTasks = agentTasks.any { task ->
+                    !task.archived && task.unread && task.workflowTaskId == null &&
+                        task.projectId != null && task.projectId in knownProjectIds
+                },
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
-                    task.projectId != null && isSessionWorking(task.isActive, sessionStatuses[task.id])
+                    task.projectId != null && isSessionWorking(task)
                 },
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,

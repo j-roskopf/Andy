@@ -7,7 +7,7 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectNote
@@ -59,7 +59,7 @@ class ProjectWorkflowServiceTest {
             }
             harness.service.completeWorkflowRun(buildRun.id)
             await(timeoutMillis = 20_000) {
-                harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentTaskStatus.Completed
+                harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentStatus.Done
             }
             await(timeoutMillis = 20_000) {
                 harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
@@ -424,7 +424,7 @@ class ProjectWorkflowServiceTest {
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
             await {
-                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.status == AgentTaskStatus.Running }
+                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.status == AgentStatus.Working }
             }
             harness.service.pauseBuildPair(buildId)
             await(timeoutMillis = 20_000) {
@@ -802,7 +802,7 @@ class ProjectWorkflowServiceTest {
             harness.service.stopBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
             val run = harness.service.tasks.value.single { it.workflowTaskId == buildId }
-            await { harness.service.tasks.value.first { it.id == run.id }.status == AgentTaskStatus.Stopped }
+            await { harness.service.tasks.value.first { it.id == run.id }.status == AgentStatus.Done }
             val workflow = harness.service.projects.value.getValue("project-1")
             val build = workflow.tasks.first { it.id == buildId }
             val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
@@ -829,12 +829,12 @@ class ProjectWorkflowServiceTest {
 
             service.runSpec(specId, "Tighten the recovery section")
             await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.state == ProjectTaskState.Running }
-            val refineRun = service.tasks.value.single { it.workflowTaskId == specId && it.status == AgentTaskStatus.Running }
+            val refineRun = service.tasks.value.single { it.workflowTaskId == specId && it.status == AgentStatus.Working }
             service.stop(refineRun.id)
             await {
                 val spec = service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }
                 spec?.state == ProjectTaskState.Completed &&
-                    service.tasks.value.firstOrNull { it.id == refineRun.id }?.status == AgentTaskStatus.Stopped
+                    service.tasks.value.firstOrNull { it.id == refineRun.id }?.status == AgentStatus.Done
             }
             var spec = service.projects.value.getValue("project-1").tasks.first { it.id == specId }
             assertEquals(1, spec.planVersions.size)
@@ -890,7 +890,7 @@ class ProjectWorkflowServiceTest {
     fun migrationRestartClearsLegacyNotesAfterTheMarkerWasAlreadyPersisted() = runBlocking {
         val root = File.createTempFile("andy-workflow-migration-restart", null).also { it.delete(); it.mkdirs() }
         val projectDir = File(root, "project").apply { mkdirs() }
-        val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
         store.save(
             AgentStoreState(
                 binaryOverrides = mapOf(AgentKind.Codex.cliName to workflowShellBinary()),
@@ -1010,7 +1010,7 @@ class ProjectWorkflowServiceTest {
     fun restartTurnsAnInterruptedVerifierAndItsBuildIntoAttentionWithoutResuming() = runBlocking {
         val root = File.createTempFile("andy-workflow-recovery", null).also { it.delete(); it.mkdirs() }
         val projectDir = File(root, "project").apply { mkdirs() }
-        val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
         val profile = verifyProfile()
         val run = AgentTask(
             id = "run-interrupted-verify",
@@ -1020,7 +1020,7 @@ class ProjectWorkflowServiceTest {
             projectId = "project-1",
             cwd = projectDir.absolutePath,
             originDir = projectDir.absolutePath,
-            status = AgentTaskStatus.Running,
+            status = AgentStatus.Working,
             createdAtMillis = 20,
             workflowTaskId = "verify-1",
             workflowStage = ProjectWorkflowStage.Verification,
@@ -1161,7 +1161,7 @@ private suspend fun withHarness(
     val config = actionConfig ?: MutableActionConfig(
         ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
     )
-    val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+    val store = DesktopAgentTaskStore(File(root, "agents.db"))
     store.save(AgentStoreState(binaryOverrides = mapOf(adapter.kind.cliName to workflowShellBinary())))
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var service: DesktopAgentRunService? = null

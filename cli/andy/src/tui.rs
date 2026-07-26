@@ -1,5 +1,8 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+    MouseEventKind,
+};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
@@ -13,10 +16,12 @@ use crate::attach;
 use crate::chats::{self, ListEntry, ProjectGroup};
 use crate::compose;
 use crate::mcp::McpClient;
+use crate::tmux;
 
 pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
+    stdout().execute(EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
     let mut selected: usize = 0;
@@ -40,7 +45,8 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
     .await;
 
     loop {
-        status = flash.take().unwrap_or_else(|| {
+        // Keep flash until the next keypress — take() every redraw made it vanish in ~250ms.
+        status = flash.clone().unwrap_or_else(|| {
             footer_status(
                 entries.get(selected),
                 groups.iter().map(|g| g.chats.len()).sum(),
@@ -84,9 +90,18 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                     }
                 })
                 .collect();
+
+            let refresh_button = Line::from(vec![
+                Span::styled("[", Style::default().fg(Color::DarkGray)),
+                Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("] Refresh ", Style::default().fg(Color::Cyan)),
+            ])
+            .right_aligned();
+
             let list = List::new(list_items).block(
                 Block::default()
                     .title(" Andy chats (andyd) ")
+                    .title_top(refresh_button)
                     .borders(Borders::ALL),
             );
             list_state.select(Some(selected));
@@ -98,183 +113,197 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
         })?;
 
         if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
-                    KeyCode::Char('n') => {
-                        let Some(ListEntry::Header { key, label, .. }) = entries.get(selected)
-                        else {
-                            // New chat only from project / Inbox headers.
-                            continue;
-                        };
-                        let project_key = key.clone();
-                        let project_label = label.clone();
-                        let preset = (project_key.as_str(), project_label.as_str());
-                        match compose::run_composer(&mut client, &mut terminal, Some(preset))
-                            .await
-                        {
-                            Ok(Some(outcome)) => {
-                                let task_id = outcome.task_id;
-                                // Keep the project open so the new chat is visible at the top.
-                                expanded.insert(project_key);
-                                refresh(
-                                    &mut client,
-                                    &mut groups,
-                                    &mut expanded,
-                                    &mut entries,
-                                    &mut selected,
-                                    &mut list_state,
-                                    &mut status,
-                                )
-                                .await;
-                                if let Some(idx) = entries.iter().position(|e| {
-                                    matches!(e, ListEntry::Chat(c) if c.id == task_id)
-                                }) {
-                                    selected = idx;
-                                    list_state.select(Some(selected));
-                                }
-                                flash = Some(match outcome.attach_error {
-                                    Some(err) => {
-                                        format!("started {task_id} but attach failed: {err}")
-                                    }
-                                    None if entries.iter().any(|e| {
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+                    flash = None;
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('n') => {
+                            let Some(ListEntry::Header { key, label, .. }) = entries.get(selected)
+                            else {
+                                // New chat only from project / Inbox headers.
+                                continue;
+                            };
+                            let project_key = key.clone();
+                            let project_label = label.clone();
+                            let preset = (project_key.as_str(), project_label.as_str());
+                            match compose::run_composer(&mut client, &mut terminal, Some(preset))
+                                .await
+                            {
+                                Ok(Some(outcome)) => {
+                                    let task_id = outcome.task_id;
+                                    // Keep the project open so the new chat is visible at the top.
+                                    expanded.insert(project_key);
+                                    refresh(
+                                        &mut client,
+                                        &mut groups,
+                                        &mut expanded,
+                                        &mut entries,
+                                        &mut selected,
+                                        &mut list_state,
+                                        &mut status,
+                                    )
+                                    .await;
+                                    if let Some(idx) = entries.iter().position(|e| {
                                         matches!(e, ListEntry::Chat(c) if c.id == task_id)
-                                    }) =>
-                                    {
-                                        format!("started {task_id}")
+                                    }) {
+                                        selected = idx;
+                                        list_state.select(Some(selected));
                                     }
-                                    None => format!(
-                                        "started {task_id} · not in list yet — press r to refresh"
-                                    ),
-                                });
-                            }
-                            Ok(None) => {}
-                            Err(err) => flash = Some(format!("compose error: {err:#}")),
-                        }
-                    }
-                    KeyCode::Char('r') => {
-                        refresh(
-                            &mut client,
-                            &mut groups,
-                            &mut expanded,
-                            &mut entries,
-                            &mut selected,
-                            &mut list_state,
-                            &mut status,
-                        )
-                        .await
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        move_selection(entries.len(), &mut selected, 1);
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        move_selection(entries.len(), &mut selected, -1);
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::PageDown => {
-                        let page = visible_page(&terminal);
-                        move_selection(entries.len(), &mut selected, page as isize);
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::PageUp => {
-                        let page = visible_page(&terminal);
-                        move_selection(entries.len(), &mut selected, -(page as isize));
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::Home => {
-                        selected = 0;
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::End => {
-                        if !entries.is_empty() {
-                            selected = entries.len() - 1;
-                        }
-                        list_state.select(Some(selected));
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        if let Some(ListEntry::Header { key, expanded: open, .. }) =
-                            entries.get(selected)
-                        {
-                            if !*open {
-                                expanded.insert(key.clone());
-                                rebuild_visible(
-                                    &groups,
-                                    &expanded,
-                                    &mut entries,
-                                    &mut selected,
-                                    &mut list_state,
-                                );
-                            }
-                        }
-                    }
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        collapse_current(
-                            &groups,
-                            &mut expanded,
-                            &mut entries,
-                            &mut selected,
-                            &mut list_state,
-                        );
-                    }
-                    KeyCode::Char(' ') => {
-                        toggle_or_noop(
-                            &groups,
-                            &mut expanded,
-                            &mut entries,
-                            &mut selected,
-                            &mut list_state,
-                        );
-                    }
-                    KeyCode::Enter => {
-                        match entries.get(selected) {
-                            Some(ListEntry::Header { .. }) => {
-                                toggle_or_noop(
-                                    &groups,
-                                    &mut expanded,
-                                    &mut entries,
-                                    &mut selected,
-                                    &mut list_state,
-                                );
-                            }
-                            Some(ListEntry::Chat(chat)) => {
-                                let id = chat.id.clone();
-                                restore_terminal(&mut terminal)?;
-                                if let Err(err) =
-                                    attach::attach_or_reattach(&mut client, &id).await
-                                {
-                                    eprintln!("{err:#}");
+                                    flash = Some(match outcome.attach_error {
+                                        Some(err) => {
+                                            format!("started {task_id} but attach failed: {err}")
+                                        }
+                                        None if entries.iter().any(|e| {
+                                            matches!(e, ListEntry::Chat(c) if c.id == task_id)
+                                        }) =>
+                                        {
+                                            format!("started {task_id}")
+                                        }
+                                        None => format!(
+                                            "started {task_id} · not in list yet — press r to refresh"
+                                        ),
+                                    });
                                 }
-                                enable_raw_mode()?;
-                                stdout().execute(EnterAlternateScreen)?;
-                                terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-                                refresh(
-                                    &mut client,
-                                    &mut groups,
-                                    &mut expanded,
-                                    &mut entries,
-                                    &mut selected,
-                                    &mut list_state,
-                                    &mut status,
-                                )
-                                .await;
+                                Ok(None) => {}
+                                Err(err) => flash = Some(format!("compose error: {err:#}")),
                             }
-                            None => {}
                         }
-                    }
-                    KeyCode::Char('a') => {
-                        if let Some(ListEntry::Chat(chat)) = entries.get(selected) {
-                            let id = chat.id.clone();
-                            restore_terminal(&mut terminal)?;
-                            if let Err(err) = attach::attach_or_reattach(&mut client, &id).await {
-                                eprintln!("{err:#}");
+                        KeyCode::Char('r') => {
+                            refresh(
+                                &mut client,
+                                &mut groups,
+                                &mut expanded,
+                                &mut entries,
+                                &mut selected,
+                                &mut list_state,
+                                &mut status,
+                            )
+                            .await
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            move_selection(entries.len(), &mut selected, 1);
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            move_selection(entries.len(), &mut selected, -1);
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::PageDown => {
+                            let page = visible_page(&terminal);
+                            move_selection(entries.len(), &mut selected, page as isize);
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::PageUp => {
+                            let page = visible_page(&terminal);
+                            move_selection(entries.len(), &mut selected, -(page as isize));
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::Home => {
+                            selected = 0;
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::End => {
+                            if !entries.is_empty() {
+                                selected = entries.len() - 1;
                             }
-                            enable_raw_mode()?;
-                            stdout().execute(EnterAlternateScreen)?;
-                            terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+                            list_state.select(Some(selected));
+                        }
+                        KeyCode::Right | KeyCode::Char('l') => {
+                            if let Some(ListEntry::Header { key, expanded: open, .. }) =
+                                entries.get(selected)
+                            {
+                                if !*open {
+                                    expanded.insert(key.clone());
+                                    rebuild_visible(
+                                        &groups,
+                                        &expanded,
+                                        &mut entries,
+                                        &mut selected,
+                                        &mut list_state,
+                                    );
+                                }
+                            }
+                        }
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            collapse_current(
+                                &groups,
+                                &mut expanded,
+                                &mut entries,
+                                &mut selected,
+                                &mut list_state,
+                            );
+                        }
+                        KeyCode::Char(' ') => {
+                            toggle_or_noop(
+                                &groups,
+                                &mut expanded,
+                                &mut entries,
+                                &mut selected,
+                                &mut list_state,
+                            );
+                        }
+                        KeyCode::Enter => {
+                            match entries.get(selected) {
+                                Some(ListEntry::Header { .. }) => {
+                                    toggle_or_noop(
+                                        &groups,
+                                        &mut expanded,
+                                        &mut entries,
+                                        &mut selected,
+                                        &mut list_state,
+                                    );
+                                }
+                                Some(ListEntry::Chat(chat)) => {
+                                    let id = chat.id.clone();
+                                    if confirm_attach(&mut terminal, &id)? {
+                                        flash = attach_selected_chat(
+                                            &mut client,
+                                            &mut terminal,
+                                            &mut groups,
+                                            &mut expanded,
+                                            &mut entries,
+                                            &mut selected,
+                                            &mut list_state,
+                                            &mut status,
+                                            &id,
+                                        )
+                                        .await?;
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            if let Some(ListEntry::Chat(chat)) = entries.get(selected) {
+                                let id = chat.id.clone();
+                                if confirm_attach(&mut terminal, &id)? {
+                                    flash = attach_selected_chat(
+                                        &mut client,
+                                        &mut terminal,
+                                        &mut groups,
+                                        &mut expanded,
+                                        &mut entries,
+                                        &mut selected,
+                                        &mut list_state,
+                                        &mut status,
+                                        &id,
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Mouse(mouse) => {
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                        flash = None;
+                        let size = terminal.size().unwrap_or_default();
+                        if mouse.row == 0 && mouse.column >= size.width.saturating_sub(15) {
                             refresh(
                                 &mut client,
                                 &mut groups,
@@ -285,10 +314,16 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                 &mut status,
                             )
                             .await;
+                        } else if mouse.row > 0 && (mouse.row as usize) <= entries.len() {
+                            let clicked_idx = (mouse.row as usize) - 1;
+                            if clicked_idx < entries.len() {
+                                selected = clicked_idx;
+                                list_state.select(Some(selected));
+                            }
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
     }
@@ -421,18 +456,134 @@ async fn refresh(
 fn footer_status(selected: Option<&ListEntry>, chat_count: usize) -> String {
     match selected {
         Some(ListEntry::Header { .. }) => {
-            format!("{chat_count} chats · n new chat · Enter/Space expand · q quit")
+            format!("{chat_count} chats · n new chat · r refresh · Enter/Space expand · q quit")
         }
         Some(ListEntry::Chat(_)) => {
-            format!("{chat_count} chats · a attach · Enter attach · q quit")
+            format!(
+                "{chat_count} chats · r refresh · a/Enter attach · {} · q quit",
+                tmux::detach_hint()
+            )
         }
-        None => format!("{chat_count} chats · q quit"),
+        None => format!("{chat_count} chats · r refresh · q quit"),
     }
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
+    let _ = stdout().execute(DisableMouseCapture);
     stdout().execute(LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+/// Pause on a full-screen hint so users see how to get back before tmux takes over.
+fn confirm_attach(terminal: &mut Terminal<CrosstermBackend<Stdout>>, task_id: &str) -> Result<bool> {
+    loop {
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let text = format!(
+                "\n  {task_id}\n\n  {}\n\n  Enter attach · Esc cancel\n",
+                tmux::detach_hint()
+            );
+            frame.render_widget(
+                Paragraph::new(text).block(
+                    Block::default()
+                        .title(" Attach to live chat ")
+                        .borders(Borders::ALL),
+                ),
+                area,
+            );
+        })?;
+
+        if event::poll(Duration::from_millis(250))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Esc => return Ok(false),
+                    KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char(' ') => return Ok(true),
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Returns a footer flash when attach fails (also shown full-screen before returning).
+async fn attach_selected_chat(
+    client: &mut McpClient,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    groups: &mut Vec<ProjectGroup>,
+    expanded: &mut HashSet<String>,
+    entries: &mut Vec<ListEntry>,
+    selected: &mut usize,
+    list_state: &mut ListState,
+    status: &mut String,
+    task_id: &str,
+) -> Result<Option<String>> {
+    restore_terminal(terminal)?;
+    let attach_err = match attach::attach_or_reattach(client, task_id).await {
+        Ok(()) => None,
+        Err(err) => Some(format!("{err:#}")),
+    };
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let _ = stdout().execute(EnableMouseCapture);
+    *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let flash = if let Some(err) = attach_err {
+        show_attach_error(terminal, task_id, &err)?;
+        // Single-line footer summary; full text was already on the modal.
+        Some(format!(
+            "attach failed for {task_id}: {}",
+            err.lines().next().unwrap_or("unknown error")
+        ))
+    } else {
+        None
+    };
+    refresh(
+        client,
+        groups,
+        expanded,
+        entries,
+        selected,
+        list_state,
+        status,
+    )
+    .await;
+    Ok(flash)
+}
+
+/// Full-screen error so attach failures are readable (eprintln was under the alt screen).
+fn show_attach_error(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    task_id: &str,
+    err: &str,
+) -> Result<()> {
+    loop {
+        terminal.draw(|frame| {
+            let area = frame.area();
+            let text = format!(
+                "\n  Could not attach to {task_id}\n\n  {}\n\n  Press any key to return to the chat list\n",
+                err.replace('\n', "\n  ")
+            );
+            frame.render_widget(
+                Paragraph::new(text).block(
+                    Block::default()
+                        .title(" Attach failed ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Red)),
+                ),
+                area,
+            );
+        })?;
+
+        if event::poll(Duration::from_millis(250))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    return Ok(());
+                }
+            }
+        }
+    }
 }

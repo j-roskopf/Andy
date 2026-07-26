@@ -88,6 +88,19 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     return false
 }
 
+/** tmux status bar rows (`[andy-task0:node* … "Cursor Agent" 09:14`) that leaked into pre-fix captures. */
+private val TmuxStatusBarLine = Regex("""^\[[A-Za-z0-9_-]+:\S*\s""")
+
+/**
+ * Pre-fix history was saved as de-duplicated, unstyled rows scraped from the tmux
+ * viewer, so it can never regain terminal styling. Keep its line structure and
+ * indentation — that still reads like a terminal — and drop the redraw debris.
+ */
+internal fun formatLegacyScrollbackForReplay(raw: String): String = raw.lines()
+    .filterNot { line -> isScrollbackNoiseLine(line) || TmuxStatusBarLine.containsMatchIn(line.trimStart()) }
+    .joinToString("\n")
+    .trimEnd()
+
 internal fun isScrollbackDiffLine(line: String): Boolean {
     val trimmed = line.trim()
     return trimmed.startsWith("▎") ||

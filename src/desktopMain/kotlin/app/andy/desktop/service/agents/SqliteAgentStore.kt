@@ -7,12 +7,10 @@ import java.io.File
 /**
  * SQLDelight-backed persistence for [AgentStoreState].
  *
- * Task / workflow payloads are stored as JSON (same DTOs as the legacy TOML file).
- * On first open, imports `~/.andy/agents.toml` when present and the DB is empty.
+ * Task / workflow payloads are stored as JSON (same DTOs used for encode/decode).
  */
 internal class SqliteAgentStore(
     private val dbFile: File = File(System.getProperty("user.home"), ".andy/agents.db"),
-    private val tomlFile: File = File(System.getProperty("user.home"), ".andy/agents.toml"),
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -22,7 +20,6 @@ internal class SqliteAgentStore(
     private val db = openAndyAgentDatabase(dbFile)
 
     fun load(scrollbackFile: (String) -> File): AgentStoreState {
-        maybeImportToml(scrollbackFile)
         val tasks = db.agentStoreQueries.selectAllTasks().executeAsList().mapNotNull { row ->
             runCatching {
                 json.decodeFromString(AgentTaskDto.serializer(), row.payload)
@@ -115,32 +112,11 @@ internal class SqliteAgentStore(
         }
     }
 
-    private fun maybeImportToml(scrollbackFile: (String) -> File) {
-        val count = db.agentStoreQueries.countTasks().executeAsOne()
-        val imported = db.agentStoreQueries.getMeta(KEY_TOML_IMPORTED).executeAsOneOrNull() == "1"
-        if (imported || count > 0L) return
-        if (!tomlFile.isFile || tomlFile.length() == 0L) {
-            db.agentStoreQueries.setMeta(KEY_TOML_IMPORTED, "1")
-            return
-        }
-        val state = runCatching {
-            net.peanuuutz.tomlkt.Toml { ignoreUnknownKeys = true }
-                .decodeFromString(AgentsFileDto.serializer(), tomlFile.readText())
-                .toModel(scrollbackFile)
-        }.getOrNull() ?: return
-        save(state)
-        db.agentStoreQueries.setMeta(KEY_TOML_IMPORTED, "1")
-        val migrated = File(tomlFile.absolutePath + ".migrated")
-        runCatching { tomlFile.copyTo(migrated, overwrite = true) }
-        runCatching { tomlFile.renameTo(migrated) }
-    }
-
     companion object {
         private const val SCHEMA_VERSION = 1
         private const val KEY_SCHEMA_VERSION = "schema_version"
         private const val KEY_LAST_USED_AGENT = "last_used_agent"
         private const val KEY_MAX_CONCURRENT = "max_concurrent"
         private const val KEY_LEGACY_ARCHIVED = "legacy_transcript_chats_archived"
-        private const val KEY_TOML_IMPORTED = "toml_imported"
     }
 }

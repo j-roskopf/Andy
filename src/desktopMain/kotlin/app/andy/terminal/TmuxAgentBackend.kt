@@ -25,7 +25,6 @@ class TmuxAgentBackend(
 ) : TerminalSession {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
-    private var waitJob: Job? = null
     private var scrapeJob: Job? = null
     private val killOnClose = AtomicBoolean(true)
 
@@ -35,8 +34,18 @@ class TmuxAgentBackend(
     private val _bufferSnapshots = MutableSharedFlow<String>(extraBufferCapacity = 8, replay = 1)
     override val bufferSnapshots: SharedFlow<String> = _bufferSnapshots.asSharedFlow()
 
+    private val _windowTitle = MutableStateFlow("")
+    override val windowTitle: StateFlow<String> = _windowTitle.asStateFlow()
+
+    private val _oscProgress = MutableStateFlow("")
+    override val oscProgress: StateFlow<String> = _oscProgress.asStateFlow()
+
+    /** Liveness as of the last scrape cycle, so [isAlive] does not fork per call. */
+    @Volatile private var lastAlive: Boolean = true
+
     override val isAlive: Boolean
-        get() = _exitCode.value == null && TmuxAndy.hasSession(sessionId)
+        get() = _exitCode.value == null &&
+            if (scrapeJob?.isActive == true) lastAlive else TmuxAndy.hasSession(sessionId)
 
     override val pid: Long? get() = null
 
@@ -49,24 +58,24 @@ class TmuxAgentBackend(
         check(started.compareAndSet(false, true)) { "TerminalSession already started" }
         TmuxAndy.newSession(sessionId, cwd, argv, env)
 
-        waitJob = scope.launch {
-            val code = TmuxAndy.waitExit(sessionId)
-            _exitCode.value = code
-            scrapeJob?.cancel()
-        }
+        // One tmux fork per cycle covers buffer, title and liveness; exit detection rides
+        // along rather than running a second `has-session` poller alongside it.
         scrapeJob = scope.launch {
             var last = ""
             while (isActive && _exitCode.value == null) {
-                if (!TmuxAndy.hasSession(sessionId)) break
-                val snap = bufferSnapshot()
+                val probe = TmuxAndy.probePane(sessionId, historyLines = 80)
+                lastAlive = probe.alive
+                if (!probe.alive) break
+                val snap = probe.content.trimEnd()
                 if (snap != last) {
                     last = snap
                     _bufferSnapshots.emit(snap)
                 }
+                if (probe.title != _windowTitle.value) _windowTitle.value = probe.title
                 delay(250)
             }
-            val finalSnap = bufferSnapshot()
-            if (finalSnap != last) _bufferSnapshots.emit(finalSnap)
+            if (!isActive) return@launch
+            if (_exitCode.value == null) _exitCode.value = 0
         }
     }
 
@@ -84,13 +93,14 @@ class TmuxAgentBackend(
     }
 
     override fun bufferSnapshot(): String {
-        if (!TmuxAndy.hasSession(sessionId)) return ""
-        return TmuxAndy.capturePane(sessionId, historyLines = 80).trimEnd()
+        val probe = TmuxAndy.probePane(sessionId, historyLines = 80)
+        lastAlive = probe.alive
+        if (!probe.alive) return ""
+        return probe.content.trimEnd()
     }
 
     override fun close() {
         scrapeJob?.cancel()
-        waitJob?.cancel()
         if (killOnClose.get()) {
             TmuxAndy.killSession(sessionId)
         }

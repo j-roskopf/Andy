@@ -416,7 +416,13 @@ compose.desktop {
             isEnabled.set(false)
         }
         nativeDistributions {
-            modules("java.instrument", "java.management", "java.net.http", "jdk.unsupported")
+            modules(
+                "java.instrument",
+                "java.management",
+                "java.net.http",
+                "java.sql", // SQLDelight JdbcSqliteDriver (agent/project store)
+                "jdk.unsupported",
+            )
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
@@ -780,14 +786,23 @@ tasks.register<Copy>("installAndyCli") {
         }
     }
     doLast {
-        val dest = file("${System.getProperty("user.home")}/.andy/bin/andy")
+        val binDir = file("${System.getProperty("user.home")}/.andy/bin")
+        val dest = file("$binDir/andy")
         // Gradle Copy invalidates the cargo adhoc signature; macOS then
         // SIGKILLs the binary ("Code Signature Invalid") until re-signed.
         val codesign = ProcessBuilder("codesign", "--force", "--sign", "-", dest.absolutePath)
             .inheritIO()
             .start()
         check(codesign.waitFor() == 0) { "codesign failed for ${dest.absolutePath}" }
+
+        val hookSrc = file("scripts/andy-status-hook.sh")
+        check(hookSrc.isFile) { "missing ${hookSrc.path}" }
+        val hookDest = file("$binDir/andy-status-hook.sh")
+        hookDest.writeText(hookSrc.readText())
+        hookDest.setExecutable(true, false)
+
         println("Installed ${dest.absolutePath}")
+        println("Installed ${hookDest.absolutePath}")
         println("Add to PATH if needed: export PATH=\"\$HOME/.andy/bin:\$PATH\"")
     }
 }

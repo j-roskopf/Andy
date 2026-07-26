@@ -12,6 +12,14 @@ import io.github.ketraterm.render.api.TerminalRenderUnderline
 import io.github.ketraterm.session.TerminalSession as KetraSession
 
 /**
+ * One captured terminal row. [plain] drives snapshot alignment and text search;
+ * [ansi] carries the styling replay needs to look like the live terminal.
+ */
+data class StyledTerminalRow(val plain: String, val ansi: String) {
+    val isBlank: Boolean get() = plain.isBlank()
+}
+
+/**
  * Export KetraTerm history + screen as newline-oriented ANSI so replay keeps
  * terminal styling (not raw TUI redraw noise or plain text).
  */
@@ -20,38 +28,42 @@ fun TerminalBuffer.exportScrollbackAnsi(): String {
     if (reader == null) {
         return (this as? TerminalInspector)?.getAllAsString().orEmpty()
     }
-    return exportScrollbackAnsi(reader)
+    return reader.readStyledScrollbackRows().joinToString("\r\n") { it.ansi }
 }
 
 /** Session-aware export; must be used for replay buffers owned by a live session. */
-fun KetraSession.exportScrollbackAnsi(): String = exportScrollbackAnsi(this)
+fun KetraSession.exportScrollbackAnsi(): String =
+    readStyledScrollbackRows().joinToString("\r\n") { it.ansi }
 
-private fun exportScrollbackAnsi(reader: TerminalRenderFrameReader): String {
+/**
+ * Read history + screen as styled rows, newest [maxRows] only when positive.
+ *
+ * Bounding the window keeps periodic capture cheap; callers stitch successive
+ * windows back together with [app.andy.terminal.ScrollbackAccumulator].
+ */
+fun TerminalRenderFrameReader.readStyledScrollbackRows(maxRows: Int = 0): List<StyledTerminalRow> {
     var historySize = 0
     var screenRows = 0
-    reader.readRenderFrame { frame ->
+    readRenderFrame { frame ->
         historySize = frame.historySize
         screenRows = frame.rows
     }
-    val viewportRows = historySize + screenRows
-    if (viewportRows <= 0) return ""
-
-    val out = StringBuilder()
-    reader.readRenderFrame(scrollbackOffset = historySize, viewportRows = viewportRows) { frame ->
+    val total = historySize + screenRows
+    if (total <= 0) return emptyList()
+    val wanted = if (maxRows in 1 until total) maxRows else total
+    val rows = ArrayList<StyledTerminalRow>(wanted)
+    readRenderFrame(scrollbackOffset = historySize - (total - wanted), viewportRows = wanted) { frame ->
         for (row in 0 until frame.rows) {
-            if (out.isNotEmpty()) out.append("\r\n")
-            appendRenderLineAsAnsi(out, frame, row)
+            rows += renderLineAsStyledRow(frame, row)
         }
     }
-    if (out.isNotEmpty()) out.append("\u001b[0m")
-    return out.toString()
+    return rows
 }
 
-private fun appendRenderLineAsAnsi(
-    out: StringBuilder,
+private fun renderLineAsStyledRow(
     frame: TerminalRenderFrame,
     row: Int,
-) {
+): StyledTerminalRow {
     val columns = frame.columns
     val codeWords = IntArray(columns)
     val attrWords = LongArray(columns)
@@ -80,26 +92,43 @@ private fun appendRenderLineAsAnsi(
             else -> break
         }
     }
-    if (lastContent < 0) return
+    if (lastContent < 0) return StyledTerminalRow("", "")
 
+    val ansi = StringBuilder()
+    val plain = StringBuilder()
     var currentAttr = Long.MIN_VALUE
     for (col in 0..lastContent) {
         if (flags[col] and TerminalRenderCellFlags.WIDE_TRAILING != 0) continue
         val attr = attrWords[col]
         if (attr != currentAttr) {
-            out.append(renderAttrToAnsiSgr(attr))
+            ansi.append(renderAttrToAnsiSgr(attr))
             currentAttr = attr
         }
-        clusters[col]?.let {
-            out.append(it)
+        val cluster = clusters[col]
+        if (cluster != null) {
+            ansi.append(cluster)
+            plain.append(cluster)
             continue
         }
         when {
-            flags[col] and TerminalRenderCellFlags.EMPTY != 0 -> out.append(' ')
-            codeWords[col] == 0 -> out.append(' ')
-            else -> out.appendCodePoint(codeWords[col])
+            flags[col] and TerminalRenderCellFlags.EMPTY != 0 -> {
+                ansi.append(' ')
+                plain.append(' ')
+            }
+            codeWords[col] == 0 -> {
+                ansi.append(' ')
+                plain.append(' ')
+            }
+            else -> {
+                ansi.appendCodePoint(codeWords[col])
+                plain.appendCodePoint(codeWords[col])
+            }
         }
     }
+    // Each row resets its own styling so the transcript can be re-ordered and
+    // truncated without a stale SGR bleeding into everything below it.
+    if (currentAttr != Long.MIN_VALUE) ansi.append("\u001b[0m")
+    return StyledTerminalRow(plain = plain.toString(), ansi = ansi.toString())
 }
 
 internal fun renderAttrToAnsiSgr(attr: Long): String {

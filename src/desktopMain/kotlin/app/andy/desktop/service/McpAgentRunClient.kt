@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
@@ -10,7 +11,6 @@ import app.andy.model.AgentModelOption
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaAccess
-import app.andy.model.AgentSessionStatus
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -93,14 +93,19 @@ class McpAgentRunClient(
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
 
-    private val _sessionStatuses = MutableStateFlow<Map<String, AgentSessionStatus>>(emptyMap())
-    override val sessionStatuses: StateFlow<Map<String, AgentSessionStatus>> = _sessionStatuses.asStateFlow()
-
     private val skillFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentSkill>>>()
-    private val statusFlows = ConcurrentHashMap<String, MutableStateFlow<AgentSessionStatus?>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
     private var localBridge: DesktopAgentRunService? = null
+
+    private val _interactiveTerminalTaskIds = MutableStateFlow<Set<String>>(emptySet())
+    /** Mirrors the local terminal bridge, which owns the KetraTerm viewers this GUI hosts. */
+    override val interactiveTerminalTaskIds: StateFlow<Set<String>> =
+        _interactiveTerminalTaskIds.asStateFlow()
+
+    private val _attachedTerminalTaskIds = MutableStateFlow<Set<String>>(emptySet())
+    override val attachedTerminalTaskIds: StateFlow<Set<String>> =
+        _attachedTerminalTaskIds.asStateFlow()
 
     init {
         scope.launch {
@@ -113,12 +118,23 @@ class McpAgentRunClient(
 
     fun attachLocalTerminalBridge(local: DesktopAgentRunService) {
         localBridge = local
+        scope.launch {
+            local.interactiveTerminalTaskIds.collect { _interactiveTerminalTaskIds.value = it }
+        }
+        scope.launch {
+            local.attachedTerminalTaskIds.collect { _attachedTerminalTaskIds.value = it }
+        }
     }
 
     /** Local KetraTerm/tmux-attach host used by [app.andy.ui.agents.AgentTerminalSurface]. */
     fun terminalHost(): DesktopAgentRunService? = localBridge
 
+    internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
+        scope.launch { refreshTasks() }
+    }
+
     private suspend fun refreshTasks() {
+        refreshComposerOptions()
         val raw = callTool("chat.list", emptyMap())
         val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return
         // Keep a lightweight task list for the GUI; full AgentTask fields are filled where possible.
@@ -135,8 +151,7 @@ class McpAgentRunClient(
                 agent = agent,
                 projectId = obj["projectId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
                 cwd = obj["cwd"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
-                status = app.andy.model.AgentTaskStatus.entries.firstOrNull { it.name == statusName }
-                    ?: app.andy.model.AgentTaskStatus.Unknown,
+                status = app.andy.model.AgentStatus.entries.firstOrNull { it.name == statusName },
                 createdAtMillis = obj["createdAtMillis"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
                     ?: obj["createdAtMillis"]?.jsonPrimitive?.longOrNull
                     ?: 0L,
@@ -146,6 +161,44 @@ class McpAgentRunClient(
                 archived = obj["archived"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
                     ?: obj["archived"]?.jsonPrimitive?.booleanOrNull
                     ?: false,
+            )
+        }
+    }
+
+    private suspend fun refreshComposerOptions() {
+        val raw = runCatching { callTool("chat.composer_options", emptyMap()) }.getOrNull() ?: return
+        val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return
+        val agents = root["agents"]?.jsonArray ?: return
+        _cliStatuses.value = agents.mapNotNull { element ->
+            val obj = element.jsonObject
+            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val kind = AgentKind.entries.firstOrNull { it.name == id } ?: return@mapNotNull null
+            val available = obj["available"]?.jsonPrimitive?.booleanOrNull
+                ?: obj["available"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                ?: false
+            val ready = obj["ready"]?.jsonPrimitive?.booleanOrNull
+                ?: obj["ready"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                ?: false
+            val version = obj["version"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val issueTitle = obj["issue"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            AgentCliStatus(
+                kind = kind,
+                // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
+                binaryPath = if (ready) kind.cliName else if (available) null else null,
+                version = version,
+                issue = when {
+                    issueTitle != null -> AgentCliIssue(
+                        title = issueTitle,
+                        detail = issueTitle,
+                        blocksTasks = !ready,
+                    )
+                    available && !ready -> AgentCliIssue(
+                        title = "${kind.label} unavailable on daemon",
+                        detail = "Install or repair ${kind.cliName} where andyd is running.",
+                        blocksTasks = true,
+                    )
+                    else -> null
+                },
             )
         }
     }
@@ -254,7 +307,7 @@ class McpAgentRunClient(
                 agent = draft.agent,
                 projectId = draft.projectId,
                 cwd = draft.directory,
-                status = app.andy.model.AgentTaskStatus.Running,
+                status = app.andy.model.AgentStatus.Working,
                 createdAtMillis = System.currentTimeMillis(),
             )
     }
@@ -291,6 +344,12 @@ class McpAgentRunClient(
     override fun canReattachSession(taskId: String): Boolean =
         localBridge?.canReattachSession(taskId) == true
 
+    override fun isTerminalLive(taskId: String): Boolean =
+        localBridge?.isTerminalLive(taskId) == true
+
+    override fun isViewing(taskId: String): Boolean =
+        localBridge?.isViewing(taskId) == true
+
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         scope.launch {
             callTool(
@@ -319,13 +378,12 @@ class McpAgentRunClient(
 
     override fun markRead(taskId: String) = Unit
     override fun markUnread(taskId: String) = Unit
-    override fun setChatViewing(taskId: String?, viewing: Boolean) = Unit
+    override fun setChatViewing(taskId: String?, viewing: Boolean) {
+        localBridge?.setChatViewing(taskId, viewing)
+    }
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String): StateFlow<List<AgentEvent>> = emptyEvents
-
-    override fun sessionStatus(taskId: String): StateFlow<AgentSessionStatus?> =
-        statusFlows.computeIfAbsent(taskId) { MutableStateFlow(null) }
 
     override fun interactiveResumeCommand(taskId: String): String? =
         "tmux -L andy attach -t ${TmuxAndy.sessionName(taskId)}"
@@ -342,7 +400,9 @@ class McpAgentRunClient(
     override suspend fun worktreeDiffSummary(taskId: String): String? = null
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = null
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = null
-    override suspend fun refreshCliStatuses() = Unit
+    override suspend fun refreshCliStatuses() {
+        refreshComposerOptions()
+    }
     override suspend fun isGitRepo(dir: String): Boolean = File(dir, ".git").exists()
 
     // ProjectWorkflowService — minimal remote stubs

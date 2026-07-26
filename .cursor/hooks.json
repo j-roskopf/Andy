@@ -1,0 +1,15 @@
+{
+    "version": 1,
+    "hooks": {
+        "beforeSubmitPrompt": [
+            {
+                "command": "'/Users/joer/Code/Andy/Andy/.andy/task-b30566d957/andy-status-hook.sh' working empty"
+            }
+        ],
+        "stop": [
+            {
+                "command": "'/Users/joer/Code/Andy/Andy/.andy/task-b30566d957/andy-status-hook.sh' done empty"
+            }
+        ]
+    }
+}

@@ -70,6 +70,10 @@ private data class MirrorPopOutWindow(
 
 fun main() {
     app.andy.terminal.AndyKetraTermConfig.ensureInitialized()
+    // Before any terminal widget exists: RepaintManager is per-AppContext and swapping it
+    // out from under live components would strand whatever they had already queued.
+    app.andy.terminal.TerminalRepaintThrottle.ensureInstalled()
+    runCatching { app.andy.desktop.service.agents.AndyStatusHookInstaller.ensureInstalled() }
     installRuntimeAppIcon()
     application {
         val runtime = remember { createDesktopRuntime() }
@@ -78,9 +82,17 @@ fun main() {
         val workspaceStore = services.workspaceStore as DesktopWorkspaceStore
         val workspaceState by workspaceStore.state.collectAsState()
         val agentTasks by services.agentRuns.tasks.collectAsState()
-        // Dock/tray/title reflect every finished chat waiting for review.
-        // In-app, unread still routes to Agents vs Actions by projectId.
-        val unreadCount = agentTasks.count { it.unread }
+        var actionsConfig by remember { mutableStateOf(app.andy.model.ActionsConfig()) }
+        LaunchedEffect(Unit) {
+            runCatching { actionsConfig = services.actionConfig.load() }
+        }
+        val knownProjectIds = remember(actionsConfig.projects) {
+            actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
+        }
+        val unreadCount = agentTasks.count { task ->
+            !task.archived && task.unread && task.workflowTaskId == null &&
+                (task.projectId == null || task.projectId in knownProjectIds)
+        }
         val windowState = rememberWindowState(width = 1800.dp, height = 1072.dp)
         var visible by remember { mutableStateOf(true) }
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
@@ -214,6 +226,7 @@ fun main() {
                 scope = this, tasks = services.agentRuns.tasks,
                 workspace = { workspaceStore.state.value }, isForeground = appFocus::isForeground,
                 notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
+                isViewing = services.agentRuns::isViewing,
             ).start()
         }
         LaunchedEffect(Unit) {

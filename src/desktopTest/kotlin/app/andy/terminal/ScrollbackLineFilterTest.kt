@@ -82,6 +82,26 @@ class ScrollbackLineFilterTest {
     }
 
     @Test
+    fun legacyReplayKeepsIndentationAndDropsViewerDebris() {
+        val raw = """
+            [andy-task0:tmux*                          "Joes-M5" 08:56 25-Jul-26
+              my previous chat history is still not formatted correctly
+            [andy-task0:node*                     "Cursor Agent" 08:56 25-Jul-26
+              I'll look at the screenshot first.
+                git log --oneline -15
+             ⠰⠰ Working 24.67k tokens
+        """.trimIndent()
+
+        val formatted = formatLegacyScrollbackForReplay(raw)
+        assertFalse(formatted.contains("andy-task0"), formatted)
+        assertFalse(formatted.contains("Working"), formatted)
+        // Indentation carries the transcript's structure; the old formatter trimmed it away.
+        assertTrue(formatted.startsWith("  my previous chat history is still not formatted correctly"), formatted)
+        assertTrue(formatted.contains("    git log --oneline -15"), formatted)
+        assertFalse(formatted.contains("\n\n"), formatted)
+    }
+
+    @Test
     fun scrollbackDisplayTextFromRealCaptureIsLeftAlignedConversation() {
         val raw = """
                               Antigravity CLI 1.1.7

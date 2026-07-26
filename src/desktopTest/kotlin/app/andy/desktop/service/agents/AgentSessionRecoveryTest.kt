@@ -1,9 +1,8 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
-import app.andy.model.AgentSessionStatus
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,6 +10,28 @@ import kotlin.test.assertTrue
 import java.io.File
 
 class AgentSessionRecoveryTest {
+    @Test
+    fun terminalBufferLooksReadyForInputRequiresTrailingExactPrompt() {
+        assertTrue(terminalBufferLooksReadyForInput("Implemented the fix.\n> "))
+        assertTrue(terminalBufferLooksReadyForInput("All done.\n❯ "))
+        assertTrue(terminalBufferLooksReadyForInput("Ready.\nclaude> "))
+        assertTrue(isExactPromptLine(">"))
+        assertTrue(isExactPromptLine("agy>"))
+
+        // Generics / HTML while streaming must not look like a prompt.
+        assertFalse(terminalBufferLooksReadyForInput("fun ids(): List<String>\n"))
+        assertFalse(terminalBufferLooksReadyForInput("return Optional<Foo>\n"))
+        assertFalse(isExactPromptLine("List<String>"))
+        assertFalse(isExactPromptLine("</div>"))
+
+        // Leftover prompt higher in scrollback does not count — only the bottom lines.
+        assertFalse(
+            terminalBufferLooksReadyForInput(
+                ">\nThinking about the change…\nreading AgentStatusTracker.kt\nfun ids(): List<String>\n",
+            ),
+        )
+    }
+
     @Test
     fun inferCompletedTurnUsesHookDoneAndLiveSessionDone() {
         val artifactDir = File.createTempFile("andy-artifacts", null).also { it.delete(); it.mkdirs() }
@@ -28,7 +49,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = "",
-                    liveSessionStatus = AgentSessionStatus.Done,
+                    liveSessionStatus = AgentStatus.Done,
                 ),
             )
             val noHookDir = File.createTempFile("andy-artifacts-empty", null).also { it.delete(); it.mkdirs() }
@@ -55,7 +76,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.Cursor,
                     artifactDir = artifactDir,
                     scrollback = scrollback,
-                    liveSessionStatus = AgentSessionStatus.Idle,
+                    liveSessionStatus = AgentStatus.Done,
                     sawWorking = false,
                 ),
             )
@@ -64,7 +85,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.Cursor,
                     artifactDir = artifactDir,
                     scrollback = scrollback,
-                    liveSessionStatus = AgentSessionStatus.Idle,
+                    liveSessionStatus = AgentStatus.Done,
                     sawWorking = true,
                 ),
             )
@@ -73,7 +94,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.Cursor,
                     artifactDir = artifactDir,
                     scrollback = scrollback,
-                    liveSessionStatus = AgentSessionStatus.Working,
+                    liveSessionStatus = AgentStatus.Working,
                     sawWorking = true,
                 ),
             )
@@ -83,7 +104,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = "done\n> ",
-                    liveSessionStatus = AgentSessionStatus.Idle,
+                    liveSessionStatus = AgentStatus.Done,
                     sawWorking = false,
                 ),
             )
@@ -103,7 +124,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = scrollback,
-                    liveSessionStatus = AgentSessionStatus.Working,
+                    liveSessionStatus = AgentStatus.Working,
                 ),
             )
             assertFalse(
@@ -111,7 +132,7 @@ class AgentSessionRecoveryTest {
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = scrollback,
-                    liveSessionStatus = AgentSessionStatus.Idle,
+                    liveSessionStatus = AgentStatus.Done,
                 ),
             )
         } finally {
@@ -154,7 +175,7 @@ class AgentSessionRecoveryTest {
     fun recoverInterruptedTaskStatusMapsRunningToCompletedWhenHookDone() {
         val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
         try {
-            val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(root, "agents.db"))
             val task = AgentTask(
                 id = "task-done",
                 title = "t",
@@ -162,7 +183,7 @@ class AgentSessionRecoveryTest {
                 agent = AgentKind.ClaudeCode,
                 cwd = root.absolutePath,
                 originDir = root.absolutePath,
-                status = AgentTaskStatus.Running,
+                status = AgentStatus.Working,
                 createdAtMillis = 1,
                 startedAtMillis = 2,
             )
@@ -174,7 +195,7 @@ class AgentSessionRecoveryTest {
                 .writeText("""{"status":"done","at":1}""" + "\n")
 
             val recovered = recoverInterruptedTaskStatus(task, scrollback)
-            assertEquals(AgentTaskStatus.Completed, recovered.status)
+            assertEquals(AgentStatus.Done, recovered.status)
             assertEquals(0, recovered.exitCode)
             assertTrue(recovered.finishedAtMillis != null)
             assertTrue(recovered.unread)
@@ -187,7 +208,7 @@ class AgentSessionRecoveryTest {
     fun recoverInterruptedTaskStatusUpgradesPausedToCompletedWhenHookDone() {
         val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
         try {
-            val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(root, "agents.db"))
             val task = AgentTask(
                 id = "task-paused-done",
                 title = "t",
@@ -195,7 +216,7 @@ class AgentSessionRecoveryTest {
                 agent = AgentKind.ClaudeCode,
                 cwd = root.absolutePath,
                 originDir = root.absolutePath,
-                status = AgentTaskStatus.Paused,
+                status = AgentStatus.Done,
                 createdAtMillis = 1,
                 startedAtMillis = 2,
                 finishedAtMillis = 3,
@@ -208,7 +229,7 @@ class AgentSessionRecoveryTest {
                 .writeText("""{"status":"done","at":1}""" + "\n")
 
             val recovered = recoverInterruptedTaskStatus(task, scrollback)
-            assertEquals(AgentTaskStatus.Completed, recovered.status)
+            assertEquals(AgentStatus.Done, recovered.status)
         } finally {
             root.deleteRecursively()
         }
@@ -218,7 +239,7 @@ class AgentSessionRecoveryTest {
     fun recoverInterruptedTaskStatusMapsRunningToPausedWhenIdleEvidenceExists() {
         val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
         try {
-            val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(root, "agents.db"))
             val task = AgentTask(
                 id = "task-idle",
                 title = "t",
@@ -226,7 +247,7 @@ class AgentSessionRecoveryTest {
                 agent = AgentKind.ClaudeCode,
                 cwd = root.absolutePath,
                 originDir = root.absolutePath,
-                status = AgentTaskStatus.Running,
+                status = AgentStatus.Working,
                 createdAtMillis = 1,
                 startedAtMillis = 2,
             )
@@ -235,7 +256,7 @@ class AgentSessionRecoveryTest {
             scrollback.writeText("Done.\n> ")
 
             val recovered = recoverInterruptedTaskStatus(task, scrollback)
-            assertEquals(AgentTaskStatus.Paused, recovered.status)
+            assertEquals(AgentStatus.Done, recovered.status)
             assertTrue(recovered.finishedAtMillis != null)
         } finally {
             root.deleteRecursively()
@@ -246,7 +267,7 @@ class AgentSessionRecoveryTest {
     fun recoverInterruptedTaskStatusMapsRunningToUnknownWhenMidTurn() {
         val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
         try {
-            val store = DesktopAgentTaskStore(File(root, "agents.toml"))
+            val store = DesktopAgentTaskStore(File(root, "agents.db"))
             val task = AgentTask(
                 id = "task-busy",
                 title = "t",
@@ -254,7 +275,7 @@ class AgentSessionRecoveryTest {
                 agent = AgentKind.ClaudeCode,
                 cwd = root.absolutePath,
                 originDir = root.absolutePath,
-                status = AgentTaskStatus.Running,
+                status = AgentStatus.Working,
                 createdAtMillis = 1,
                 startedAtMillis = 2,
             )
@@ -263,7 +284,7 @@ class AgentSessionRecoveryTest {
             scrollback.writeText("Let me read the file and")
 
             val recovered = recoverInterruptedTaskStatus(task, scrollback)
-            assertEquals(AgentTaskStatus.Unknown, recovered.status)
+            assertEquals(AgentStatus.Error, recovered.status)
         } finally {
             root.deleteRecursively()
         }
@@ -278,11 +299,11 @@ class AgentSessionRecoveryTest {
             agent = AgentKind.Codex,
             cwd = "/tmp",
             originDir = "/tmp",
-            status = AgentTaskStatus.WaitingForInput,
+            status = AgentStatus.Blocked,
             createdAtMillis = 1,
             finishedAtMillis = 2,
         )
         val recovered = recoverInterruptedTaskStatus(task, File("/tmp/missing-scrollback"))
-        assertEquals(AgentTaskStatus.WaitingForInput, recovered.status)
+        assertEquals(AgentStatus.Blocked, recovered.status)
     }
 }

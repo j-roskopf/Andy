@@ -1,8 +1,11 @@
 package app.andy.terminal
 
+import app.andy.desktop.service.agents.AgentScratchWorkspace
+
 actual object TerminalSessions {
     actual fun create(request: TerminalLaunchRequest): TerminalSession {
         AndyKetraTermConfig.ensureInitialized()
+        val cwd = AgentScratchWorkspace.resolveCwd(request.cwd)
         return when (request.mode) {
             TerminalMode.DirectPty -> {
                 val session = KetraTermBackend(
@@ -11,19 +14,26 @@ actual object TerminalSessions {
                     rows = request.rows,
                     appearance = request.appearance,
                 )
-                session.start(request.argv, request.cwd, request.env)
+                session.start(request.argv, cwd, request.env)
                 session
             }
             TerminalMode.TmuxAgent -> {
                 val session = TmuxAgentBackend(sessionId = request.sessionId)
                 session.setKillOnClose(request.killTmuxOnClose)
-                session.start(request.argv, request.cwd, request.env)
+                session.start(request.argv, cwd, request.env)
                 session
             }
             TerminalMode.TmuxAttach -> {
+                val sessionId = request.sessionId
+                if (TmuxAndy.hasSession(sessionId) && TmuxAndy.sessionLooksBroken(sessionId)) {
+                    TmuxAndy.killSession(sessionId)
+                }
                 // Ensure the agent session exists (create if argv provided and missing).
-                if (!TmuxAndy.hasSession(request.sessionId) && request.argv.isNotEmpty()) {
-                    TmuxAndy.newSession(request.sessionId, request.cwd, request.argv, request.env)
+                if (!TmuxAndy.hasSession(sessionId) && request.argv.isNotEmpty()) {
+                    TmuxAndy.newSession(sessionId, cwd, request.argv, request.env)
+                }
+                check(TmuxAndy.hasSession(sessionId)) {
+                    "tmux session ${TmuxAndy.sessionName(sessionId)} missing after create"
                 }
                 val session = TmuxAttachBackend(
                     sessionId = request.sessionId,

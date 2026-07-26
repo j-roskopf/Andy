@@ -38,6 +38,19 @@ class AgentScratchWorkspaceTest {
     }
 
     @Test
+    fun resolveCwdFallsBackWhenExplicitDirectoryIsMissing() {
+        val home = File.createTempFile("andy-scratch-home-missing", null).also { it.delete(); it.mkdirs() }
+        try {
+            val missing = File(home, "deleted-worktree").absolutePath
+            val resolved = AgentScratchWorkspace.resolveCwd(missing, home)
+            assertEquals(File(home, ".andy-tasks").absoluteFile.normalize().absolutePath, resolved)
+            assertTrue(File(resolved).isDirectory)
+        } finally {
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun isScratchDetectsNullAndScratchSubtree() {
         val home = File.createTempFile("andy-scratch-home3", null).also { it.delete(); it.mkdirs() }
         try {
@@ -46,6 +59,19 @@ class AgentScratchWorkspaceTest {
             assertTrue(AgentScratchWorkspace.isScratch(scratch.absolutePath, home))
             assertTrue(AgentScratchWorkspace.isScratch(File(scratch, "nested").absolutePath, home))
             assertFalse(AgentScratchWorkspace.isScratch(File(home, "other").absolutePath, home))
+        } finally {
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun resolveCwdFallsBackWhenScratchPathIsAFile() {
+        val home = File.createTempFile("andy-scratch-home-file", null).also { it.delete(); it.mkdirs() }
+        val blocking = File(home, ".andy-tasks").also { it.writeText("not a directory") }
+        try {
+            val resolved = AgentScratchWorkspace.resolveCwd(null, home)
+            assertTrue(File(resolved).isDirectory)
+            assertTrue(resolved != blocking.absolutePath)
         } finally {
             home.deleteRecursively()
         }

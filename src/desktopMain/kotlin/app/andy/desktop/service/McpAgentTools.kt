@@ -1,5 +1,8 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.agents.AgentWorkflowArtifacts
+import app.andy.desktop.service.agents.appendAgentStatus
+import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
@@ -20,6 +23,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.io.File
 
 private val agentToolsJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
@@ -78,7 +82,7 @@ fun Server.registerAgentProjectTools(
                         put("id", task.id)
                         put("title", task.title)
                         put("agent", task.agent.name)
-                        put("status", task.status.name)
+                        put("status", task.status?.name.orEmpty())
                         put("projectId", task.projectId.orEmpty())
                         put("cwd", task.cwd.orEmpty())
                         put("unread", task.unread)
@@ -239,7 +243,7 @@ fun Server.registerAgentProjectTools(
         textResult(
             buildJsonObject {
                 put("id", task.id)
-                put("status", task.status.name)
+                put("status", task.status?.name.orEmpty())
                 put("tmuxSession", TmuxAndy.sessionName(task.id))
                 put("attach", "tmux -L andy attach -t ${TmuxAndy.sessionName(task.id)}")
             }.toString(),
@@ -307,15 +311,51 @@ fun Server.registerAgentProjectTools(
         required = listOf("taskId"),
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
-        val status = agentRuns.sessionStatus(id).value
         val task = agentRuns.tasks.value.firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
                 put("id", id)
-                put("taskStatus", task?.status?.name)
-                put("sessionStatus", status?.name)
+                put("status", task?.status?.name.orEmpty())
+                put("statusConfident", task?.statusConfident ?: false)
                 put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
                 put("tmuxSession", TmuxAndy.sessionName(id))
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "agent_status",
+        description = "Optional: report agent turn status to Andy (writes .andy/<taskId>/status.json). Andy already infers working/idle from terminal output.",
+        properties = mapOf(
+            "taskId" to buildJsonObject {
+                put("type", "string")
+                put("description", "Andy chat/task id")
+            },
+            "status" to buildJsonObject {
+                put("type", "string")
+                put("description", "working | blocked | done | error")
+            },
+        ),
+        required = listOf("taskId", "status"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val statusRaw = str(args, "status")?.trim()?.lowercase() ?: error("status required")
+        val status = when (statusRaw) {
+            "working" -> AgentStatus.Working
+            "blocked" -> AgentStatus.Blocked
+            "done" -> AgentStatus.Done
+            "error", "failed" -> AgentStatus.Error
+            else -> error("status must be working, blocked, done, or error")
+        }
+        val task = agentRuns.tasks.value.firstOrNull { it.id == id } ?: error("unknown task: $id")
+        val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), id)
+        appendAgentStatus(artifactDir, status)
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("taskId", id)
+                put("status", status.name.lowercase())
+                put("artifactDir", artifactDir.absolutePath)
             }.toString(),
         )
     }
@@ -356,7 +396,10 @@ fun Server.registerAgentProjectTools(
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
         val tmuxAlive = TmuxAndy.isAvailable() && TmuxAndy.hasSession(id)
-        if (tmuxAlive) {
+        // Alive + not broken is enough. Requiring isActive/isTerminalLive used a 1s
+        // session-list cache that could miss a Done-but-still-open pane and kill it.
+        val healthySession = tmuxAlive && !TmuxAndy.sessionLooksBroken(id)
+        if (healthySession) {
             textResult(
                 buildJsonObject {
                     put("ok", true)
@@ -365,14 +408,33 @@ fun Server.registerAgentProjectTools(
                     put("reattached", false)
                 }.toString(),
             )
-        } else if (agentRuns.canReattachSession(id)) {
+        } else if (tmuxAlive) {
+            TmuxAndy.killSession(id)
             agentRuns.reattachSession(id)
+            val appeared = TmuxAndy.waitForSession(id, timeoutMs = 30_000)
             textResult(
                 buildJsonObject {
-                    put("ok", true)
+                    put("ok", appeared)
                     put("id", id)
-                    put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
+                    put("tmuxAlive", appeared)
                     put("reattached", true)
+                    if (!appeared) {
+                        put("error", "reattach started but tmux session did not appear")
+                    }
+                }.toString(),
+            )
+        } else if (agentRuns.canReattachSession(id)) {
+            agentRuns.reattachSession(id)
+            val appeared = TmuxAndy.waitForSession(id, timeoutMs = 30_000)
+            textResult(
+                buildJsonObject {
+                    put("ok", appeared)
+                    put("id", id)
+                    put("tmuxAlive", appeared)
+                    put("reattached", true)
+                    if (!appeared) {
+                        put("error", "reattach started but tmux session did not appear")
+                    }
                 }.toString(),
             )
         } else {
@@ -447,6 +509,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.resume",
     "chat.respond",
     "chat.status",
+    "agent_status",
     "chat.attach_command",
     "chat.reattach",
     "project.list",

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,7 +28,12 @@ internal fun RetainedDestination(
         if (active) visited = true
     }
     if (!visited) return
+    val parentSuppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
     Box(if (active) Modifier.fillMaxSize() else Modifier.size(0.dp)) {
-        content()
+        CompositionLocalProvider(
+            LocalSuppressHeavyweightSurfaces provides (!active || parentSuppressHeavyweight),
+        ) {
+            content()
+        }
     }
 }

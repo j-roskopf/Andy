@@ -10,7 +10,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
@@ -24,8 +28,8 @@ import app.andy.andy.generated.resources.agent_codex
 import app.andy.andy.generated.resources.agent_cursor
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
-import app.andy.model.AgentSessionStatus
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
+import app.andy.model.AgentTask
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
@@ -33,6 +37,7 @@ import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -52,39 +57,26 @@ internal fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.Antigravity -> Red
 }
 
-internal fun agentStatusColor(status: AgentTaskStatus): Color = when (status) {
-    AgentTaskStatus.Running -> Green
-    AgentTaskStatus.Queued -> Cyan
-    AgentTaskStatus.WaitingForInput -> Rust
-    AgentTaskStatus.Paused -> Cyan
-    AgentTaskStatus.Completed -> Cyan
-    AgentTaskStatus.Failed -> Red
-    AgentTaskStatus.Stopped -> Rust
-    AgentTaskStatus.Unknown -> TextSecondary
+internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
+    AgentStatus.Working -> Green
+    AgentStatus.Blocked -> Rust
+    AgentStatus.Done -> Cyan
+    AgentStatus.Error -> Red
+    null -> Cyan
 }
 
-internal fun agentStatusLabel(status: AgentTaskStatus): String = when (status) {
-    AgentTaskStatus.Unknown -> "interrupted"
-    AgentTaskStatus.Paused -> "idle"
-    AgentTaskStatus.WaitingForInput -> "needs your input"
-    else -> status.name.lowercase()
+internal fun agentStatusLabel(task: AgentTask): String = when {
+    task.isQueued -> "queued"
+    isChatRelaunching(task) -> "launching"
+    else -> task.status?.name?.lowercase() ?: "queued"
 }
-
-internal fun agentSessionStatusColor(status: AgentSessionStatus): Color = when (status) {
-    AgentSessionStatus.Working -> Green
-    AgentSessionStatus.Idle -> Cyan
-    AgentSessionStatus.Blocked -> Rust
-    AgentSessionStatus.Done -> Cyan
-}
-
-internal fun agentSessionStatusLabel(status: AgentSessionStatus): String = status.name.lowercase()
 
 @Composable
-internal fun SessionStatusDot(status: AgentSessionStatus, modifier: Modifier = Modifier) {
+internal fun StatusDot(status: AgentStatus, modifier: Modifier = Modifier) {
     Box(
         modifier
             .size(6.dp)
-            .background(agentSessionStatusColor(status), CircleShape),
+            .background(agentStatusColor(status), CircleShape),
     )
 }
 
@@ -132,9 +124,25 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * Sidebar / session-row activity spinner.
+ *
+ * Driven by a coarse ~10 Hz timer instead of Material's indeterminate infinite
+ * transition: on a high-refresh desktop display that transition invalidates the
+ * whole Skiko surface at display rate (e.g. 144 Hz). The Swing terminal
+ * repaint throttle cannot help — Compose paints through Skiko, not Swing.
+ */
 @Composable
 internal fun ProjectActivityIndicator(size: Dp = 10.dp) {
+    var phase by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(100)
+            phase = (phase + 0.08f) % 1f
+        }
+    }
     CircularProgressIndicator(
+        progress = { phase },
         modifier = Modifier.size(size),
         color = Cyan,
         strokeWidth = 1.5.dp,
@@ -154,15 +162,40 @@ internal fun formatElapsed(startMillis: Long?, endMillis: Long?, nowMillis: Long
     }
 }
 
+/**
+ * True when the chat pane should host the live, typeable CLI rather than a read-only
+ * scrollback replay.
+ *
+ * Interactive while the run is active, still launching, or Andy still owns a live
+ * tmux/PTY session for this chat ([terminalLive]). A finished turn keeps the CLI
+ * typeable at its prompt; read-only replay is only for chats with no live session.
+ */
+internal fun isChatTerminalInteractive(task: AgentTask, terminalLive: Boolean): Boolean =
+    task.isActive || isChatLaunching(task) || isChatRelaunching(task) || terminalLive
+
+/** Queued for launch, or relaunching for a resume/retry — the terminal is on its way. */
+internal fun isChatLaunching(task: AgentTask): Boolean =
+    task.status == null && task.finishedAtMillis == null
+
+/** Resume/retry after a finished turn — status cleared but [AgentTask.startedAtMillis] remains. */
+internal fun isChatRelaunching(task: AgentTask): Boolean =
+    task.status == null && task.startedAtMillis != null && task.finishedAtMillis == null
+
+/**
+ * True when Andy's own composer belongs under the terminal: always in read-only mode
+ * (it is the only way to type), and while a live CLI holds staged images that must
+ * ship with a composed message rather than be typed into the PTY.
+ */
+internal fun showsChatFollowUpComposer(interactive: Boolean, hasStagedImages: Boolean): Boolean =
+    !interactive || hasStagedImages
+
 /** True while the card timer should keep ticking with wall clock. */
-internal fun isElapsedLive(isActive: Boolean, sessionStatus: AgentSessionStatus?): Boolean =
-    isActive && sessionStatus != AgentSessionStatus.Done && sessionStatus != AgentSessionStatus.Idle
+internal fun isElapsedLive(task: AgentTask): Boolean =
+    task.isActive && task.status == AgentStatus.Working
 
 /** True while the session sidebar/header should show a live activity spinner. */
-internal fun isSessionWorking(isActive: Boolean, sessionStatus: AgentSessionStatus?): Boolean =
-    isActive && sessionStatus != AgentSessionStatus.Idle &&
-        sessionStatus != AgentSessionStatus.Done &&
-        sessionStatus != AgentSessionStatus.Blocked
+internal fun isSessionWorking(task: AgentTask): Boolean =
+    task.isActive && task.status == AgentStatus.Working
 
 /**
  * End timestamp for [formatElapsed]. Keeps counting only while [isElapsedLive];
@@ -172,10 +205,9 @@ internal fun isSessionWorking(isActive: Boolean, sessionStatus: AgentSessionStat
 internal fun rememberElapsedEndMillis(
     taskId: String,
     finishedAtMillis: Long?,
-    isActive: Boolean,
-    sessionStatus: AgentSessionStatus?,
+    task: AgentTask,
 ): Long? {
-    val live = isElapsedLive(isActive, sessionStatus)
+    val live = isElapsedLive(task)
     val shouldFreeze = finishedAtMillis == null && !live
     val frozenAt = remember(taskId, shouldFreeze) {
         if (shouldFreeze) currentTimeMillis() else null

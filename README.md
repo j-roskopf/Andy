@@ -29,9 +29,21 @@ Andy can run as a launchd-managed headless daemon (`andyd`) that owns agent/proj
 state (SQLite), spawns agents into `tmux -L andy`, and serves MCP over
 `~/.andy/andyd.sock`. The Compose GUI and a Rust CLI (`cli/andy`) attach as clients.
 
-Requires **tmux** (`brew install tmux`). See [docs/ANDYD.md](docs/ANDYD.md) for setup,
-`./gradlew runAndyd`, `./gradlew installAndyCli` (`~/.andy/bin/andy`), launchd packaging,
-and release assets (`andy-<version>-{macos-arm64,linux-x86_64,windows-x86_64.exe}`).
+Requires **tmux** (`brew install tmux`).
+
+Install the CLI (macOS arm64 / Linux x86_64) from the latest GitHub Release:
+
+```sh
+curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
+export PATH="$HOME/.andy/bin:$PATH"   # once; add to shell rc if you want
+```
+
+That installs `~/.andy/bin/andy` and the status helper `~/.andy/bin/andy-status-hook.sh`
+(also installed automatically by the desktop app / `andyd`). Windows: download
+`andy-<version>-windows-x86_64.exe` from the [latest release](https://github.com/j-roskopf/Andy/releases/latest).
+
+From source: `./gradlew installAndyCli`. See [docs/ANDYD.md](docs/ANDYD.md) for
+`runAndyd`, launchd packaging, and agent status hooks.
 
 ## Features
 

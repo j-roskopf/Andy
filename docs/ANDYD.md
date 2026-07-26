@@ -15,8 +15,11 @@ are equal clients over a Unix domain socket.
 |------|------|
 | `~/.andy/andyd.sock` | MCP control plane (Unix domain socket) |
 | `~/.andy/andyd.pid` | Daemon pid / lock file |
-| `~/.andy/agents.db` | SQLDelight SQLite store (imported from `agents.toml`) |
-| `~/.andy/agents.toml` | Legacy TOML (mirrored / one-time migrated) |
+| `~/.andy/agents.db` | SQLDelight SQLite store for agent/project state |
+| `~/.andy/bin/andy` | Rust CLI binary |
+| `~/.andy/bin/andy-status-hook.sh` | Stable vendor-hook helper (desktop / andyd / installer) |
+| `$PWD/.andy/active-task` | Gitignored pointer to the active task id for status hooks |
+| `$PWD/.andy/<taskId>/` | Per-task artifacts (`status.json`, plan/review, …) |
 | `tmux -L andy` | Dedicated Andy tmux server |
 | `andy-task-<taskId>` | Per-task tmux session name |
 
@@ -35,20 +38,33 @@ This starts MCP on:
 
 ## Rust CLI
 
-Install a local release binary to `~/.andy/bin/andy`:
+Install from the latest GitHub Release (macOS arm64 / Linux x86_64):
 
 ```sh
-./gradlew installAndyCli
+curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
 export PATH="$HOME/.andy/bin:$PATH"   # once; add to shell rc if you want
 ```
 
-GitHub Releases also publish prebuilt CLI binaries:
+The installer places `andy` and `andy-status-hook.sh` in `~/.andy/bin`. The desktop
+app and `andyd` also install the status helper on startup so agent vendor hooks can
+call a stable `"$HOME/.andy/bin/andy-status-hook.sh"` path; the active task is
+selected via gitignored `.andy/active-task` in the project directory.
+
+From a source checkout:
+
+```sh
+./gradlew installAndyCli
+export PATH="$HOME/.andy/bin:$PATH"
+```
+
+Release assets also include the raw binaries:
 
 - `andy-<version>-macos-arm64`
 - `andy-<version>-linux-x86_64`
 - `andy-<version>-windows-x86_64.exe`
+- `install-andy.sh` / `andy-status-hook.sh` (stable names)
 
-Download, `chmod +x`, and put on your `PATH` (or replace `~/.andy/bin/andy`).
+Windows: download the `.exe` from the release page (the curl installer is bash-only).
 
 Then:
 
@@ -56,6 +72,7 @@ Then:
 andy chat list                 # grouped by project (Inbox / projectId)
 andy chat list --json          # raw MCP payload
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
+andy chat start --no-attach --agent ClaudeCode "fire and forget JSON only"
 andy attach <taskId>           # live tmux, or quiet provider reattach then attach
 andy tui                       # n new chat · grouped projects · a / Enter attach
 andy chat resume <taskId> "…"  # when quiet reattach isn't possible
@@ -70,7 +87,8 @@ use `andy chat resume`.
 Dev loop without installing: `cargo run --manifest-path cli/andy/Cargo.toml -- chat list`
 
 Live terminal view is always `tmux -L andy attach -t andy-task-<id>` — MCP never
-streams PTY bytes.
+streams PTY bytes. From the TUI or `andy attach`, press **F12**, **Alt+d**, or the
+usual tmux **Ctrl-b** then **d** to detach back to the chat list without stopping the agent.
 
 ## launchd (macOS)
 
@@ -85,11 +103,20 @@ launchctl load ~/Library/LaunchAgents/com.joetr.andyd.plist
 
 ## GUI modes
 
-`createDesktopRuntime()` detects the socket:
+On launch the GUI calls `resolveRuntimeMode()`:
 
-- **DaemonClient** — GUI talks to `andyd` via MCP; KetraTerm attaches to tmux
-- **EmbeddedDaemon** — in-process fallback when no socket is present (also
-  publishes `andyd.sock` so the CLI can attach)
+1. **EmbeddedDaemon** (default) — agents run in-process with KetraTerm + tmux attach.
+   Fully self-contained; also binds `~/.andy/andyd.sock` for the CLI when no external
+   daemon owns it.
+2. **DaemonClient** — only when a **standalone** `andyd` is already running (pidfile +
+   live socket), e.g. launchd or `./gradlew runAndyd`. The GUI attaches KetraTerm viewers
+   to tmux sessions owned by that process.
+
+The GUI does **not** spawn `andyd` and switch to client mode — that split left chats
+finishing in headless tmux before a terminal viewer could attach. Use `runAndyd` or
+launchd when you want a persistent background daemon for the CLI while the GUI is closed.
+
+Stale `andyd.sock` / `andyd.pid` files left after a crash are removed automatically.
 
 ## MCP tools (agents)
 

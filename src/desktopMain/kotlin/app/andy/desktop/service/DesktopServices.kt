@@ -51,26 +51,18 @@ enum class RuntimeMode {
     EmbeddedDaemon,
 }
 
-fun detectRuntimeMode(): RuntimeMode {
-    val sock = File(System.getProperty("user.home"), ".andy/andyd.sock")
-    return if (isAndydSocketLive(sock)) RuntimeMode.DaemonClient else RuntimeMode.EmbeddedDaemon
+/** Pick how the GUI hosts agent/project services. */
+fun resolveRuntimeMode(): RuntimeMode {
+    AndydProcess.removeStaleArtifacts()
+    return if (AndydProcess.isExternalDaemonLive()) {
+        RuntimeMode.DaemonClient
+    } else {
+        RuntimeMode.EmbeddedDaemon
+    }
 }
 
-/**
- * True only when [socketPath] accepts a Unix-domain connection.
- * A leftover `andyd.sock` file after a crash must not force DaemonClient mode
- * (that leaves the GUI with an empty chat list).
- */
-internal fun isAndydSocketLive(socketPath: File): Boolean {
-    if (!socketPath.exists()) return false
-    return runCatching {
-        java.nio.channels.SocketChannel.open(java.net.StandardProtocolFamily.UNIX).use { channel ->
-            channel.configureBlocking(true)
-            channel.connect(java.net.UnixDomainSocketAddress.of(socketPath.toPath()))
-            true
-        }
-    }.getOrDefault(false)
-}
+/** @deprecated Use [resolveRuntimeMode]; kept for tests. */
+fun detectRuntimeMode(): RuntimeMode = resolveRuntimeMode()
 
 data class DaemonRuntime(
     val services: AndyServices,
@@ -224,10 +216,12 @@ fun createDaemonRuntime(
     )
 }
 
-fun createDesktopRuntime(mode: RuntimeMode = detectRuntimeMode()): DesktopRuntime {
+fun createDesktopRuntime(mode: RuntimeMode = resolveRuntimeMode()): DesktopRuntime {
     if (mode == RuntimeMode.DaemonClient) {
+        System.err.println("andy: daemon-client mode (${AndydProcess.socketPath().absolutePath})")
         return createDesktopClientRuntime()
     }
+    System.err.println("andy: embedded daemon mode (in-process agents)")
     return createEmbeddedDesktopRuntime()
 }
 
@@ -444,11 +438,12 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     }
 
     // Expose unix socket while GUI embeds the daemon so CLI can attach —
-    // but never steal a socket already owned by a standalone andyd.
+    // but never steal a socket already owned by a standalone `andyd`.
     updatesScope.launch {
-        val sock = File(System.getProperty("user.home"), ".andy/andyd.sock")
-        if (sock.exists()) {
-            System.out.println("andy: embedded mode skipped unix socket; ${sock.absolutePath} already present")
+        val sock = AndydProcess.socketPath()
+        deleteSocketIfStale(sock)
+        if (isAndydSocketLive(sock)) {
+            System.out.println("andy: embedded mode skipped unix socket; ${sock.absolutePath} already live")
             System.out.flush()
             return@launch
         }

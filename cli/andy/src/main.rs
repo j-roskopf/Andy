@@ -55,6 +55,9 @@ enum ChatCmd {
         directory: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        /// Print the MCP response and exit without attaching to tmux.
+        #[arg(long)]
+        no_attach: bool,
         prompt: String,
     },
     Stop { task_id: String },
@@ -95,6 +98,7 @@ async fn main() -> Result<()> {
             project,
             directory,
             title,
+            no_attach,
             prompt,
         }) => {
             let mut args = json!({
@@ -111,7 +115,22 @@ async fn main() -> Result<()> {
                 args["title"] = json!(t);
             }
             let raw = client.call_tool("chat.start", args).await?;
-            println!("{raw}");
+            if no_attach {
+                println!("{raw}");
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+            if let Some(err) = v.as_str().filter(|s| s.starts_with("Error:")) {
+                anyhow::bail!("{err}");
+            }
+            let task_id = v
+                .get("id")
+                .and_then(|id| id.as_str())
+                .with_context(|| format!("unexpected chat.start response: {raw}"))?;
+            if let Err(err) = attach::attach_or_reattach(&mut client, task_id).await {
+                eprintln!("started {task_id} but attach failed: {err:#}");
+                println!("{raw}");
+            }
         }
         Commands::Chat(ChatCmd::Stop { task_id }) => {
             let raw = client

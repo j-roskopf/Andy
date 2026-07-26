@@ -22,6 +22,7 @@ fun main(@Suppress("UNUSED_PARAMETER") args: Array<String>) {
     System.setProperty("java.awt.headless", "true")
 
     val andyHome = File(System.getProperty("user.home"), ".andy").also { it.mkdirs() }
+    runCatching { app.andy.desktop.service.agents.AndyStatusHookInstaller.ensureInstalled() }
     val pidFile = File(andyHome, "andyd.pid")
     val lock = acquirePidLock(pidFile) ?: run {
         System.err.println("andyd already running (pidfile ${pidFile.absolutePath})")

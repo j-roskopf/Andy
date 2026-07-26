@@ -8,7 +8,7 @@ import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
-import app.andy.model.AgentTaskStatus
+import app.andy.model.AgentStatus
 import app.andy.model.AgentUserInputOption
 import app.andy.model.AgentUserInputQuestion
 import app.andy.model.AgentUserInputRequest
@@ -46,7 +46,7 @@ class DesktopAgentTaskStoreTest {
             it.mkdirs()
         }
         try {
-            runBlocking { block(DesktopAgentTaskStore(File(dir, "agents.toml"))) }
+            runBlocking { block(DesktopAgentTaskStore(File(dir, "agents.db"))) }
         } finally {
             dir.deleteRecursively()
         }
@@ -111,7 +111,7 @@ class DesktopAgentTaskStoreTest {
                     ),
                 ),
             ),
-            status = AgentTaskStatus.WaitingForInput,
+            status = AgentStatus.Blocked,
             vendorSessionId = "t-99",
             createdAtMillis = 111,
             startedAtMillis = 222,
@@ -144,14 +144,14 @@ class DesktopAgentTaskStoreTest {
             agent = AgentKind.ClaudeCode,
             cwd = "/tmp",
             originDir = "/tmp",
-            status = AgentTaskStatus.Running,
+            status = AgentStatus.Working,
             createdAtMillis = 1,
             startedAtMillis = 10,
         )
-        val queued = running.copy(id = "task-q", status = AgentTaskStatus.Queued, startedAtMillis = null)
+        val queued = running.copy(id = "task-q", status = null, startedAtMillis = null)
         store.save(AgentStoreState(tasks = listOf(running, queued)))
         val loaded = store.load()
-        assertEquals(setOf(AgentTaskStatus.Unknown), loaded.tasks.map { it.status }.toSet())
+        assertEquals(setOf(AgentStatus.Error), loaded.tasks.map { it.status }.toSet())
         assertTrue(loaded.tasks.all { it.finishedAtMillis != null })
     }
 
@@ -164,7 +164,7 @@ class DesktopAgentTaskStoreTest {
             agent = AgentKind.ClaudeCode,
             cwd = "/tmp",
             originDir = "/tmp",
-            status = AgentTaskStatus.Paused,
+            status = AgentStatus.Done,
             createdAtMillis = 1,
             startedAtMillis = 10,
             finishedAtMillis = 99,
@@ -342,7 +342,7 @@ class DesktopAgentTaskStoreTest {
     }
 
     @Test
-    fun loadsVersionTwoWorkflowWithReviewDisabledAndNoReviewTask() = withStore { store ->
+    fun roundTripsWorkflowWithoutReviewTask() = withStore { store ->
         val profile = ProjectAgentProfile()
         val build = ProjectTask(
             id = "build-v2", projectId = "project-v2", kind = ProjectTaskKind.Build,
@@ -357,44 +357,11 @@ class DesktopAgentTaskStoreTest {
         )
         val workflow = ProjectWorkflowState("project-v2", tasks = listOf(build, verify))
         store.save(AgentStoreState(projectWorkflows = mapOf(workflow.projectId to workflow)))
-        val file = store.javaClass.getDeclaredField("file").let { field ->
-            field.isAccessible = true
-            field.get(store) as File
-        }
-        file.writeText(file.readText().replaceFirst("version = 3", "version = 2"))
 
         val loaded = store.load().projectWorkflows.getValue("project-v2")
         assertEquals(false, loaded.tasks.first { it.kind == ProjectTaskKind.Build }.reviewEnabled)
         assertEquals(emptyList(), loaded.tasks.filter { it.kind == ProjectTaskKind.Review })
         assertEquals(listOf("build-v2", "verify-v2"), loaded.tasks.map { it.id })
-    }
-
-    @Test
-    fun loadsVersionOneAgentDataWithWorkflowDefaults() {
-        val dir = File.createTempFile("andy-agents-v1", null).also { it.delete(); it.mkdirs() }
-        val file = File(dir, "agents.toml")
-        try {
-            file.writeText(
-                """
-                version = 1
-                maxConcurrent = 3
-
-                [[tasks]]
-                id = "legacy-task"
-                title = "Legacy"
-                prompt = "keep working"
-                agent = "Codex"
-                status = "Completed"
-                createdAtMillis = 42
-                """.trimIndent(),
-            )
-            val loaded = runBlocking { DesktopAgentTaskStore(file).load() }
-            assertEquals("legacy-task", loaded.tasks.single().id)
-            assertEquals(3, loaded.maxConcurrent)
-            assertEquals(emptyMap(), loaded.projectWorkflows)
-        } finally {
-            dir.deleteRecursively()
-        }
     }
 
     @Test
@@ -405,7 +372,7 @@ class DesktopAgentTaskStoreTest {
             prompt = "done",
             agent = AgentKind.Codex,
             projectId = "proj-1",
-            status = AgentTaskStatus.Completed,
+            status = AgentStatus.Done,
             createdAtMillis = 42,
             archived = true,
         )
@@ -420,42 +387,11 @@ class DesktopAgentTaskStoreTest {
             title = "important",
             prompt = "p",
             agent = AgentKind.Codex,
-            status = AgentTaskStatus.Completed,
+            status = AgentStatus.Done,
             createdAtMillis = 1,
-            // Pad so the on-disk file exceeds the empty-store guard.
-            completedResultText = "x".repeat(12_000),
         )
         store.save(AgentStoreState(tasks = listOf(task)))
         store.save(AgentStoreState())
         assertEquals(listOf(task.id), store.load().tasks.map { it.id })
-    }
-
-    @Test
-    fun loadRecoversFromSqliteWhenTomlMirrorIsUnreadable() {
-        val dir = File.createTempFile("andy-agents", null).also {
-            it.delete()
-            it.mkdirs()
-        }
-        try {
-            runBlocking {
-                val file = File(dir, "agents.toml")
-                val store = DesktopAgentTaskStore(file)
-                val task = AgentTask(
-                    id = "from-db",
-                    title = "recovered",
-                    prompt = "p",
-                    agent = AgentKind.Codex,
-                    status = AgentTaskStatus.Completed,
-                    createdAtMillis = 7,
-                )
-                store.save(AgentStoreState(tasks = listOf(task)))
-                // Corrupt the human-readable TOML mirror; the SQLite DB is the source of truth.
-                file.writeText("this is not valid toml {{{")
-                val loaded = store.load()
-                assertEquals(listOf(task.id), loaded.tasks.map { it.id })
-            }
-        } finally {
-            dir.deleteRecursively()
-        }
     }
 }

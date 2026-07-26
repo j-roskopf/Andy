@@ -139,6 +139,12 @@ internal fun actionIconMarker(icon: String): String = when (icon.trim().lowercas
 
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
+private data class ProjectChatLists(val active: List<AgentTask>, val archived: List<AgentTask>)
+
+private val ProjectChatSort =
+    compareByDescending<AgentTask> { it.isActive }
+        .thenByDescending { it.unread }
+        .thenByDescending { it.createdAtMillis }
 
 private enum class ProjectCanvas(val label: String) { Chat("chat"), Tasks("tasks"), Runbook("runbook"), Scratchpad("scratchpad") }
 
@@ -281,10 +287,23 @@ private fun ProjectCockpit(
             query.isBlank() || project.name.contains(query, true) || project.contextDir.contains(query, true)
         }
     }
-    val unreadProjectIds = remember(agentTasks) {
+    val unreadProjectIds = remember(agentTasks, config.projects) {
+        val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
-            task.projectId?.takeIf { task.unread && !task.archived }
+            task.projectId?.takeIf { task.unread && !task.archived && task.workflowTaskId == null && it in validProjectIds }
         }
+    }
+    val projectChatLists = remember(agentTasks) {
+        agentTasks
+            .asSequence()
+            .filter { it.workflowTaskId == null && it.projectId != null }
+            .groupBy { it.projectId!! }
+            .mapValues { (_, tasks) ->
+                ProjectChatLists(
+                    active = tasks.filter { !it.archived }.sortedWith(ProjectChatSort),
+                    archived = tasks.filter { it.archived }.sortedByDescending { it.createdAtMillis },
+                )
+            }
     }
     val projectTasks = project?.let { item ->
         agentTasks
@@ -332,14 +351,9 @@ private fun ProjectCockpit(
                     TextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Find a project", color = TextSecondary, fontFamily = MonoFont) })
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
                         items(projects, key = { it.id }) { item ->
-                            val sessions = agentTasks.filter {
-                                it.projectId == item.id && !it.archived && it.workflowTaskId == null
-                            }
-                                .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
-                            val archivedSessions = agentTasks.filter {
-                                it.projectId == item.id && it.archived && it.workflowTaskId == null
-                            }
-                                .sortedByDescending { it.createdAtMillis }
+                            val chatLists = projectChatLists[item.id] ?: ProjectChatLists(emptyList(), emptyList())
+                            val sessions = chatLists.active
+                            val archivedSessions = chatLists.archived
                             val viewingArchived = viewingArchivedForProjectId == item.id
                             val sessionsCollapsed = item.id in collapsedProjectIds
                             ProjectSessionGroup(
@@ -359,7 +373,6 @@ private fun ProjectCockpit(
                                 showMore = !sessionsCollapsed && !viewingArchived &&
                                     sessions.size > RecentSessionsPerProject &&
                                     expandedProjectSessionsId != item.id,
-                                sessionStatus = { taskId -> services.agentRuns.sessionStatus(taskId) },
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
                                         collapsedProjectIds = if (sessionsCollapsed) {
@@ -728,7 +741,6 @@ private fun ProjectSessionGroup(
     viewingArchived: Boolean,
     archivedCount: Int,
     showMore: Boolean,
-    sessionStatus: (String) -> kotlinx.coroutines.flow.StateFlow<app.andy.model.AgentSessionStatus?>,
     onToggleProject: () -> Unit,
     onOpenSession: (AgentTask) -> Unit,
     onMarkSessionUnread: (AgentTask) -> Unit,
@@ -802,10 +814,8 @@ private fun ProjectSessionGroup(
                     )
                 }
                 sessions.forEach { task ->
-                    val status by sessionStatus(task.id).collectAsState()
                     ProjectSessionRow(
                         task = task,
-                        sessionStatus = status,
                         selected = task.id == selectedSessionId,
                         onOpen = { onOpenSession(task) },
                         onMarkUnread = { onMarkSessionUnread(task) },
@@ -841,7 +851,6 @@ private fun ProjectSessionGroup(
 @Composable
 private fun ProjectSessionRow(
     task: AgentTask,
-    sessionStatus: app.andy.model.AgentSessionStatus?,
     selected: Boolean,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
@@ -877,7 +886,7 @@ private fun ProjectSessionRow(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
-                    isSessionWorking(task.isActive, sessionStatus) -> ProjectActivityIndicator(9.dp)
+                    isSessionWorking(task) -> ProjectActivityIndicator(9.dp)
                     task.unread -> UnreadDot()
                 }
             }

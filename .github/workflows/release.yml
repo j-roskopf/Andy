@@ -577,6 +577,22 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Checkout install scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+          path: andy-src
+
+      - name: Stage CLI install assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          cp andy-src/scripts/install-andy.sh release-artifacts/install-andy.sh
+          cp andy-src/scripts/andy-status-hook.sh release-artifacts/andy-status-hook.sh
+          chmod +x release-artifacts/install-andy.sh release-artifacts/andy-status-hook.sh
+          ls -la release-artifacts/install-andy.sh release-artifacts/andy-status-hook.sh
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -595,6 +611,8 @@ jobs:
             release-artifacts/**/andy-tracebox-bin-*
             release-artifacts/**/andy-tracebox-SHA256SUMS
             release-artifacts/**/andy-tracebox-LICENSE.txt
+            release-artifacts/install-andy.sh
+            release-artifacts/andy-status-hook.sh
 
   web:
     name: Web release

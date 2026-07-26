@@ -48,6 +48,16 @@ fun scrubInheritedTerminalEnvironment(env: MutableMap<String, String>) {
     }
 }
 
+/** Directory for a new PTY/tmux client — never inherit a deleted JVM cwd. */
+fun resolveTerminalWorkingDirectory(cwd: String?): String {
+    val trimmed = cwd?.takeIf { it.isNotBlank() }
+    if (trimmed != null) {
+        val dir = java.io.File(trimmed).absoluteFile.normalize()
+        if (dir.isDirectory) return dir.absolutePath
+    }
+    return java.io.File(System.getProperty("user.home")).absolutePath
+}
+
 /** Full launch environment: process env + overrides, with IDE/proxy vars stripped. */
 fun buildTerminalLaunchEnvironment(overrides: Map<String, String> = emptyMap()): Map<String, String> {
     val env = HashMap(System.getenv())

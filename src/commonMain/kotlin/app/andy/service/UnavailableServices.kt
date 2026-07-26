@@ -267,6 +267,7 @@ object UnavailableAgentRunService : AgentRunService {
     override fun reattachSession(taskId: String) = Unit
 
     override fun canReattachSession(taskId: String): Boolean = false
+    override fun isViewing(taskId: String): Boolean = false
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
     override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
@@ -278,8 +279,6 @@ object UnavailableAgentRunService : AgentRunService {
     override fun archive(taskId: String) = Unit
     override fun unarchive(taskId: String) = Unit
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())
-    override fun sessionStatus(taskId: String) = MutableStateFlow(null)
-    override val sessionStatuses = MutableStateFlow(emptyMap<String, AgentSessionStatus>())
     override fun interactiveResumeCommand(taskId: String): String? = null
     override suspend fun openInTerminal(taskId: String) = unavailable()
     override suspend fun openSkill(path: String) = unavailable()

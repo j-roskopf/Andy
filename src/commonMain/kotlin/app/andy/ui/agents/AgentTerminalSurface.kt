@@ -7,9 +7,10 @@ import app.andy.service.AndyServices
 /**
  * Embedded agent CLI terminal (PTY). Desktop hosts KetraTerm; other targets no-op.
  *
- * [sessionActive] is true while Andy expects a live PTY (queued/running/waiting).
- * Finished chats prefer scrollback history when available; they do not auto-restart
- * the provider CLI (send a follow-up / resume to reopen interactively).
+ * [sessionActive] is decided by the caller via [isChatTerminalInteractive]: true while
+ * Andy is launching this chat and while this app run owns its live session. Everything
+ * else — stopped, exited, or carried over from a previous app run — replays scrollback
+ * read-only and never auto-restarts the provider CLI (send a follow-up to reopen it).
  */
 @Composable
 expect fun AgentTerminalSurface(

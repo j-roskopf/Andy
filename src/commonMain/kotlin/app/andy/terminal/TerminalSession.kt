@@ -1,8 +1,10 @@
 package app.andy.terminal
 
 import app.andy.model.TerminalAppearanceSnapshot
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Backend-agnostic PTY + emulator seam.
@@ -17,8 +19,28 @@ interface TerminalSession {
     val exitCode: StateFlow<Int?>
     val pid: Long?
 
-    /** Debounced text snapshots of the visible terminal buffer (for scrape status). */
+    /**
+     * Debounced text snapshots of the visible terminal buffer (for scrape status).
+     *
+     * Implementations must emit whenever the visible screen changes: this is the only
+     * channel status detection reads from. [bufferSnapshot] is for callers that need the
+     * screen at a specific moment, and on tmux-backed sessions it can cost a subprocess,
+     * so it must not be used as a substitute for observing this flow.
+     */
     val bufferSnapshots: SharedFlow<String>
+
+    /**
+     * Latest OSC 0/2 window/icon title (empty when unsupported or unset).
+     * Used by agent status screen manifests (Claude braille spinner, Codex action required, …).
+     */
+    val windowTitle: StateFlow<String>
+        get() = EmptyOscTitle
+
+    /**
+     * Latest ConEmu-style OSC progress payload (`4;0`, `4;1`, …), empty when unset.
+     */
+    val oscProgress: StateFlow<String>
+        get() = EmptyOscProgress
 
     fun start(argv: List<String>, cwd: String?, env: Map<String, String>)
     fun write(bytes: ByteArray)
@@ -57,3 +79,6 @@ data class TerminalLaunchRequest(
 expect object TerminalSessions {
     fun create(request: TerminalLaunchRequest): TerminalSession
 }
+
+private val EmptyOscTitle: StateFlow<String> = MutableStateFlow("").asStateFlow()
+private val EmptyOscProgress: StateFlow<String> = MutableStateFlow("").asStateFlow()

@@ -153,13 +153,11 @@ private fun AgentCommandCenter(
                 }
                 if (inbox.isEmpty()) EmptyState(if (query.isBlank()) if (showArchived) "No archived tasks" else "No tasks yet" else "No matching tasks") else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxSize()) {
                     items(inbox, key = { it.id }) { task ->
-                        val sessionStatus by services.agentRuns.sessionStatus(task.id).collectAsState()
                         AgentTaskCard(
                             task,
                             null,
                             !composing && task.id == selected?.id,
                             nowMillis,
-                            sessionStatus = sessionStatus,
                             onClick = { selectedTaskId = task.id; composing = false; services.agentRuns.markRead(task.id) },
                             onMarkUnread = { services.agentRuns.markUnread(task.id) },
                             onArchive = if (showArchived) {
@@ -237,7 +235,6 @@ private fun AgentTaskCard(
     projectName: String?,
     selected: Boolean,
     nowMillis: Long,
-    sessionStatus: app.andy.model.AgentSessionStatus? = null,
     onClick: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
@@ -285,8 +282,8 @@ private fun AgentTaskCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (task.unread) UnreadDot()
-                    if (sessionStatus == app.andy.model.AgentSessionStatus.Blocked) {
-                        SessionStatusDot(sessionStatus)
+                    if (task.status == app.andy.model.AgentStatus.Blocked) {
+                        StatusDot(task.status!!)
                     }
                     AgentBadge(task.agent)
                 }
@@ -300,11 +297,7 @@ private fun AgentTaskCard(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (sessionStatus != null && task.isActive) {
-                    StatusTag(agentSessionStatusLabel(sessionStatus), agentSessionStatusColor(sessionStatus))
-                } else {
-                    StatusTag(agentStatusLabel(task.status), agentStatusColor(task.status))
-                }
+                StatusTag(agentStatusLabel(task), agentStatusColor(task.status))
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -333,8 +326,7 @@ private fun AgentTaskCard(
                 val elapsedEnd = rememberElapsedEndMillis(
                     taskId = task.id,
                     finishedAtMillis = task.finishedAtMillis,
-                    isActive = task.isActive,
-                    sessionStatus = sessionStatus,
+                    task = task,
                 )
                 formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let {
                     Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)

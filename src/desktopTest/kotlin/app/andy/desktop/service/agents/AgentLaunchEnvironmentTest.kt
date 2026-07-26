@@ -1,13 +1,26 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentEvent
+import app.andy.terminal.resolveTerminalWorkingDirectory
 import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import java.io.File
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class AgentLaunchEnvironmentTest {
+    @Test
+    fun resolveTerminalWorkingDirectoryFallsBackWhenMissing() {
+        val home = File(System.getProperty("user.home")).absolutePath
+        assertEquals(home, resolveTerminalWorkingDirectory(null))
+        assertEquals(home, resolveTerminalWorkingDirectory(""))
+        assertEquals(home, resolveTerminalWorkingDirectory("/definitely/not/a/real/andy/path"))
+        val here = File(".").absoluteFile.normalize().absolutePath
+        assertEquals(here, resolveTerminalWorkingDirectory(here))
+    }
+
     @Test
     fun scrubsIdeAndProxyOverridesButPreservesAuthCredentials() {
         val env = mutableMapOf(
