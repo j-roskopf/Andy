@@ -68,10 +68,17 @@ class MitmAddonHookRegistrationTest {
 
     private fun resolvePythonFor(mitmdump: String): String? {
         val mitmdumpFile = File(mitmdump)
-        val siblingPython = File(mitmdumpFile.parentFile, "python")
-        val siblingPython3 = File(mitmdumpFile.parentFile, "python3")
-        return listOf(siblingPython, siblingPython3)
-            .firstOrNull { it.isFile && it.canExecute() }
+        val isWindows = System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)
+        val siblingCandidates = if (isWindows) {
+            listOf(File(mitmdumpFile.parentFile, "python.exe"))
+        } else {
+            listOf(
+                File(mitmdumpFile.parentFile, "python"),
+                File(mitmdumpFile.parentFile, "python3"),
+            )
+        }
+        return siblingCandidates
+            .firstOrNull { it.isFile && (isWindows || it.canExecute()) }
             ?.absolutePath
             ?: MitmRuntime.findSuitablePython()
     }

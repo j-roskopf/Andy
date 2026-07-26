@@ -11,8 +11,17 @@ class MitmRuntimeTest {
     fun resolvePrefersPinnedVenvWhenPresent() {
         val home = kotlin.io.path.createTempDirectory("andy-mitm-runtime").toFile()
         try {
-            val venvBin = File(home, ".andy/proxy/venv/bin").also { it.mkdirs() }
-            val mitmdump = File(venvBin, "mitmdump").also {
+            val venvBin = if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {
+                File(home, ".andy/proxy/venv/Scripts").also { it.mkdirs() }
+            } else {
+                File(home, ".andy/proxy/venv/bin").also { it.mkdirs() }
+            }
+            val mitmdumpName = if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) {
+                "mitmdump.exe"
+            } else {
+                "mitmdump"
+            }
+            val mitmdump = File(venvBin, mitmdumpName).also {
                 it.writeText("#!/bin/sh\necho Mitmproxy: ${MitmRuntime.PINNED_MITMPROXY_VERSION}\n")
                 it.setExecutable(true)
             }
