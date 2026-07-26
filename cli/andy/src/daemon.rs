@@ -119,18 +119,18 @@ fn try_launch() -> Result<bool> {
         .create(true)
         .append(true)
         .open(logs.join("andyd.err.log"))?;
-    let mut child = Command::new(&command[0])
-        .args(&command[1..])
+    let path = augmented_path();
+    let mut cmd = Command::new(&command[0]);
+    cmd.args(&command[1..])
         .current_dir(&home)
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(stderr)
-        .env("PATH", augmented_path());
+        .env("PATH", &path);
     if let Some(tmux) = crate::tmux::bundled_tmux_binary() {
-        child.env("ANDY_TMUX", tmux);
+        cmd.env("ANDY_TMUX", tmux);
     }
-    child
-        .spawn()
+    cmd.spawn()
         .with_context(|| format!("spawn {}", command.join(" ")))?;
     Ok(true)
 }
