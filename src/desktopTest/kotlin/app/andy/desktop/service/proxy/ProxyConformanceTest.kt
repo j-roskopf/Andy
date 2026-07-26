@@ -77,6 +77,9 @@ class ProxyConformanceTest {
             "-s", addon.absolutePath,
             "--set", "termlog_verbosity=error",
             "--set", "ssl_insecure=true",
+            // Conformance origins bind to loopback; mitmproxy blocks literal IPs by default.
+            "--set", "block_global=false",
+            "--set", "block_private=false",
         )
         val process = ProcessBuilder(command)
             .directory(dir)
