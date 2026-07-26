@@ -845,11 +845,6 @@ class AgentTerminalManager(
      */
     private fun seedScrollback(file: File, newRun: Boolean): ScrollbackAccumulator {
         val accumulator = ScrollbackAccumulator()
-        if (newRun) {
-            // A fresh CLI run must not replay the previous session's pane output.
-            runCatching { if (file.isFile) file.delete() }
-            return accumulator
-        }
         val existing = runCatching {
             if (file.isFile && file.length() > 0L) file.readText() else ""
         }.getOrDefault("")
@@ -860,6 +855,8 @@ class AgentTerminalManager(
             existing
         }.trimEnd()
         if (committed.isBlank()) return accumulator
+        // A fresh CLI run keeps the resolved transcript on disk and marks the boundary
+        // with a session rule; reattach seeds the same file without adding a rule.
         val seed = if (newRun) committed + SCROLLBACK_SESSION_SEPARATOR else committed
         accumulator.seed(styledRowsFromAnsiText(seed.trimEnd()))
         return accumulator
