@@ -63,4 +63,34 @@ class MitmRuntimeTest {
             home.deleteRecursively()
         }
     }
+
+    @Test
+    fun resolvePrefersPinnedVenvOnWindowsPaths() {
+        val home = kotlin.io.path.createTempDirectory("andy-mitm-runtime-win").toFile()
+        val originalOs = System.getProperty("os.name")
+        try {
+            System.setProperty("os.name", "Windows 10")
+            val venvScripts = File(home, ".andy/proxy/venv/Scripts").also { it.mkdirs() }
+            val mitmdump = File(venvScripts, "mitmdump.exe").also {
+                it.writeText("stub")
+                it.setExecutable(true)
+            }
+            File(home, ".andy/proxy/mitmproxy-version").writeText(MitmRuntime.PINNED_MITMPROXY_VERSION)
+
+            val resolved = MitmRuntime.resolveMitmdump(
+                userHome = home,
+                provisionIfNeeded = false,
+                findSystemMitmdump = { "/usr/bin/mitmdump-should-not-win" },
+            )
+            assertEquals(mitmdump.absolutePath, resolved.executable)
+            assertEquals(MitmRuntime.ResolveResult.Source.PinnedVenv, resolved.source)
+        } finally {
+            if (originalOs != null) {
+                System.setProperty("os.name", originalOs)
+            } else {
+                System.clearProperty("os.name")
+            }
+            home.deleteRecursively()
+        }
+    }
 }

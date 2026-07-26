@@ -255,28 +255,24 @@ class DesktopProxyService(
     private suspend fun snapshotAndDisableCaptivePortal(adb: String, serial: String) {
         // Deterministically disable Android network validation while Andy's proxy is
         // configured so generate_204 failures cannot mark the network no-internet.
-        val mode = readGlobalSetting(adb, serial, "captive_portal_mode")
-        val detection = readGlobalSetting(adb, serial, "captive_portal_detection_enabled")
-        DeviceProxyStateStore.save(
-            proxyDir,
-            DeviceCaptivePortalSnapshot(
-                serial = serial,
-                captivePortalMode = mode,
-                captivePortalDetectionEnabled = detection,
-            ),
-        )
+        if (DeviceProxyStateStore.load(proxyDir, serial) == null) {
+            val mode = readGlobalSetting(adb, serial, "captive_portal_mode")
+            val detection = readGlobalSetting(adb, serial, "captive_portal_detection_enabled")
+            DeviceProxyStateStore.save(
+                proxyDir,
+                DeviceCaptivePortalSnapshot(
+                    serial = serial,
+                    captivePortalMode = mode,
+                    captivePortalDetectionEnabled = detection,
+                ),
+            )
+        }
         runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_mode", "0"), 10)
         runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_detection_enabled", "0"), 10)
     }
 
     private suspend fun restoreCaptivePortal(adb: String, serial: String) {
-        val snapshot = DeviceProxyStateStore.load(proxyDir, serial)
-        if (snapshot == null) {
-            // Best-effort restore to Android defaults when we have no snapshot.
-            runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_mode", "1"), 10)
-            runner.run(listOf(adb, "-s", serial, "shell", "settings", "put", "global", "captive_portal_detection_enabled", "1"), 10)
-            return
-        }
+        val snapshot = DeviceProxyStateStore.load(proxyDir, serial) ?: return
         restoreGlobalSetting(adb, serial, "captive_portal_mode", snapshot.captivePortalMode)
         restoreGlobalSetting(adb, serial, "captive_portal_detection_enabled", snapshot.captivePortalDetectionEnabled)
         DeviceProxyStateStore.clear(proxyDir, serial)

@@ -53,8 +53,26 @@ object MitmRuntime {
     fun venvDir(userHome: File = File(System.getProperty("user.home"))): File =
         File(proxyHome(userHome), "venv")
 
-    fun pinnedMitmdump(userHome: File = File(System.getProperty("user.home"))): File =
-        File(venvDir(userHome), "bin/mitmdump")
+    fun pinnedMitmdump(userHome: File = File(System.getProperty("user.home"))): File {
+        val bin = venvExecutablesDir(venvDir(userHome))
+        return if (isWindows()) File(bin, "mitmdump.exe") else File(bin, "mitmdump")
+    }
+
+    private fun venvExecutablesDir(venv: File): File =
+        if (isWindows()) File(venv, "Scripts") else File(venv, "bin")
+
+    private fun venvPython(venv: File): File? {
+        val bin = venvExecutablesDir(venv)
+        return if (isWindows()) {
+            File(bin, "python.exe").takeIf { it.isFile }
+        } else {
+            File(bin, "python").takeIf { it.isFile && it.canExecute() }
+                ?: File(bin, "python3").takeIf { it.isFile && it.canExecute() }
+        }
+    }
+
+    private fun isWindows(): Boolean =
+        System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)
 
     fun versionMarker(userHome: File = File(System.getProperty("user.home"))): File =
         File(proxyHome(userHome), MARKER_NAME)
@@ -104,8 +122,7 @@ object MitmRuntime {
             }
         }
 
-        val venvPython = File(venv, "bin/python").takeIf { it.isFile && it.canExecute() }
-            ?: File(venv, "bin/python3").takeIf { it.isFile && it.canExecute() }
+        val venvPython = venvPython(venv)
             ?: return CommandResult.failure("venv created but python binary missing under ${venv.absolutePath}")
 
         val pipUpgrade = runProcess(
@@ -204,33 +221,35 @@ object MitmRuntime {
             "or install a supported mitmdump on PATH (`brew install mitmproxy`). "
 
     fun findSuitablePython(): String? {
+        val pythonNames = if (isWindows()) {
+            listOf("python3.14.exe", "python3.13.exe", "python3.12.exe", "python3.exe", "python.exe")
+        } else {
+            listOf("python3.14", "python3.13", "python3.12", "python3", "python")
+        }
         val candidates = buildList {
-            addAll(
-                listOf(
-                    "python3.14", "python3.13", "python3.12", "python3", "python",
-                ).flatMap { name ->
-                    listOf(
-                        File("/opt/homebrew/bin", name),
-                        File("/usr/local/bin", name),
-                        File("/usr/bin", name),
-                    )
-                },
-            )
+            if (!isWindows()) {
+                addAll(
+                    pythonNames.flatMap { name ->
+                        listOf(
+                            File("/opt/homebrew/bin", name),
+                            File("/usr/local/bin", name),
+                            File("/usr/bin", name),
+                        )
+                    },
+                )
+            }
             System.getenv("PATH").orEmpty()
                 .split(File.pathSeparator)
                 .filter { it.isNotBlank() }
                 .forEach { dir ->
-                    add(File(dir, "python3.14"))
-                    add(File(dir, "python3.13"))
-                    add(File(dir, "python3.12"))
-                    add(File(dir, "python3"))
-                    add(File(dir, "python"))
+                    pythonNames.forEach { name -> add(File(dir, name)) }
                 }
         }
         return candidates
             .distinctBy { it.absolutePath }
             .firstOrNull { file ->
-                file.isFile && file.canExecute() && pythonVersionAtLeast(file.absolutePath, MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR)
+                file.isFile && (isWindows() || file.canExecute()) &&
+                    pythonVersionAtLeast(file.absolutePath, MIN_PYTHON_MAJOR, MIN_PYTHON_MINOR)
             }
             ?.absolutePath
     }

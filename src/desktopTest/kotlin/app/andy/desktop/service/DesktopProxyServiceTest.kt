@@ -231,6 +231,60 @@ class DesktopProxyServiceTest {
     }
 
     @Test
+    fun configureDeviceProxyPreservesOriginalCaptivePortalSnapshotOnReconfigure() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-proxy-captive-reconfigure").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            env.globalSettings["captive_portal_mode"] = "1"
+            env.globalSettings["captive_portal_detection_enabled"] = "1"
+            val service = DesktopProxyService(
+                env.runner,
+                env.devices,
+                mitmdumpExecutable = { "/usr/bin/mitmdump" },
+                processStarter = { _, _, _ -> MockProxyProcess() },
+                hostOsName = { env.hostOsName },
+            )
+
+            assertTrue(service.configureDeviceProxy("emulator-5554", "10.0.2.2", 8888).isSuccess)
+            assertTrue(service.configureDeviceProxy("emulator-5554", "10.0.2.2", 8888).isSuccess)
+            assertTrue(service.clearDeviceProxy("emulator-5554").isSuccess)
+            assertEquals("1", env.globalSettings["captive_portal_mode"])
+            assertEquals("1", env.globalSettings["captive_portal_detection_enabled"])
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun clearDeviceProxyWithoutSnapshotLeavesCaptivePortalUnchanged() = runBlocking {
+        val env = MockAndroidDeviceEnvironment()
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-proxy-captive-no-snapshot").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            env.globalSettings["captive_portal_mode"] = "0"
+            env.globalSettings["captive_portal_detection_enabled"] = "0"
+            val service = DesktopProxyService(
+                env.runner,
+                env.devices,
+                mitmdumpExecutable = { "/usr/bin/mitmdump" },
+                processStarter = { _, _, _ -> MockProxyProcess() },
+                hostOsName = { env.hostOsName },
+            )
+
+            assertTrue(service.clearDeviceProxy("emulator-5554").isSuccess)
+            assertEquals("0", env.globalSettings["captive_portal_mode"])
+            assertEquals("0", env.globalSettings["captive_portal_detection_enabled"])
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+    }
+
+    @Test
     fun startAppliesCorporateUpstreamTrustOptions() = runBlocking {
         val env = MockAndroidDeviceEnvironment()
         val originalHome = System.getProperty("user.home")
