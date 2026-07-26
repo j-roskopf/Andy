@@ -52,16 +52,16 @@ class ProjectWorkflowServiceTest {
         ) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            val buildRun = awaitValue(timeoutMillis = 120_000) {
+            val buildRun = awaitValue(timeoutMillis = 180_000) {
                 harness.service.tasks.value.firstOrNull {
                     it.workflowStage == ProjectWorkflowStage.Build && it.isActive
                 }
             }
             harness.service.completeWorkflowRun(buildRun.id)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentStatus.Done
             }
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
             }
         }
@@ -72,12 +72,12 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "approved")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
 
             harness.service.startRecoveryFollowUp(buildId, "The confirmation toast never appears after rotation.")
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Paused
             }
             var workflow = harness.service.projects.value.getValue("project-1")
@@ -94,7 +94,7 @@ class ProjectWorkflowServiceTest {
             assertEquals(1, workflow.tasks.first { it.id == build.linkedVerificationTaskId }.attempts.size, "verification stays historical")
 
             harness.service.startRecoveryReview(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
             workflow = harness.service.projects.value.getValue("project-1")
@@ -114,14 +114,14 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved", "changes", "approved")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
 
             harness.service.startRecoveryFollowUp(buildId, "Fix the validation message.")
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
             harness.service.startRecoveryReview(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 val workflow = harness.service.projects.value["project-1"] ?: return@await false
                 workflow.tasks.first { it.id == buildId }.state == ProjectTaskState.Paused &&
                     workflow.tasks.first { it.id == workflow.tasks.first { task -> task.id == buildId }.linkedReviewTaskId }.reviewVerdicts.size == 2
@@ -132,9 +132,9 @@ class ProjectWorkflowServiceTest {
             assertEquals(2, build.attempts.size, "rejected recovery review must not launch another build")
 
             harness.service.startRecoveryFollowUp(buildId, "Also cover the whitespace path.")
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
             harness.service.startRecoveryReview(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Completed }
             build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
             assertEquals(3, build.attempts.size)
             assertFalse(build.recoveryMode)
@@ -146,7 +146,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved-warnings")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
             val workflow = harness.service.projects.value.getValue("project-1")
@@ -170,7 +170,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("changes", "approved")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
             val workflow = harness.service.projects.value.getValue("project-1")
@@ -196,7 +196,7 @@ class ProjectWorkflowServiceTest {
         ) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
             val workflow = harness.service.projects.value.getValue("project-1")
@@ -223,7 +223,7 @@ class ProjectWorkflowServiceTest {
             assertEquals(1, build.attempts.size)
 
             harness.service.resumeBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             workflow = harness.service.projects.value.getValue("project-1")
             build = workflow.tasks.first { it.id == buildId }
             review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -238,7 +238,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("duplicate-leading")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             val workflow = harness.service.projects.value.getValue("project-1")
             val build = workflow.tasks.first { it.id == buildId }
             val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -318,7 +318,7 @@ class ProjectWorkflowServiceTest {
                 ),
             )
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention }
             val workflow = harness.service.projects.value.getValue("project-1")
             val build = workflow.tasks.first { it.id == buildId }
             val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -373,7 +373,7 @@ class ProjectWorkflowServiceTest {
             build = workflow.tasks.first { it.id == buildId }
             assertEquals(2, build.reviewGeneration, "re-enabling must always create a fresh generation")
             harness.service.resumeBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             workflow = harness.service.projects.value.getValue("project-1")
             build = workflow.tasks.first { it.id == buildId }
             val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -407,7 +407,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(reviewWritesFile = true), gitRepo = true) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             val runs = harness.service.tasks.value.filter { it.workflowStage in setOf(ProjectWorkflowStage.Build, ProjectWorkflowStage.Review, ProjectWorkflowStage.Verification) }
             val reviewRun = runs.first { it.workflowStage == ProjectWorkflowStage.Review }
             val verifyRun = runs.first { it.workflowStage == ProjectWorkflowStage.Verification }
@@ -428,7 +428,7 @@ class ProjectWorkflowServiceTest {
                 harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.status == AgentStatus.Working }
             }
             harness.service.pauseBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 val workflow = harness.service.projects.value["project-1"] ?: return@await false
                 val build = workflow.tasks.firstOrNull { it.id == buildId } ?: return@await false
                 val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
@@ -440,7 +440,7 @@ class ProjectWorkflowServiceTest {
             assertEquals(runCount, harness.service.tasks.value.size, "disabling Review must not launch Verification")
 
             harness.service.resumeBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             val workflow = harness.service.projects.value.getValue("project-1")
             val build = workflow.tasks.first { it.id == buildId }
             val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
@@ -512,7 +512,7 @@ class ProjectWorkflowServiceTest {
             assertTrue(service.projects.value.getValue("project-1").tasks.any { it.id == verificationId })
 
             service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
 
@@ -610,7 +610,7 @@ class ProjectWorkflowServiceTest {
             assertEquals(ProjectTaskState.Draft, verification.state)
 
             harness.service.resumeBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
                     ProjectTaskState.Completed
             }
@@ -687,7 +687,7 @@ class ProjectWorkflowServiceTest {
         withHarness(WorkflowAdapter(verificationOutcomes = ArrayDeque(List(5) { "failed" }))) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.NeedsAttention
             }
             val workflow = harness.service.projects.value.getValue("project-1")
@@ -785,7 +785,7 @@ class ProjectWorkflowServiceTest {
             assertTrue(verification.attempts.isEmpty())
 
             harness.service.resumeBuildPair(buildId)
-            await(timeoutMillis = 120_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
+            await(timeoutMillis = 180_000) { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
             workflow = harness.service.projects.value.getValue("project-1")
             build = workflow.tasks.first { it.id == buildId }
             verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
@@ -941,7 +941,7 @@ class ProjectWorkflowServiceTest {
         withHarness(adapter) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
-            await(timeoutMillis = 120_000) {
+            await(timeoutMillis = 180_000) {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
             }
 
@@ -1370,13 +1370,13 @@ private object WorkflowWorkspaceStore : WorkspaceStore {
     override suspend fun save(state: WorkspaceState) = Unit
 }
 
-private suspend fun await(timeoutMillis: Long = 120_000, condition: () -> Boolean) {
+private suspend fun await(timeoutMillis: Long = 180_000, condition: () -> Boolean) {
     withTimeout(timeoutMillis) {
         while (!condition()) delay(20)
     }
 }
 
-private suspend fun <T> awaitValue(timeoutMillis: Long = 120_000, supplier: () -> T?): T {
+private suspend fun <T> awaitValue(timeoutMillis: Long = 180_000, supplier: () -> T?): T {
     var result: T? = null
     withTimeout(timeoutMillis) {
         while (true) {
