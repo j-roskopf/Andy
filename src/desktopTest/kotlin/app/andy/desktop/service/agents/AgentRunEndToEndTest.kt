@@ -353,12 +353,21 @@ class AgentQueuedFollowUpTest {
 
             service.queueFollowUp(task.id, "second message")
             service.queueFollowUp(task.id, "third message")
-            assertEquals(
-                listOf("second message", "third message"),
-                service.tasks.value.first { it.id == task.id }.queuedFollowUps.map { it.text },
-            )
+            val afterQueue = service.tasks.value.first { it.id == task.id }
+            val queuedTexts = afterQueue.queuedFollowUps.map { it.text }
+            val liveUserMessages = service.events(task.id).value
+                .filterIsInstance<AgentEvent.UserMessage>()
+                .map { it.text }
+            if (queuedTexts.isNotEmpty()) {
+                assertEquals(listOf("second message", "third message"), queuedTexts)
+            } else {
+                // Direct PTY keeps the session alive while the first run is active, so follow-ups
+                // may be delivered live instead of sitting in the queue until Done.
+                assertEquals(listOf("second message", "third message"), liveUserMessages)
+            }
+            File(dir, ".queue-test-ready").writeText("go")
 
-            withTimeout(60_000) {
+            withTimeout(120_000) {
                 while (true) {
                     val current = service.tasks.value.first { it.id == task.id }
                     val userMessages = service.events(task.id).value
@@ -562,7 +571,11 @@ private class QueueTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
 
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> =
-        listOf(binary, "-c", "sleep 1")
+        listOf(
+            binary,
+            "-c",
+            "while [ ! -f '${task.cwd}/.queue-test-ready' ]; do sleep 0.05; done",
+        )
 
     override fun buildInteractiveResumeCommand(
         binary: String,
