@@ -53,6 +53,7 @@ object UnavailableIntentService : IntentService {
 
 object UnavailableAppService : AppService {
     override suspend fun listApps(serial: String) = emptyList<AndroidApp>()
+    override suspend fun focusedPackage(serial: String): String? = null
     override suspend fun getAppDetails(serial: String, packageName: String) = AndroidAppDetails()
     override suspend fun launch(serial: String, packageName: String) = unavailable()
     override suspend fun launchActivity(serial: String, packageName: String, activityName: String) = unavailable()

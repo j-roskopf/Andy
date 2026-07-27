@@ -6,8 +6,9 @@ import app.andy.model.AgentStatus
 /**
  * Herdr-style screen detection: priority rules over buffer regions + OSC title/progress.
  *
- * Ported from https://github.com/ogulcancelik/herdr (Apache-2.0) manifests for
- * Claude / Codex / Cursor / Antigravity, with Andy-specific working/idle extras.
+ * Ported from Herdr remote manifests (https://herdr.dev/docs/agents/, Apache-2.0)
+ * for Claude / Codex / Cursor / Antigravity. Andy-only extras are marked in-rule
+ * comments; snapshots live under `src/desktopTest/resources/herdr-manifests/`.
  *
  * Known agent + no match → idle fallback (strict blocked: only explicit blocker rules).
  */
@@ -304,6 +305,21 @@ private val ClaudeScreenManifest: List<ScreenRule> = listOf(
                 ScreenGate(contains = listOf("tab/arrow keys")),
                 ScreenGate(contains = listOf("arrow keys to navigate")),
                 ScreenGate(contains = listOf("↑/↓ to navigate")),
+                ScreenGate(contains = listOf("esc to interrupt")),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "model_picker_menu",
+        state = ScreenState.Unknown,
+        priority = 900,
+        region = ScreenRegion.WholeRecent,
+        skipStateUpdate = true,
+        gate = ScreenGate(
+            contains = listOf("select model", "enter to set as default", "esc to cancel"),
+            not = listOf(
+                ScreenGate(contains = listOf("do you want to proceed?")),
+                ScreenGate(contains = listOf("enter to select")),
             ),
         ),
     ),
@@ -406,18 +422,22 @@ private val ClaudeScreenManifest: List<ScreenRule> = listOf(
         region = ScreenRegion.OscProgress,
         gate = ScreenGate(regex = listOf(Regex("""^4;0"""))),
     ),
-    // Andy status-line working cues (not in Herdr Claude manifest).
+    // Andy status-line / in-turn working cues (Herdr Claude relies mainly on OSC braille;
+    // tmux pane titles often stay on the idle ✳ glyph, so we need visible chrome too).
+    // Priority above live_prompt_box (950) so interrupt chrome wins over a leftover ❯.
     ScreenRule(
         id = "andy_status_line_working",
         state = ScreenState.Working,
-        priority = 200,
-        region = ScreenRegion.BottomNonEmpty(6),
+        priority = 960,
+        region = ScreenRegion.BottomNonEmpty(8),
         visibleWorking = true,
         gate = ScreenGate(
             any = listOf(
                 ScreenGate(contains = listOf("perambulat")),
                 ScreenGate(contains = listOf("thinking more")),
+                ScreenGate(contains = listOf("esc to interrupt")),
                 ScreenGate(regex = listOf(Regex("""✻\s+\w+ing\b"""))),
+                ScreenGate(regex = listOf(Regex("""✦\s+\w+ing\b"""))),
                 ScreenGate(regex = listOf(Regex("""(?i)↓\s*\d+\s*tokens"""))),
             ),
         ),
@@ -545,12 +565,21 @@ private val CodexScreenManifest: List<ScreenRule> = listOf(
         id = "andy_plain_prompt_idle",
         state = ScreenState.Idle,
         priority = 80,
-        region = ScreenRegion.BottomNonEmpty(3),
+        region = ScreenRegion.BottomNonEmpty(8),
         visibleIdle = true,
         gate = ScreenGate(
             any = listOf(
+                // Codex idle prompt — including placeholder text ("› Find and fix…").
+                ScreenGate(lineRegex = listOf(Regex("""^›(?:\s|$)"""))),
+                ScreenGate(lineRegex = listOf(Regex("""^─\s*Worked for\b"""))),
                 ScreenGate(lineRegex = listOf(Regex("""›\s*$"""))),
                 ScreenGate(lineRegex = listOf(Regex(""">\s*$"""))),
+            ),
+            not = listOf(
+                ScreenGate(lineRegex = listOf(Regex("""^[•◦]\s+Working \("""))),
+                ScreenGate(contains = listOf("esc to interrupt")),
+                ScreenGate(contains = listOf("press enter to confirm")),
+                ScreenGate(contains = listOf("allow command?")),
             ),
         ),
     ),

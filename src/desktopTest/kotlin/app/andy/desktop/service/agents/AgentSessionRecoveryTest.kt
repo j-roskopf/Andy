@@ -33,7 +33,7 @@ class AgentSessionRecoveryTest {
     }
 
     @Test
-    fun inferCompletedTurnUsesHookDoneAndLiveSessionDone() {
+    fun inferCompletedTurnUsesIdleScrollbackAndLiveSessionDone() {
         val artifactDir = File.createTempFile("andy-artifacts", null).also { it.delete(); it.mkdirs() }
         try {
             File(artifactDir, "status.json").writeText("""{"status":"done","at":1}""" + "\n")
@@ -43,6 +43,15 @@ class AgentSessionRecoveryTest {
                     artifactDir = artifactDir,
                     scrollback = "Weather is 72F and sunny.\n> ",
                 ),
+                "idle-at-prompt scrollback completes the turn without hooks",
+            )
+            assertFalse(
+                inferCompletedTurn(
+                    agent = AgentKind.ClaudeCode,
+                    artifactDir = artifactDir,
+                    scrollback = "Still thinking…",
+                ),
+                "status.json alone must not complete a turn",
             )
             assertTrue(
                 inferCompletedTurn(
@@ -105,8 +114,9 @@ class AgentSessionRecoveryTest {
                     artifactDir = artifactDir,
                     scrollback = "done\n> ",
                     liveSessionStatus = AgentStatus.Done,
-                    sawWorking = false,
+                    sawWorking = true,
                 ),
+                "idle-at-prompt with live Done after working completes the build turn",
             )
         } finally {
             artifactDir.deleteRecursively()
@@ -141,7 +151,7 @@ class AgentSessionRecoveryTest {
     }
 
     @Test
-    fun inferPausedAtPromptOnReloadRequiresPromptWithoutDoneHook() {
+    fun inferPausedAtPromptOnReloadIsFalseWhenIdleAtPromptMeansCompleted() {
         val artifactDir = File.createTempFile("andy-artifacts", null).also { it.delete(); it.mkdirs() }
         try {
             assertFalse(
@@ -151,16 +161,16 @@ class AgentSessionRecoveryTest {
                     scrollback = "Still thinking about your request…",
                 ),
             )
-            assertTrue(
+            assertFalse(
                 inferPausedAtPrompt(
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = "Here is the answer.\n> ",
                 ),
+                "idle-at-prompt is completed, not paused",
             )
-            File(artifactDir, "status.json").writeText("""{"status":"done","at":1}""" + "\n")
-            assertFalse(
-                inferPausedAtPrompt(
+            assertTrue(
+                inferCompletedTurn(
                     agent = AgentKind.ClaudeCode,
                     artifactDir = artifactDir,
                     scrollback = "Here is the answer.\n> ",
@@ -172,7 +182,7 @@ class AgentSessionRecoveryTest {
     }
 
     @Test
-    fun recoverInterruptedTaskStatusMapsRunningToCompletedWhenHookDone() {
+    fun recoverInterruptedTaskStatusMapsRunningToCompletedWhenIdleAtPrompt() {
         val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
         try {
             val store = DesktopAgentTaskStore(File(root, "agents.db"))
@@ -190,9 +200,6 @@ class AgentSessionRecoveryTest {
             val scrollback = store.scrollbackFile(task.id)
             scrollback.parentFile?.mkdirs()
             scrollback.writeText("72F and sunny.\n> ")
-            File(AgentWorkflowArtifacts.dirFor(root, task.id), "status.json")
-                .apply { parentFile.mkdirs() }
-                .writeText("""{"status":"done","at":1}""" + "\n")
 
             val recovered = recoverInterruptedTaskStatus(task, scrollback)
             assertEquals(AgentStatus.Done, recovered.status)

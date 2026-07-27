@@ -24,6 +24,7 @@ import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ConfigSource
 import app.andy.model.AgentSandboxMode
 import app.andy.model.grillMeInteractivePromptAddendum
+import app.andy.model.specPlanWriteInstruction
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectPlanSnapshot
@@ -2214,9 +2215,11 @@ class DesktopAgentRunService(
         if (spec.grillMeEnabled) {
             append("\n\n").append(grillMeInteractivePromptAddendum(artifactRelPath))
         } else {
-            append(
-                "\n\nWrite the complete implementation specification to `$artifactRelPath/plan.md`, " +
-                    "including interfaces, edge cases, and verification steps, then stop (exit the session).",
+            append("\n\n").append(
+                specPlanWriteInstruction(
+                    artifactRelPath,
+                    including = "including interfaces, edge cases, and verification steps",
+                ),
             )
         }
     }
@@ -2683,9 +2686,14 @@ class DesktopAgentRunService(
             persist()
             return
         }
-        if (run.isActive) {
+        // null status means createAndStart returned before launchRun promoted the agent to
+        // Working. That is still in-flight — do not treat it as a failed stage.
+        if (run.status == null || run.isActive) {
             updateProjectTask(projectTaskId) {
-                it.copy(state = if (run.status == null) ProjectTaskState.Queued else ProjectTaskState.Running)
+                it.copy(
+                    state = if (run.status == null) ProjectTaskState.Queued else ProjectTaskState.Running,
+                    lastError = null,
+                )
             }
             persist()
             return
@@ -3223,8 +3231,8 @@ class DesktopAgentRunService(
 
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
-        if (shouldIgnoreStatusSnapshot(task, snapshot)) return
         val terminalLive = terminals.isAlive(taskId)
+        if (shouldIgnoreStatusSnapshot(task, snapshot, terminalLive = terminalLive)) return
         val previous = previousTaskStatuses.put(taskId, snapshot.status)
         val clearResumable = snapshot.status == AgentStatus.Working ||
             snapshot.status == AgentStatus.Blocked
@@ -3243,6 +3251,11 @@ class DesktopAgentRunService(
                 it.copy(
                     status = snapshot.status,
                     statusConfident = snapshot.confident,
+                    // Live Working/Blocked means the turn is not finished anymore.
+                    finishedAtMillis = when (snapshot.status) {
+                        AgentStatus.Working, AgentStatus.Blocked -> null
+                        else -> it.finishedAtMillis
+                    },
                     resumable = if (clearResumable) false else it.resumable,
                 )
             }

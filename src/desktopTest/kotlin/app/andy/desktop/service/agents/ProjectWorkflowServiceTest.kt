@@ -814,6 +814,32 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun runSpecDoesNotSurfaceWorkflowStageFailedWhileLaunching() = runBlocking {
+        // createAndStart returns with status=null before launchRun promotes to Working.
+        // reconcileWorkflowRun must treat that as queued, not as a failed stage.
+        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
+            val service = harness.service
+            val specId = service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan typed workflows",
+                    brief = "Design typed project tasks",
+                    profile = specProfile(),
+                ),
+            )
+            service.runSpec(specId)
+            val spec = service.projects.value.getValue("project-1").tasks.first { it.id == specId }
+            assertTrue(
+                spec.state == ProjectTaskState.Queued || spec.state == ProjectTaskState.Running,
+                "expected Queued/Running immediately after runSpec, got ${spec.state}",
+            )
+            assertEquals(null, spec.lastError)
+            await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.planVersions?.size == 1 }
+            assertEquals(null, service.projects.value.getValue("project-1").tasks.first { it.id == specId }.lastError)
+        }
+    }
+
+    @Test
     fun stoppingAndDeletingASpecRefineRestoresCompletedAndDropsTheAttempt() = runBlocking {
         withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
             val service = harness.service

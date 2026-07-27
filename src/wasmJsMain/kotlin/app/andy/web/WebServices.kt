@@ -303,6 +303,18 @@ private class BrowserAppService(private val devices: BrowserDeviceService) : App
         }.sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
     }
 
+    override suspend fun focusedPackage(serial: String): String? {
+        val patterns = listOf(
+            Regex("""mCurrentFocus=.*\s([a-zA-Z0-9_.]+)/"""),
+            Regex("""mFocusedApp=.*\s([a-zA-Z0-9_.]+)/"""),
+            Regex("""topResumedActivity=.*\s([a-zA-Z0-9_.]+)/"""),
+        )
+        fun parse(output: String): String? =
+            patterns.firstNotNullOfOrNull { pattern -> pattern.find(output)?.groupValues?.getOrNull(1) }
+        return parse(devices.shell(serial, listOf("dumpsys", "window", "windows")).stdout)
+            ?: parse(devices.shell(serial, listOf("dumpsys", "activity", "activities")).stdout)
+    }
+
     override suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails {
         val output = devices.shell(serial, listOf("dumpsys", "package", packageName)).stdout
         if (output.isBlank() || output.contains("Unable to find package", ignoreCase = true)) return AndroidAppDetails()

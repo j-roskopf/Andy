@@ -30,12 +30,19 @@ internal fun statusNeedsUnread(
 /**
  * True when a live-status scrape should not overwrite the task badge.
  *
- * Remounting a Done chat (switch away → back) often publishes unconfident Working from a
- * half-drawn idle screen. Confident Done/Error/Blocked must not flip on that noise.
+ * Working must be able to replace Done/Blocked when the turn continues (blocker
+ * cleared, visible working chrome, or user send). Remount soft-Working from a
+ * half-drawn idle screen must not demote confident Done/Error — but only when the
+ * terminal is no longer live. A live interactive session keeps updating freely
+ * even after [AgentTask.finishedAtMillis] was stamped (early turn-complete).
+ *
+ * Soft Working may still replace Blocked — once the blocker leaves the screen the
+ * turn is in progress again (Herdr: blocked → working/idle, never stuck blocked).
  */
 internal fun shouldIgnoreStatusSnapshot(
     task: AgentTask,
     snapshot: AgentStatusSnapshot,
+    terminalLive: Boolean = false,
 ): Boolean {
     if (task.status == AgentStatus.Blocked &&
         task.userInputRequest != null &&
@@ -43,16 +50,23 @@ internal fun shouldIgnoreStatusSnapshot(
     ) {
         return true
     }
+    // Live interactive sessions: always accept Working (soft or confident).
+    if (terminalLive && snapshot.status == AgentStatus.Working) {
+        return false
+    }
+    // Soft Working after confident Done/Error is remount / boot noise.
+    // Soft Working after Blocked is a real turn continuation — allow it.
     if (snapshot.status == AgentStatus.Working &&
         !snapshot.confident &&
         task.statusConfident &&
-        task.status != null &&
-        task.status != AgentStatus.Working
+        (task.status == AgentStatus.Done || task.status == AgentStatus.Error)
     ) {
         return true
     }
-    // A finished turn must not flip back to Working until resume clears finishedAtMillis.
+    // Soft Working after a finalized turn is remount noise. Confident Working
+    // (user send / visible working chrome) clears the stamp via applyStatusSnapshot.
     if (snapshot.status == AgentStatus.Working &&
+        !snapshot.confident &&
         task.finishedAtMillis != null &&
         task.status != AgentStatus.Working
     ) {

@@ -1,19 +1,23 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -23,7 +27,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -36,8 +42,10 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun PackageSelector(
@@ -49,23 +57,65 @@ internal fun PackageSelector(
     allowAll: Boolean = true,
     placeholder: String = "All",
     buttonPrefix: String = "Pkg: ",
+    autoSelectForeground: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var installedApps by remember(serial) { mutableStateOf<List<AndroidApp>>(emptyList()) }
     var searchAppQuery by remember { mutableStateOf("") }
+    var loadingPackages by remember(serial) { mutableStateOf(false) }
+    var resolvingCurrent by remember { mutableStateOf(false) }
+    var autoSelectAttempted by remember(serial) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val busy = loadingPackages || resolvingCurrent
 
-    LaunchedEffect(serial, expanded, selectedPackage) {
+    LaunchedEffect(serial, autoSelectForeground) {
+        if (!autoSelectForeground || serial == null || autoSelectAttempted) return@LaunchedEffect
+        autoSelectAttempted = true
+        if (selectedPackage != null) return@LaunchedEffect
+        resolvingCurrent = true
+        try {
+            val focused = runCatching { appsService.focusedPackage(serial) }.getOrNull()
+                ?.takeUnless { it.isNoiseForegroundPackage() }
+            if (focused != null) onSelectedPackageChange(focused)
+        } finally {
+            resolvingCurrent = false
+        }
+    }
+
+    LaunchedEffect(serial, expanded) {
         if (serial == null) {
             installedApps = emptyList()
+            loadingPackages = false
             return@LaunchedEffect
         }
-        if (expanded || selectedPackage != null) {
+        if (!expanded) return@LaunchedEffect
+        loadingPackages = true
+        try {
             runCatching { appsService.listApps(serial) }
                 .onSuccess { apps ->
                     installedApps = apps.sortedWith(
                         compareBy({ it.label?.lowercase() ?: "" }, { it.packageName }),
                     )
                 }
+        } finally {
+            loadingPackages = false
+        }
+    }
+
+    fun selectCurrentApp() {
+        val currentSerial = serial ?: return
+        scope.launch {
+            resolvingCurrent = true
+            try {
+                val focused = runCatching { appsService.focusedPackage(currentSerial) }.getOrNull()
+                if (focused != null) {
+                    onSelectedPackageChange(focused)
+                    expanded = false
+                    searchAppQuery = ""
+                }
+            } finally {
+                resolvingCurrent = false
+            }
         }
     }
 
@@ -90,7 +140,15 @@ internal fun PackageSelector(
                 modifier = Modifier.weight(1f, fill = false),
             )
             Spacer(Modifier.width(4.dp))
-            Text("▼", color = TextSecondary, fontSize = 10.sp)
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = Rust,
+                )
+            } else {
+                Text("▼", color = TextSecondary, fontSize = 10.sp)
+            }
         }
 
         DropdownMenu(
@@ -104,7 +162,7 @@ internal fun PackageSelector(
                 onValueChange = { searchAppQuery = it },
                 placeholder = {
                     Text(
-                        "Search packages...",
+                        if (loadingPackages) "Loading packages…" else "Search packages...",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         maxLines = 1,
@@ -134,6 +192,32 @@ internal fun PackageSelector(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Column {
+                    if (serial != null) {
+                        DropdownMenuItem(
+                            enabled = !resolvingCurrent,
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        "Current app",
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    if (resolvingCurrent) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(12.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = Rust,
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = { selectCurrentApp() },
+                        )
+                    }
+
                     if (allowAll) {
                         DropdownMenuItem(
                             text = {
@@ -149,6 +233,23 @@ internal fun PackageSelector(
                                 searchAppQuery = ""
                             },
                         )
+                    }
+
+                    if (loadingPackages && installedApps.isEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 20.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Rust,
+                            )
+                            Text("Loading packages…", color = TextSecondary, fontSize = 12.sp)
+                        }
                     }
 
                     filteredApps.forEach { app ->
@@ -184,3 +285,6 @@ internal fun PackageSelector(
         }
     }
 }
+
+private fun String.isNoiseForegroundPackage(): Boolean =
+    startsWith("com.android.systemui")

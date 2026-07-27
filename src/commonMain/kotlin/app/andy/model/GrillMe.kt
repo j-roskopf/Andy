@@ -15,6 +15,20 @@ internal fun isGrillMeSkillName(name: String): Boolean =
     name.equals("grill-me", ignoreCase = true) || name.equals("grilling", ignoreCase = true)
 
 /**
+ * Where Spec runs must leave `plan.md`. Plan mode is always on for Spec, and provider
+ * plan UIs otherwise stash plans elsewhere — say the path explicitly in the same message.
+ */
+internal fun specPlanWriteInstruction(
+    artifactRelPath: String,
+    including: String = "",
+): String {
+    val detail = including.trim().takeIf { it.isNotEmpty() }?.let { ", $it" }.orEmpty()
+    return "Even though plan mode is active, write the complete implementation specification " +
+        "to `$artifactRelPath/plan.md`$detail, then stop (exit the session). " +
+        "Do not use the provider's default plan path or plan UI. Do not implement the plan."
+}
+
+/**
  * Spec phase runs in an interactive terminal. Grill-me happens natively in the TUI;
  * when the agent needs an Andy-mediated decision during an *automated* phase it writes
  * `.andy/<taskId>/question.json` instead.
@@ -26,13 +40,8 @@ internal fun grillMeInteractivePromptAddendum(artifactRelPath: String): String =
         If a fact can be found by exploring the workspace, look it up instead of asking.
         """.trimIndent(),
     )
-    append('\n')
-    append(
-        """
-
-        Continue grilling until you reach shared understanding, then write the complete implementation specification to `$artifactRelPath/plan.md` and stop (exit the session). Do not implement the plan.
-        """.trimIndent(),
-    )
+    append("\n\nContinue grilling until you reach shared understanding. ")
+    append(specPlanWriteInstruction(artifactRelPath))
 }
 
 @Deprecated("Use grillMeInteractivePromptAddendum", ReplaceWith("grillMeInteractivePromptAddendum(artifactRelPath)"))

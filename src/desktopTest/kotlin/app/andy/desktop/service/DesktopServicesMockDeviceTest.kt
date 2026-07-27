@@ -530,6 +530,7 @@ class DesktopServicesMockDeviceTest {
         val sentIntent = services.intents.send("emulator-5554", draft)
 
         val apps = services.apps.listApps("emulator-5554")
+        val focused = services.apps.focusedPackage("emulator-5554")
         val launched = services.apps.launch("emulator-5554", "com.example.app")
         val launchedActivity = services.apps.launchActivity("emulator-5554", "com.example.app", ".MainActivity")
         val stopped = services.apps.stop("emulator-5554", "com.example.app")
@@ -579,6 +580,7 @@ class DesktopServicesMockDeviceTest {
         assertTrue(sentIntent.isSuccess)
 
         assertEquals(listOf("com.disabled.app", "com.example.app", "com.android.settings"), apps.map { it.packageName })
+        assertEquals("com.example.app", focused)
         assertEquals("Example", apps.first { it.packageName == "com.example.app" }.label)
         assertEquals(false, apps.first { it.packageName == "com.example.app" }.system)
         assertEquals(false, apps.first { it.packageName == "com.disabled.app" }.enabled)

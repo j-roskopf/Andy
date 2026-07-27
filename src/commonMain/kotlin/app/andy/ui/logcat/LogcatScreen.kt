@@ -197,6 +197,7 @@ internal fun LogcatPanel(
                         serial = serial,
                         selectedPackage = selectedPackage,
                         onSelectedPackageChange = onSelectedPackageChange,
+                        autoSelectForeground = true,
                         modifier = if (compact) Modifier.widthIn(max = 180.dp) else Modifier.widthIn(max = 300.dp)
                     )
                 }
@@ -256,6 +257,7 @@ internal fun LogcatPanel(
                                     serial = serial,
                                     selectedPackage = selectedPackage,
                                     onSelectedPackageChange = onSelectedPackageChange,
+                                    autoSelectForeground = true,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                                 Spacer(Modifier.height(4.dp))

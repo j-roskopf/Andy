@@ -22,11 +22,19 @@ data class AgentStatusSnapshot(
 )
 
 /**
- * Hybrid status tracker aligned with Herdr's detection policy:
- * - vendor lifecycle hooks (`status.json` via [installStatusSignals]) are authoritative when present
- * - per-agent screen manifests for blocked / working / idle (regions + OSC) as fallback
+ * Herdr-parity status tracker for Claude / Cursor / Codex / Antigravity.
+ *
+ * Status authority is the screen manifest only (see https://herdr.dev/docs/agents/):
+ * those agents are session-identity integrations in Herdr, not lifecycle authorities.
+ * Incomplete vendor hooks must not author the badge — they miss permission-after /
+ * interrupts and can fire spurious working after Stop.
+ *
+ * Policy:
+ * - per-agent screen manifests for blocked / working / idle (regions + OSC)
  * - known agent + no match → idle/Done (idle fallback)
  * - Working→plain-idle requires pending confirmation (Herdr-style)
+ * - user send ([markUserWorking]) bumps Working; scrape owns the rest
+ * - process exit / phaseFinished force Done/Error
  *
  * Intentionally does **not** treat PTY buffer churn as Working. That heuristic
  * fights Cursor alt-screen redraws and is the main source of idle↔working flicker.
@@ -46,7 +54,6 @@ class AgentStatusTracker(
     initialSnapshot: AgentStatusSnapshot? = null,
     private val foreground: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(true),
 ) {
-    private val hook = HookStatusSource(artifactDir)
     private val _status = MutableStateFlow(
         initialSnapshot ?: AgentStatusSnapshot(AgentStatus.Working, confident = false),
     )
@@ -66,7 +73,7 @@ class AgentStatusTracker(
         startJobs()
     }
 
-    /** Stop hook/buffer/poll loops while no viewer is mounted for this chat. */
+    /** Stop buffer/poll loops while no viewer is mounted for this chat. */
     fun pause() {
         if (!paused.compareAndSet(false, true)) return
         jobs.forEach { it.cancel() }
@@ -81,7 +88,6 @@ class AgentStatusTracker(
 
     private fun startJobs() {
         jobs = listOf(
-            scope.launch { hook.watch { publish() } },
             scope.launch {
                 session.bufferSnapshots.collect { buffer ->
                     scrape.onBuffer(buffer)
@@ -124,7 +130,6 @@ class AgentStatusTracker(
                         progress = session.oscProgress.value,
                     )
                     scrape.tick()
-                    hook.refresh()
                     if (!session.isAlive) {
                         val exit = session.exitCode.value
                         publish(processExited = true, exitCode = exit)
@@ -142,9 +147,24 @@ class AgentStatusTracker(
         scrape.clearPendingIdle()
     }
 
+    /**
+     * User started a turn (submit / resume). Bumps Working immediately; scrape owns
+     * later blocked / working / idle transitions. Confident so service-layer remount
+     * guards do not drop the bump after Done; does not latch Working.
+     */
+    fun markUserWorking() {
+        if (closed.get()) return
+        latch = null
+        scrape.clearPendingIdle()
+        emit(AgentStatusSnapshot(AgentStatus.Working, confident = true))
+    }
+
     fun markPhaseFinished() {
         publish(phaseFinished = true)
     }
+
+    /** Visible working chrome from the screen manifest (OSC spinner, status line, …). */
+    fun showsWorkingIndicator(): Boolean = scrape.showsWorkingIndicator()
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -158,85 +178,57 @@ class AgentStatusTracker(
     ) {
         if (closed.get()) return
 
-        val confidentSignal = when {
-            processExited -> AgentStatusSnapshot(
+        if (processExited) {
+            val snapshot = AgentStatusSnapshot(
                 status = if (exitCode == 0 || exitCode == null) AgentStatus.Done else AgentStatus.Error,
                 confident = true,
             )
-            phaseFinished -> AgentStatusSnapshot(AgentStatus.Done, confident = true)
-            else -> {
-                val hookStatus = hook.latest()
-                when (hookStatus) {
-                    AgentStatus.Blocked, AgentStatus.Done, AgentStatus.Error ->
-                        AgentStatusSnapshot(hookStatus, confident = true)
-                    AgentStatus.Working ->
-                        AgentStatusSnapshot(AgentStatus.Working, confident = true)
-                    null -> null
-                }
-            }
+            latch = snapshot
+            emit(snapshot)
+            return
         }
-
-        if (confidentSignal != null) {
-            // Vendor hook Done is authoritative. Stale scrape working chrome (braille
-            // spinners, "ctrl+c to stop") must not veto a fresh hook Done — that left
-            // Cursor/Antigravity stuck on Working after stop/Stop fired.
-            // Scrape visible-working may still suppress Done when there is no hook Done
-            // (phaseFinished / processExited already set confident Done above).
-            val hookSaysDone = hook.latest() == AgentStatus.Done
-            if (confidentSignal.status == AgentStatus.Done &&
-                !phaseFinished &&
-                !processExited &&
-                !hookSaysDone &&
-                scrape.showsVisibleWorking()
-            ) {
-                latch = null
-            } else {
-                latch = confidentSignal
-                emit(confidentSignal)
-                return
-            }
-        }
-
-        val latchSnapshot = latch
-        if (latchSnapshot != null && latchSnapshot.confident && latchHolds(latchSnapshot)) {
-            emit(latchSnapshot)
+        if (phaseFinished) {
+            val snapshot = AgentStatusSnapshot(AgentStatus.Done, confident = true)
+            latch = snapshot
+            emit(snapshot)
             return
         }
 
+        val latchSnapshot = latch
+        if (latchSnapshot != null && latchSnapshot.confident) {
+            if (latchHolds(latchSnapshot)) {
+                emit(latchSnapshot)
+                return
+            }
+            latch = null
+        }
+
         val scrapeHint = scrape.badgeHint() ?: return
-        val scrapeConfident = when (scrapeHint) {
+        // Soft idle stays Done (Herdr idle fallback). Do not invent Working — that trapped
+        // Codex/Claude at Working forever when the prompt had placeholder text and no OSC
+        // idle title under tmux. Boot uses markUserWorking / launch Working instead.
+        val publishedStatus = scrapeHint
+        val scrapeConfident = when (publishedStatus) {
             AgentStatus.Blocked -> scrape.isCurrentlyBlocked()
             AgentStatus.Done -> scrape.isDoneConfident()
+            AgentStatus.Working -> scrape.showsWorkingIndicator()
             else -> false
         }
-        // Soft idle (Done, not yet confident) is treated as Working for *new* runs so the
-        // badge does not flash Done during boot. Once we already know the chat is Done
-        // (reattach / remount seed), keep Done — a half-drawn idle screen after switching
-        // chat windows must not invent Working.
-        val alreadyDone = _status.value.status == AgentStatus.Done ||
-            latch?.status == AgentStatus.Done
-        val publishedStatus = if (scrapeHint == AgentStatus.Done && !scrapeConfident) {
-            if (alreadyDone) AgentStatus.Done else AgentStatus.Working
-        } else {
-            scrapeHint
-        }
         val snapshot = AgentStatusSnapshot(publishedStatus, confident = scrapeConfident)
-        if (scrapeConfident) {
+        // Latch only Blocked/Done — Working must yield as soon as chrome changes.
+        if (scrapeConfident && snapshot.status != AgentStatus.Working) {
             latch = snapshot
         }
         emit(snapshot)
     }
 
     private fun latchHolds(latch: AgentStatusSnapshot): Boolean = when (latch.status) {
-        AgentStatus.Blocked -> scrape.isCurrentlyBlocked() || hook.latest() == AgentStatus.Blocked
+        AgentStatus.Blocked -> scrape.isCurrentlyBlocked()
         AgentStatus.Done, AgentStatus.Error -> {
-            if (hook.latest() == AgentStatus.Working) return false
-            // Hook Done stays latched until a newer Working hook arrives. Without a
-            // hook Done, strong scrape working still unlatches scrape-inferred Done.
-            if (hook.latest() == AgentStatus.Done) return true
+            if (scrape.isCurrentlyBlocked()) return false
             !scrape.showsWorkingIndicator()
         }
-        AgentStatus.Working -> true
+        AgentStatus.Working -> scrape.showsWorkingIndicator() || scrape.hasPendingIdle()
     }
 
     private fun emit(snapshot: AgentStatusSnapshot) {
@@ -250,42 +242,6 @@ class AgentStatusTracker(
         private const val STATUS_POLL_MS = 500L
         private const val PENDING_IDLE_POLL_MS = 100L
         private const val BACKGROUND_STATUS_POLL_MS = 3_000L
-    }
-}
-
-/** Reads `.andy/<taskId>/status.json` written by CLI lifecycle hooks or the file protocol. */
-class HookStatusSource(
-    private val artifactDir: File,
-) {
-    private val statusFile = File(artifactDir, "status.json")
-    /** Eager read so [AgentStatusTracker] can seed from hooks on reattach. */
-    @Volatile private var latest: AgentStatus? = readLatestHookStatus(artifactDir)
-
-    fun latest(): AgentStatus? = latest
-
-    /** Re-read status.json (poll loop + watch both call this). */
-    fun refresh(): Boolean {
-        val next = readLatestHookStatus(artifactDir)
-        if (next == latest) return false
-        latest = next
-        return true
-    }
-
-    suspend fun watch(onChange: () -> Unit) {
-        var lastFingerprint = ""
-        while (true) {
-            if (statusFile.isFile) {
-                // Length + mtime: appends within the same millisecond (common for
-                // working→done pairs) may not bump lastModified alone.
-                val fingerprint = "${statusFile.length()}:${statusFile.lastModified()}"
-                if (fingerprint != lastFingerprint) {
-                    lastFingerprint = fingerprint
-                    refresh()
-                    onChange()
-                }
-            }
-            delay(400)
-        }
     }
 }
 
@@ -581,6 +537,7 @@ internal fun parseStatusJson(raw: String): AgentStatus? {
     }
 }
 
+/** Optional MCP / debug helper — not used for badge authority (Herdr screen-manifest model). */
 internal fun appendAgentStatus(artifactDir: File, status: AgentStatus) {
     artifactDir.mkdirs()
     val statusPath = File(artifactDir, "status.json")

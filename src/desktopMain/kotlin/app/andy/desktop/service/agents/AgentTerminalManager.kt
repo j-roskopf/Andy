@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.awt.Component
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -313,7 +314,7 @@ class AgentTerminalManager(
         if (!isAlive(taskId)) return
         handles[taskId]?.let { handle ->
             handle.statusTracker.clearLatch()
-            appendAgentStatus(handle.artifactDir, AgentStatus.Working)
+            handle.statusTracker.markUserWorking()
         }
         writeRaw(taskId, body)
         delay(SUBMIT_KEY_GAP_MS)
@@ -573,9 +574,6 @@ class AgentTerminalManager(
                 bindSessionForeground(session, foreground)
                 val seededStatus = listOfNotNull(retainedStatus, preferredStatus)
                     .firstOrNull { it.confident || it.status != AgentStatus.Working }
-                    ?: readLatestHookStatus(artifactDir)?.let {
-                        AgentStatusSnapshot(it, confident = true)
-                    }
                 val tracker = AgentStatusTracker(
                     scope = scope,
                     taskId = taskId,
@@ -668,16 +666,35 @@ class AgentTerminalManager(
 
     /**
      * Blocks until the agent turn is finished. For tmux-backed sessions the pane may
-     * keep a shell alive after the CLI exits, so completion is inferred from status
-     * hooks / scrape rather than session death.
+     * keep a shell alive after the CLI exits, so completion is inferred from scrape
+     * rather than session death.
+     *
+     * Important: interactive TUIs emit confident [AgentStatus.Blocked] for permissions
+     * and confident [AgentStatus.Done] for the boot splash / idle prompt. Neither is
+     * process exit. We only treat Done/Error as turn-complete after the turn has been
+     * "armed" by a real blocker or visible working chrome — never by Blocked itself.
      */
     suspend fun awaitExit(taskId: String): Int {
         val handle = handles[taskId]
         if (handle != null) {
             return when (handle.session) {
                 is TmuxAttachBackend, is TmuxAgentBackend -> {
+                    var armed = false
                     val snapshot = handle.statusTracker.status.first { snap ->
-                        snap.confident && snap.status in TURN_COMPLETE_STATUSES
+                        when (snap.status) {
+                            AgentStatus.Blocked -> {
+                                armed = true
+                                false
+                            }
+                            AgentStatus.Working -> {
+                                if (snap.confident || handle.statusTracker.showsWorkingIndicator()) {
+                                    armed = true
+                                }
+                                false
+                            }
+                            AgentStatus.Error -> snap.confident
+                            AgentStatus.Done -> snap.confident && armed
+                        }
                     }
                     when (snapshot.status) {
                         AgentStatus.Error -> handle.session.exitCode.value ?: 1
@@ -685,7 +702,7 @@ class AgentTerminalManager(
                     }
                 }
                 else -> {
-                    val code = handle.session.exitCode.first { it != null } ?: -1
+                    val code = awaitDirectPtyExit(handle)
                     withContext(Dispatchers.IO) {
                         // Trailing Direct PTY bytes can land after exit. Persist once, then
                         // give a short grace window — not a multi-second stall on empty stubs.
@@ -709,7 +726,35 @@ class AgentTerminalManager(
         if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
             return withContext(Dispatchers.IO) { TmuxAndy.waitExit(taskId) }
         }
-        return -1
+        return UNKNOWN_EXIT_CODE
+    }
+
+    /**
+     * Wait for a Direct PTY's exit code — indefinitely while the process is alive, since an
+     * agent turn has no time bound, but never indefinitely once it is gone.
+     *
+     * The old `exitCode.first { it != null }` had no floor: any path that fails to report a
+     * code parks the caller forever, and with it the concurrency permit its run holds in
+     * [DesktopAgentRunService], so the workflow stage stalls with nothing in the log. A dead
+     * session that has still not reported after [EXIT_CODE_GRACE_MS] now resolves as unknown,
+     * turning a silent hang into a visible failure.
+     */
+    private suspend fun awaitDirectPtyExit(handle: Handle): Int {
+        var deadSinceMillis = 0L
+        while (true) {
+            withTimeoutOrNull(EXIT_CODE_POLL_MS) {
+                handle.session.exitCode.first { it != null }
+            }?.let { return it }
+            if (handle.session.isAlive) {
+                deadSinceMillis = 0L
+                continue
+            }
+            val now = System.currentTimeMillis()
+            when {
+                deadSinceMillis == 0L -> deadSinceMillis = now
+                now - deadSinceMillis >= EXIT_CODE_GRACE_MS -> return UNKNOWN_EXIT_CODE
+            }
+        }
     }
 
     fun stop(taskId: String) {
@@ -906,12 +951,20 @@ class AgentTerminalManager(
         /** Max wait after DirectPty exit for trailing buffer bytes when scrollback is still empty. */
         private const val DIRECT_PTY_SCROLLBACK_GRACE_ATTEMPTS = 5
         private const val DIRECT_PTY_SCROLLBACK_GRACE_MS = 20L
+
+        /** Re-check cadence for a Direct PTY that has not published an exit code yet. */
+        private const val EXIT_CODE_POLL_MS = 100L
+
+        /**
+         * How long a dead Direct PTY may go without publishing an exit code before
+         * [awaitDirectPtyExit] gives up. Publishing only needs the backend's wait coroutine
+         * to be scheduled, so this is generous even on a loaded CI runner.
+         */
+        private const val EXIT_CODE_GRACE_MS = 2_000L
+
+        /** Returned when a session ends without ever reporting a status. */
+        const val UNKNOWN_EXIT_CODE = KetraTermBackend.CLOSED_EXIT_CODE
         internal const val SUBMIT_KEY_GAP_MS = 80L
-        private val TURN_COMPLETE_STATUSES = setOf(
-            AgentStatus.Done,
-            AgentStatus.Error,
-            AgentStatus.Blocked,
-        )
 
         fun defaultMode(): AgentTerminalMode =
             when (System.getenv("ANDY_TERMINAL_MODE")?.lowercase()) {

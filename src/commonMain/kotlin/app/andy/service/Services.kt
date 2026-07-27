@@ -126,6 +126,8 @@ interface IntentService {
 
 interface AppService {
     suspend fun listApps(serial: String): List<AndroidApp>
+    /** Package currently in the foreground on [serial], or null if unknown. */
+    suspend fun focusedPackage(serial: String): String?
     suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails
     suspend fun launch(serial: String, packageName: String): CommandResult
     suspend fun launchActivity(serial: String, packageName: String, activityName: String): CommandResult

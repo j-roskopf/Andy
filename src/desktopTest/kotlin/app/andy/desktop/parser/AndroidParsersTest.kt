@@ -423,4 +423,26 @@ class AndroidParsersTest {
         assertEquals("1080x2400", AndroidParsers.parseWmSize("Physical size: 1080x2400\n"))
         assertNull(AndroidParsers.parseWmSize("not a size"))
     }
+
+    @Test
+    fun parseFocusedPackageFromWindowFocus() {
+        val output = """
+            mCurrentFocus=Window{abc u0 com.example.garden/.MainActivity}
+            mFocusedApp=AppWindowToken{xyz token=Token{1 ActivityRecord{2 u0 com.other/.Ignored}}}
+        """.trimIndent()
+
+        assertEquals("com.example.garden", AndroidParsers.parseFocusedPackage(output))
+    }
+
+    @Test
+    fun parseFocusedPackageFromTopResumedActivity() {
+        val output = "topResumedActivity=ActivityRecord{abc u0 com.example.checkout/.CheckoutActivity t12}"
+
+        assertEquals("com.example.checkout", AndroidParsers.parseFocusedPackage(output))
+    }
+
+    @Test
+    fun parseFocusedPackageReturnsNullWhenMissing() {
+        assertNull(AndroidParsers.parseFocusedPackage("no focus info here"))
+    }
 }
