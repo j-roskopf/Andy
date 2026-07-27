@@ -103,6 +103,23 @@ class ScrollbackAnsiTeeOscTest {
     }
 
     @Test
+    fun preservesValidUtf8AfterMalformedBytesInChunk() {
+        val tee = ScrollbackAnsiTee()
+        val sparkle = "✨".toByteArray(StandardCharsets.UTF_8)
+        val malformedThenPartial = byteArrayOf(
+            0xE2.toByte(),
+            0x41,
+            sparkle[0],
+            sparkle[1],
+        )
+        tee.append(malformedThenPartial, 0, malformedThenPartial.size)
+        tee.append(byteArrayOf(sparkle[2]), 0, 1)
+
+        assertTrue(tee.snapshot().contains("✨"), "valid split UTF-8 must still reconstruct after malformed bytes")
+        assertFalse(tee.snapshot().endsWith('\uFFFD'))
+    }
+
+    @Test
     fun clearDropsPendingUtf8() {
         val tee = ScrollbackAnsiTee()
         val sparkle = "✨".toByteArray(StandardCharsets.UTF_8)

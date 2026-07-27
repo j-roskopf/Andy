@@ -176,12 +176,21 @@ internal fun utf8CompletePrefixLength(bytes: ByteArray, offset: Int, length: Int
     var i = offset
     while (i < end) {
         val lead = bytes[i].toInt() and 0xFF
-        val need = when {
+        var need = when {
             lead < 0x80 -> 1
             lead and 0xE0 == 0xC0 -> 2
             lead and 0xF0 == 0xE0 -> 3
             lead and 0xF8 == 0xF0 -> 4
             else -> 1 // lone continuation / invalid lead — consume so it becomes U+FFFD once
+        }
+        if (need > 1) {
+            for (j in 1 until need) {
+                if (i + j >= end) break
+                if (bytes[i + j].toInt() and 0xC0 != 0x80) {
+                    need = 1
+                    break
+                }
+            }
         }
         if (i + need > end) return i - offset
         i += need
