@@ -50,9 +50,17 @@ object OptInGates {
             else -> false
         }
 
-    /** macOS CI runners are slower for agent/workflow harness tests. */
-    fun harnessTimeoutMillis(localMillis: Long, ciMacMillis: Long = localMillis * 3): Long =
-        if (System.getenv("CI") != null && isMacOs()) ciMacMillis else localMillis
+    /** CI runners are slower for agent/workflow harness tests; macOS CI is slowest. */
+    fun harnessTimeoutMillis(
+        localMillis: Long,
+        ciMillis: Long,
+        ciMacMillis: Long = ciMillis,
+    ): Long =
+        when {
+            System.getenv("CI") == null -> localMillis
+            isMacOs() -> ciMacMillis
+            else -> ciMillis
+        }
 
     private fun isMacOs(): Boolean =
         System.getProperty("os.name").lowercase().contains("mac")

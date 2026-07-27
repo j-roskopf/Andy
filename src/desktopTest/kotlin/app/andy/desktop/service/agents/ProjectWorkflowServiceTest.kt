@@ -437,10 +437,9 @@ class ProjectWorkflowServiceTest {
                 val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
                 build.state == ProjectTaskState.Paused && review?.reviewVerdicts?.lastOrNull()?.status == ProjectReviewStatus.ChangesRequested
             }
+            val runCount = awaitStableTaskCount(harness.service)
             editReviewSetting(harness.service, buildId, enabled = false)
-            val runCount = harness.service.tasks.value.size
-            delay(100)
-            assertEquals(runCount, harness.service.tasks.value.size, "disabling Review must not launch Verification")
+            assertStaysAt(runCount, "disabling Review must not launch Verification") { harness.service.tasks.value.size }
 
             harness.service.resumeBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed }
@@ -702,10 +701,9 @@ class ProjectWorkflowServiceTest {
             assertTrue(build.paused)
             assertTrue(build.lastError?.contains("5 times") == true)
 
-            val runCount = harness.service.tasks.value.size
+            val runCount = awaitStableTaskCount(harness.service)
             harness.service.resumeBuildPair(buildId)
-            delay(100)
-            assertEquals(runCount, harness.service.tasks.value.size, "the hard verification limit must not spend on another Build")
+            assertStaysAt(runCount, "the hard verification limit must not spend on another Build") { harness.service.tasks.value.size }
         }
     }
 
@@ -885,8 +883,12 @@ class ProjectWorkflowServiceTest {
             assertEquals(scratchpad, persisted.scratchpad)
 
             harness.service.ensureProject("project-1")
-            delay(100)
-            assertEquals(1, harness.service.projects.value.getValue("project-1").scratchpad.lines().count { it == "## Migrated todos" })
+            // Re-ensuring must not re-migrate. Wait for the reload to settle back to the
+            // migrated scratchpad, then confirm exactly one header holds steady.
+            await { harness.service.projects.value["project-1"]?.scratchpad?.contains("## Migrated todos") == true }
+            assertStaysAt(1, "re-ensuring the project must not duplicate the migrated todos header") {
+                harness.service.projects.value.getValue("project-1").scratchpad.lines().count { it == "## Migrated todos" }
+            }
         }
     }
 
@@ -1063,11 +1065,15 @@ class ProjectWorkflowServiceTest {
                 terminalMode = AgentTerminalMode.DirectPty,
             )
             service.ensureProject("project-1")
-            val recovered = service.projects.value.getValue("project-1").tasks
-            assertTrue(recovered.filter { it.id in setOf(build.id, verification.id) }.all { it.state == ProjectTaskState.NeedsAttention })
-            assertTrue(recovered.first { it.id == build.id }.paused)
-            delay(150)
-            assertEquals(1, service.tasks.value.size, "restart recovery must not launch another paid run")
+            // Recovery reconciles the interrupted run asynchronously; wait for it to settle to
+            // NeedsAttention before asserting, then confirm it never spends another run.
+            val active = service
+            await {
+                val recovered = active.projects.value["project-1"]?.tasks ?: return@await false
+                recovered.filter { it.id in setOf(build.id, verification.id) }.all { it.state == ProjectTaskState.NeedsAttention } &&
+                    recovered.firstOrNull { it.id == build.id }?.paused == true
+            }
+            assertStaysAt(1, "restart recovery must not launch another paid run") { active.tasks.value.size }
         } finally {
             runCatching { service?.close() }
             scope.cancel()
@@ -1382,7 +1388,7 @@ private object WorkflowWorkspaceStore : WorkspaceStore {
 }
 
 private suspend fun await(
-    timeoutMillis: Long = harnessTimeoutMillis(360_000, 900_000),
+    timeoutMillis: Long = harnessTimeoutMillis(360_000, 600_000, 900_000),
     condition: () -> Boolean,
 ) {
     withTimeout(timeoutMillis) {
@@ -1391,7 +1397,7 @@ private suspend fun await(
 }
 
 private suspend fun <T> awaitValue(
-    timeoutMillis: Long = harnessTimeoutMillis(360_000, 900_000),
+    timeoutMillis: Long = harnessTimeoutMillis(360_000, 600_000, 900_000),
     supplier: () -> T?,
 ): T {
     var result: T? = null
@@ -1403,6 +1409,49 @@ private suspend fun <T> awaitValue(
         }
     }
     return result!!
+}
+
+/**
+ * Wait until [DesktopAgentRunService.tasks] stops changing, then return the settled size.
+ * Reaching a workflow state (e.g. NeedsAttention) can slightly precede the final task-list
+ * bookkeeping, so capturing a "current count" the instant an [await] resolves raced that
+ * trailing write on slow CI. This yields a baseline only once the count has held steady.
+ */
+private suspend fun awaitStableTaskCount(service: DesktopAgentRunService): Int {
+    val stableForMillis = harnessTimeoutMillis(150, 400, 600)
+    val deadline = System.currentTimeMillis() + harnessTimeoutMillis(10_000, 30_000, 45_000)
+    var last = service.tasks.value.size
+    var stableSince = System.currentTimeMillis()
+    while (System.currentTimeMillis() < deadline) {
+        delay(20)
+        val current = service.tasks.value.size
+        if (current != last) {
+            last = current
+            stableSince = System.currentTimeMillis()
+        } else if (System.currentTimeMillis() - stableSince >= stableForMillis) {
+            return last
+        }
+    }
+    return service.tasks.value.size
+}
+
+/**
+ * Assert [sample] stays equal to [expected] for a settle window, failing the instant it
+ * diverges. Replaces the racy "sleep a fixed 100ms then check once" negative assertions: it
+ * gives the workflow a generous window to (wrongly) act while catching any divergence the
+ * moment it happens, independent of how slow the runner is.
+ */
+private suspend fun <T> assertStaysAt(
+    expected: T,
+    message: String,
+    settleMillis: Long = harnessTimeoutMillis(500, 2_000, 3_000),
+    sample: () -> T,
+) {
+    val deadline = System.currentTimeMillis() + settleMillis
+    do {
+        assertEquals(expected, sample(), message)
+        delay(20)
+    } while (System.currentTimeMillis() < deadline)
 }
 
 private fun initializeGitRepository(directory: File) {

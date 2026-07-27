@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.desktop.test.OptInGates
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.terminal.TerminalSession
@@ -7,15 +8,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
 import java.io.File
 
@@ -182,8 +187,7 @@ class AgentStatusTrackerTest {
             )
             tracker.start()
             session.emitBuffer("✨ Perambulating... (33s · ↓ 547 tokens · thinking more)\n> ")
-            kotlinx.coroutines.delay(600)
-            assertEquals(AgentStatus.Working, tracker.status.value.status)
+            tracker.awaitStatus(AgentStatus.Working)
             tracker.close()
         } finally {
             scope.cancel()
@@ -249,8 +253,7 @@ class AgentStatusTrackerTest {
             )
             tracker.start()
             session.emitBuffer("Thinking about the change…\nreading AgentStatusTracker.kt\n")
-            kotlinx.coroutines.delay(800)
-            assertEquals(AgentStatus.Working, tracker.status.value.status)
+            tracker.awaitStatus(AgentStatus.Working)
             assertFalse(tracker.status.value.confident)
             tracker.close()
         } finally {
@@ -321,16 +324,14 @@ class AgentStatusTrackerTest {
                     " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n" +
                     "  Cursor Grok 4.5 High Fast · 22%\n",
             )
-            kotlinx.coroutines.delay(800)
-            assertEquals(AgentStatus.Working, tracker.status.value.status)
+            tracker.awaitStatus(AgentStatus.Working)
 
             session.emitBuffer(
                 "Done with that.\n" +
                     "  → Add a follow-up\n" +
                     "  Cursor Grok 4.5 High Fast · 23%\n",
             )
-            kotlinx.coroutines.delay(1_200)
-            assertEquals(AgentStatus.Done, tracker.status.value.status)
+            tracker.awaitStatus(AgentStatus.Done)
             tracker.close()
         } finally {
             scope.cancel()
@@ -455,8 +456,7 @@ class AgentStatusTrackerTest {
                     " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n" +
                     "  Cursor Grok 4.5 High Fast · 21.1%\n",
             )
-            kotlinx.coroutines.delay(800)
-            assertEquals(AgentStatus.Done, tracker.status.value.status)
+            tracker.awaitStatus(AgentStatus.Done)
 
             repeat(6) { i ->
                 session.emitBuffer(
@@ -497,9 +497,8 @@ class AgentStatusTrackerTest {
             )
             tracker.start()
             session.emitBuffer("Implemented the fix.\n> ")
-            kotlinx.coroutines.delay(800)
+            tracker.awaitStatus(AgentStatus.Done)
             val snap = tracker.status.value
-            assertEquals(AgentStatus.Done, snap.status)
             assertTrue(snap.confident, "idle-fallback Done should notify without status.json")
             assertFalse(File(artifactDir, "status.json").exists())
             tracker.close()
@@ -539,8 +538,7 @@ class AgentStatusTrackerTest {
         )
         tracker.start()
         tracker.markPhaseFinished()
-        kotlinx.coroutines.delay(200)
-        assertEquals(AgentStatus.Done, last?.status)
+        awaitUntil("markPhaseFinished should publish a Done snapshot") { last?.status == AgentStatus.Done }
         assertTrue(last?.confident == true)
         scope.cancel()
     }
@@ -956,6 +954,42 @@ class AgentStatusTrackerTest {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
         }
+    }
+}
+
+/**
+ * Poll until the tracker publishes [expected], instead of sleeping a fixed guess and asserting
+ * once. The background poll loop advances on its own schedule (500ms normal, 100ms×5 for
+ * idle-confirmation, capped at 1.5s), so a fixed `delay(N)` raced that schedule and flaked on
+ * slower CI runners. This resolves as soon as the state is reached and only fails after a
+ * generous timeout, reporting the state actually observed for a readable diff.
+ */
+private suspend fun AgentStatusTracker.awaitStatus(
+    expected: AgentStatus,
+    timeoutMillis: Long = OptInGates.harnessTimeoutMillis(10_000, 20_000, 30_000),
+) {
+    try {
+        withTimeout(timeoutMillis) {
+            while (status.value.status != expected) delay(20)
+        }
+    } catch (timeout: TimeoutCancellationException) {
+        // Surface the state actually reached rather than a bare timeout stack.
+        assertEquals(expected, status.value.status)
+    }
+}
+
+/** Poll [condition] to true within a generous timeout; fail with [message] otherwise. */
+private suspend fun awaitUntil(
+    message: String,
+    timeoutMillis: Long = OptInGates.harnessTimeoutMillis(10_000, 20_000, 30_000),
+    condition: () -> Boolean,
+) {
+    try {
+        withTimeout(timeoutMillis) {
+            while (!condition()) delay(20)
+        }
+    } catch (timeout: TimeoutCancellationException) {
+        fail("Timed out after ${timeoutMillis}ms waiting for: $message")
     }
 }
 

@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assume.assumeTrue
 
 /**
@@ -372,10 +373,18 @@ class IosSimMirrorDeviceSmokeTest {
                 }
             }
             assertTrue(sawDown && sawUp, "Live Canvas did not emit a complete touch gesture")
-            delay(800)
-            val afterTap = captureSimulatorScreenshot(udid)
+            // The fixture flips the whole page blue→red on any tap, so a visible change is
+            // expected — but repaint + screenshot latency varies on loaded CI simulators. Poll
+            // until the screen reflects the tap instead of guessing a single 800ms settle.
+            val changeTimeoutMs = if (System.getenv("CI") != null) 15_000L else 5_000L
+            val screenChanged = withTimeoutOrNull(changeTimeoutMs) {
+                while (!simulatorScreenshotChanged(beforeTap, captureSimulatorScreenshot(udid))) {
+                    delay(150)
+                }
+                true
+            } ?: false
             assertTrue(
-                simulatorScreenshotChanged(beforeTap, afterTap),
+                screenChanged,
                 "Simulator HID acknowledged the Live tap, but the visible simulator UI did not change",
             )
         } finally {

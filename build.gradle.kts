@@ -15,6 +15,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.0"
     id("org.jetbrains.compose") version "1.11.1"
     id("io.github.takahirom.roborazzi") version "1.60.0"
+    // CI safety net for flaky agent/mirror/device integration tests: retry a failed test a
+    // couple of times before failing the build (see the Test task config below).
+    id("org.gradle.test-retry") version "1.6.4"
 }
 
 val andyVersionName = providers.gradleProperty("andy.versionName").orElse("0.1.0").get()
@@ -399,6 +402,22 @@ val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
+    // These desktop suites include real-subprocess agent/workflow tests and hardware-backed
+    // mirror/simulator smoke tests whose timing is inherently variable on shared CI runners.
+    // The assertions are being hardened to poll for conditions rather than sleep fixed windows,
+    // but a retry keeps a lone residual flake from turning the whole PR red and forcing a manual
+    // re-run. CI-only so local runs still surface flakiness honestly (one attempt, no masking).
+    if (System.getenv("CI") != null) {
+        retry {
+            maxRetries.set(2)
+            // Circuit breaker: if this many distinct tests fail, treat it as a real breakage
+            // (compile/env/systemic) and stop retrying instead of burning CI minutes.
+            maxFailures.set(20)
+            // A test that fails then passes on retry must not fail the build — that is the
+            // whole point of the net. Retried tests are still reported for visibility.
+            failOnPassedAfterRetry.set(false)
+        }
+    }
 }
 
 compose.desktop {

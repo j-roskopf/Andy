@@ -352,14 +352,23 @@ class AgentQueuedFollowUpTest {
 
             service.queueFollowUp(task.id, "second message")
             service.queueFollowUp(task.id, "third message")
-            val afterQueue = service.tasks.value.first { it.id == task.id }
-            val queuedTexts = afterQueue.queuedFollowUps.map { it.text }
-            val liveUserMessages = service.events(task.id).value
-                .filterIsInstance<AgentEvent.UserMessage>()
-                .map { it.text }
-            val observedFollowUps = (queuedTexts + liveUserMessages)
-                .filter { it == "second message" || it == "third message" }
-            assertEquals(listOf("second message", "third message"), observedFollowUps)
+            // queueFollowUp posts to the service scope, so the queue may not reflect both
+            // entries the instant the calls return. Poll the combined (still-queued + already
+            // delivered) view until both follow-ups are accounted for, in order, instead of
+            // sampling once and racing that async write.
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    val queuedTexts = current.queuedFollowUps.map { it.text }
+                    val liveUserMessages = service.events(task.id).value
+                        .filterIsInstance<AgentEvent.UserMessage>()
+                        .map { it.text }
+                    val observedFollowUps = (queuedTexts + liveUserMessages)
+                        .filter { it == "second message" || it == "third message" }
+                    if (observedFollowUps == listOf("second message", "third message")) break
+                    delay(25)
+                }
+            }
             File(dir, ".queue-test-ready").writeText("go")
 
             withTimeout(harnessTimeoutMillis(120_000, 360_000)) {
