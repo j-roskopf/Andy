@@ -56,13 +56,39 @@ class AgentAttentionCoordinatorTest {
     }
 
     @Test
-    fun doneWhileTerminalLiveIsSuppressedWhenViewing() {
+    fun doneWhileViewingPlaysSoundButSkipsOsBanner() {
         val fixture = Fixture(viewing = { it == "task" })
         fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
         fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
 
         assertEquals(emptyList(), fixture.notifications.events)
-        assertEquals(emptyList(), fixture.sounds.played)
+        assertEquals(listOf("chime"), fixture.sounds.played)
+    }
+
+    @Test
+    fun blockedWhileViewingPlaysSoundButSkipsOsBanner() {
+        val fixture = Fixture(
+            foreground = true,
+            viewing = { it == "task" },
+            initialWorkspace = WorkspaceState(agentNotificationTiming = AgentNotificationTiming.Always),
+        )
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Blocked, confident = true)))
+
+        assertEquals(emptyList(), fixture.notifications.events)
+        assertEquals(listOf("chime"), fixture.sounds.played)
+    }
+
+    @Test
+    fun blockedWhileNotViewingShowsOsAndSound() {
+        val fixture = Fixture(
+            initialWorkspace = WorkspaceState(agentNotificationTiming = AgentNotificationTiming.Always),
+        )
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Blocked, confident = true)))
+
+        assertEquals(listOf("Blocked"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("chime"), fixture.sounds.played)
     }
 
     @Test

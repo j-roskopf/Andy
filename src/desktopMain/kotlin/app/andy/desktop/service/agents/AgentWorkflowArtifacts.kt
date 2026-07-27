@@ -42,6 +42,7 @@ class AgentWorkflowArtifacts(
     private val scope: CoroutineScope,
     val taskId: String,
     val root: File,
+    private val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS,
 ) {
     sealed interface Event {
         data class PlanReady(val text: String) : Event
@@ -83,10 +84,11 @@ class AgentWorkflowArtifacts(
     }
 
     private fun startPolling() {
+        val intervalMs = pollIntervalMs.coerceAtLeast(1L)
         job = scope.launch {
             pollOnce()
             while (isActive && !closed.get() && !paused.get()) {
-                delay(350)
+                delay(intervalMs)
                 pollOnce()
             }
         }
@@ -131,6 +133,8 @@ class AgentWorkflowArtifacts(
     }
 
     companion object {
+        const val DEFAULT_POLL_INTERVAL_MS = 350L
+
         fun dirFor(cwd: File?, taskId: String): File {
             val base = cwd?.takeIf { it.path.isNotBlank() } ?: AgentScratchWorkspace.path()
             return File(base, ".andy/$taskId")

@@ -152,6 +152,9 @@ internal object GpuMirrorJni {
         highlightTop: Float,
         highlightRight: Float,
         highlightBottom: Float,
+        contentZoom: Float = 1f,
+        contentPanX: Float = 0f,
+        contentPanY: Float = 0f,
     ) {
         if (!loadResult.isSuccess || presenterId == 0L) return
         runCatching {
@@ -162,6 +165,7 @@ internal object GpuMirrorJni {
                 sourceWidth, sourceHeight,
                 pickerEnabled,
                 highlightLeft, highlightTop, highlightRight, highlightBottom,
+                contentZoom, contentPanX, contentPanY,
             )
         }
     }
@@ -176,6 +180,13 @@ internal object GpuMirrorJni {
                 normalizedX != null && normalizedY != null,
             )
         }
+    }
+
+    fun inspectPixel(decoderId: Long, normalizedX: Float, normalizedY: Float): String? {
+        if (!loadResult.isSuccess || decoderId == 0L) return null
+        val color = runCatching { nativeInspectPixel(decoderId, normalizedX, normalizedY) }.getOrDefault(-1)
+        if (color == -1) return null
+        return "#%02X%02X%02X".format((color ushr 16) and 0xff, (color ushr 8) and 0xff, color and 0xff)
     }
 
     private fun loadLibrary() = runCatching {
@@ -249,6 +260,9 @@ internal object GpuMirrorJni {
         highlightTop: Float,
         highlightRight: Float,
         highlightBottom: Float,
+        contentZoom: Float,
+        contentPanX: Float,
+        contentPanY: Float,
     )
     private external fun nativeUpdatePresenterPickerPoint(
         presenterId: Long,
@@ -256,4 +270,5 @@ internal object GpuMirrorJni {
         normalizedY: Float,
         visible: Boolean,
     )
+    private external fun nativeInspectPixel(decoderId: Long, normalizedX: Float, normalizedY: Float): Int
 }

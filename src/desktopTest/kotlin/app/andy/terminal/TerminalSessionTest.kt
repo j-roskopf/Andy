@@ -3,6 +3,7 @@ package app.andy.terminal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -37,6 +38,51 @@ class TerminalSessionTest {
         } finally {
             session.close()
         }
+    }
+
+    /**
+     * Agent runs park on [TerminalSession.exitCode] for the whole turn, so closing a session
+     * out from under them must always complete the flow — never leave it null.
+     */
+    @Test
+    fun closingALiveSessionCompletesTheExitCodeFlow() = runBlocking {
+        val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
+        val argv = if (isWindows) {
+            listOf("cmd", "/c", "timeout /t 3600 /nobreak >nul")
+        } else {
+            listOf("/bin/sh", "-c", "cat")
+        }
+        val session = TerminalSessions.create(
+            TerminalLaunchRequest(sessionId = "terminal-close-live-test", argv = argv),
+        )
+        assertTrue(session.isAlive, "the process should still be running before close")
+
+        session.close()
+
+        // Completing at all is the regression; the value is the process' real termination
+        // status when close managed to collect one (143 = SIGTERM on Unix), and
+        // [KetraTermBackend.CLOSED_EXIT_CODE] when it did not.
+        val exitCode = withTimeout(15_000) { session.exitCode.first { it != null } }
+        assertNotEquals(0, exitCode, "a session killed by close must not report a clean exit")
+    }
+
+    /** A real status already reported must not be overwritten by the close-time fallback. */
+    @Test
+    fun closeDoesNotClobberAnAlreadyReportedExitCode() = runBlocking {
+        val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
+        val argv = if (isWindows) {
+            listOf("cmd", "/c", "exit 7")
+        } else {
+            listOf("/bin/sh", "-c", "exit 7")
+        }
+        val session = TerminalSessions.create(
+            TerminalLaunchRequest(sessionId = "terminal-close-exited-test", argv = argv),
+        )
+        assertEquals(7, withTimeout(15_000) { session.exitCode.first { it != null } })
+
+        session.close()
+
+        assertEquals(7, session.exitCode.value)
     }
 
     @Test

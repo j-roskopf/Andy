@@ -250,6 +250,18 @@ class KetraTermBackend(
         return runCatching { session.terminal.getScreenAsString().trimEnd() }.getOrDefault("")
     }
 
+    /**
+     * Complete [exitCode] for anyone parked on it, using the process' real status when it
+     * has one. Compare-and-set so a code already published by the wait loop always wins;
+     * [CLOSED_EXIT_CODE] is only the fallback for "gone, and nobody ever reported how".
+     */
+    private fun publishExitCode() {
+        val observed = process?.let { pty ->
+            runCatching { if (pty.isAlive) null else pty.exitValue() }.getOrNull()
+        }
+        _exitCode.compareAndSet(null, observed ?: CLOSED_EXIT_CODE)
+    }
+
     private fun refreshOscFromTee() {
         // The tee parses OSC as bytes arrive, so this is a field read rather than a
         // copy-and-rescan of the whole scrollback buffer on every poll.
@@ -261,6 +273,10 @@ class KetraTermBackend(
 
     override fun close() {
         scrapeJob?.cancel()
+        // Callers park on [exitCode] for the whole turn, so it must always complete. The
+        // wait loop normally reports it, but it cannot for a session closed before start,
+        // or one whose waitFor() never returns — publish here so no waiter is stranded.
+        publishExitCode()
         waitJob?.cancel()
         swingTerminal?.let { terminal ->
             onSwingEdt {
@@ -278,6 +294,9 @@ class KetraTermBackend(
                 }
             }
         }
+        // Second pass: the process may have still been alive above, and a session closed
+        // before start() has no process at all. Either way a waiter must be released.
+        publishExitCode()
         swingTerminal = null
         ketraSession = null
         ptyConnector = null
@@ -286,6 +305,13 @@ class KetraTermBackend(
     }
 
     companion object {
+        /**
+         * Reported by [close] when the session ends without the process ever supplying a
+         * status — killed mid-flight, or closed before it was started. Matches the "unknown
+         * exit" code the agent terminal manager already uses for a session it cannot query.
+         */
+        const val CLOSED_EXIT_CODE: Int = -1
+
         /** Screen-observation cadence for the chat on screen. */
         private const val FOREGROUND_SCRAPE_MS = 250L
 

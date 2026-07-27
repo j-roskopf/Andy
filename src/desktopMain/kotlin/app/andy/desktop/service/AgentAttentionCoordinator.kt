@@ -13,6 +13,11 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Notify on scrape-confident Blocked (request) and Done (finished). Timing prefs
+ * (Always vs BackgroundOnly) still apply. While viewing a chat, skip the OS banner
+ * (redundant) but still play sound for Blocked and Done.
+ */
 class DesktopAgentAttentionCoordinator(
     private val scope: CoroutineScope,
     private val tasks: StateFlow<List<AgentTask>>,
@@ -50,13 +55,14 @@ class DesktopAgentAttentionCoordinator(
             val statusChanged = prior.status != task.status
             val becameConfident = task.statusConfident && !prior.confident
             if (kind == null || (!statusChanged && !becameConfident) || !task.statusConfident) return@forEach
-            if (isViewing(task.id)) return@forEach
             if (kind == AgentAttentionKind.Done && task.queuedFollowUps.isNotEmpty()) return@forEach
             val prefs = workspace()
             if (prefs.agentNotificationTiming == AgentNotificationTiming.BackgroundOnly && isForeground()) return@forEach
             if (!AgentNotificationDedup.tryMarkNotified(task.id, kind.name)) return@forEach
             val event = AgentAttentionEvent(task.id, task.projectId, task.notificationTitle, kind)
-            if (prefs.agentOsNotificationsEnabled) notifications.show(event)
+            // When the chat is already open, skip the OS banner (redundant) but keep sound.
+            val showOs = prefs.agentOsNotificationsEnabled && !isViewing(task.id)
+            if (showOs) notifications.show(event)
             if (prefs.agentNotificationSoundEnabled) sounds.play(prefs.agentNotificationSoundId)
         }
         previous.keys.retainAll(tasks.map { it.id }.toSet())

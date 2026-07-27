@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,8 +28,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import app.andy.ui.components.AndyHorizontalDivider
+import app.andy.ui.components.rightBorder
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,10 +40,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
@@ -55,12 +57,16 @@ import app.andy.ui.components.StatusRow
 import app.andy.ui.agents.ProjectActivityIndicator
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
+import app.andy.ui.theme.AndyMotion
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
+import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -90,43 +96,70 @@ internal fun Sidebar(
         remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
     }
     val scope = rememberCoroutineScope()
+    val spatialSpec = tween<androidx.compose.ui.unit.Dp>(
+        durationMillis = AndyMotion.SpatialMs,
+        easing = FastOutSlowInEasing,
+    )
+    val fadeSpec = tween<Float>(
+        durationMillis = AndyMotion.StandardMs,
+        easing = FastOutSlowInEasing,
+    )
     val sidebarWidth by animateDpAsState(
-        targetValue = if (expanded) 246.dp else 64.dp,
-        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        targetValue = if (expanded) AndyLayout.SidebarWidth else AndyLayout.SidebarCollapsedWidth,
+        animationSpec = spatialSpec,
         label = "workspaceSidebarWidth",
     )
     val horizontalPadding by animateDpAsState(
-        targetValue = if (expanded) AndySpace.S3 else AndySpace.S2,
-        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        targetValue = if (expanded) AndySpace.Space3 else AndySpace.Space2,
+        animationSpec = spatialSpec,
         label = "workspaceSidebarPadding",
     )
     val labelAlpha by animateFloatAsState(
         targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(durationMillis = 130, easing = FastOutSlowInEasing),
+        animationSpec = fadeSpec,
         label = "workspaceSidebarLabelAlpha",
     )
     val labelGap by animateDpAsState(
-        targetValue = if (expanded) 8.dp else 0.dp,
-        animationSpec = tween(durationMillis = 190, easing = FastOutSlowInEasing),
+        targetValue = if (expanded) AndySpace.Space3 else 0.dp,
+        animationSpec = spatialSpec,
         label = "workspaceSidebarLabelGap",
     )
 
     Column(
-        Modifier.width(sidebarWidth).fillMaxHeight()
-            .background(Brush.verticalGradient(listOf(AndyColors.Neutral750, AndyColors.Neutral850)), RoundedCornerShape(AndyRadius.R4))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-            .padding(horizontal = horizontalPadding, vertical = AndySpace.S3),
+        Modifier
+            .width(sidebarWidth)
+            .fillMaxHeight()
+            .background(AndyColors.SidebarBg)
+            .rightBorder(Border)
+            .padding(horizontal = horizontalPadding, vertical = AndySpace.Space3),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(AndySpace.S1, AndySpace.S2, AndySpace.S1, AndySpace.S4),
+            Modifier.fillMaxWidth().padding(
+                start = AndySpace.Space1,
+                top = AndySpace.Space2,
+                end = AndySpace.Space1,
+                bottom = AndySpace.Space4,
+            ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.S2) else Arrangement.Center,
+            horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.spacedBy(AndySpace.Space3) else Arrangement.Center,
         ) {
-            AndyRobotIcon(Modifier.size(28.dp))
+            AndyRobotIcon(Modifier.size(AndyLayout.ControlHeightSm))
             if (labelAlpha > 0.01f) {
                 Column {
-                    Text("andy", color = AndyColors.Neutral100.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-                    Text("workspace", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp)
+                    Text(
+                        "Andy",
+                        color = TextPrimary.copy(alpha = labelAlpha),
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        "Workspace",
+                        color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 11.sp,
+                    )
                 }
             }
         }
@@ -134,35 +167,65 @@ internal fun Sidebar(
         Column(
             Modifier.weight(1f).verticalScroll(rememberScrollState()),
         ) {
+            // Keep nav rows at SidebarRowHeight; Material's 48dp min touch target was
+            // expanding the selected Settings (and other) rows into oversized pills.
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
             destinations.forEach { item ->
                 val disabledForIos = iosSelectionActive && !item.availableWithIosTarget()
                 val active = item == current
                 Row(
                     Modifier.fillMaxWidth()
-                        .height(34.dp)
-                        .background(if (active) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                        .then(if (active) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.52f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
+                        .height(AndyLayout.SidebarRowHeight)
+                        .background(
+                            if (active) AndyColors.SurfaceSelected else Color.Transparent,
+                            RoundedCornerShape(AndyRadius.Control),
+                        )
                         .clickable(enabled = !disabledForIos) {
                             if (disabledForIos) onSelect(AndyDestination.Live) else onSelect(item)
                         }
-                        .padding(horizontal = 9.dp),
+                        .padding(horizontal = AndySpace.Space3),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
                 ) {
-                    Text(navMark(item), color = if (active) Rust else if (disabledForIos) TextSecondary.copy(alpha = 0.35f) else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                    Text(
+                        navMark(item),
+                        color = when {
+                            active -> Rust
+                            disabledForIos -> AndyColors.TextDisabled
+                            else -> TextSecondary
+                        },
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                    )
                     if (labelAlpha > 0.01f) {
                         Spacer(Modifier.width(labelGap))
                         Text(
-                            item.label.lowercase(),
-                            color = (if (active) AndyColors.Neutral100 else AndyColors.Neutral300).copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
-                            fontFamily = MonoFont,
+                            item.label,
+                            color = (if (active) TextPrimary else TextSecondary)
+                                .copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
+                            fontFamily = DisplayFont,
+                            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
                             fontSize = 13.sp,
                             modifier = Modifier.weight(1f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (item == AndyDestination.Devices) Text("$deviceCount", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 11.sp)
-                        if (item == AndyDestination.Logcat) Text("live", color = TextSecondary.copy(alpha = labelAlpha), fontFamily = MonoFont, fontSize = 10.sp)
+                        if (item == AndyDestination.Devices) {
+                            Text(
+                                "$deviceCount",
+                                color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
+                                fontFamily = DisplayFont,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        if (item == AndyDestination.Logcat) {
+                            Text(
+                                "Live",
+                                color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
+                                fontFamily = DisplayFont,
+                                fontSize = 11.sp,
+                            )
+                        }
                     }
                     if (
                         (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
@@ -170,10 +233,10 @@ internal fun Sidebar(
                             hasUnreadProjectAgentTasks || hasActiveProjectAgentTasks
                         ))
                     ) {
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(AndySpace.Space2))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                         ) {
                             if (
                                 (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
@@ -186,26 +249,25 @@ internal fun Sidebar(
                     }
                 }
             }
+            }
         }
         if (expanded) {
             Column(
                 Modifier.fillMaxWidth()
-                    .background(AndyColors.Neutral900.copy(alpha = 0.56f), RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space2),
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .clickable { onStatusExpandedChange(!statusExpanded) },
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                 ) {
                     Text(
                         "v${app.andy.updates.AndyBuildInfo.versionName}",
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
+                        color = AndyColors.TextTertiary,
+                        fontFamily = DisplayFont,
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -213,22 +275,24 @@ internal fun Sidebar(
                     )
                     Text(
                         if (statusExpanded) "▾" else "▸",
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
+                        color = AndyColors.TextTertiary,
+                        fontFamily = DisplayFont,
                         fontSize = 10.sp,
                     )
                 }
                 AnimatedVisibility(
                     visible = statusExpanded,
-                    enter = expandVertically(animationSpec = tween(170, easing = FastOutSlowInEasing)) + fadeIn(tween(120)),
-                    exit = shrinkVertically(animationSpec = tween(140, easing = FastOutSlowInEasing)) + fadeOut(tween(90)),
+                    enter = expandVertically(animationSpec = tween(AndyMotion.StandardMs, easing = FastOutSlowInEasing)) +
+                        fadeIn(tween(AndyMotion.FastMs)),
+                    exit = shrinkVertically(animationSpec = tween(AndyMotion.SmallMinMs, easing = FastOutSlowInEasing)) +
+                        fadeOut(tween(AndyMotion.MicroMinMs)),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                         Text(
-                            "h.264 embedded",
-                            color = TextSecondary,
-                            fontFamily = MonoFont,
-                            fontSize = 10.sp,
+                            "H.264 embedded",
+                            color = AndyColors.TextTertiary,
+                            fontFamily = DisplayFont,
+                            fontSize = 11.sp,
                             maxLines = 1,
                         )
                         if (updates != null) {
@@ -241,7 +305,7 @@ internal fun Sidebar(
                             StatusRow("Local only", "port 10000", true)
                         }
 
-                        AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = 2.dp))
+                        AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = AndySpace.Space1))
 
                         if (updates != null) {
                             val updateText = when (updateState) {
@@ -275,15 +339,15 @@ internal fun Sidebar(
                                             }
                                         }
                                     } else Modifier)
-                                    .padding(vertical = 2.dp),
+                                    .padding(vertical = AndySpace.Space1),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = updateText,
                                     color = updateColor,
                                     fontSize = 11.sp,
-                                    fontFamily = MonoFont,
-                                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Bold else FontWeight.Normal
+                                    fontFamily = DisplayFont,
+                                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Medium else FontWeight.Normal
                                 )
                             }
                         }
@@ -298,24 +362,24 @@ internal fun Sidebar(
 private fun WorkspaceSidebarToggle(expanded: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
-            .height(30.dp)
-            .padding(bottom = 6.dp),
+            .height(AndyLayout.ControlHeightMd)
+            .padding(bottom = AndySpace.Space2),
         horizontalArrangement = if (expanded) Arrangement.End else Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(24.dp)
-                .background(AndyColors.Neutral900.copy(alpha = 0.50f), RoundedCornerShape(AndyRadius.R2))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R2))
+            Modifier
+                .size(AndyLayout.ToolbarButtonSize)
+                .background(Color.Transparent, RoundedCornerShape(AndyRadius.Control))
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (expanded) "<<" else ">>",
+                if (expanded) "‹‹" else "››",
                 color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
             )
         }
     }
@@ -324,13 +388,7 @@ private fun WorkspaceSidebarToggle(expanded: Boolean, onClick: () -> Unit) {
 @Composable
 private fun AndyRobotIcon(modifier: Modifier = Modifier) {
     Box(
-        modifier
-            .background(
-                Brush.verticalGradient(listOf(AndyColors.Neutral600, AndyColors.Neutral850)),
-                RoundedCornerShape(AndyRadius.R3),
-            )
-            .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(AndyRadius.R3))
-            .padding(3.dp),
+        modifier,
         contentAlignment = Alignment.Center,
     ) {
         Image(

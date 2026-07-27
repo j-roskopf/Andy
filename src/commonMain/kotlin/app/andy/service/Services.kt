@@ -1,5 +1,6 @@
 package app.andy.service
 
+import androidx.compose.runtime.Stable
 import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
@@ -125,6 +126,8 @@ interface IntentService {
 
 interface AppService {
     suspend fun listApps(serial: String): List<AndroidApp>
+    /** Package currently in the foreground on [serial], or null if unknown. */
+    suspend fun focusedPackage(serial: String): String?
     suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails
     suspend fun launch(serial: String, packageName: String): CommandResult
     suspend fun launchActivity(serial: String, packageName: String, activityName: String): CommandResult
@@ -690,6 +693,12 @@ data class PlatformCapabilities(
     }
 }
 
+/**
+ * App-wide service graph. Marked [Stable] so panes that take it as a parameter
+ * (notably the agent [app.andy.ui.agents.AgentTerminalSurface]) can skip when only
+ * unrelated parent state changes — otherwise every tick re-enters the Swing interop host.
+ */
+@Stable
 data class AndyServices(
     val devices: DeviceService,
     val iosDevices: IosDeviceService,

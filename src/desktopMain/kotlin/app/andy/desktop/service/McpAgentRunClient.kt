@@ -227,6 +227,11 @@ class McpAgentRunClient(
         scope.launch {
             runCatching {
                 callTool(tool, mapOf("taskId" to JsonPrimitive(taskId)))
+            }.onFailure { error ->
+                // Local clientReadTaskIds clear the badge for this session only;
+                // if the daemon RPC fails (e.g. stale andyd without chat.mark_read),
+                // unread returns after GUI restart.
+                System.err.println("andy: $tool failed for $taskId: ${error.message}")
             }
             runCatching { refreshTasks() }
         }
@@ -339,8 +344,15 @@ class McpAgentRunClient(
                 }
                 val result = root["result"]?.jsonObject ?: return@use ""
                 val content = result["content"]?.jsonArray ?: return@use result.toString()
-                content.firstOrNull()?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
+                val text = content.firstOrNull()?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
                     ?: content.toString()
+                // MCP tools/call can succeed at the JSON-RPC layer while returning
+                // isError=true (unknown tool, validation, etc.). Treat that as failure
+                // so mark_read is not silently dropped against a stale andyd.
+                if (result["isError"]?.jsonPrimitive?.booleanOrNull == true) {
+                    error(text.ifBlank { "$name failed" })
+                }
+                text
             }
         }
 

@@ -10,9 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -85,6 +85,7 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -628,11 +629,15 @@ private fun AgentChatComposer(
             }
         }
 
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
             Box {
                 FilterPill(
@@ -754,12 +759,6 @@ private fun AgentChatComposer(
                     }
                 }
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-            Spacer(Modifier.weight(1f))
             AgentQuotaMenu(services = form.services, agent = state.agent)
             OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
                 Text(if (showOptions) "hide options" else "options", fontSize = 11.sp)
@@ -769,7 +768,6 @@ private fun AgentChatComposer(
             }
             Button(onClick = onSubmit, enabled = canSubmit, colors = primaryButtonColors()) {
                 Text("start", fontSize = 11.sp)
-            }
             }
         }
     }
@@ -946,7 +944,7 @@ private fun AgentTaskComposerFields(
                         state.customDirectory,
                         { state.customDirectory = it },
                         singleLine = true,
-                        modifier = Modifier.weight(1f).height(54.dp),
+                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                         colors = fieldColors(),
                         placeholder = { Text("directory the agent works in", color = TextSecondary, fontFamily = MonoFont) },

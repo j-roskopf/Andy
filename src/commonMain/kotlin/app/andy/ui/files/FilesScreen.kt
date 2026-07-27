@@ -3,6 +3,7 @@ package app.andy.ui.files
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,6 +59,7 @@ import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -272,7 +274,7 @@ private fun DeviceFilesBrowser(
                 path,
                 { path = it },
                 singleLine = true,
-                modifier = Modifier.weight(1f).height(54.dp),
+                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
                 colors = fieldColors(),
             )

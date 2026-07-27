@@ -192,36 +192,43 @@ else
   cat >"${HOOK_DEST}" <<'HOOK'
 #!/bin/sh
 # Andy-managed status hook — do not edit.
+# Usage: andy-status-hook.sh <working|done|blocked|error> [respond] [gate]
 status="${1:-done}"
 respond="${2:-none}"
+gate="${3:-none}"
+payload=$(cat 2>/dev/null || true)
+
+respond_and_exit() {
+  case "$respond" in
+    empty) printf '%s\n' '{}' ;;
+    allow) printf '%s\n' '{"decision":"allow"}' ;;
+    stop) printf '%s\n' '{"decision":"stop"}' ;;
+  esac
+  exit 0
+}
+
+case "$gate" in
+  fully-idle)
+    printf '%s' "$payload" | grep -Eq '"fullyIdle"[[:space:]]*:[[:space:]]*true' || respond_and_exit
+    ;;
+  completed)
+    printf '%s' "$payload" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(completed|aborted)"' || respond_and_exit
+    ;;
+esac
+
 ROOT="${ANDY_PROJECT_ROOT:-$PWD}"
 ACTIVE="$ROOT/.andy/active-task"
 if [ ! -f "$ACTIVE" ]; then
-  case "$respond" in
-    empty) printf '%s\n' '{}' ;;
-    allow) printf '%s\n' '{"decision":"allow"}' ;;
-    stop) printf '%s\n' '{"decision":"stop"}' ;;
-  esac
-  exit 0
+  respond_and_exit
 fi
 task_id=$(tr -d '[:space:]' < "$ACTIVE")
 if [ -z "$task_id" ]; then
-  case "$respond" in
-    empty) printf '%s\n' '{}' ;;
-    allow) printf '%s\n' '{"decision":"allow"}' ;;
-    stop) printf '%s\n' '{"decision":"stop"}' ;;
-  esac
-  exit 0
+  respond_and_exit
 fi
 dir="$ROOT/.andy/$task_id"
 mkdir -p "$dir"
 printf '{"status":"%s","at":%s}\n' "$status" "$(date +%s)" >> "$dir/status.json"
-case "$respond" in
-  empty) printf '%s\n' '{}' ;;
-  allow) printf '%s\n' '{"decision":"allow"}' ;;
-  stop) printf '%s\n' '{"decision":"stop"}' ;;
-esac
-exit 0
+respond_and_exit
 HOOK
 fi
 chmod +x "${HOOK_DEST}"

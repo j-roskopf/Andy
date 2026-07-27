@@ -24,6 +24,7 @@ import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ConfigSource
 import app.andy.model.AgentSandboxMode
 import app.andy.model.grillMeInteractivePromptAddendum
+import app.andy.model.specPlanWriteInstruction
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectPlanSnapshot
@@ -100,6 +101,7 @@ class DesktopAgentRunService(
     private val actionConfig: ActionConfigStore,
     private val enableProbes: Boolean = true,
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
+    artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -116,6 +118,7 @@ class DesktopAgentRunService(
         },
         scrollbackFile = { id -> store.scrollbackFile(id) },
         mode = terminalMode,
+        artifactPollIntervalMs = artifactPollIntervalMs,
     )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -2212,9 +2215,11 @@ class DesktopAgentRunService(
         if (spec.grillMeEnabled) {
             append("\n\n").append(grillMeInteractivePromptAddendum(artifactRelPath))
         } else {
-            append(
-                "\n\nWrite the complete implementation specification to `$artifactRelPath/plan.md`, " +
-                    "including interfaces, edge cases, and verification steps, then stop (exit the session).",
+            append("\n\n").append(
+                specPlanWriteInstruction(
+                    artifactRelPath,
+                    including = "including interfaces, edge cases, and verification steps",
+                ),
             )
         }
     }
@@ -2681,9 +2686,14 @@ class DesktopAgentRunService(
             persist()
             return
         }
-        if (run.isActive) {
+        // null status means createAndStart returned before launchRun promoted the agent to
+        // Working. That is still in-flight — do not treat it as a failed stage.
+        if (run.status == null || run.isActive) {
             updateProjectTask(projectTaskId) {
-                it.copy(state = if (run.status == null) ProjectTaskState.Queued else ProjectTaskState.Running)
+                it.copy(
+                    state = if (run.status == null) ProjectTaskState.Queued else ProjectTaskState.Running,
+                    lastError = null,
+                )
             }
             persist()
             return
@@ -3221,19 +3231,31 @@ class DesktopAgentRunService(
 
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
-        if (shouldIgnoreStatusSnapshot(task, snapshot)) return
         val terminalLive = terminals.isAlive(taskId)
+        if (shouldIgnoreStatusSnapshot(task, snapshot, terminalLive = terminalLive)) return
         val previous = previousTaskStatuses.put(taskId, snapshot.status)
         val clearResumable = snapshot.status == AgentStatus.Working ||
             snapshot.status == AgentStatus.Blocked
-        if (task.status != snapshot.status ||
-            task.statusConfident != snapshot.confident ||
+        val statusChanged = task.status != snapshot.status
+        // Confidence-only flips while Working are scrape noise. Each updateTask republishes
+        // the tasks list and recomposes the chat pane; with a live SwingPanel that re-punches
+        // the Skiko clear-hole and reads as terminal flicker. Attention only cares about
+        // confidence on Done/Blocked/Error.
+        val confidenceChanged =
+            task.statusConfident != snapshot.confident && snapshot.status != AgentStatus.Working
+        if (statusChanged ||
+            confidenceChanged ||
             (clearResumable && task.resumable)
         ) {
             updateTask(taskId) {
                 it.copy(
                     status = snapshot.status,
                     statusConfident = snapshot.confident,
+                    // Live Working/Blocked means the turn is not finished anymore.
+                    finishedAtMillis = when (snapshot.status) {
+                        AgentStatus.Working, AgentStatus.Blocked -> null
+                        else -> it.finishedAtMillis
+                    },
                     resumable = if (clearResumable) false else it.resumable,
                 )
             }

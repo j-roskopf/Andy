@@ -225,6 +225,9 @@ internal class GpuMirrorPresenter internal constructor(
         highlightTop: Float,
         highlightRight: Float,
         highlightBottom: Float,
+        contentZoom: Float = 1f,
+        contentPanX: Float = 0f,
+        contentPanY: Float = 0f,
     ) {
         GpuMirrorJni.updatePresenterOverlay(
             presenterId,
@@ -233,6 +236,7 @@ internal class GpuMirrorPresenter internal constructor(
             sourceWidth, sourceHeight,
             pickerEnabled,
             highlightLeft, highlightTop, highlightRight, highlightBottom,
+            contentZoom, contentPanX, contentPanY,
         )
     }
 

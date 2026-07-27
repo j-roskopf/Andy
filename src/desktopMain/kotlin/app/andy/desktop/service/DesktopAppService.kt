@@ -46,6 +46,11 @@ class DesktopAppService(
             .sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
     }
 
+    override suspend fun focusedPackage(serial: String): String? {
+        return AndroidParsers.parseFocusedPackage(devices.shell(serial, listOf("dumpsys", "window", "windows")).stdout)
+            ?: AndroidParsers.parseFocusedPackage(devices.shell(serial, listOf("dumpsys", "activity", "activities")).stdout)
+    }
+
     override suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails {
         val result = devices.shell(serial, listOf("dumpsys", "package", packageName))
         return if (result.isSuccess) AndroidParsers.parseAppDetails(result.stdout) else AndroidAppDetails()

@@ -6,14 +6,15 @@ import kotlin.test.assertTrue
 
 class AgentNotificationDedupTest {
     @Test
-    fun suppressesSecondNotificationWithinWindow() {
+    fun neverSuppressesSequentialNotifications() {
         assertTrue(AgentNotificationDedup.tryMarkNotified("task-1"))
-        assertFalse(AgentNotificationDedup.tryMarkNotified("task-1"))
-        assertTrue(AgentNotificationDedup.shouldSuppress("task-1"))
+        assertTrue(AgentNotificationDedup.tryMarkNotified("task-1"))
+        assertFalse(AgentNotificationDedup.shouldSuppress("task-1"))
     }
 
     @Test
-    fun differentKindsNotifySeparately() {
+    fun differentKindsAlsoAlwaysNotify() {
+        assertTrue(AgentNotificationDedup.tryMarkNotified("task-2", "Done"))
         assertTrue(AgentNotificationDedup.tryMarkNotified("task-2", "Done"))
         assertTrue(AgentNotificationDedup.tryMarkNotified("task-2", "Error"))
     }

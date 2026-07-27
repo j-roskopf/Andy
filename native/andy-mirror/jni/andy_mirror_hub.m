@@ -75,6 +75,7 @@ typedef struct {
     __strong NSWindow *window;
     __strong MTKView *view;
     __strong NSView *content;
+    __strong NSView *guide_view;
     CAMetalLayer *layer;
     AndyMirrorOverlay overlay;
     bool overlay_open;
@@ -108,6 +109,114 @@ static pthread_mutex_t hub_lock = PTHREAD_MUTEX_INITIALIZER;
 static int64_t next_id = 1;
 static int64_t ios_decoder_id = ANDY_HUB_INVALID_ID;
 
+@interface AndyGpuGuideOverlay : NSView
+@property(nonatomic, assign) GpuPresenter *presenter;
+@end
+
+static NSColor *hub_guide_color(const float components[4]) {
+    return [NSColor colorWithSRGBRed:fmaxf(0.0f, fminf(1.0f, components[0]))
+                               green:fmaxf(0.0f, fminf(1.0f, components[1]))
+                                blue:fmaxf(0.0f, fminf(1.0f, components[2]))
+                               alpha:fmaxf(0.0f, fminf(1.0f, components[3]))];
+}
+
+static void hub_draw_guide_badge(NSString *text, NSPoint origin, NSRect bounds) {
+    NSFont *font = [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightMedium];
+    if (!font) font = [NSFont userFixedPitchFontOfSize:11.0];
+    if (!font) font = [NSFont systemFontOfSize:11.0];
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionaryWithCapacity:2];
+    if (font) [attributes setObject:font forKey:NSFontAttributeName];
+    NSColor *foreground = [NSColor whiteColor];
+    if (foreground) [attributes setObject:foreground forKey:NSForegroundColorAttributeName];
+    NSSize text_size = [text sizeWithAttributes:attributes];
+    NSRect rect = NSMakeRect(
+        fmax(NSMinX(bounds) + 4.0, fmin(origin.x, NSMaxX(bounds) - text_size.width - 14.0)),
+        fmax(NSMinY(bounds) + 4.0, fmin(origin.y, NSMaxY(bounds) - text_size.height - 10.0)),
+        text_size.width + 10.0,
+        text_size.height + 6.0
+    );
+    [[NSColor colorWithSRGBRed:0.85 green:0.44 blue:0.29 alpha:0.96] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:5.0 yRadius:5.0] fill];
+    [text drawAtPoint:NSMakePoint(NSMinX(rect) + 5.0, NSMinY(rect) + 3.0) withAttributes:attributes];
+}
+
+@implementation AndyGpuGuideOverlay
+
+- (BOOL)isOpaque {
+    return NO;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    (void) point;
+    // Mouse events stay on the Swing/AWT host beneath this child window.
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirty_rect {
+    (void) dirty_rect;
+    GpuPresenter *presenter = self.presenter;
+    const NSRect bounds = self.bounds;
+    if (NSIsEmptyRect(bounds)) return;
+    [[NSColor clearColor] setFill];
+    NSRectFillUsingOperation(bounds, NSCompositingOperationCopy);
+    if (!presenter || presenter->overlay.ruler[0] <= 0.5f) return;
+    const AndyMirrorOverlay overlay = presenter->overlay;
+
+    const float zoom = fmaxf(overlay.source_size[2], 1.0f);
+    const float pan_x = fmaxf(0.0f, fminf(1.0f, overlay.format_flags[2]));
+    const float pan_y = fmaxf(0.0f, fminf(1.0f, overlay.format_flags[3]));
+    const float origin_x = pan_x * (1.0f - 1.0f / zoom);
+    const float origin_y = pan_y * (1.0f - 1.0f / zoom);
+    const float content_u = fmaxf(0.0f, fminf(1.0f, overlay.ruler[1]));
+    const float content_v = fmaxf(0.0f, fminf(1.0f, overlay.ruler[2]));
+    const float host_u = (content_u - origin_x) * zoom;
+    const float host_v = (content_v - origin_y) * zoom;
+    // Metal UV y=0 is the top of the host; AppKit y grows upward.
+    const CGFloat x = NSMinX(bounds) + bounds.size.width * host_u;
+    const CGFloat y = NSMaxY(bounds) - bounds.size.height * host_v;
+
+    NSBezierPath *ruler = [NSBezierPath bezierPath];
+    ruler.lineWidth = 1.5;
+    [ruler moveToPoint:NSMakePoint(x, NSMinY(bounds))];
+    [ruler lineToPoint:NSMakePoint(x, NSMaxY(bounds))];
+    [ruler moveToPoint:NSMakePoint(NSMinX(bounds), y)];
+    [ruler lineToPoint:NSMakePoint(NSMaxX(bounds), y)];
+    [hub_guide_color(overlay.ruler_color) setStroke];
+    [ruler stroke];
+
+    const float source_width = fmaxf(1.0f, overlay.source_size[0]);
+    const float source_height = fmaxf(1.0f, overlay.source_size[1]);
+    const int left = (int) lroundf(content_u * source_width);
+    const int top = (int) lroundf(content_v * source_height);
+    const int right = (int) lroundf(source_width) - left;
+    const int bottom = (int) lroundf(source_height) - top;
+    // Edge distances at the four line ends (matches Design expectation).
+    hub_draw_guide_badge([NSString stringWithFormat:@"%d", left],
+                         NSMakePoint(x + 8.0, NSMaxY(bounds) - 24.0), bounds);
+    hub_draw_guide_badge([NSString stringWithFormat:@"%d", right],
+                         NSMakePoint(x - 70.0, NSMinY(bounds) + 8.0), bounds);
+    hub_draw_guide_badge([NSString stringWithFormat:@"%d", top],
+                         NSMakePoint(NSMinX(bounds) + 8.0, y - 24.0), bounds);
+    hub_draw_guide_badge([NSString stringWithFormat:@"%d", bottom],
+                         NSMakePoint(NSMaxX(bounds) - 74.0, y + 8.0), bounds);
+}
+
+@end
+
+static void invalidate_gpu_guide_overlay(GpuPresenter *presenter) {
+    if (!presenter || !presenter->guide_view) return;
+    void (^redraw)(void) = ^{
+        if (!presenter->guide_view) return;
+        [presenter->guide_view setNeedsDisplay:YES];
+        [presenter->guide_view displayIfNeeded];
+    };
+    if ([NSThread isMainThread]) {
+        redraw();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), redraw);
+    }
+}
+
 static NSString *const shader_source = @
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
@@ -130,26 +239,41 @@ static NSString *const shader_source = @
     "  constexpr sampler nearest_sampler(address::clamp_to_edge, filter::nearest);\n"
     "  bool is_bgra = overlay.format_flags.x > 0.5;\n"
     "  bool full_range_yuv = overlay.format_flags.y > 0.5;\n"
-    "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, in.uv, is_bgra, full_range_yuv);\n"
+    "  float zoom = max(overlay.source_size.z, 1.0);\n"
+    "  float2 pan = overlay.format_flags.zw;\n"
+    "  float2 content_uv = in.uv / zoom + pan * (1.0 - 1.0 / zoom);\n"
+    "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, content_uv, is_bgra, full_range_yuv);\n"
+    "  if (overlay.grid.x > 0.5 && overlay.grid.y > 0.0) {\n"
+    "    float step_x = max(overlay.grid.y, 0.0001);\n"
+    "    float step_y = max(overlay.grid.z > 0.0 ? overlay.grid.z : overlay.grid.y, 0.0001);\n"
+    "    float fx = abs(fract(content_uv.x / step_x));\n"
+    "    float fy = abs(fract(content_uv.y / step_y));\n"
+    "    fx = min(fx, 1.0 - fx);\n"
+    "    fy = min(fy, 1.0 - fy);\n"
+    "    float x_width = max(fwidth(content_uv.x / step_x), 0.001);\n"
+    "    float y_width = max(fwidth(content_uv.y / step_y), 0.001);\n"
+    "    float line = max(1.0 - smoothstep(0.0, x_width, fx), 1.0 - smoothstep(0.0, y_width, fy));\n"
+    "    rgb = mix(rgb, overlay.grid_color.rgb, overlay.grid_color.a * line);\n"
+    "  }\n"
     "  if (overlay.ruler.x > 0.5) {\n"
-    "    float x_width = max(fwidth(in.uv.x), 0.001);\n"
-    "    float y_width = max(fwidth(in.uv.y), 0.001);\n"
-    "    float vertical = 1.0 - smoothstep(x_width * 0.6, x_width * 1.6, abs(in.uv.x - overlay.ruler.y));\n"
-    "    float horizontal = 1.0 - smoothstep(y_width * 0.6, y_width * 1.6, abs(in.uv.y - overlay.ruler.z));\n"
+    "    float x_width = max(fwidth(content_uv.x), 0.001);\n"
+    "    float y_width = max(fwidth(content_uv.y), 0.001);\n"
+    "    float vertical = 1.0 - smoothstep(x_width * 0.6, x_width * 1.6, abs(content_uv.x - overlay.ruler.y));\n"
+    "    float horizontal = 1.0 - smoothstep(y_width * 0.6, y_width * 1.6, abs(content_uv.y - overlay.ruler.z));\n"
     "    rgb = mix(rgb, overlay.ruler_color.rgb, overlay.ruler_color.a * max(vertical, horizontal));\n"
     "  }\n"
     "  if (overlay.highlight.z > overlay.highlight.x && overlay.highlight.w > overlay.highlight.y) {\n"
-    "    bool inside = in.uv.x >= overlay.highlight.x && in.uv.x <= overlay.highlight.z && in.uv.y >= overlay.highlight.y && in.uv.y <= overlay.highlight.w;\n"
-    "    float edge = min(min(abs(in.uv.x - overlay.highlight.x) * y_tex.get_width(), abs(in.uv.x - overlay.highlight.z) * y_tex.get_width()), min(abs(in.uv.y - overlay.highlight.y) * y_tex.get_height(), abs(in.uv.y - overlay.highlight.w) * y_tex.get_height()));\n"
+    "    bool inside = content_uv.x >= overlay.highlight.x && content_uv.x <= overlay.highlight.z && content_uv.y >= overlay.highlight.y && content_uv.y <= overlay.highlight.w;\n"
+    "    float edge = min(min(abs(content_uv.x - overlay.highlight.x) * y_tex.get_width(), abs(content_uv.x - overlay.highlight.z) * y_tex.get_width()), min(abs(content_uv.y - overlay.highlight.y) * y_tex.get_height(), abs(content_uv.y - overlay.highlight.w) * y_tex.get_height()));\n"
     "    if (inside && edge < 2.0) rgb = float3(0.85, 0.44, 0.29);\n"
     "  }\n"
     "  if (overlay.picker.x > 0.5 && overlay.picker.w > 0.5) {\n"
-    "    float2 delta = in.uv - overlay.picker.yz;\n"
+    "    float2 delta = content_uv - overlay.picker.yz;\n"
     "    float aspect = float(y_tex.get_width()) / max(1.0, float(y_tex.get_height()));\n"
     "    float lens_distance = length(float2(delta.x * aspect, delta.y));\n"
-    "    const float lens_radius = 0.092;\n"
+    "    const float lens_radius = 0.092 / zoom;\n"
     "    if (lens_distance <= lens_radius) {\n"
-    "      if (lens_distance >= lens_radius - 0.004) rgb = float3(0.85, 0.44, 0.29);\n"
+    "      if (lens_distance >= lens_radius - 0.004 / zoom) rgb = float3(0.85, 0.44, 0.29);\n"
     "      else {\n"
     "        float2 magnified_uv = overlay.picker.yz + delta / 5.0;\n"
     "        rgb = sampled_rgb(y_tex, uv_tex, nearest_sampler, magnified_uv, is_bgra, full_range_yuv);\n"
@@ -582,6 +706,9 @@ static void apply_presenter_frame(GpuPresenter *presenter) {
         [presenter->window setFrame:frame display:NO];
     }
     presenter->view.frame = NSMakeRect(0, 0, w, h);
+    if (presenter->guide_view) {
+        presenter->guide_view.frame = NSMakeRect(0, 0, w, h);
+    }
     presenter->layer.contentsScale = backing_scale;
     const CGSize drawable = CGSizeMake(w * backing_scale, h * backing_scale);
     const bool drawable_changed = !CGSizeEqualToSize(presenter->layer.drawableSize, drawable);
@@ -625,7 +752,15 @@ static bool open_presenter_window(GpuPresenter *presenter) {
         presenter->view.enableSetNeedsDisplay = NO;
         presenter->view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [presenter->content addSubview:presenter->view];
+        AndyGpuGuideOverlay *guide = [[AndyGpuGuideOverlay alloc] initWithFrame:content_rect];
+        guide.presenter = presenter;
+        guide.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        guide.wantsLayer = YES;
+        guide.layer.opaque = NO;
+        [presenter->content addSubview:guide];
+        presenter->guide_view = guide;
         presenter->window.contentView = presenter->content;
+        // Opaque Metal pixels underneath; the guide view composites distance labels on top.
         presenter->window.opaque = YES;
         presenter->window.backgroundColor = NSColor.blackColor;
         presenter->window.hasShadow = NO;
@@ -652,6 +787,10 @@ static void close_presenter_window(GpuPresenter *presenter) {
             [presenter->window.parentWindow removeChildWindow:presenter->window];
         }
         [presenter->window orderOut:nil];
+        if ([presenter->guide_view isKindOfClass:[AndyGpuGuideOverlay class]]) {
+            ((AndyGpuGuideOverlay *) presenter->guide_view).presenter = NULL;
+        }
+        presenter->guide_view = nil;
         presenter->window = nil;
         presenter->view = nil;
         presenter->content = nil;
@@ -1143,7 +1282,8 @@ void andy_hub_update_overlay(int64_t presenter_id, bool grid_enabled, float grid
                              float grid_r, float grid_g, float grid_b, float grid_a, bool ruler_enabled,
                              float ruler_x, float ruler_y, float ruler_r, float ruler_g, float ruler_b, float ruler_a,
                              float source_width, float source_height, bool picker_enabled, float highlight_left,
-                             float highlight_top, float highlight_right, float highlight_bottom) {
+                             float highlight_top, float highlight_right, float highlight_bottom,
+                             float content_zoom, float content_pan_x, float content_pan_y) {
     GpuPresenter *presenter = find_presenter(presenter_id);
     if (!presenter) return;
     presenter->overlay.grid[0] = grid_enabled ? 1.0f : 0.0f;
@@ -1162,12 +1302,20 @@ void andy_hub_update_overlay(int64_t presenter_id, bool grid_enabled, float grid
     presenter->overlay.ruler_color[3] = ruler_a;
     presenter->overlay.source_size[0] = source_width;
     presenter->overlay.source_size[1] = source_height;
+    presenter->overlay.source_size[2] = fmaxf(1.0f, content_zoom);
+    presenter->overlay.source_size[3] = 0.0f;
+    presenter->overlay.format_flags[2] = fmaxf(0.0f, fminf(1.0f, content_pan_x));
+    presenter->overlay.format_flags[3] = fmaxf(0.0f, fminf(1.0f, content_pan_y));
     presenter->overlay.picker[0] = picker_enabled ? 1.0f : 0.0f;
+    if (!picker_enabled) {
+        presenter->overlay.picker[3] = 0.0f;
+    }
     presenter->overlay.highlight[0] = highlight_left;
     presenter->overlay.highlight[1] = highlight_top;
     presenter->overlay.highlight[2] = highlight_right;
     presenter->overlay.highlight[3] = highlight_bottom;
     andy_hub_repaint_presenter(presenter_id);
+    invalidate_gpu_guide_overlay(presenter);
 }
 
 void andy_hub_update_picker_point(int64_t presenter_id, float normalized_x, float normalized_y, bool visible) {
@@ -1180,10 +1328,78 @@ void andy_hub_update_picker_point(int64_t presenter_id, float normalized_x, floa
 }
 
 int andy_hub_inspect_pixel(int64_t decoder_id, float normalized_x, float normalized_y) {
-    (void) decoder_id;
-    (void) normalized_x;
-    (void) normalized_y;
-    return -1;
+    GpuDecoder *decoder = find_decoder(decoder_id);
+    if (!decoder) return -1;
+    pthread_mutex_lock(&decoder->latest_pixels_lock);
+    CVPixelBufferRef pixels = decoder->latest_pixels;
+    if (pixels) {
+        CVPixelBufferRetain(pixels);
+    }
+    pthread_mutex_unlock(&decoder->latest_pixels_lock);
+    if (!pixels) return -1;
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
+    if (!width || !height ||
+        CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        CVPixelBufferRelease(pixels);
+        return -1;
+    }
+    const size_t x = (size_t) fmaxf(0.0f, fminf((float) width - 1.0f, normalized_x * width));
+    const size_t y = (size_t) fmaxf(0.0f, fminf((float) height - 1.0f, normalized_y * height));
+    uint8_t rgb[3] = {0, 0, 0};
+    if (pixel_buffer_is_bgra(pixels)) {
+        const uint8_t *base = NULL;
+        size_t stride = 0;
+        if (CVPixelBufferGetPlaneCount(pixels) == 0) {
+            base = (const uint8_t *) CVPixelBufferGetBaseAddress(pixels);
+            stride = CVPixelBufferGetBytesPerRow(pixels);
+        } else {
+            base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+            stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        }
+        if (!base || !stride) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return -1;
+        }
+        const uint8_t *pixel = base + y * stride + x * 4;
+        OSType format = CVPixelBufferGetPixelFormatType(pixels);
+        if (format == kCVPixelFormatType_32RGBA) {
+            rgb[0] = pixel[0];
+            rgb[1] = pixel[1];
+            rgb[2] = pixel[2];
+        } else if (format == kCVPixelFormatType_32ARGB) {
+            rgb[0] = pixel[1];
+            rgb[1] = pixel[2];
+            rgb[2] = pixel[3];
+        } else {
+            rgb[0] = pixel[2];
+            rgb[1] = pixel[1];
+            rgb[2] = pixel[0];
+        }
+    } else {
+        const uint8_t *y_base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        const uint8_t *uv_base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
+        const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+        if (!y_base || !uv_base) {
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return -1;
+        }
+        const int yy = y_base[y * y_stride + x] - 16;
+        const size_t uv_x = (x / 2) * 2;
+        const size_t uv_y = y / 2;
+        const int uu = uv_base[uv_y * uv_stride + uv_x] - 128;
+        const int vv = uv_base[uv_y * uv_stride + uv_x + 1] - 128;
+        rgb[0] = (uint8_t) fmax(0, fmin(255, (298 * yy + 409 * vv + 128) >> 8));
+        rgb[1] = (uint8_t) fmax(0, fmin(255, (298 * yy - 100 * uu - 208 * vv + 128) >> 8));
+        rgb[2] = (uint8_t) fmax(0, fmin(255, (298 * yy + 516 * uu + 128) >> 8));
+    }
+    CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferRelease(pixels);
+    return (int) (0xff000000u | ((unsigned) rgb[0] << 16) | ((unsigned) rgb[1] << 8) | (unsigned) rgb[2]);
 }
 
 static float p95_from_samples(double *samples, size_t count) {
@@ -1398,13 +1614,14 @@ JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeUpdatePresenterOverlay)(
         jfloat grid_r, jfloat grid_g, jfloat grid_b, jfloat grid_a, jboolean ruler_enabled, jfloat ruler_x,
         jfloat ruler_y, jfloat ruler_r, jfloat ruler_g, jfloat ruler_b, jfloat ruler_a, jfloat source_width,
         jfloat source_height, jboolean picker_enabled, jfloat highlight_left, jfloat highlight_top,
-        jfloat highlight_right, jfloat highlight_bottom) {
+        jfloat highlight_right, jfloat highlight_bottom, jfloat content_zoom, jfloat content_pan_x,
+        jfloat content_pan_y) {
     (void) env;
     (void) clazz;
     andy_hub_update_overlay((int64_t) presenter_id, grid_enabled == JNI_TRUE, grid_step_x, grid_step_y, grid_r, grid_g,
         grid_b, grid_a, ruler_enabled == JNI_TRUE, ruler_x, ruler_y, ruler_r, ruler_g, ruler_b, ruler_a,
         source_width, source_height, picker_enabled == JNI_TRUE, highlight_left, highlight_top, highlight_right,
-        highlight_bottom);
+        highlight_bottom, content_zoom, content_pan_x, content_pan_y);
 }
 
 JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeUpdatePresenterPickerPoint)(
@@ -1412,4 +1629,11 @@ JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeUpdatePresenterPickerPoint)(
     (void) env;
     (void) clazz;
     andy_hub_update_picker_point((int64_t) presenter_id, normalized_x, normalized_y, visible == JNI_TRUE);
+}
+
+JNIEXPORT jint JNICALL GPU_JNI_METHOD(nativeInspectPixel)(
+        JNIEnv *env, jclass clazz, jlong decoder_id, jfloat normalized_x, jfloat normalized_y) {
+    (void) env;
+    (void) clazz;
+    return (jint) andy_hub_inspect_pixel((int64_t) decoder_id, normalized_x, normalized_y);
 }

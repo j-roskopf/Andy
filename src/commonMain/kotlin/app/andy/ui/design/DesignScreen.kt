@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,6 +55,7 @@ import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -94,6 +96,7 @@ internal fun DesignScreen(
     var referenceImageKey by remember { mutableLongStateOf(0L) }
     var referenceImageOpacity by remember { mutableFloatStateOf(0.5f) }
     var zoom by remember { mutableStateOf("1.0") }
+    var rulerSeeded by remember { mutableStateOf(false) }
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth.coerceAtLeast(760f)) }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     val copyText = rememberCopyText()
@@ -112,6 +115,7 @@ internal fun DesignScreen(
         }
     }
     LaunchedEffect(serial) {
+        rulerSeeded = false
         if (serial != null) {
             val result = services.mirror.connect(serial, LiveMirrorSettings.config.value)
             connectResult = if (result.isSuccess) result.stdout else result.stderr
@@ -119,6 +123,13 @@ internal fun DesignScreen(
     }
     Row(Modifier.fillMaxSize()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
+            LaunchedEffect(frame?.width, frame?.height, rulerSeeded) {
+                val current = frame ?: return@LaunchedEffect
+                if (rulerSeeded || current.width <= 1 || current.height <= 1) return@LaunchedEffect
+                rulerX = (current.width / 2).toString()
+                rulerY = (current.height / 2).toString()
+                rulerSeeded = true
+            }
             LiveDevicePane(
                 serial = serial,
                 device = device,
@@ -129,8 +140,8 @@ internal fun DesignScreen(
                 connectResult = connectResult,
                 modifier = Modifier.width(localDevicePaneWidth.dp).fillMaxHeight(),
                 showRuler = ruler,
-                rulerX = rulerX.toFloatOrNull()?.coerceIn(0f, 3000f) ?: 540f,
-                rulerY = rulerY.toFloatOrNull()?.coerceIn(0f, 3000f) ?: 960f,
+                rulerX = rulerX.toFloatOrNull()?.coerceIn(0f, (frame?.width ?: 3000).toFloat()) ?: 0f,
+                rulerY = rulerY.toFloatOrNull()?.coerceIn(0f, (frame?.height ?: 3000).toFloat()) ?: 0f,
                 gridSize = if (grid) gridSize.toFloatOrNull()?.coerceIn(2f, 120f) else null,
                 gridColor = color.copy(alpha = 0.38f),
                 pickerColor = color.takeIf { pickerEnabled },
@@ -175,12 +186,12 @@ internal fun DesignScreen(
                 FilterPill("Picker", pickerEnabled, Rust) { pickerEnabled = !pickerEnabled }
             }
             FormRow("Grid size") {
-                TextField(gridSize, { gridSize = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(120.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                TextField(gridSize, { gridSize = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(120.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             }
             FormRow("Ruler X/Y") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextField(rulerX, { rulerX = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
-                    TextField(rulerY, { rulerY = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(rulerX, { rulerX = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(rulerY, { rulerY = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(110.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
                 }
             }
             FormRow("Zoom") {
@@ -189,7 +200,7 @@ internal fun DesignScreen(
                         val next = ((zoom.toFloatOrNull() ?: 1f) - 0.25f).coerceIn(0.5f, 4f)
                         zoom = app.andy.formatDecimal(next, 2)
                     }) { Text("-") }
-                    TextField(zoom, { zoom = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(96.dp).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(zoom, { zoom = it.filter { ch -> ch.isDigit() || ch == '.' } }, singleLine = true, modifier = Modifier.width(96.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
                     OutlinedButton(onClick = {
                         val next = ((zoom.toFloatOrNull() ?: 1f) + 0.25f).coerceIn(0.5f, 4f)
                         zoom = app.andy.formatDecimal(next, 2)

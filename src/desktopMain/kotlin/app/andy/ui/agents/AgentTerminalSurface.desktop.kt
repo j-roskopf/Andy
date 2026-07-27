@@ -49,7 +49,6 @@ import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextSecondary
 import io.github.ketraterm.ui.swing.api.SwingTerminal
-import java.awt.Component
 import java.awt.dnd.DropTarget
 import javax.swing.SwingUtilities
 import kotlinx.coroutines.Dispatchers
@@ -124,9 +123,10 @@ actual fun AgentTerminalSurface(
             historyTerminal = null
         }
 
-        clearHistory()
-
         suspend fun openHistoryIfAvailable() {
+            // Keep an existing replay mounted so resume/reattach does not flash through
+            // an empty "Waiting for terminal…" gap before the live viewer arrives.
+            if (historyTerminal != null) return
             if (agentRuns?.hasScrollback(taskId) != true) return
             val replay = withContext(Dispatchers.IO) {
                 agentRuns.openScrollbackReplay(taskId)
@@ -148,19 +148,22 @@ actual fun AgentTerminalSurface(
             return@LaunchedEffect
         }
 
-        liveTerminal = agentRuns?.terminalWidget(taskId)
-        if (liveTerminal != null) {
+        fun adoptLiveIfPresent(): Boolean {
+            liveTerminal = agentRuns?.terminalWidget(taskId)
+            if (liveTerminal == null) return false
             if (!browsingLiveHistory) clearHistory()
-            return@LaunchedEffect
+            return true
         }
+
+        if (adoptLiveIfPresent()) return@LaunchedEffect
 
         // Prefer attaching a viewer to an already-live tmux session (no provider restart).
         runCatching { agentRuns?.attachTerminalIfNeeded(taskId) }
-        liveTerminal = agentRuns?.terminalWidget(taskId)
-        if (liveTerminal != null) {
-            if (!browsingLiveHistory) clearHistory()
-            return@LaunchedEffect
-        }
+        if (adoptLiveIfPresent()) return@LaunchedEffect
+
+        // Bridge with scrollback while the live viewer is still attaching — avoids the
+        // Waiting placeholder flash that used to land between history teardown and mount.
+        openHistoryIfAvailable()
 
         // Active/queued: wait for the live terminal (or a live tmux attach).
         // Short grace when nothing is live yet so stale "queued" chats fall back to
@@ -172,14 +175,10 @@ actual fun AgentTerminalSurface(
             if (attempts % 5 == 0) {
                 runCatching { agentRuns?.attachTerminalIfNeeded(taskId) }
             }
-            liveTerminal = agentRuns?.terminalWidget(taskId)
+            if (adoptLiveIfPresent()) return@LaunchedEffect
             attempts++
         }
-        if (liveTerminal != null) {
-            if (!browsingLiveHistory) clearHistory()
-            return@LaunchedEffect
-        }
-        // Live tmux with no mountable viewer, or stale queued with no PTY — show saved history.
+        // Live tmux with no mountable viewer, or stale queued with no PTY — keep history.
         if (agentRuns?.isTerminalLive(taskId) != true) {
             when (val runs = services.agentRuns) {
                 is DesktopAgentRunService -> runs.reconcileStaleActiveTaskIfNeeded(taskId)
@@ -190,9 +189,12 @@ actual fun AgentTerminalSurface(
     }
 
     val historyToDispose = rememberUpdatedState(historyTerminal)
-    DisposableEffect(taskId, releaseViewer) {
+    DisposableEffect(taskId) {
         onDispose {
-            releaseViewer?.invoke(taskId)
+            // Keep the KetraTerm viewer alive across chat switches. Releasing here forced
+            // null → history → live settle (and a SIGWINCH redraw) every time the inbox
+            // selection changed. Foreground cadence is owned by setChatViewing; viewers are
+            // dropped when the session ends or the handle is cleared.
             historyToDispose.value?.let { widget ->
                 runCatching { disposeScrollbackReplayTerminal(widget) }
             }
@@ -288,163 +290,148 @@ actual fun AgentTerminalSurface(
         Modifier
     }
 
-    when {
-        displayTerminal != null -> {
-            Box(
-                modifier = modifier
-                    .background(terminalPanelBackground)
-                    .then(dragBorderModifier),
-            ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .then(dropModifier),
-                ) {
-                    if (!suppressHeavyweight) {
-                        key(taskId, displayTerminal) {
-                            var swingDropTarget by remember(taskId) { mutableStateOf<DropTarget?>(null) }
-                            var swingDropHost by remember(taskId) { mutableStateOf<Component?>(null) }
-                            // Live TUIs own the alt screen — scrollViewportBy cannot reveal history
-                            // there — so wheel-up opens Andy's flushed scrollback peek. While peeking,
-                            // wheel-down at the bottom returns to the live PTY.
-                            val wheelOverLive =
-                                liveTerminal != null && effectiveSessionActive && !browsingLiveHistory
-                            val wheelOverHistoryPeek =
-                                browsingLiveHistory && liveTerminal != null
-                            val openHistoryPeek = rememberUpdatedState(newValue = { openLiveHistoryPeek() })
-                            val followLive = rememberUpdatedState(newValue = { returnToLiveTerminal() })
-                            DisposableEffect(
-                                taskId,
-                                displayTerminal,
-                                wheelOverLive,
-                                wheelOverHistoryPeek,
-                            ) {
-                                val terminal = displayTerminal
-                                // Displace KetraTerm's wheel listener on the EDT so alt-screen
-                                // wheel-up cannot become UP keys (prompt history).
-                                val wheelHandler = onSwingEdt {
-                                    when {
-                                        wheelOverLive -> LiveTerminalWheelHandler(
-                                            terminal = terminal,
-                                            onOpenHistoryPeek = { openHistoryPeek.value.invoke() },
-                                        )
-                                        wheelOverHistoryPeek -> LiveTerminalWheelHandler(
-                                            terminal = terminal,
-                                            onReturnToLive = { followLive.value.invoke() },
-                                        )
-                                        else -> null
-                                    }
-                                }
-                                onDispose {
-                                    runCatching {
-                                        if (wheelHandler != null) {
-                                            onSwingEdt { wheelHandler.uninstall() }
-                                        }
-                                    }
-                                    runCatching {
-                                        onSwingEdt {
-                                            swingDropHost?.dropTarget = null
-                                        }
-                                    }
-                                    swingDropTarget = null
-                                    swingDropHost = null
-                                }
-                            }
-                            SwingPanel(
-                                modifier = Modifier.fillMaxSize(),
-                                background = terminalPanelBackground,
-                                factory = {
-                                    displayTerminal.apply {
-                                        if (acceptsLiveDrops) {
-                                            SwingUtilities.invokeLater { requestFocusInWindow() }
-                                        }
-                                    }
-                                },
-                                update = { terminalWidget ->
-                                    if (!acceptsLiveDrops || swingDropTarget != null) return@SwingPanel
-                                    val host = terminalWidget.parent ?: terminalWidget
-                                    swingDropHost = host
-                                    swingDropTarget = host.installImageDropTarget(
-                                        onFiles = { paths -> onTerminalImagesDropped.value(paths) },
-                                        onDragActiveChange = { active -> onDragActiveChange.value(active) },
-                                    )
-                                },
-                            )
-                        }
-                    } else {
-                        Box(Modifier.fillMaxSize().background(terminalPanelBackground))
-                    }
-                    if (imageDragActive && acceptsLiveDrops) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(Cyan.copy(alpha = 0.08f)),
-                            contentAlignment = Alignment.BottomCenter,
-                        ) {
-                            Text(
-                                "release to stage image for your next message",
-                                color = Cyan,
-                                fontFamily = MonoFont,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(bottom = 12.dp),
-                            )
-                        }
-                    }
-                    AnimatedVisibility(
-                        visible = liveTerminal != null && effectiveSessionActive && !browsingLiveHistory,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 10.dp, end = 12.dp),
-                    ) {
-                        Button(
-                            onClick = ::openLiveHistoryPeek,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(AndyRadius.Pill),
-                        ) {
-                            Text(
-                                "↑  history",
-                                fontFamily = MonoFont,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                    AnimatedVisibility(
-                        visible = browsingLiveHistory && liveTerminal != null,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 14.dp),
-                    ) {
-                        Button(
-                            onClick = ::returnToLiveTerminal,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                            shape = RoundedCornerShape(AndyRadius.Pill),
-                        ) {
-                            Text(
-                                "↓  follow live",
-                                fontFamily = MonoFont,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
+    // Stable interop host: never key(SwingPanel) on the terminal widget. Remounting the
+    // AWT peer tears down the Skiko clear-hole, re-parents KetraTerm, and SIGWINCHes tmux —
+    // that is the multi-flash on resume and on history↔live. Swap the child inside one host.
+    val hostPanel = remember(taskId) {
+        javax.swing.JPanel(java.awt.BorderLayout()).apply {
+            isOpaque = true
+        }
+    }
+    val awtPanelBackground = remember(terminalPanelBackground) {
+        java.awt.Color(
+            terminalPanelBackground.red,
+            terminalPanelBackground.green,
+            terminalPanelBackground.blue,
+            terminalPanelBackground.alpha,
+        )
+    }
+    val displayTerminalState = rememberUpdatedState(displayTerminal)
+    val acceptsLiveDropsState = rememberUpdatedState(acceptsLiveDrops)
+
+    DisposableEffect(taskId, hostPanel) {
+        onDispose {
+            runCatching {
+                onSwingEdt {
+                    hostPanel.dropTarget = null
+                    hostPanel.removeAll()
+                    hostPanel.revalidate()
                 }
             }
         }
+    }
 
-        else -> {
-            Box(
-                modifier = modifier
-                    .background(terminalPanelBackground)
-                    .then(dropModifier)
-                    .then(dragBorderModifier),
-                contentAlignment = Alignment.Center,
-            ) {
+    Box(
+        modifier = modifier
+            .background(terminalPanelBackground)
+            .then(dragBorderModifier),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(dropModifier),
+        ) {
+            if (!suppressHeavyweight) {
+                key(taskId) {
+                    var swingDropTarget by remember(taskId) { mutableStateOf<DropTarget?>(null) }
+                    // Live TUIs own the alt screen — scrollViewportBy cannot reveal history
+                    // there — so wheel-up opens Andy's flushed scrollback peek. While peeking,
+                    // wheel-down at the bottom returns to the live PTY.
+                    val wheelOverLive =
+                        liveTerminal != null && effectiveSessionActive && !browsingLiveHistory
+                    val wheelOverHistoryPeek =
+                        browsingLiveHistory && liveTerminal != null
+                    val openHistoryPeek = rememberUpdatedState(newValue = { openLiveHistoryPeek() })
+                    val followLive = rememberUpdatedState(newValue = { returnToLiveTerminal() })
+                    DisposableEffect(
+                        taskId,
+                        displayTerminal,
+                        wheelOverLive,
+                        wheelOverHistoryPeek,
+                    ) {
+                        val terminal = displayTerminal
+                        val wheelHandler = onSwingEdt {
+                            when {
+                                terminal == null -> null
+                                wheelOverLive -> LiveTerminalWheelHandler(
+                                    terminal = terminal,
+                                    onOpenHistoryPeek = { openHistoryPeek.value.invoke() },
+                                )
+                                wheelOverHistoryPeek -> LiveTerminalWheelHandler(
+                                    terminal = terminal,
+                                    onReturnToLive = { followLive.value.invoke() },
+                                )
+                                else -> null
+                            }
+                        }
+                        onDispose {
+                            runCatching {
+                                if (wheelHandler != null) {
+                                    onSwingEdt { wheelHandler.uninstall() }
+                                }
+                            }
+                            runCatching {
+                                onSwingEdt { hostPanel.dropTarget = null }
+                            }
+                            swingDropTarget = null
+                        }
+                    }
+                    SwingPanel(
+                        modifier = Modifier.fillMaxSize(),
+                        background = terminalPanelBackground,
+                        factory = {
+                            // Same host across suppress toggles — child stays attached so
+                            // chrome-menu close is a reparent, not a KetraTerm rebuild.
+                            hostPanel.apply {
+                                background = awtPanelBackground
+                                val child = displayTerminalState.value
+                                if (child != null && (components.firstOrNull() !== child)) {
+                                    removeAll()
+                                    add(child, java.awt.BorderLayout.CENTER)
+                                    revalidate()
+                                }
+                            }
+                        },
+                        update = { panel ->
+                            panel.background = awtPanelBackground
+                            val desired = displayTerminalState.value
+                            val current = panel.components.firstOrNull()
+                            if (current !== desired) {
+                                panel.removeAll()
+                                if (desired != null) {
+                                    panel.add(desired, java.awt.BorderLayout.CENTER)
+                                    if (acceptsLiveDropsState.value) {
+                                        SwingUtilities.invokeLater { desired.requestFocusInWindow() }
+                                    }
+                                }
+                                panel.revalidate()
+                                panel.repaint()
+                                swingDropTarget = null
+                            }
+                            if (acceptsLiveDropsState.value && swingDropTarget == null) {
+                                swingDropTarget = panel.installImageDropTarget(
+                                    onFiles = { paths -> onTerminalImagesDropped.value(paths) },
+                                    onDragActiveChange = { active -> onDragActiveChange.value(active) },
+                                )
+                            } else if (!acceptsLiveDropsState.value && swingDropTarget != null) {
+                                panel.dropTarget = null
+                                swingDropTarget = null
+                            }
+                        },
+                    )
+                }
+            } else {
+                // Must tear the interop host down while chrome menus are open: a mounted
+                // SwingPanel still punches BlendMode.Clear through overlapping DropdownMenus.
+                Box(Modifier.fillMaxSize().background(terminalPanelBackground))
+            }
+            if (displayTerminal == null) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
                 ) {
                     Text(
                         when {
@@ -464,6 +451,61 @@ actual fun AgentTerminalSurface(
                         color = if (imageDragActive) Cyan else TextSecondary.copy(alpha = 0.72f),
                         fontFamily = MonoFont,
                         fontSize = 11.sp,
+                    )
+                }
+            }
+            if (imageDragActive && acceptsLiveDrops) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Cyan.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    Text(
+                        "release to stage image for your next message",
+                        color = Cyan,
+                        fontFamily = MonoFont,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = liveTerminal != null && effectiveSessionActive && !browsingLiveHistory,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 10.dp, end = 12.dp),
+            ) {
+                Button(
+                    onClick = ::openLiveHistoryPeek,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(AndyRadius.Pill),
+                ) {
+                    Text(
+                        "↑  history",
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = browsingLiveHistory && liveTerminal != null,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 14.dp),
+            ) {
+                Button(
+                    onClick = ::returnToLiveTerminal,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
+                    shape = RoundedCornerShape(AndyRadius.Pill),
+                ) {
+                    Text(
+                        "↓  follow live",
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
                     )
                 }
             }

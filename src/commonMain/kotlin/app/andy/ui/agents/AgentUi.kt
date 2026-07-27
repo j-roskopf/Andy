@@ -10,11 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
@@ -37,7 +33,6 @@ import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextSecondary
-import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -128,24 +123,16 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
 }
 
 /**
- * Sidebar / session-row activity spinner.
+ * Sidebar / session-row activity marker.
  *
- * Driven by a coarse ~10 Hz timer instead of Material's indeterminate infinite
- * transition: on a high-refresh desktop display that transition invalidates the
- * whole Skiko surface at display rate (e.g. 144 Hz). The Swing terminal
- * repaint throttle cannot help — Compose paints through Skiko, not Swing.
+ * Intentionally not animated. A timer-driven spinner invalidates the whole Skiko
+ * window (including any agent SwingPanel clear-hole) and reads as terminal flicker
+ * while a chat is working. A static cyan ring still marks live work without that cost.
  */
 @Composable
 internal fun ProjectActivityIndicator(size: Dp = 10.dp) {
-    var phase by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(100)
-            phase = (phase + 0.08f) % 1f
-        }
-    }
     CircularProgressIndicator(
-        progress = { phase },
+        progress = { 0.7f },
         modifier = Modifier.size(size),
         color = Cyan,
         strokeWidth = 1.5.dp,
@@ -188,6 +175,9 @@ internal fun isChatRelaunching(task: AgentTask): Boolean =
  * True when Andy's own composer belongs under the terminal: always in read-only mode
  * (it is the only way to type), and while a live CLI holds staged images that must
  * ship with a composed message rather than be typed into the PTY.
+ *
+ * [interactive] should track [isChatTerminalInteractive], not viewer attach state —
+ * delaying on attach briefly shows the composer and resizes the SwingPanel (a flash).
  */
 internal fun showsChatFollowUpComposer(interactive: Boolean, hasStagedImages: Boolean): Boolean =
     !interactive || hasStagedImages

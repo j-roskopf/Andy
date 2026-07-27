@@ -2,6 +2,7 @@ package app.andy.ui.logcat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -184,7 +186,7 @@ internal fun LogcatPanel(
                     onValueChange = { state.search = it },
                     placeholder = { Text("filter or package:com.example", color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     singleLine = true,
-                    modifier = Modifier.weight(1f).height(54.dp),
+                    modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
                     colors = fieldColors()
                 )
@@ -195,6 +197,7 @@ internal fun LogcatPanel(
                         serial = serial,
                         selectedPackage = selectedPackage,
                         onSelectedPackageChange = onSelectedPackageChange,
+                        autoSelectForeground = true,
                         modifier = if (compact) Modifier.widthIn(max = 180.dp) else Modifier.widthIn(max = 300.dp)
                     )
                 }
@@ -254,6 +257,7 @@ internal fun LogcatPanel(
                                     serial = serial,
                                     selectedPackage = selectedPackage,
                                     onSelectedPackageChange = onSelectedPackageChange,
+                                    autoSelectForeground = true,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                                 Spacer(Modifier.height(4.dp))

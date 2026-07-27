@@ -3,6 +3,7 @@ package app.andy.ui.controls
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -50,6 +50,7 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.MonoFont
@@ -327,16 +328,28 @@ private fun CommandTile(
             Button(
                 onClick = onPrimary,
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             ) {
-                Text(primaryLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    primaryLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
             OutlinedButton(
                 onClick = onSecondary,
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             ) {
-                Text(secondaryLabel, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    secondaryLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
         }
     }
@@ -355,13 +368,22 @@ private fun ValueCommandTile(
             TextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).height(42.dp),
+                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                 colors = fieldColors(),
             )
-            Button(onClick = onApply, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                Text(actionLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Button(
+                onClick = onApply,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    actionLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
         }
     }
@@ -372,11 +394,11 @@ private fun ControlTile(label: String, content: @Composable () -> Unit) {
     val shape = RoundedCornerShape(AndyRadius.R3)
     Column(
         modifier = Modifier
-            .widthIn(min = 200.dp, max = 216.dp)
+            .widthIn(min = 260.dp, max = 300.dp)
             .heightIn(min = 72.dp)
             .background(AndyColors.Neutral900.copy(alpha = 0.44f), shape)
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(label, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         content()
@@ -421,8 +443,15 @@ private fun HardwareCommand(label: String, onClick: () -> Unit) {
             containerColor = AndyColors.Neutral900.copy(alpha = 0.42f),
             contentColor = TextPrimary,
         ),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
     ) {
-        Text(label, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            label,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
 }

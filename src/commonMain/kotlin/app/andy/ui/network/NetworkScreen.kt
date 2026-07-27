@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -80,6 +81,7 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -558,7 +560,7 @@ internal fun NetworkScreen(
                                             it.toIntOrNull()?.takeIf { value -> value in 1..65535 }?.let(onPortChange)
                                         },
                                         singleLine = true,
-                                        modifier = Modifier.width(86.dp).height(54.dp),
+                                        modifier = Modifier.width(86.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                                         colors = fieldColors(),
                                     )

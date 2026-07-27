@@ -1,7 +1,9 @@
 package app.andy.terminal
 
 import app.andy.desktop.service.agents.AgentScratchWorkspace
+import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -16,6 +18,11 @@ import java.io.File
 import java.util.UUID
 
 class TmuxAndyTest {
+    @BeforeTest
+    fun isolateFromLiveAndyTmux() {
+        TmuxAndy.useIsolatedServerForTests()
+    }
+
     @Test
     fun tmuxAvailableOrSkip() {
         if (!TmuxAndy.isAvailable()) {
@@ -23,6 +30,7 @@ class TmuxAndyTest {
             return
         }
         assertTrue(TmuxAndy.tmuxBinary().isNotBlank())
+        assertEquals(TmuxAndy.TEST_SERVER, TmuxAndy.SERVER)
     }
 
     @Test
@@ -297,6 +305,51 @@ class TmuxAndyTest {
         } finally {
             TmuxAndy.killSession(taskId)
             runCatching { TmuxAndy.killSession("poison-seed") }
+        }
+    }
+
+    /**
+     * Recycle must not SIGTERM the shared server while a healthy sibling chat is live —
+     * that is the `[server exited]` failure mode for every attached Andy agent pane.
+     */
+    @Test
+    fun newSessionDoesNotRecycleServerWhenHealthySiblingExists() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        val healthyId = "healthy-" + UUID.randomUUID().toString().take(8)
+        val brokenId = "broken-" + UUID.randomUUID().toString().take(8)
+        try {
+            TmuxAndy.newSession(
+                taskId = healthyId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf("/bin/sh", "-c", "printf 'andy-healthy\\n'; sleep 60"),
+            )
+            assertTrue(TmuxAndy.hasSession(healthyId))
+            // Fake getcwd chrome in a sibling pane — enough to trip recycle detection.
+            val error = assertFailsWith<IllegalStateException> {
+                TmuxAndy.newSession(
+                    taskId = brokenId,
+                    cwd = System.getProperty("user.dir"),
+                    argv = listOf(
+                        "/bin/sh",
+                        "-c",
+                        "printf 'shell-init: error retrieving current directory: getcwd: cannot access parent directories\\n'; sleep 60",
+                    ),
+                )
+            }
+            assertTrue(
+                error.message.orEmpty().contains("poisoned"),
+                "expected poisoned-server error, got=${error.message}",
+            )
+            assertTrue(TmuxAndy.hasSession(healthyId), "healthy sibling must survive refused recycle")
+            assertFalse(TmuxAndy.hasSession(brokenId), "broken new session should be torn down")
+            val pane = TmuxAndy.capturePane(healthyId, historyLines = 20)
+            assertTrue(pane.contains("andy-healthy"), "healthy pane=${pane.take(300)}")
+        } finally {
+            runCatching { TmuxAndy.killSession(healthyId) }
+            runCatching { TmuxAndy.killSession(brokenId) }
         }
     }
 

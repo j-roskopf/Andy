@@ -17,6 +17,7 @@ expect fun MirrorVideoSurface(
     onPickerClick: (String) -> Unit = {},
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
+    onContentPan: (Float, Float) -> Unit = { _, _ -> },
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
     deferNativePresentation: Boolean = false,
@@ -36,6 +37,7 @@ expect fun MirrorVideoSurface(
     onPickerClick: (String) -> Unit = {},
     onDevicePointClick: (Int, Int) -> Unit = { _, _ -> },
     onRulerResize: (Float, Float) -> Unit = { _, _ -> },
+    onContentPan: (Float, Float) -> Unit = { _, _ -> },
     overlay: MirrorOverlay = MirrorOverlay(),
     occluded: Boolean = false,
     deferNativePresentation: Boolean = false,
@@ -63,6 +65,11 @@ data class MirrorOverlay(
     val referenceImageKey: Long = 0L,
     val referenceImageOpacity: Float = 0.5f,
     val gesture: MirrorGestureOverlay? = null,
+    /** 1 = fit; >1 zooms content inside the fixed host (pan with [contentPanX]/[contentPanY]). */
+    val contentZoom: Float = 1f,
+    /** 0 = show left/top of zoomed content; 1 = show right/bottom. */
+    val contentPanX: Float = 0f,
+    val contentPanY: Float = 0f,
 )
 
 /** A replay-only interaction annotation rendered by the platform video surface. */

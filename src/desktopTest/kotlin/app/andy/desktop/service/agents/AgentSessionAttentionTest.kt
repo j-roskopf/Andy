@@ -91,6 +91,30 @@ class AgentSessionAttentionTest {
     }
 
     @Test
+    fun liveTerminalAllowsSoftWorkingAfterDone() {
+        assertFalse(
+            shouldIgnoreStatusSnapshot(
+                task = task(AgentStatus.Done).copy(
+                    statusConfident = true,
+                    finishedAtMillis = 5L,
+                ),
+                snapshot = AgentStatusSnapshot(AgentStatus.Working, confident = false),
+                terminalLive = true,
+            ),
+        )
+    }
+
+    @Test
+    fun softWorkingReplacesBlockedAfterPermissionClears() {
+        assertFalse(
+            shouldIgnoreStatusSnapshot(
+                task = task(AgentStatus.Blocked).copy(statusConfident = true),
+                snapshot = AgentStatusSnapshot(AgentStatus.Working, confident = false),
+            ),
+        )
+    }
+
+    @Test
     fun confidentWorkingCanReplaceDone() {
         assertFalse(
             shouldIgnoreStatusSnapshot(
@@ -111,8 +135,21 @@ class AgentSessionAttentionTest {
     }
 
     @Test
-    fun finishedTurnIgnoresWorkingUntilResumeClearsFinishedAt() {
+    fun softWorkingIgnoredWhileFinishedAtSet() {
         assertTrue(
+            shouldIgnoreStatusSnapshot(
+                task = task(AgentStatus.Done).copy(
+                    statusConfident = true,
+                    finishedAtMillis = 5L,
+                ),
+                snapshot = AgentStatusSnapshot(AgentStatus.Working, confident = false),
+            ),
+        )
+    }
+
+    @Test
+    fun confidentWorkingReplacesDoneEvenWhenFinishedAtSet() {
+        assertFalse(
             shouldIgnoreStatusSnapshot(
                 task = task(AgentStatus.Done).copy(
                     statusConfident = true,

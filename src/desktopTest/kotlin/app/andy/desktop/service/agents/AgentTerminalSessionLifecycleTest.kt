@@ -6,9 +6,11 @@ import app.andy.model.AgentTask
 import app.andy.terminal.AndyKetraTermConfig
 import app.andy.terminal.TmuxAndy
 import java.io.File
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -28,6 +30,11 @@ import kotlinx.coroutines.withTimeout
  */
 class AgentTerminalSessionLifecycleTest {
     private val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
+
+    @BeforeTest
+    fun isolateFromLiveAndyTmux() {
+        TmuxAndy.useIsolatedServerForTests()
+    }
 
     @Test
     fun sessionStaysInteractiveUntilStoppedThenReplaysReadOnlyAfterRestart() = runBlocking {
@@ -350,6 +357,72 @@ class AgentTerminalSessionLifecycleTest {
             )
         } finally {
             runCatching { TmuxAndy.killSession(taskId) }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * Stopping a live chat must wake whoever is waiting on its exit.
+     *
+     * The run pipeline parks in [AgentTerminalManager.awaitExit] for the whole turn, inside
+     * the concurrency permit its run holds in `DesktopAgentRunService`. Anything that leaves
+     * that wait unresolved stalls the workflow stage with nothing in the log, so the contract
+     * is pinned here rather than left to whichever teardown path happens to report a code.
+     */
+    @Test
+    fun stoppingALiveSessionWakesAnInFlightAwaitExit() = runBlocking {
+        AndyKetraTermConfig.ensureInitialized()
+        val dir = tempDir()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val taskId = "await-exit-stop-task"
+        try {
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            manager.start(task(taskId, dir), longRunningArgv(), emptyMap())
+            assertTrue(manager.isInteractive(taskId), "the session should be live before stopping")
+
+            val waiter = async { manager.awaitExit(taskId) }
+            // Let the waiter capture the handle and park on the exit flow — stopping before
+            // that would take the "no handle" path and prove nothing.
+            delay(250)
+            assertTrue(waiter.isActive, "awaitExit should still be waiting on a live session")
+
+            manager.stop(taskId)
+            // Returning at all is the regression. The code is the process' real termination
+            // status when the stop collected one (143 = SIGTERM on Unix), otherwise
+            // [AgentTerminalManager.UNKNOWN_EXIT_CODE] — never a clean success.
+            val code = withTimeout(15_000) { waiter.await() }
+            assertNotEquals(0, code, "a session killed mid-turn must not report a clean exit")
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * The bounded wait is a backstop, not a replacement: a process that exits on its own
+     * still reports its real status rather than the unknown-exit fallback.
+     */
+    @Test
+    fun awaitExitReportsTheRealProcessExitCode() = runBlocking {
+        if (isWindows) return@runBlocking // /bin/sh exit codes; Unix CI covers this path
+        AndyKetraTermConfig.ensureInitialized()
+        val dir = tempDir()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val taskId = "await-exit-code-task"
+        try {
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            manager.start(task(taskId, dir), listOf("/bin/sh", "-c", "exit 7"), emptyMap())
+            assertEquals(7, withTimeout(15_000) { manager.awaitExit(taskId) })
+        } finally {
             scope.cancel()
             dir.deleteRecursively()
         }

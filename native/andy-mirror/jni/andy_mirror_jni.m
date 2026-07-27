@@ -371,10 +371,10 @@ static void draw_picker_magnifier(const AndyMirrorOverlay overlay, NSRect bounds
         const float source_height = fmaxf(1.0f, overlay.source_size[1]);
         const int left = (int) lroundf(overlay.ruler[1] * source_width);
         const int top = (int) lroundf(overlay.ruler[2] * source_height);
-        draw_guide_badge([NSString stringWithFormat:@"L %d", left], NSMakePoint(x + 8.0, NSMaxY(bounds) - 24.0), bounds);
-        draw_guide_badge([NSString stringWithFormat:@"R %d", (int) lroundf(source_width) - left], NSMakePoint(x - 70.0, NSMinY(bounds) + 8.0), bounds);
-        draw_guide_badge([NSString stringWithFormat:@"T %d", top], NSMakePoint(NSMinX(bounds) + 8.0, y - 24.0), bounds);
-        draw_guide_badge([NSString stringWithFormat:@"B %d", (int) lroundf(source_height) - top], NSMakePoint(NSMaxX(bounds) - 74.0, y + 8.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"%d", left], NSMakePoint(x + 8.0, NSMaxY(bounds) - 24.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"%d", (int) lroundf(source_width) - left], NSMakePoint(x - 70.0, NSMinY(bounds) + 8.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"%d", top], NSMakePoint(NSMinX(bounds) + 8.0, y - 24.0), bounds);
+        draw_guide_badge([NSString stringWithFormat:@"%d", (int) lroundf(source_height) - top], NSMakePoint(NSMaxX(bounds) - 74.0, y + 8.0), bounds);
     }
 
     if (overlay.picker[0] > 0.5f && overlay.picker[3] > 0.5f) {
@@ -719,6 +719,18 @@ static NSString *const shader_source = @
     "  bool is_bgra = overlay.format_flags.x > 0.5;\n"
     "  bool full_range_yuv = overlay.format_flags.y > 0.5;\n"
     "  float3 rgb = sampled_rgb(y_tex, uv_tex, linear_sampler, in.uv, is_bgra, full_range_yuv);\n"
+    "  if (overlay.grid.x > 0.5 && overlay.grid.y > 0.0) {\n"
+    "    float step_x = max(overlay.grid.y, 0.0001);\n"
+    "    float step_y = max(overlay.grid.z > 0.0 ? overlay.grid.z : overlay.grid.y, 0.0001);\n"
+    "    float fx = abs(fract(in.uv.x / step_x));\n"
+    "    float fy = abs(fract(in.uv.y / step_y));\n"
+    "    fx = min(fx, 1.0 - fx);\n"
+    "    fy = min(fy, 1.0 - fy);\n"
+    "    float x_width = max(fwidth(in.uv.x / step_x), 0.001);\n"
+    "    float y_width = max(fwidth(in.uv.y / step_y), 0.001);\n"
+    "    float line = max(1.0 - smoothstep(0.0, x_width, fx), 1.0 - smoothstep(0.0, y_width, fy));\n"
+    "    rgb = mix(rgb, overlay.grid_color.rgb, overlay.grid_color.a * line);\n"
+    "  }\n"
     "  if (overlay.ruler.x > 0.5) {\n"
     "    float x_width = max(fwidth(in.uv.x), 0.001);\n"
     "    float y_width = max(fwidth(in.uv.y), 0.001);\n"

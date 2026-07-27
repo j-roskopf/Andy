@@ -72,7 +72,8 @@ internal fun inferCompletedTurn(
 ): Boolean {
     if (scrollbackLooksBlocked(agent, scrollback)) return false
     if (liveSessionStatus == AgentStatus.Done) return true
-    return readLatestHookStatus(artifactDir) == AgentStatus.Done
+    // Herdr screen-manifest: idle at prompt means the turn finished (no hook authority).
+    return scrollbackLooksIdleAtPrompt(agent, scrollback)
 }
 
 /**
@@ -90,7 +91,6 @@ internal fun inferWorkflowBuildTurnComplete(
     if (liveSessionStatus == AgentStatus.Working || liveSessionStatus == AgentStatus.Blocked) {
         return false
     }
-    if (inferCompletedTurn(agent, artifactDir, scrollback, null)) return true
     if (!sawWorking) return false
     return liveSessionStatus == AgentStatus.Done &&
         scrollbackLooksIdleAtPrompt(agent, scrollback)
@@ -102,24 +102,15 @@ internal fun inferPausedAtPrompt(
     scrollback: String,
     liveSessionStatus: AgentStatus? = null,
 ): Boolean {
+    // Idle-at-prompt is treated as a completed turn under screen-manifest authority.
     if (inferCompletedTurn(agent, artifactDir, scrollback, liveSessionStatus)) return false
     if (scrollbackLooksBlocked(agent, scrollback)) return false
 
     when (liveSessionStatus) {
-        AgentStatus.Working -> return false
-        AgentStatus.Blocked -> return false
-        AgentStatus.Done -> {
-            return scrollbackLooksIdleAtPrompt(agent, scrollback)
-        }
+        AgentStatus.Working, AgentStatus.Blocked -> return false
         else -> Unit
     }
-
-    if (!scrollbackLooksIdleAtPrompt(agent, scrollback)) return false
-
-    return when (readLatestHookStatus(artifactDir)) {
-        AgentStatus.Working, AgentStatus.Blocked -> false
-        else -> true
-    }
+    return false
 }
 
 private fun AgentTask.asCompletedTurn(): AgentTask = copy(
@@ -128,16 +119,13 @@ private fun AgentTask.asCompletedTurn(): AgentTask = copy(
     finishedAtMillis = finishedAtMillis ?: System.currentTimeMillis(),
 )
 
+/** Legacy status.json reader — badge authority is screen scrape; kept for MCP/debug artifacts. */
 internal fun readLatestHookStatus(artifactDir: File): AgentStatus? {
     val file = File(artifactDir, "status.json")
     if (!file.isFile) return null
-    val parsed = file.readLines()
+    return file.readLines()
         .asReversed()
-        .mapNotNull { line -> line.takeIf { it.isNotBlank() }?.let(::parseStatusJson) }
-    val latest = parsed.firstOrNull() ?: return null
-    if (latest != AgentStatus.Blocked) return latest
-    // Permission-mode notifications append blocked after Stop already wrote done.
-    return parsed.drop(1).firstOrNull { it == AgentStatus.Done } ?: latest
+        .firstNotNullOfOrNull { line -> line.takeIf { it.isNotBlank() }?.let(::parseStatusJson) }
 }
 
 internal fun scrollbackLooksBlocked(agent: AgentKind, scrollback: String): Boolean =

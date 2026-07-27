@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -82,6 +83,7 @@ import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -218,7 +220,7 @@ internal fun DevicesScreen(
                 { state.deviceQuery = it },
                 placeholder = { Text("Search devices", color = TextSecondary) },
                 singleLine = true,
-                modifier = Modifier.width(280.dp).height(54.dp),
+                modifier = Modifier.width(280.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
                 colors = fieldColors(),
             )

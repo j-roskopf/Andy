@@ -6,17 +6,42 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Thin wrapper around a dedicated Andy tmux server (`tmux -L andy`).
+ * Thin wrapper around a dedicated Andy tmux server (`tmux -L andy` by default).
  *
  * Agent tasks run as detached sessions named `andy-task-<taskId>`. Live attach
  * (GUI / CLI) is `tmux -L andy attach -t andy-task-<taskId>` — MCP never streams
  * PTY bytes.
+ *
+ * Override the socket with env `ANDY_TMUX_SOCKET` or [useIsolatedServerForTests] so
+ * desktopTest never shares the live GUI/`andyd` server (a `kill-server` there
+ * prints `[server exited]` in every attached agent chat).
  */
 object TmuxAndy {
-    const val SERVER = "andy"
+    const val PRODUCTION_SERVER = "andy"
+    const val TEST_SERVER = "andy-test"
+
+    private val serverName = AtomicReference(
+        System.getenv("ANDY_TMUX_SOCKET")?.takeIf { it.isNotBlank() } ?: PRODUCTION_SERVER,
+    )
+
+    /** Active tmux `-L` socket name (`andy` in production, `andy-test` under desktopTest). */
+    val SERVER: String get() = serverName.get()
 
     /**
-     * Options every Andy session needs, applied globally to the `andy` server.
+     * Point this process at an isolated socket. Desktop tests must call this before any
+     * tmux work so they cannot SIGTERM live agent sessions on [PRODUCTION_SERVER].
+     */
+    fun useIsolatedServerForTests(
+        name: String = System.getenv("ANDY_TMUX_SOCKET")?.takeIf { it.isNotBlank() } ?: TEST_SERVER,
+    ) {
+        if (serverName.get() == name) return
+        serverName.set(name)
+        serverConfigured.set(false)
+        sessionCache.set(null)
+    }
+
+    /**
+     * Options every Andy session needs, applied globally to the Andy tmux server.
      *
      * `status off` is a correctness requirement, not just a redraw saving: the embedded
      * viewer attaches a real tmux client, so a visible status bar would occupy the bottom
@@ -176,16 +201,36 @@ object TmuxAndy {
         createDetachedSession(taskId, sessionCwd, launch)
 
         // Poisoned server cwd: -c and even `cd` still leave shell-init noise that makes
-        // Node CLIs die on uv_cwd. Recycle once; other Andy sessions die with the server,
-        // which is preferable to every new chat being unusable.
+        // Node CLIs die on uv_cwd. Recycle only when it would not kill healthy chats —
+        // otherwise every attached viewer prints `[server exited]` and goes read-only.
         if (sessionLooksBrokenSoon(taskId)) {
-            killServer()
-            startServer()
-            createDetachedSession(taskId, sessionCwd, launch)
+            if (canRecycleServerWithoutKillingHealthySessions(exceptTaskId = taskId)) {
+                killServer()
+                startServer()
+                createDetachedSession(taskId, sessionCwd, launch)
+            } else {
+                killSession(taskId)
+                error(
+                    "Andy tmux server cwd is poisoned (getcwd / uv_cwd). " +
+                        "Other live agent chats are still on socket '$SERVER', so it was not recycled. " +
+                        "Stop those chats or run: tmux -L $SERVER kill-server",
+                )
+            }
         }
         check(hasSession(taskId)) {
             "failed to create tmux session ${sessionName(taskId)}"
         }
+    }
+
+    /**
+     * True when recycling the tmux server would only discard empty/broken sessions.
+     * Healthy siblings must survive — they are live agent chats.
+     */
+    internal fun canRecycleServerWithoutKillingHealthySessions(exceptTaskId: String): Boolean {
+        val except = sessionName(exceptTaskId)
+        val others = listSessions().filter { it != except }
+        if (others.isEmpty()) return true
+        return others.all { name -> paneContentLooksBroken(capturePaneRaw(name, historyLines = 0)) }
     }
 
     private fun createDetachedSession(taskId: String, sessionCwd: String, launch: String) {
@@ -251,8 +296,15 @@ object TmuxAndy {
      * Captures pane text. [historyLines] of `-1` means full history (`-S -`).
      * [escapes] keeps SGR sequences (`-e`) so captures can be replayed with styling.
      */
-    fun capturePane(taskId: String, historyLines: Int = 200, escapes: Boolean = false): String {
-        val cmd = mutableListOf(tmuxBinary(), "-L", SERVER, "capture-pane", "-p", "-t", sessionName(taskId))
+    fun capturePane(taskId: String, historyLines: Int = 200, escapes: Boolean = false): String =
+        capturePaneRaw(sessionName(taskId), historyLines = historyLines, escapes = escapes)
+
+    private fun capturePaneRaw(
+        session: String,
+        historyLines: Int = 200,
+        escapes: Boolean = false,
+    ): String {
+        val cmd = mutableListOf(tmuxBinary(), "-L", SERVER, "capture-pane", "-p", "-t", session)
         if (escapes) cmd += "-e"
         if (historyLines < 0) {
             cmd += listOf("-S", "-")

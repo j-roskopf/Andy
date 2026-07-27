@@ -797,7 +797,7 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun stopCurrentTerminatesTheRunAndRequiresAttention() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 1_500)) { harness ->
+        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Running }
@@ -814,8 +814,34 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun runSpecDoesNotSurfaceWorkflowStageFailedWhileLaunching() = runBlocking {
+        // createAndStart returns with status=null before launchRun promotes to Working.
+        // reconcileWorkflowRun must treat that as queued, not as a failed stage.
+        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
+            val service = harness.service
+            val specId = service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan typed workflows",
+                    brief = "Design typed project tasks",
+                    profile = specProfile(),
+                ),
+            )
+            service.runSpec(specId)
+            val spec = service.projects.value.getValue("project-1").tasks.first { it.id == specId }
+            assertTrue(
+                spec.state == ProjectTaskState.Queued || spec.state == ProjectTaskState.Running,
+                "expected Queued/Running immediately after runSpec, got ${spec.state}",
+            )
+            assertEquals(null, spec.lastError)
+            await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.planVersions?.size == 1 }
+            assertEquals(null, service.projects.value.getValue("project-1").tasks.first { it.id == specId }.lastError)
+        }
+    }
+
+    @Test
     fun stoppingAndDeletingASpecRefineRestoresCompletedAndDropsTheAttempt() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 1_500)) { harness ->
+        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
             val service = harness.service
             val specId = service.saveSpec(
                 ProjectSpecDraft(
@@ -929,6 +955,7 @@ class ProjectWorkflowServiceTest {
                 scope, store, AgentCliLocator(), mapOf(AgentKind.Codex to WorkflowAdapter()), WorktreeManager(File(root, "worktrees")),
                 WorkflowFakeMcp, WorkflowWorkspaceStore, config, enableProbes = false,
                 terminalMode = AgentTerminalMode.DirectPty,
+                artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
             )
             service.ensureProject("project-1")
             await { config.value.projects.single().notes.isEmpty() }
@@ -1063,6 +1090,7 @@ class ProjectWorkflowServiceTest {
                 MutableActionConfig(ActionsConfig(projects = listOf(ActionProject("project-1", "Project", projectDir.absolutePath)))),
                 enableProbes = false,
                 terminalMode = AgentTerminalMode.DirectPty,
+                artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
             )
             service.ensureProject("project-1")
             // Recovery reconciles the interrupted run asynchronously; wait for it to settle to
@@ -1192,6 +1220,9 @@ private suspend fun withHarness(
             enableProbes = false,
             // Fast-exiting shell "agents" race the tmux-attach path; run them in-process.
             terminalMode = AgentTerminalMode.DirectPty,
+            // Keep artifact detection tight so multi-stage workflows don't wait on the
+            // production 350ms poll between Spec/Review/Verification handoffs.
+            artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
         )
         service.ensureProject("project-1")
         block(WorkflowHarness(service, store, projectDir))
@@ -1222,6 +1253,12 @@ private class WorkflowAdapter(
         } else {
             if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) {
                 task.cwd?.let { File(it, "review-edit.txt").writeText("reviewed change\n") }
+            }
+            // Pre-write when the stage completes immediately so the artifact watcher does
+            // not wait on shell I/O. Delayed stages keep writing after sleep so stop/pause
+            // tests can still observe a live run.
+            if (stageDelayMillis == 0L && task.workflowStage != failStage) {
+                writeWorkflowArtifacts(task)
             }
             listOf(binary, "-c", unixCommand(task))
         }
@@ -1257,16 +1294,23 @@ private class WorkflowAdapter(
         if (stageDelayMillis > 0) append("sleep ").append(stageDelayMillis / 1_000.0).append("; ")
         when (task.workflowStage) {
             ProjectWorkflowStage.Spec -> {
-                append(writeArtifact(task, "plan.md", specPlanText()))
+                // Already on disk when stageDelayMillis == 0; delayed stages write after sleep.
+                if (stageDelayMillis > 0) append(writeArtifact(task, "plan.md", specPlanText()))
             }
             ProjectWorkflowStage.Build -> {
                 if (buildKeepAliveSeconds > 0) append("sleep ").append(buildKeepAliveSeconds)
             }
             ProjectWorkflowStage.Review -> {
-                reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifact(task, "review.json", it)) }
+                if (stageDelayMillis > 0) {
+                    reviewJson(reviewOutcomeKey(task))?.let { append(writeArtifact(task, "review.json", it)) }
+                }
             }
             ProjectWorkflowStage.Verification -> {
-                verificationJson(verificationOutcomeKey(task))?.let { append(writeArtifact(task, "verification.json", it)) }
+                if (stageDelayMillis > 0) {
+                    verificationJson(verificationOutcomeKey(task))?.let {
+                        append(writeArtifact(task, "verification.json", it))
+                    }
+                }
             }
             null -> Unit
         }
@@ -1354,6 +1398,9 @@ private class WorkflowAdapter(
 }
 
 private fun isWindows(): Boolean = System.getProperty("os.name").contains("windows", ignoreCase = true)
+
+/** Fast artifact poll for multi-stage workflow harnesses (production default is 350ms). */
+private const val WORKFLOW_ARTIFACT_POLL_MS = 20L
 
 private fun workflowShellBinary(): String = if (isWindows()) {
     checkNotNull(System.getenv("ComSpec")) { "ComSpec is required to run workflow tests on Windows" }
@@ -1444,7 +1491,7 @@ private suspend fun awaitStableTaskCount(service: DesktopAgentRunService): Int {
 private suspend fun <T> assertStaysAt(
     expected: T,
     message: String,
-    settleMillis: Long = harnessTimeoutMillis(500, 2_000, 3_000),
+    settleMillis: Long = harnessTimeoutMillis(200, 2_000, 3_000),
     sample: () -> T,
 ) {
     val deadline = System.currentTimeMillis() + settleMillis

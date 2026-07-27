@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -116,6 +117,7 @@ import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.shell.RetainedDestination
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -496,7 +498,6 @@ private fun ProjectCockpit(
                                             AgentTaskDetail(
                                                 services,
                                                 selected,
-                                                nowMillis,
                                                 onDelete = ::requestDeleteChat,
                                                 transcriptScrollMemory = transcriptScrollMemory,
                                                 modifier = Modifier.fillMaxSize(),
@@ -1184,7 +1185,7 @@ private fun ProjectDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Context directory", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TextField(contextDir, { contextDir = it }, readOnly = true, singleLine = true, modifier = Modifier.weight(1f).height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont), colors = fieldColors())
+                        TextField(contextDir, { contextDir = it }, readOnly = true, singleLine = true, modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont), colors = fieldColors())
                         Button(onClick = { scope.launch { pickDirectory(contextDir.ifBlank { null })?.let { contextDir = it } } }, colors = primaryButtonColors()) { Text("browse") }
                     }
                 }
@@ -1258,7 +1259,7 @@ private fun ActionDialog(projects: List<ActionProject>, initialProjectId: String
                             cwd,
                             { cwd = it },
                             singleLine = true,
-                            modifier = Modifier.weight(1f).height(54.dp),
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                             textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                             colors = fieldColors(),
                             placeholder = { Text("blank uses project context dir", color = TextSecondary, fontFamily = MonoFont) },
