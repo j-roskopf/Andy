@@ -872,18 +872,33 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installStatusSignalsWritesActiveTaskWithoutClaudeStatusHooks() {
+    fun installClaudeStatusHooksWritesWorkingDoneBlockedMapping() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
             System.setProperty("user.home", home.absolutePath)
             val cwd = File(home, "project").also { it.mkdirs() }
             val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
-            installStatusSignals(AgentKind.ClaudeCode, cwd, artifacts)
+            installClaudeStatusHooks(cwd, artifacts)
 
-            assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
+            val settings = File(cwd, ".claude/settings.json")
+            assertTrue(settings.isFile)
+            val text = settings.readText()
+            val hooks = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["hooks"]!!.jsonObject
+            assertTrue(hooks.containsKey("UserPromptSubmit"))
+            assertTrue(hooks.containsKey("Stop"))
+            assertTrue(hooks.containsKey("PermissionRequest"))
+            assertTrue(hooks.containsKey("Notification"))
+            assertFalse(hooks.containsKey("SubagentStop"), "SubagentStop must not mark parent Done")
+            assertTrue("working" in text)
+            assertTrue("idle_prompt|agent_completed" in text)
+            assertTrue("permission_prompt|agent_needs_input|elicitation_dialog" in text)
+            assertTrue(
+                "\$HOME/.andy/bin/andy-status-hook.sh" in text,
+                "hooks must use stable \$HOME helper path",
+            )
             assertTrue(AndyStatusHookInstaller.scriptFile(home).canExecute())
-            assertFalse(File(cwd, ".claude/settings.json").exists())
+            assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
             assertTrue(!File(home, ".claude/settings.json").exists())
         } finally {
             System.setProperty("user.home", previousHome)
@@ -892,7 +907,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installStatusSignalsStripsClaudeAndyHooksButPreservesUserHooks() {
+    fun installClaudeStatusHooksMergesWithoutClobberingUserHooks() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
@@ -903,50 +918,10 @@ class AgentStatusTrackerTest {
                 """
                 {
                   "hooks": {
-                    "UserPromptSubmit": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' working" }
-                        ]
-                      }
-                    ],
-                    "Stop": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' done" }
-                        ]
-                      }
-                    ],
-                    "PermissionRequest": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' blocked" }
-                        ]
-                      }
-                    ],
-                    "Notification": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' blocked" }
-                        ]
-                      }
-                    ],
                     "PreToolUse": [
                       {
                         "hooks": [
                           { "type": "command", "command": "echo user-hook" }
-                        ]
-                      },
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' working" }
-                        ]
-                      }
-                    ],
-                    "PostToolUse": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' working" }
                         ]
                       }
                     ],
@@ -962,27 +937,16 @@ class AgentStatusTrackerTest {
                 """.trimIndent(),
             )
             val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
-            installStatusSignals(AgentKind.ClaudeCode, cwd, artifacts)
+            installClaudeStatusHooks(cwd, artifacts)
 
-            val settingsText = File(settingsDir, "settings.json").readText()
             val hooks = kotlinx.serialization.json.Json
-                .parseToJsonElement(settingsText)
+                .parseToJsonElement(File(settingsDir, "settings.json").readText())
                 .jsonObject["hooks"]!!
                 .jsonObject
             assertTrue(hooks.containsKey("PreToolUse"), "user PreToolUse must be preserved")
             assertTrue("echo user-hook" in hooks.toString())
-            assertFalse("andy-status-hook" in settingsText, "legacy Andy status hooks must be stripped")
-            for (event in listOf(
-                "UserPromptSubmit",
-                "Stop",
-                "PermissionRequest",
-                "Notification",
-                "PostToolUse",
-                "SubagentStop",
-            )) {
-                assertFalse(hooks.containsKey(event), "Andy-only $event entry must be removed")
-            }
-            assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
+            assertFalse(hooks.containsKey("SubagentStop"), "legacy Andy SubagentStop entry removed")
+            assertTrue(hooks.containsKey("Stop"))
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -990,7 +954,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installCursorStatusSignalsDoesNotWriteWorkingDoneHooks() {
+    fun installCursorStatusHooksWritesBeforeSubmitAndStop() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
@@ -999,8 +963,19 @@ class AgentStatusTrackerTest {
             val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
             installStatusSignals(AgentKind.Cursor, cwd, artifacts)
 
+            val hooksFile = File(cwd, ".cursor/hooks.json")
+            assertTrue(hooksFile.isFile)
+            val root = kotlinx.serialization.json.Json.parseToJsonElement(hooksFile.readText()).jsonObject
+            val hooks = root["hooks"]!!.jsonObject
+            assertTrue(hooks.containsKey("sessionStart"))
+            assertTrue(hooks.containsKey("beforeSubmitPrompt"))
+            assertTrue(hooks.containsKey("stop"))
+            val text = hooksFile.readText()
+            assertTrue("working" in text)
+            assertTrue("done" in text)
+            assertTrue(" completed" in text, "Cursor stop must gate done on status completed|aborted")
+            assertTrue("\$HOME/.andy/bin/andy-status-hook.sh" in text)
             assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
-            assertFalse(File(cwd, ".cursor/hooks.json").exists())
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -1008,7 +983,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installCursorStatusSignalsStripsAndyHooks() {
+    fun installCursorStatusHooksMergesWithoutClobberingUserHooks() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
@@ -1037,11 +1012,12 @@ class AgentStatusTrackerTest {
 
             val text = File(hooksDir, "hooks.json").readText()
             val hooks = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["hooks"]!!.jsonObject
-            assertFalse("andy-status-hook" in text)
-            assertFalse(hooks.containsKey("beforeSubmitPrompt"))
-            assertFalse(hooks.containsKey("stop"))
+            assertTrue(hooks.containsKey("beforeSubmitPrompt"))
+            assertTrue(hooks.containsKey("stop"))
             assertTrue(hooks.containsKey("sessionStart"))
             assertTrue("echo user-cursor-hook" in text)
+            assertTrue("\$HOME/.andy/bin/andy-status-hook.sh" in text)
+            assertFalse("/tmp/andy-status-hook.sh" in text, "stale /tmp Andy hooks must be replaced")
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -1049,7 +1025,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installCodexStatusSignalsDoesNotWriteWorkingDoneBlockedHooks() {
+    fun installCodexStatusHooksWritesWorkingDoneBlocked() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
@@ -1058,113 +1034,57 @@ class AgentStatusTrackerTest {
             val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
             installStatusSignals(AgentKind.Codex, cwd, artifacts)
 
-            assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
-            assertFalse(File(cwd, ".codex/hooks.json").exists())
-        } finally {
-            System.setProperty("user.home", previousHome)
-            home.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun installCodexStatusSignalsStripsAndyHooks() {
-        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
-        val previousHome = System.getProperty("user.home")
-        try {
-            System.setProperty("user.home", home.absolutePath)
-            val cwd = File(home, "project").also { it.mkdirs() }
-            val hooksDir = File(cwd, ".codex").also { it.mkdirs() }
-            File(hooksDir, "hooks.json").writeText(
-                """
-                {
-                  "hooks": {
-                    "UserPromptSubmit": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' working empty" }
-                        ]
-                      }
-                    ],
-                    "Stop": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' done empty" }
-                        ]
-                      }
-                    ],
-                    "PermissionRequest": [
-                      {
-                        "hooks": [
-                          { "type": "command", "command": "'/tmp/andy-status-hook.sh' blocked empty" }
-                        ]
-                      }
-                    ]
-                  }
-                }
-                """.trimIndent(),
-            )
-            val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
-            installStatusSignals(AgentKind.Codex, cwd, artifacts)
-
-            val text = File(hooksDir, "hooks.json").readText()
-            assertFalse("andy-status-hook" in text)
+            val hooksFile = File(cwd, ".codex/hooks.json")
+            assertTrue(hooksFile.isFile)
+            val text = hooksFile.readText()
             val hooks = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject["hooks"]!!.jsonObject
-            assertTrue(hooks.isEmpty())
-        } finally {
-            System.setProperty("user.home", previousHome)
-            home.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun installAntigravityStatusSignalsDoesNotWriteNamedAndyStatusHook() {
-        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
-        val previousHome = System.getProperty("user.home")
-        try {
-            System.setProperty("user.home", home.absolutePath)
-            val cwd = File(home, "project").also { it.mkdirs() }
-            val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
-            installStatusSignals(AgentKind.Antigravity, cwd, artifacts)
-
-            assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
-            assertFalse(File(cwd, ".agents/hooks.json").exists())
-        } finally {
-            System.setProperty("user.home", previousHome)
-            home.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun installAntigravityStatusSignalsStripsNamedAndyStatusHook() {
-        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
-        val previousHome = System.getProperty("user.home")
-        try {
-            System.setProperty("user.home", home.absolutePath)
-            val cwd = File(home, "project").also { it.mkdirs() }
-            val hooksDir = File(cwd, ".agents").also { it.mkdirs() }
-            File(hooksDir, "hooks.json").writeText(
-                """
-                {
-                  "andy-status": {
-                    "PreInvocation": [{ "command": "andy-status-hook.sh working" }],
-                    "Stop": [{ "command": "andy-status-hook.sh done empty fully-idle" }],
-                    "PreToolUse": [{ "command": "andy-status-hook.sh blocked" }]
-                  },
-                  "user-hook": {
-                    "Stop": [{ "command": "echo keep-me" }]
-                  }
-                }
-                """.trimIndent(),
+            assertTrue(hooks.containsKey("UserPromptSubmit"))
+            assertTrue(hooks.containsKey("Stop"))
+            assertTrue(hooks.containsKey("PermissionRequest"))
+            assertTrue(
+                Regex("""andy-status-hook\.sh\\?" (working|done|blocked) empty""")
+                    .containsMatchIn(text) ||
+                    Regex("""andy-status-hook\.sh" (working|done|blocked) empty""")
+                        .containsMatchIn(text),
+                "Codex hooks must use empty respond mode for JSON stdout",
             )
+            assertTrue("\$HOME/.andy/bin/andy-status-hook.sh" in text)
+            assertTrue(" empty" in text)
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun installAntigravityStatusHooksWritesNamedAndyStatusHook() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val cwd = File(home, "project").also { it.mkdirs() }
             val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
             installStatusSignals(AgentKind.Antigravity, cwd, artifacts)
 
-            val root = kotlinx.serialization.json.Json
-                .parseToJsonElement(File(hooksDir, "hooks.json").readText())
-                .jsonObject
-            assertFalse(root.containsKey("andy-status"))
-            assertTrue(root.containsKey("user-hook"))
-            assertTrue("echo keep-me" in root.toString())
+            val hooksFile = File(cwd, ".agents/hooks.json")
+            assertTrue(hooksFile.isFile)
+            val root = kotlinx.serialization.json.Json.parseToJsonElement(hooksFile.readText()).jsonObject
+            assertTrue(root.containsKey("andy-status"))
+            val andy = root["andy-status"]!!.jsonObject
+            assertTrue(andy.containsKey("PreInvocation"))
+            assertTrue(andy.containsKey("Stop"))
+            assertTrue(andy.containsKey("PreToolUse"))
+            val text = hooksFile.readText()
+            assertTrue("ask_question|ask_permission" in text)
+            assertTrue(" fully-idle" in text, "Antigravity Stop must gate done on fullyIdle")
+            assertTrue(
+                Regex("""andy-status-hook\.sh" done empty fully-idle""")
+                    .containsMatchIn(text) ||
+                    Regex("""andy-status-hook\.sh\\" done empty fully-idle""")
+                        .containsMatchIn(text),
+                "Antigravity Stop must use empty respond (not decision:stop)",
+            )
+            assertFalse(" done stop" in text)
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -1318,7 +1238,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun installStatusSignalsUpdatesActiveTaskWithoutCreatingHooks() {
+    fun installCursorStatusHooksSkipsRewriteWhenUnchanged() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         try {
@@ -1326,13 +1246,16 @@ class AgentStatusTrackerTest {
             val cwd = File(home, "project").also { it.mkdirs() }
             val artifacts = File(cwd, ".andy/task-a").also { it.mkdirs() }
             installStatusSignals(AgentKind.Cursor, cwd, artifacts)
-            assertEquals("task-a", File(cwd, ".andy/active-task").readText().trim())
-            assertFalse(File(cwd, ".cursor/hooks.json").exists())
-
+            val hooksFile = File(cwd, ".cursor/hooks.json")
+            val first = hooksFile.readText()
+            val firstModified = hooksFile.lastModified()
+            Thread.sleep(20)
             val artifactsB = File(cwd, ".andy/task-b").also { it.mkdirs() }
             installStatusSignals(AgentKind.Cursor, cwd, artifactsB)
+            assertEquals(first, hooksFile.readText(), "stable hooks must not rewrite per task")
             assertEquals("task-b", File(cwd, ".andy/active-task").readText().trim())
-            assertFalse(File(cwd, ".cursor/hooks.json").exists())
+            // File content identical; mtime may or may not change — content is the contract.
+            assertTrue(firstModified > 0)
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()

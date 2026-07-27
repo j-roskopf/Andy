@@ -134,6 +134,58 @@ class AgentTerminalSessionLifecycleTest {
     }
 
     /**
+     * Regression for orphaned `andy-task-*` tmux sessions: a session reattached after
+     * losing its handle (app/daemon restart, or any other drop from [handles]) is built
+     * with `killTmuxOnClose = false` so background release doesn't tear down a chat the
+     * user isn't actively stopping. But [AgentTerminalManager.stop] always means
+     * "terminate" - if it trusted that same flag, stopping (or deleting, which routes
+     * through stop) a chat that had been reattached would silently leave its tmux
+     * session and CLI process running forever with no handle referencing it.
+     */
+    @Test
+    fun stoppingAReattachedSessionStillKillsTmux() = runBlocking {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return@runBlocking
+        }
+        AndyKetraTermConfig.ensureInitialized()
+        val dir = tempDir()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val taskId = "reattach-then-stop-task"
+        try {
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.TmuxWithAttach,
+            )
+            manager.start(task(taskId, dir), longRunningArgv(), emptyMap())
+            assertTrue(TmuxAndy.hasSession(taskId))
+
+            // Simulate a dropped handle (e.g. app/daemon restart) followed by a GUI
+            // reattach: this is the only path that constructs a fresh TmuxAttachBackend
+            // pinned to killTmuxOnClose = false.
+            manager.stop(taskId)
+            assertFalse(TmuxAndy.hasSession(taskId), "sanity: stop on a live handle kills tmux")
+
+            TmuxAndy.newSession(taskId = taskId, cwd = dir.absolutePath, argv = longRunningArgv())
+            assertTrue(TmuxAndy.hasSession(taskId))
+            val reattached = manager.attachExisting(taskId, cwd = dir.absolutePath)
+            assertNotNull(reattached, "reattach should succeed")
+            assertTrue(TmuxAndy.hasSession(taskId))
+
+            manager.stop(taskId)
+            assertFalse(
+                TmuxAndy.hasSession(taskId),
+                "stopping a reattached chat must kill its tmux session, not just drop the handle",
+            )
+        } finally {
+            runCatching { TmuxAndy.killSession(taskId) }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
      * Product-path regression: AgentTerminalManager → TerminalSessions → tmux must
      * recover a deleted task cwd into scratch instead of a getcwd / uv_cwd broken pane.
      */
