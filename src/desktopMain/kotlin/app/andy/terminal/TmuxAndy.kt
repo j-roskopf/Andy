@@ -236,10 +236,18 @@ object TmuxAndy {
     private fun createDetachedSession(taskId: String, sessionCwd: String, launch: String) {
         if (hasSession(taskId)) killSession(taskId)
         val name = sessionName(taskId)
+        // tmux's client/server IPC caps a single command message at roughly 16-20KB
+        // ("command too long"). A long build/review prompt (a whole frozen plan or
+        // diff) blows past that if inlined with `-c launch`, so hand tmux a short
+        // script path instead — the command line stays tiny no matter how big the
+        // agent prompt is.
+        val scriptFile = launchScriptFile(name)
+        scriptFile.parentFile?.mkdirs()
+        scriptFile.writeText(launch)
         val cmd = listOf(
             tmuxBinary(), "-L", SERVER, "new-session", "-d", "-s", name,
             "-c", sessionCwd,
-            "--", "/bin/sh", "-c", launch,
+            "--", "/bin/sh", scriptFile.absolutePath,
         )
         val result = run(cmd, workingDirectory = File(sessionCwd))
         invalidateSessionCache()
@@ -247,6 +255,12 @@ object TmuxAndy {
             "failed to create tmux session $name: ${result.stderr.ifBlank { result.stdout }}"
         }
     }
+
+    private fun launchScriptDir(): File =
+        File(System.getProperty("user.home"), ".andy/tmux-launch")
+
+    private fun launchScriptFile(sessionName: String): File =
+        File(launchScriptDir(), "$sessionName.sh")
 
     /** True when a newly spawned pane shows getcwd / uv_cwd failure within [timeoutMs]. */
     private fun sessionLooksBrokenSoon(taskId: String, timeoutMs: Long = 600): Boolean {
@@ -266,6 +280,7 @@ object TmuxAndy {
             checkExit = false,
         )
         invalidateSessionCache()
+        launchScriptFile(sessionName(taskId)).delete()
     }
 
     /** Drop the Andy tmux server (all sessions). Next [startServer] boots from a safe cwd. */

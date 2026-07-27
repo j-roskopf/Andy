@@ -770,7 +770,11 @@ class AgentTerminalManager(
             runCatching { handle.session.close() }
             // Direct PTY output can land in the buffer just after process exit.
             runCatching { persistScrollback(handle) }
-        } else if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
+        }
+        // stop() always means terminate, unlike session.close() which a reattached
+        // TmuxAttachBackend honors with killTmuxOnClose = false. Force it here so a
+        // chat that was reattached after a dropped handle doesn't leak its tmux session.
+        if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
             TmuxAndy.killSession(taskId)
         }
         bumpSessionsRevision()
