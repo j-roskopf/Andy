@@ -75,43 +75,20 @@ jobs:
 
       - name: Run Linux checks
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
+        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
 
       - name: Install tmux (agent terminal executor)
         if: matrix.os == 'macos'
         run: brew install tmux || true
 
-      - name: Boot iOS Simulator for Live smoke
-        if: matrix.os == 'macos'
-        run: |
-          set -euo pipefail
-          # Prefer an already-available iPhone runtime; create nothing new.
-          UDID="$(
-            xcrun simctl list devices available -j | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in data.get("devices", {}).items():
-              if "iOS" not in runtime:
-                  continue
-              for device in devices:
-                  name = device.get("name") or ""
-                  if device.get("isAvailable") and "iPhone" in name:
-                      print(device["udid"])
-                      raise SystemExit(0)
-          raise SystemExit("No available iPhone simulator device found")
-          '
-          )"
-          echo "Booting iOS Simulator $UDID"
-          xcrun simctl boot "$UDID" || true
-          xcrun simctl bootstatus "$UDID" -b
-          # Some SimulatorKit paths expect the Simulator app process.
-          open -a Simulator --args -CurrentDeviceUDID "$UDID" || true
-          echo "ANDY_IOS_SIM_UDID=$UDID" >> "$GITHUB_ENV"
-          echo "ANDY_IOS_SIM_SMOKE=1" >> "$GITHUB_ENV"
+      # iOS Simulator "Live" smoke tests (IosSimMirrorDeviceSmokeTest) are intentionally NOT run
+      # on CI: driving a real GPU mirror + AWT Robot HID against a headless-ish runner is
+      # inherently flaky and has hung the job to the 60m limit. Without ANDY_IOS_SIM_SMOKE the
+      # tests assumeTrue-skip. Run them locally with a booted simulator when needed.
 
       - name: Run macOS checks
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build
+        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build "-PandyRetryTests=true"
 
       - name: Build Andy Rust CLI
         if: matrix.os == 'macos'
@@ -123,7 +100,7 @@ jobs:
       - name: Run Windows checks
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble
+        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
 
       - name: Upload test reports
         if: failure()

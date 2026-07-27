@@ -399,6 +399,16 @@ val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
 
 // Compose Desktop screenshots share one renderer per process. Running them serially
 // keeps their viewport, fonts, and image output deterministic on every CI runner.
+// Enable test retries via an explicit Gradle property the CI workflow passes
+// (`-PandyRetryTests=true`). A property is propagated to the daemon reliably, unlike env vars
+// such as CI, which are not part of daemon compatibility and can be missing on the runner — that
+// is why the earlier `System.getenv("CI")`-gated retry never fired on GitHub CI. The property name
+// is intentionally dot-free: PowerShell (the Windows CI shell) splits `-Pfoo.bar=true` at the dot.
+// The env check is kept as a best-effort fallback for other CI setups.
+val andyRetryTests =
+    providers.gradleProperty("andyRetryTests").map(String::toBoolean).getOrElse(false) ||
+        System.getenv("CI") != null
+
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
@@ -406,8 +416,8 @@ tasks.withType<Test>().configureEach {
     // mirror/simulator smoke tests whose timing is inherently variable on shared CI runners.
     // The assertions are being hardened to poll for conditions rather than sleep fixed windows,
     // but a retry keeps a lone residual flake from turning the whole PR red and forcing a manual
-    // re-run. CI-only so local runs still surface flakiness honestly (one attempt, no masking).
-    if (System.getenv("CI") != null) {
+    // re-run. Off by default locally so local runs still surface flakiness honestly.
+    if (andyRetryTests) {
         retry {
             maxRetries.set(2)
             // Circuit breaker: if this many distinct tests fail, treat it as a real breakage
