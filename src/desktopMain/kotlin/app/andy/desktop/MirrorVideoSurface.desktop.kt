@@ -770,8 +770,23 @@ private class MirrorPanel(
             if (frameImage != null) {
                 g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
                 val rect = fittedRect(frameImage)
-                g2.drawImage(frameImage, rect.x, rect.y, rect.width, rect.height, null)
-                paintOverlay(g2, frameImage, rect)
+                // The bitmap crop is in frameImage's own pixel space; annotations (grid/ruler/
+                // highlight/gesture) are reported in overlay.sourceWidth/Height device-pixel space.
+                // Those can differ (a downscaled preview frame vs. the real device resolution), so
+                // scale contentZoom/Pan into each space separately rather than sharing one window.
+                val imageWindow = contentWindow(frameImage.width, frameImage.height)
+                g2.drawImage(
+                    frameImage,
+                    rect.x, rect.y, rect.x + rect.width, rect.y + rect.height,
+                    imageWindow.x.roundToInt(), imageWindow.y.roundToInt(),
+                    (imageWindow.x + imageWindow.width).roundToInt(), (imageWindow.y + imageWindow.height).roundToInt(),
+                    null,
+                )
+                val annotationWindow = contentWindow(
+                    overlay.sourceWidth ?: frameImage.width,
+                    overlay.sourceHeight ?: frameImage.height,
+                )
+                paintOverlay(g2, frameImage, rect, annotationWindow)
             }
         } finally {
             g2.dispose()
@@ -800,6 +815,20 @@ private class MirrorPanel(
             x = (contentU * contentWidth).roundToInt().coerceIn(0, contentWidth - 1),
             y = (contentV * contentHeight).roundToInt().coerceIn(0, contentHeight - 1),
         )
+    }
+
+    /** Visible source-pixel window the CPU path must draw/overlay into [rect] — identity when unzoomed. */
+    private data class ContentWindow(val x: Float, val y: Float, val width: Float, val height: Float)
+
+    /** Mirrors [mapPoint]'s zoom math so the CPU-drawn frame and its overlay agree with hit-testing. */
+    private fun contentWindow(sourceWidth: Int, sourceHeight: Int): ContentWindow {
+        val zoom = overlay.contentZoom.coerceAtLeast(1f)
+        if (zoom <= 1.01f) return ContentWindow(0f, 0f, sourceWidth.toFloat(), sourceHeight.toFloat())
+        val windowWidth = sourceWidth / zoom
+        val windowHeight = sourceHeight / zoom
+        val originX = overlay.contentPanX.coerceIn(0f, 1f) * (sourceWidth - windowWidth)
+        val originY = overlay.contentPanY.coerceIn(0f, 1f) * (sourceHeight - windowHeight)
+        return ContentWindow(originX, originY, windowWidth, windowHeight)
     }
 
     /** Authoritative mirror size for hit-testing — matches the scrcpy/Metal stream from [setFrame]. */
@@ -832,7 +861,7 @@ private class MirrorPanel(
         return DrawRect((width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight, scale)
     }
 
-    private fun paintOverlay(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect) {
+    private fun paintOverlay(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect, window: ContentWindow) {
         referenceImage?.let { image ->
             val imageGraphics = g2.create() as Graphics2D
             try {
@@ -846,25 +875,31 @@ private class MirrorPanel(
                 imageGraphics.dispose()
             }
         }
+        // Grid/ruler/highlight are expressed in the same source-pixel space as [window], so a
+        // world coordinate maps to screen via (world - window.origin) * rect.size / window.size —
+        // identical to [window]'s crop when unzoomed.
         if (overlay.showGrid && overlay.gridSize >= 2f) {
             val color = overlay.gridColor.toAwtColor(alphaOverride = 0.28f)
             g2.color = color
             g2.stroke = BasicStroke(1f)
-            val sourceWidth = (overlay.sourceWidth ?: frameImage.width).coerceAtLeast(1)
-            val sourceHeight = (overlay.sourceHeight ?: frameImage.height).coerceAtLeast(1)
-            var x = rect.x.toFloat()
-            val stepX = overlay.gridSize * rect.width / sourceWidth
+            val gridSize = overlay.gridSize
+            val stepX = gridSize * rect.width / window.width
             if (stepX > 0f) {
+                var worldX = kotlin.math.ceil(window.x / gridSize) * gridSize
+                var x = rect.x + (worldX - window.x) * rect.width / window.width
                 while (x <= rect.x + rect.width) {
                     g2.drawLine(x.roundToInt(), rect.y, x.roundToInt(), rect.y + rect.height)
+                    worldX += gridSize
                     x += stepX
                 }
             }
-            var y = rect.y.toFloat()
-            val stepY = overlay.gridSize * rect.height / sourceHeight
+            val stepY = gridSize * rect.height / window.height
             if (stepY > 0f) {
+                var worldY = kotlin.math.ceil(window.y / gridSize) * gridSize
+                var y = rect.y + (worldY - window.y) * rect.height / window.height
                 while (y <= rect.y + rect.height) {
                     g2.drawLine(rect.x, y.roundToInt(), rect.x + rect.width, y.roundToInt())
+                    worldY += gridSize
                     y += stepY
                 }
             }
@@ -877,8 +912,8 @@ private class MirrorPanel(
             val sourceHeight = overlay.sourceHeight ?: frameImage.height
             val xPx = overlay.rulerX.coerceIn(0f, sourceWidth.toFloat())
             val yPx = overlay.rulerY.coerceIn(0f, sourceHeight.toFloat())
-            val drawX = rect.x + (xPx * rect.width / sourceWidth).roundToInt()
-            val drawY = rect.y + (yPx * rect.height / sourceHeight).roundToInt()
+            val drawX = rect.x + ((xPx - window.x) * rect.width / window.width).roundToInt()
+            val drawY = rect.y + ((yPx - window.y) * rect.height / window.height).roundToInt()
             g2.drawLine(drawX, rect.y, drawX, rect.y + rect.height)
             g2.drawLine(rect.x, drawY, rect.x + rect.width, drawY)
             g2.fillOval(drawX - 4, rect.y + rect.height / 2 - 4, 8, 8)
@@ -889,12 +924,10 @@ private class MirrorPanel(
             drawPill(g2, rect.x + rect.width - 74, (drawY - 24).coerceAtLeast(rect.y + 4), (sourceHeight - yPx).roundToInt().toString())
         }
         parseBounds(overlay.highlightBounds)?.let { bounds ->
-            val sourceWidth = overlay.sourceWidth ?: frameImage.width
-            val sourceHeight = overlay.sourceHeight ?: frameImage.height
-            val scaleX = rect.width.toDouble() / sourceWidth.coerceAtLeast(1)
-            val scaleY = rect.height.toDouble() / sourceHeight.coerceAtLeast(1)
-            val x = rect.x + (bounds[0] * scaleX).roundToInt()
-            val y = rect.y + (bounds[1] * scaleY).roundToInt()
+            val scaleX = rect.width / window.width
+            val scaleY = rect.height / window.height
+            val x = rect.x + ((bounds[0] - window.x) * scaleX).roundToInt()
+            val y = rect.y + ((bounds[1] - window.y) * scaleY).roundToInt()
             val w = ((bounds[2] - bounds[0]) * scaleX).roundToInt().coerceAtLeast(2)
             val h = ((bounds[3] - bounds[1]) * scaleY).roundToInt().coerceAtLeast(2)
             g2.color = java.awt.Color(216, 111, 74, 90)
@@ -904,7 +937,7 @@ private class MirrorPanel(
             g2.drawRect(x, y, w, h)
         }
         overlay.gesture?.let { gesture ->
-            paintGesture(g2, frameImage, rect, gesture)
+            paintGesture(g2, frameImage, rect, window, gesture)
         }
         overlay.pickerColor?.let { color ->
             val radius = 48
@@ -927,12 +960,12 @@ private class MirrorPanel(
         }
     }
 
-    private fun paintGesture(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect, gesture: MirrorGestureOverlay) {
+    private fun paintGesture(g2: Graphics2D, frameImage: BufferedImage, rect: DrawRect, window: ContentWindow, gesture: MirrorGestureOverlay) {
         val sourceWidth = (overlay.sourceWidth ?: frameImage.width).coerceAtLeast(1)
         val sourceHeight = (overlay.sourceHeight ?: frameImage.height).coerceAtLeast(1)
         fun toScreen(x: Int, y: Int) = Point(
-            rect.x + (x.coerceIn(0, sourceWidth) * rect.width.toFloat() / sourceWidth).roundToInt(),
-            rect.y + (y.coerceIn(0, sourceHeight) * rect.height.toFloat() / sourceHeight).roundToInt(),
+            rect.x + ((x.coerceIn(0, sourceWidth) - window.x) * rect.width / window.width).roundToInt(),
+            rect.y + ((y.coerceIn(0, sourceHeight) - window.y) * rect.height / window.height).roundToInt(),
         )
         val alpha = (1f - gesture.fadeProgress).coerceIn(0f, 1f)
         if (alpha <= 0f) return
