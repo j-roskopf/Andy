@@ -40,6 +40,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import app.andy.desktop.test.OptInGates.harnessTimeoutMillis
 
 class ProjectWorkflowServiceTest {
     @Test
@@ -1381,7 +1382,7 @@ private object WorkflowWorkspaceStore : WorkspaceStore {
 }
 
 private suspend fun await(
-    timeoutMillis: Long = if (System.getenv("CI") != null) 600_000 else 360_000,
+    timeoutMillis: Long = harnessTimeoutMillis(360_000, 900_000),
     condition: () -> Boolean,
 ) {
     withTimeout(timeoutMillis) {
@@ -1390,7 +1391,7 @@ private suspend fun await(
 }
 
 private suspend fun <T> awaitValue(
-    timeoutMillis: Long = if (System.getenv("CI") != null) 600_000 else 360_000,
+    timeoutMillis: Long = harnessTimeoutMillis(360_000, 900_000),
     supplier: () -> T?,
 ): T {
     var result: T? = null

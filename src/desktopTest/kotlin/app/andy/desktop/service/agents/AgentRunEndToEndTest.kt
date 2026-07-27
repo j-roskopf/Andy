@@ -37,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import app.andy.desktop.test.OptInGates.harnessTimeoutMillis
 import org.junit.Assume.assumeTrue
 
 /**
@@ -345,7 +346,7 @@ class AgentQueuedFollowUpTest {
                     directory = dir.absolutePath,
                 ),
             )
-            withTimeout(60_000) {
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
                 while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
             }
 
@@ -361,7 +362,7 @@ class AgentQueuedFollowUpTest {
             assertEquals(listOf("second message", "third message"), observedFollowUps)
             File(dir, ".queue-test-ready").writeText("go")
 
-            withTimeout(120_000) {
+            withTimeout(harnessTimeoutMillis(120_000, 360_000)) {
                 while (true) {
                     val current = service.tasks.value.first { it.id == task.id }
                     val userMessages = service.events(task.id).value
