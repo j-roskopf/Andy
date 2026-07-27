@@ -126,6 +126,8 @@ class DesktopWorkspaceStore(
             hostFileTreePaneWidth = props.getProperty("hostFileTreePaneWidth")?.toFloatOrNull() ?: 320f,
             hostFileSearchPaneWidth = props.getProperty("hostFileSearchPaneWidth")?.toFloatOrNull() ?: 430f,
             selectedPackage = props.getProperty("selectedPackage")?.takeIf { it.isNotBlank() },
+            lastActionProjectId = props.getProperty("lastActionProjectId")?.takeIf { it.isNotBlank() },
+            lastActionId = props.getProperty("lastActionId")?.takeIf { it.isNotBlank() },
             agentOsNotificationsEnabled = props.getProperty("agentOsNotificationsEnabled")?.toBooleanStrictOrNull() ?: true,
             agentNotificationSoundEnabled = props.getProperty("agentNotificationSoundEnabled")?.toBooleanStrictOrNull() ?: true,
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
@@ -209,6 +211,8 @@ class DesktopWorkspaceStore(
             setProperty("hostFileTreePaneWidth", state.hostFileTreePaneWidth.toString())
             setProperty("hostFileSearchPaneWidth", state.hostFileSearchPaneWidth.toString())
             setProperty("selectedPackage", state.selectedPackage.orEmpty())
+            setProperty("lastActionProjectId", state.lastActionProjectId.orEmpty())
+            setProperty("lastActionId", state.lastActionId.orEmpty())
             setProperty("agentOsNotificationsEnabled", state.agentOsNotificationsEnabled.toString())
             setProperty("agentNotificationSoundEnabled", state.agentNotificationSoundEnabled.toString())
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())

@@ -239,7 +239,7 @@ internal fun LogcatPanel(
                             onClick = { overflowExpanded = true },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
                             shape = RoundedCornerShape(AndyRadius.R2),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                         ) {
                             Text("More ▼", fontSize = 12.sp)
                         }

@@ -81,6 +81,9 @@ internal fun TopChrome(
     showDevicePopOut: Boolean = false,
     onPopOutDevice: (String, String) -> Unit = { _, _ -> },
     actionConfig: ActionsConfig,
+    selectedActionProjectId: String? = null,
+    selectedActionId: String? = null,
+    onActionSelectionChange: (projectId: String, actionId: String?) -> Unit = { _, _ -> },
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
     onMenuExpandedChange: (Boolean) -> Unit = {},
@@ -133,6 +136,9 @@ internal fun TopChrome(
         if (hasActionRunnerControls) {
             ActionRunnerSelector(
                 config = actionConfig,
+                selectedProjectId = selectedActionProjectId,
+                selectedActionId = selectedActionId,
+                onSelectionChange = onActionSelectionChange,
                 onRunAction = onRunAction,
                 projectExpanded = projectMenuExpanded,
                 onProjectExpandedChange = { projectMenuExpanded = it },
@@ -204,6 +210,9 @@ private fun ProxyToolbarIndicator() {
 @Composable
 private fun ActionRunnerSelector(
     config: ActionsConfig,
+    selectedProjectId: String?,
+    selectedActionId: String?,
+    onSelectionChange: (projectId: String, actionId: String?) -> Unit,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     projectExpanded: Boolean,
     onProjectExpandedChange: (Boolean) -> Unit,
@@ -211,9 +220,6 @@ private fun ActionRunnerSelector(
     onActionExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedProjectId by remember { mutableStateOf<String?>(null) }
-    var selectedActionId by remember { mutableStateOf<String?>(null) }
-
     val project = remember(config.projects, selectedProjectId) {
         config.projects.firstOrNull { it.id == selectedProjectId } ?: config.projects.firstOrNull()
     }
@@ -247,8 +253,8 @@ private fun ActionRunnerSelector(
                     DropdownMenuItem(
                         text = { Text(item.name, color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
-                            selectedProjectId = item.id
-                            selectedActionId = item.actions.firstOrNull()?.id
+                            val nextActionId = item.actions.firstOrNull()?.id
+                            onSelectionChange(item.id, nextActionId)
                             onProjectExpandedChange(false)
                         },
                     )
@@ -279,7 +285,8 @@ private fun ActionRunnerSelector(
                     DropdownMenuItem(
                         text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
-                            selectedActionId = item.id
+                            val projectId = project?.id
+                            if (projectId != null) onSelectionChange(projectId, item.id)
                             onActionExpandedChange(false)
                         },
                     )
@@ -292,6 +299,7 @@ private fun ActionRunnerSelector(
                 val selectedProject = project
                 val selectedAction = action
                 if (selectedProject != null && selectedAction != null) {
+                    onSelectionChange(selectedProject.id, selectedAction.id)
                     onRunAction(selectedProject, selectedAction)
                 }
             },

@@ -3,6 +3,7 @@ package app.andy.terminal
 import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -85,5 +86,31 @@ class ScrollbackAnsiTeeOscTest {
         tee.feed("world")
 
         assertEquals("hello world", tee.snapshot())
+    }
+
+    @Test
+    fun preservesMultibyteUtf8SplitAcrossAppends() {
+        val tee = ScrollbackAnsiTee()
+        val sparkle = "✨".toByteArray(StandardCharsets.UTF_8)
+        assertTrue(sparkle.size >= 3, "fixture must be multi-byte UTF-8")
+
+        tee.append(sparkle, 0, 1)
+        assertEquals("", tee.snapshot(), "incomplete lead byte must stay pending")
+        tee.append(sparkle, 1, sparkle.size - 1)
+
+        assertEquals("✨", tee.snapshot())
+        assertFalse(tee.snapshot().contains('\uFFFD'))
+    }
+
+    @Test
+    fun clearDropsPendingUtf8() {
+        val tee = ScrollbackAnsiTee()
+        val sparkle = "✨".toByteArray(StandardCharsets.UTF_8)
+        tee.append(sparkle, 0, 1)
+        tee.clear()
+        tee.append(sparkle, 1, sparkle.size - 1)
+
+        // Leftover continuation bytes alone are invalid — not a reconstituted sparkle.
+        assertFalse(tee.snapshot().contains("✨"))
     }
 }
