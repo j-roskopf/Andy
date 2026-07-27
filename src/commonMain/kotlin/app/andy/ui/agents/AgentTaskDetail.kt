@@ -1,7 +1,6 @@
 package app.andy.ui.agents
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -42,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import app.andy.rememberCopyText
+import app.andy.currentTimeMillis
 import app.andy.domain.buildSplitDiffPairs
 import app.andy.domain.SplitDiffPair
 import app.andy.model.AgentKind
@@ -97,6 +98,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class DiffViewMode { Unified, Split }
@@ -105,7 +107,6 @@ private enum class DiffViewMode { Unified, Split }
 internal fun AgentTaskDetail(
     services: AndyServices,
     task: AgentTask,
-    nowMillis: Long,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
     @Suppress("UNUSED_PARAMETER") transcriptScrollMemory: TranscriptScrollMemory? = null,
@@ -143,7 +144,9 @@ internal fun AgentTaskDetail(
         }
     }
     LaunchedEffect(task.id, task.status) {
-        if (task.worktreePath != null) {
+        // While the live CLI owns the pane, skip worktree diff fetches — the card is hidden
+        // then, and refetching only changed bottom height (SwingPanel flash) mid-turn.
+        if (task.worktreePath != null && !task.isActive) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
         }
         expandedDiffPath = null
@@ -152,14 +155,13 @@ internal fun AgentTaskDetail(
 
     val supportsResume = true
     val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
-    val attachedTerminalIds by services.agentRuns.attachedTerminalTaskIds.collectAsState()
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
     // unless the user has staged images that should ship with the next composed message.
+    // Gate on session interactivity only (not attachedTerminalIds): waiting on attach briefly
+    // showed the composer, stole terminal height, and the SwingPanel resize flashed on resume.
     val terminalSessionActive = isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
-    val terminalComposerActive = terminalSessionActive &&
-        (isChatLaunching(task) || task.id in attachedTerminalIds)
     val showFollowUpComposer = supportsResume &&
-        showsChatFollowUpComposer(terminalComposerActive, followUpImagePaths.isNotEmpty())
+        showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val slashCommand = findActiveSlashCommand(followUp)
     val matchingCommands = slashCommand?.let { command ->
@@ -266,7 +268,6 @@ internal fun AgentTaskDetail(
             AgentTaskHeader(
                 task = task,
                 terminalLive = terminalSessionActive,
-                nowMillis = nowMillis,
                 onStop = { services.agentRuns.stop(task.id) },
                 onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
@@ -290,14 +291,21 @@ internal fun AgentTaskDetail(
                 .fillMaxWidth()
                 .heightIn(min = 280.dp),
         ) {
+            val terminalModifier = remember { Modifier.fillMaxSize() }
+            val imagesStagedLatest = rememberUpdatedState(
+                newValue = { staged: List<String> ->
+                    followUpImagePaths = (followUpImagePaths + staged).distinct()
+                },
+            )
+            val onImagesStaged = remember<(List<String>) -> Unit>(task.id) {
+                { staged -> imagesStagedLatest.value(staged) }
+            }
             AgentTerminalSurface(
                 services = services,
                 taskId = task.id,
                 sessionActive = terminalSessionActive,
-                onImagesStaged = { staged ->
-                    followUpImagePaths = (followUpImagePaths + staged).distinct()
-                },
-                modifier = Modifier.fillMaxSize(),
+                onImagesStaged = onImagesStaged,
+                modifier = terminalModifier,
             )
         }
         changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
@@ -356,7 +364,11 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (task.status == AgentStatus.Done && task.planMode && task.workflowTaskId == null) {
+        if (task.status == AgentStatus.Done &&
+            task.planMode &&
+            task.workflowTaskId == null &&
+            !terminalSessionActive
+        ) {
             Column(
                 Modifier.fillMaxWidth()
                     .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -585,10 +597,11 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (task.worktreePath != null) {
+        // Same rule as change-summary: never steal height from a live SwingPanel.
+        if (task.worktreePath != null && !terminalSessionActive) {
             Column(
                 Modifier.fillMaxWidth()
-                    .heightIn(max = 160.dp)
+                    .heightIn(min = 72.dp, max = 160.dp)
                     .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
                     .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
                     .padding(10.dp),
@@ -633,7 +646,6 @@ internal fun AgentTaskDetail(
 private fun AgentTaskHeader(
     task: AgentTask,
     terminalLive: Boolean,
-    nowMillis: Long,
     onStop: () -> Unit,
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
@@ -646,6 +658,16 @@ private fun AgentTaskHeader(
         finishedAtMillis = task.finishedAtMillis,
         task = task,
     )
+    // Clock only while the expanded header actually shows a live elapsed string — a parent
+    // 1Hz tick used to recompose the whole chat pane (and re-punch the terminal clear-hole).
+    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
+    LaunchedEffect(expanded, task.id, task.status, task.finishedAtMillis) {
+        if (!expanded || !isElapsedLive(task)) return@LaunchedEffect
+        while (true) {
+            nowMillis = currentTimeMillis()
+            delay(1_000)
+        }
+    }
     Column(
         Modifier.fillMaxWidth()
             .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
@@ -672,7 +694,6 @@ private fun AgentTaskHeader(
             Column(
                 Modifier
                     .weight(1f)
-                    .animateContentSize(tween(180))
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable { expanded = !expanded },
                 verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -683,6 +704,8 @@ private fun AgentTaskHeader(
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
+                    // No animateContentSize: tweening title height across chat switches
+                    // resized the terminal for ~180ms and read as settle/jump.
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -696,23 +719,28 @@ private fun AgentTaskHeader(
                 )
             }
             StatusTag(agentStatusLabel(task), agentStatusColor(task.status))
-            if (!terminalLive) {
-                StatusTag("READ-ONLY", TextSecondary)
-            }
-            if (terminalLive) {
-                onCompleteBuild?.let { complete ->
-                    OutlinedButton(
-                        onClick = complete,
-                        modifier = Modifier.height(30.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) { Text("mark complete", fontSize = 11.sp) }
+            // Fixed action slot so READ-ONLY ↔ stop does not shift header height on attach.
+            Box(Modifier.height(30.dp), contentAlignment = Alignment.Center) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (!terminalLive) {
+                        StatusTag("READ-ONLY", TextSecondary)
+                    }
+                    if (terminalLive) {
+                        onCompleteBuild?.let { complete ->
+                            OutlinedButton(
+                                onClick = complete,
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            ) { Text("mark complete", fontSize = 11.sp) }
+                        }
+                        Button(
+                            onClick = onStop,
+                            colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                        ) { Text(if (task.status == AgentStatus.Blocked) "cancel" else "stop", fontSize = 11.sp) }
+                    }
                 }
-                Button(
-                    onClick = onStop,
-                    colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
-                    modifier = Modifier.height(30.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text(if (task.status == AgentStatus.Blocked) "cancel" else "stop", fontSize = 11.sp) }
             }
             if (task.status == AgentStatus.Error) {
                 Button(

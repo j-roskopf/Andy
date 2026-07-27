@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -54,6 +55,7 @@ import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -487,7 +489,7 @@ private fun QueryResultGrid(
                                     singleLine = true,
                                     modifier = Modifier
                                         .width(180.dp)
-                                        .height(44.dp)
+                                        .defaultMinSize(minHeight = AndyLayout.FieldHeight)
                                         .onPreviewKeyEvent { event ->
                                             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                             when (event.key) {

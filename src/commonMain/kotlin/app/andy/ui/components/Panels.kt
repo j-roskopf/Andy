@@ -33,10 +33,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
@@ -73,22 +75,22 @@ internal fun Modifier.noiseGridOverlay(alpha: Float = 0.07f): Modifier = drawBeh
 internal fun StatusRow(label: String, value: String, ok: Boolean) {
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            label.lowercase(),
+            label,
             color = TextSecondary,
-            fontFamily = MonoFont,
+            fontFamily = DisplayFont,
             fontSize = 11.sp,
             maxLines = 1,
             softWrap = false,
         )
         Text(
-            value.lowercase(),
+            value,
             color = if (ok) Green else Rust,
-            fontFamily = MonoFont,
-            fontWeight = FontWeight.SemiBold,
+            fontFamily = DisplayFont,
+            fontWeight = FontWeight.Medium,
             fontSize = 11.sp,
             modifier = Modifier.weight(1f),
             textAlign = TextAlign.End,
@@ -104,18 +106,17 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
     Row(
         modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
-            Modifier.heightIn(min = 22.dp)
-                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.R2))
-                .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R2))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.heightIn(min = AndyLayout.ControlHeightXs)
+                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.Control))
+                .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             Box(Modifier.size(6.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
-            Text(label, color = color, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
+            Text(label, color = color, fontFamily = DisplayFont, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -139,7 +140,7 @@ internal fun Toolbar(
     // Page title/subtitle chrome lives in the global TopChrome; keep only trailing actions here.
     if (onPrimary == null) return
     Row(
-        modifier.fillMaxWidth().padding(bottom = 2.dp),
+        modifier.fillMaxWidth().padding(bottom = AndySpace.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.End,
     ) {
@@ -147,9 +148,9 @@ internal fun Toolbar(
             onClick = onPrimary,
             enabled = primaryEnabled,
             colors = primaryButtonColors(),
-            shape = RoundedCornerShape(AndyRadius.R2),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-        ) { Text(primaryLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            shape = RoundedCornerShape(AndyRadius.Row),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+        ) { Text(primaryLabel, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
     }
 }
 
@@ -159,14 +160,13 @@ internal fun PanelCard(
     accent: Color? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R3)
+    val shape = RoundedCornerShape(AndyRadius.Row)
     Column(
         modifier
-            .background(AndyColors.Neutral800.copy(alpha = 0.82f), shape)
-            .border(1.dp, accent?.copy(alpha = 0.58f) ?: Border, shape)
-            .noiseGridOverlay(0.025f)
-            .padding(AndySpace.S4),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .background(AndyColors.PaneBg, shape)
+            .border(1.dp, accent?.copy(alpha = 0.40f) ?: Border, shape)
+            .padding(AndySpace.Space5),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         content = content,
     )
 }
@@ -179,16 +179,15 @@ internal fun EmptyState(
     Box(
         modifier
             .fillMaxWidth()
-            .height(150.dp)
-            .background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(horizontal = AndySpace.S5, vertical = AndySpace.S4),
+            .height(120.dp)
+            .padding(horizontal = AndySpace.Space7, vertical = AndySpace.Space5),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text.lowercase(),
+            text,
             color = TextSecondary,
-            fontFamily = MonoFont,
+            fontFamily = DisplayFont,
+            fontSize = 13.sp,
             textAlign = TextAlign.Center,
         )
     }
@@ -198,27 +197,27 @@ internal fun EmptyState(
 internal fun FilterPill(
     text: String,
     selected: Boolean,
-    color: Color,
+    @Suppress("UNUSED_PARAMETER") color: Color,
     enabled: Boolean = true,
     toolbar: Boolean = false,
     leadingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
+    val shape = RoundedCornerShape(AndyRadius.Control)
     val containerColor = when {
-        !enabled -> AndyColors.Neutral750
-        selected -> color.copy(alpha = 0.26f)
-        else -> AndyColors.Neutral850
+        !enabled -> AndyColors.PaneBg
+        selected -> AndyColors.SurfaceSelected
+        else -> Color.Transparent
     }
     val borderColor = when {
-        !enabled -> AndyColors.Neutral500.copy(alpha = 0.48f)
-        selected -> color.copy(alpha = 0.70f)
+        !enabled -> AndyColors.TextDisabled.copy(alpha = 0.40f)
+        selected -> Border
         else -> Border
     }
     val contentColor = when {
-        !enabled -> AndyColors.Neutral500
-        selected -> AndyColors.Neutral100
-        else -> AndyColors.Neutral300
+        !enabled -> AndyColors.TextDisabled
+        selected -> TextPrimary
+        else -> TextSecondary
     }
     if (toolbar) {
         OutlinedButton(
@@ -232,17 +231,17 @@ internal fun FilterPill(
                 disabledContentColor = contentColor,
             ),
             border = BorderStroke(1.dp, borderColor),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) {
             Row(
                 Modifier.alpha(if (enabled) 1f else 0.55f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
                 leadingContent?.invoke()
                 Text(
-                    text.lowercase(),
-                    fontFamily = MonoFont,
+                    text,
+                    fontFamily = DisplayFont,
                     fontWeight = FontWeight.Medium,
                     fontSize = 12.sp,
                 )
@@ -252,7 +251,7 @@ internal fun FilterPill(
     }
     Box(
         Modifier
-            .height(28.dp)
+            .height(AndyLayout.ControlHeightSm)
             .background(containerColor, shape)
             .border(1.dp, borderColor, shape)
             .clickable(enabled = enabled, onClick = onClick)
@@ -262,15 +261,15 @@ internal fun FilterPill(
         Row(
             Modifier.alpha(if (enabled) 1f else 0.55f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             leadingContent?.invoke()
             Text(
-                text.lowercase(),
+                text,
                 color = contentColor,
-                fontFamily = MonoFont,
+                fontFamily = DisplayFont,
                 fontWeight = FontWeight.Medium,
-                fontSize = 10.sp,
+                fontSize = 11.sp,
                 lineHeight = 14.sp,
             )
         }
@@ -280,7 +279,7 @@ internal fun FilterPill(
 @Composable
 internal fun ControlRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont)
+        Text(label, color = TextSecondary, fontFamily = DisplayFont)
         Text(value, color = TextPrimary, fontFamily = MonoFont)
     }
 }
@@ -288,7 +287,7 @@ internal fun ControlRow(label: String, value: String) {
 @Composable
 internal fun MetricCard(label: String, value: String) {
     PanelCard(Modifier.width(170.dp).height(96.dp)) {
-        Text(label.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold)
-        Text(value, color = TextPrimary, fontSize = 26.sp, fontFamily = MonoFont)
+        Text(label, color = TextSecondary, fontFamily = DisplayFont, fontWeight = FontWeight.Medium, fontSize = 12.sp)
+        Text(value, color = TextPrimary, fontSize = 24.sp, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold)
     }
 }

@@ -124,6 +124,7 @@ class AgentStatusTracker(
                         progress = session.oscProgress.value,
                     )
                     scrape.tick()
+                    hook.refresh()
                     if (!session.isAlive) {
                         val exit = session.exitCode.value
                         publish(processExited = true, exitCode = exit)
@@ -176,10 +177,16 @@ class AgentStatusTracker(
         }
 
         if (confidentSignal != null) {
-            // Hook Done is authoritative unless the screen shows a strong visible working cue (e.g. active spinner).
+            // Vendor hook Done is authoritative. Stale scrape working chrome (braille
+            // spinners, "ctrl+c to stop") must not veto a fresh hook Done — that left
+            // Cursor/Antigravity stuck on Working after stop/Stop fired.
+            // Scrape visible-working may still suppress Done when there is no hook Done
+            // (phaseFinished / processExited already set confident Done above).
+            val hookSaysDone = hook.latest() == AgentStatus.Done
             if (confidentSignal.status == AgentStatus.Done &&
                 !phaseFinished &&
                 !processExited &&
+                !hookSaysDone &&
                 scrape.showsVisibleWorking()
             ) {
                 latch = null
@@ -224,7 +231,9 @@ class AgentStatusTracker(
         AgentStatus.Blocked -> scrape.isCurrentlyBlocked() || hook.latest() == AgentStatus.Blocked
         AgentStatus.Done, AgentStatus.Error -> {
             if (hook.latest() == AgentStatus.Working) return false
-            // Only a strong working indicator unlatches Done (no churn→Working).
+            // Hook Done stays latched until a newer Working hook arrives. Without a
+            // hook Done, strong scrape working still unlatches scrape-inferred Done.
+            if (hook.latest() == AgentStatus.Done) return true
             !scrape.showsWorkingIndicator()
         }
         AgentStatus.Working -> true
@@ -254,14 +263,24 @@ class HookStatusSource(
 
     fun latest(): AgentStatus? = latest
 
+    /** Re-read status.json (poll loop + watch both call this). */
+    fun refresh(): Boolean {
+        val next = readLatestHookStatus(artifactDir)
+        if (next == latest) return false
+        latest = next
+        return true
+    }
+
     suspend fun watch(onChange: () -> Unit) {
-        var lastModified = -1L
+        var lastFingerprint = ""
         while (true) {
             if (statusFile.isFile) {
-                val modified = statusFile.lastModified()
-                if (modified != lastModified) {
-                    lastModified = modified
-                    latest = readLatestHookStatus(artifactDir)
+                // Length + mtime: appends within the same millisecond (common for
+                // working→done pairs) may not bump lastModified alone.
+                val fingerprint = "${statusFile.length()}:${statusFile.lastModified()}"
+                if (fingerprint != lastFingerprint) {
+                    lastFingerprint = fingerprint
+                    refresh()
                     onChange()
                 }
             }

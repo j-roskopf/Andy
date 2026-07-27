@@ -171,7 +171,8 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun staleHookDoneDoesNotOverridePerambulatingScrape() = runBlocking {
+    fun hookDoneWinsOverScrapeWorkingChrome() = runBlocking {
+        // Vendor hooks are authoritative: lingering/active scrape chrome must not veto Done.
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val artifactDir = File.createTempFile("andy-status", null).also { it.delete(); it.mkdirs() }
@@ -187,7 +188,8 @@ class AgentStatusTrackerTest {
             )
             tracker.start()
             session.emitBuffer("✨ Perambulating... (33s · ↓ 547 tokens · thinking more)\n> ")
-            tracker.awaitStatus(AgentStatus.Working)
+            tracker.awaitStatus(AgentStatus.Done)
+            assertTrue(tracker.status.value.confident)
             tracker.close()
         } finally {
             scope.cancel()
@@ -676,6 +678,40 @@ class AgentStatusTrackerTest {
     }
 
     @Test
+    fun hookDoneWinsOverLingeringCursorWorkingChrome() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-status-hook-done", null).also {
+                it.delete()
+                it.mkdirs()
+            }
+            File(artifactDir, "status.json").writeText("""{"status":"done","at":1}""")
+            val session = FakeTerminalSession()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-hook-done",
+                agent = AgentKind.Cursor,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = {},
+            )
+            tracker.start()
+            // Stale stop chrome that used to veto hook Done and leave the badge on Working.
+            session.emitBuffer(
+                "Finished the turn.\n" +
+                    "            ctrl+c to stop\n" +
+                    " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n" +
+                    "  Cursor Grok 4.5 High Fast · 22%\n",
+            )
+            tracker.awaitStatus(AgentStatus.Done)
+            assertTrue(tracker.status.value.confident)
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun installClaudeStatusHooksWritesWorkingDoneBlockedMapping() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
@@ -771,11 +807,13 @@ class AgentStatusTrackerTest {
             assertTrue(hooksFile.isFile)
             val root = kotlinx.serialization.json.Json.parseToJsonElement(hooksFile.readText()).jsonObject
             val hooks = root["hooks"]!!.jsonObject
+            assertTrue(hooks.containsKey("sessionStart"))
             assertTrue(hooks.containsKey("beforeSubmitPrompt"))
             assertTrue(hooks.containsKey("stop"))
             val text = hooksFile.readText()
             assertTrue("working" in text)
             assertTrue("done" in text)
+            assertTrue(" completed" in text, "Cursor stop must gate done on status completed|aborted")
             assertTrue("\$HOME/.andy/bin/andy-status-hook.sh" in text)
             assertEquals("task-hooks", File(cwd, ".andy/active-task").readText().trim())
         } finally {
@@ -834,7 +872,17 @@ class AgentStatusTrackerTest {
             assertTrue(andy.containsKey("PreInvocation"))
             assertTrue(andy.containsKey("Stop"))
             assertTrue(andy.containsKey("PreToolUse"))
-            assertTrue("ask_question|ask_permission" in hooksFile.readText())
+            val text = hooksFile.readText()
+            assertTrue("ask_question|ask_permission" in text)
+            assertTrue(" fully-idle" in text, "Antigravity Stop must gate done on fullyIdle")
+            assertTrue(
+                Regex("""andy-status-hook\.sh" done empty fully-idle""")
+                    .containsMatchIn(text) ||
+                    Regex("""andy-status-hook\.sh\\" done empty fully-idle""")
+                        .containsMatchIn(text),
+                "Antigravity Stop must use empty respond (not decision:stop)",
+            )
+            assertFalse(" done stop" in text)
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -854,25 +902,105 @@ class AgentStatusTrackerTest {
             assertTrue(script.canExecute())
             assertEquals("task-hooks", File(project, ".andy/active-task").readText().trim())
 
-            val working = ProcessBuilder("sh", script.absolutePath, "working", "empty")
-                .directory(project)
-                .redirectErrorStream(true)
-                .start()
-            val workingOut = working.inputStream.bufferedReader().readText().trim()
-            assertEquals(0, working.waitFor())
+            val (_, workingOut) = runStatusHook(script, project, "working", "empty")
             assertEquals("{}", workingOut)
             assertTrue(
                 File(artifacts, "status.json").readText().contains("\"status\":\"working\""),
             )
 
-            val done = ProcessBuilder("sh", script.absolutePath, "done", "stop")
-                .directory(project)
-                .redirectErrorStream(true)
-                .start()
-            val doneOut = done.inputStream.bufferedReader().readText().trim()
-            assertEquals(0, done.waitFor())
+            val (_, doneOut) = runStatusHook(script, project, "done", "stop")
             assertEquals("""{"decision":"stop"}""", doneOut)
             assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"done\""))
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun statusHookScriptFullyIdleGateSkipsDoneUntilIdle() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val artifacts = File(project, ".andy/task-hooks").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            installGenericStatusHookScript(artifacts)
+            val script = AndyStatusHookInstaller.scriptFile(home)
+            val statusFile = File(artifacts, "status.json")
+
+            val (_, skippedOut) = runStatusHook(
+                script,
+                project,
+                "done",
+                "empty",
+                "fully-idle",
+                stdin = """{"fullyIdle":false,"terminationReason":"model_stop"}""",
+            )
+            assertEquals("{}", skippedOut)
+            assertFalse(statusFile.exists(), "fullyIdle:false must not write done")
+
+            val (_, idleOut) = runStatusHook(
+                script,
+                project,
+                "done",
+                "empty",
+                "fully-idle",
+                stdin = """{"fullyIdle":true,"terminationReason":"model_stop"}""",
+            )
+            assertEquals("{}", idleOut)
+            assertTrue(statusFile.readText().contains("\"status\":\"done\""))
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun statusHookScriptCompletedGateAcceptsCompletedOrAborted() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val artifacts = File(project, ".andy/task-hooks").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            installGenericStatusHookScript(artifacts)
+            val script = AndyStatusHookInstaller.scriptFile(home)
+            val statusFile = File(artifacts, "status.json")
+
+            val (_, errorOut) = runStatusHook(
+                script,
+                project,
+                "done",
+                "empty",
+                "completed",
+                stdin = """{"hook_event_name":"stop","status":"error","loop_count":0}""",
+            )
+            assertEquals("{}", errorOut)
+            assertFalse(statusFile.exists(), "status:error must not write done")
+
+            val (_, completedOut) = runStatusHook(
+                script,
+                project,
+                "done",
+                "empty",
+                "completed",
+                stdin = """{"hook_event_name":"stop","status":"completed","loop_count":0}""",
+            )
+            assertEquals("{}", completedOut)
+            assertTrue(statusFile.readText().contains("\"status\":\"done\""))
+
+            statusFile.delete()
+            val (_, abortedOut) = runStatusHook(
+                script,
+                project,
+                "done",
+                "empty",
+                "completed",
+                stdin = """{"hook_event_name":"stop","status":"aborted","loop_count":1}""",
+            )
+            assertEquals("{}", abortedOut)
+            assertTrue(statusFile.readText().contains("\"status\":\"done\""))
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
@@ -898,12 +1026,7 @@ class AgentStatusTrackerTest {
         try {
             System.setProperty("user.home", home.absolutePath)
             val script = AndyStatusHookInstaller.ensureInstalled(home)
-            val proc = ProcessBuilder("sh", script.absolutePath, "working", "empty")
-                .directory(project)
-                .redirectErrorStream(true)
-                .start()
-            val out = proc.inputStream.bufferedReader().readText().trim()
-            assertEquals(0, proc.waitFor())
+            val (_, out) = runStatusHook(script, project, "working", "empty")
             assertEquals("{}", out)
             assertFalse(File(project, ".andy").exists())
         } finally {
@@ -976,6 +1099,26 @@ private suspend fun AgentStatusTracker.awaitStatus(
         // Surface the state actually reached rather than a bare timeout stack.
         assertEquals(expected, status.value.status)
     }
+}
+
+/** Run [andy-status-hook.sh] with stdin closed (required — the script always consumes stdin). */
+private fun runStatusHook(
+    script: File,
+    project: File,
+    vararg args: String,
+    stdin: String = "",
+): Pair<Int, String> {
+    val proc = ProcessBuilder("sh", script.absolutePath, *args)
+        .directory(project)
+        .redirectErrorStream(true)
+        .start()
+    proc.outputStream.bufferedWriter().use { writer ->
+        if (stdin.isNotEmpty()) writer.write(stdin)
+    }
+    val out = proc.inputStream.bufferedReader().readText().trim()
+    val code = proc.waitFor()
+    assertEquals(0, code, "hook script exit code for args=${args.toList()} out=$out")
+    return code to out
 }
 
 /** Poll [condition] to true within a generous timeout; fail with [message] otherwise. */

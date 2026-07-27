@@ -412,6 +412,12 @@ val andyRetryTests =
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
+    // Keep desktopTest off the live `tmux -L andy` socket. Tests that recycle a poisoned
+    // server call kill-server; sharing production would print `[server exited]` in every
+    // attached agent chat.
+    if (name == "desktopTest") {
+        environment("ANDY_TMUX_SOCKET", "andy-test")
+    }
     // These desktop suites include real-subprocess agent/workflow tests and hardware-backed
     // mirror/simulator smoke tests whose timing is inherently variable on shared CI runners.
     // The assertions are being hardened to poll for conditions rather than sleep fixed windows,

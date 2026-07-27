@@ -64,6 +64,7 @@ actual fun MirrorVideoSurface(
     onPickerClick: (String) -> Unit,
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
+    onContentPan: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
     deferNativePresentation: Boolean,
@@ -100,6 +101,7 @@ actual fun MirrorVideoSurface(
                         panel.onPickerClick = onPickerClick
                         panel.onDevicePointClick = onDevicePointClick
                         panel.onRulerResize = onRulerResize
+                        panel.onContentPan = onContentPan
                         panel.setOverlay(overlay)
                         panel.setOccluded(occluded)
                     },
@@ -120,6 +122,7 @@ actual fun MirrorVideoSurface(
     onPickerClick: (String) -> Unit,
     onDevicePointClick: (Int, Int) -> Unit,
     onRulerResize: (Float, Float) -> Unit,
+    onContentPan: (Float, Float) -> Unit,
     overlay: MirrorOverlay,
     occluded: Boolean,
     deferNativePresentation: Boolean,
@@ -154,6 +157,7 @@ actual fun MirrorVideoSurface(
                         panel.onPickerClick = onPickerClick
                         panel.onDevicePointClick = onDevicePointClick
                         panel.onRulerResize = onRulerResize
+                        panel.onContentPan = onContentPan
                         panel.setOverlay(overlay)
                         panel.setOccluded(occluded)
                     },
@@ -203,7 +207,7 @@ private class MirrorPanel(
     private val fillNativePresentationHost: Boolean = false,
     private val gpuMirrorStreamKey: Any? = null,
 ) : java.awt.Canvas() {
-    private enum class DragMode { Device, RulerX, RulerY, Inspect, None }
+    private enum class DragMode { Device, RulerX, RulerY, Inspect, Pan, None }
 
     private var image: BufferedImage? = null
     private var presentBuffer: BufferedImage? = null
@@ -222,8 +226,12 @@ private class MirrorPanel(
     var onPickerClick: (String) -> Unit = {}
     var onDevicePointClick: (Int, Int) -> Unit = { _, _ -> }
     var onRulerResize: (Float, Float) -> Unit = { _, _ -> }
+    var onContentPan: (Float, Float) -> Unit = { _, _ -> }
     var passThroughInput: Boolean = true
     private var pressedPoint: Point? = null
+    private var panAnchor: Point? = null
+    private var panOriginX = 0f
+    private var panOriginY = 0f
     private var pickerPoint: Point? = null
     private var dragMode = DragMode.None
     private var lastDeviceMoveSentAtNanos = 0L
@@ -331,12 +339,32 @@ private class MirrorPanel(
                             " size=${width}x$height metadata=$nativeMetadataFrame",
                     )
                 }
-                // Avoid requestFocusInWindow when already focused — focus changes raise the black
-                // Canvas above a non-child Metal overlay and flash every tap.
-                if (!isFocusOwner) requestFocusInWindow()
                 pressedPoint = event.point
+                val rulerMode = if (mapPoint(event.point) != null) rulerDragMode(event.point) else DragMode.None
+                // Focus/geometry churn buries the Metal child window under the black Canvas,
+                // which makes ruler/grid lines vanish mid-drag. Leave Metal alone while Design
+                // guides are active or while panning a zoomed frame.
+                val willPan = overlay.contentZoom > 1.01f &&
+                    rulerMode == DragMode.None &&
+                    overlay.pickerColor == null
+                val designGuidesActive =
+                    overlay.showRuler || overlay.showGrid || overlay.pickerColor != null
+                val keepMetalFront = designGuidesActive || willPan
+                if (!keepMetalFront && !isFocusOwner) {
+                    requestFocusInWindow()
+                }
+                // When zoomed, left-drag pans the visible crop; use the trackpad/wheel too.
+                // Ruler/picker still take priority when active.
+                if (willPan) {
+                    dragMode = DragMode.Pan
+                    panAnchor = event.point
+                    panOriginX = overlay.contentPanX
+                    panOriginY = overlay.contentPanY
+                    cursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
+                    return
+                }
                 mapPoint(event.point)?.let { point ->
-                    dragMode = rulerDragMode(event.point)
+                    dragMode = rulerMode
                     when {
                         dragMode == DragMode.RulerX || dragMode == DragMode.RulerY -> updateRulerDrag(event.point)
                         overlay.pickerColor != null -> {
@@ -362,7 +390,21 @@ private class MirrorPanel(
                     updateHoverColor(event.point)
                 }
                 when (dragMode) {
-                    DragMode.RulerX, DragMode.RulerY -> mapPoint(event.point)?.let { updateRulerDrag(event.point) }
+                    DragMode.RulerX, DragMode.RulerY -> updateRulerDrag(event.point)
+                    DragMode.Pan -> {
+                        val anchor = panAnchor ?: return
+                        val rect = fittedContentRect() ?: return
+                        val zoom = overlay.contentZoom.coerceAtLeast(1f)
+                        val panRange = (1f - 1f / zoom).coerceAtLeast(0.0001f)
+                        val dx = (event.point.x - anchor.x).toFloat() / rect.width.toFloat()
+                        val dy = (event.point.y - anchor.y).toFloat() / rect.height.toFloat()
+                        // Dragging the image should move content with the cursor.
+                        val nextX = (panOriginX - dx / panRange).coerceIn(0f, 1f)
+                        val nextY = (panOriginY - dy / panRange).coerceIn(0f, 1f)
+                        overlay = overlay.copy(contentPanX = nextX, contentPanY = nextY)
+                        updateNativeOverlay(overlay)
+                        onContentPan(nextX, nextY)
+                    }
                     // Clamp so a fling that leaves the image edge still carries its
                     // final velocity to the device instead of being dropped.
                     DragMode.Device -> mapPoint(event.point, clamp = true)?.let(::sendDeviceMove)
@@ -380,8 +422,10 @@ private class MirrorPanel(
                     }
                 }
                 pressedPoint = null
+                panAnchor = null
                 lastDeviceMoveSentAtNanos = 0L
                 dragMode = DragMode.None
+                cursor = Cursor.getDefaultCursor()
             }
 
             override fun mouseMoved(event: MouseEvent) {
@@ -395,6 +439,25 @@ private class MirrorPanel(
                 }
             }
 
+            override fun mouseWheelMoved(event: MouseWheelEvent) {
+                if (overlay.contentZoom <= 1.01f) return
+                val step = (0.06f / overlay.contentZoom).coerceIn(0.01f, 0.12f)
+                val rotation = event.preciseWheelRotation.toFloat()
+                val nextX: Float
+                val nextY: Float
+                if (event.isShiftDown) {
+                    nextX = (overlay.contentPanX + rotation * step).coerceIn(0f, 1f)
+                    nextY = overlay.contentPanY
+                } else {
+                    nextX = overlay.contentPanX
+                    nextY = (overlay.contentPanY + rotation * step).coerceIn(0f, 1f)
+                }
+                overlay = overlay.copy(contentPanX = nextX, contentPanY = nextY)
+                updateNativeOverlay(overlay)
+                onContentPan(nextX, nextY)
+                event.consume()
+            }
+
             override fun mouseExited(event: MouseEvent) {
                 pickerPoint = null
                 if (overlay.pickerColor != null) {
@@ -406,6 +469,7 @@ private class MirrorPanel(
         }
         addMouseListener(listener)
         addMouseMotionListener(listener)
+        addMouseWheelListener(listener)
         addFocusListener(object : FocusAdapter() {
             override fun focusGained(event: FocusEvent) {
                 // Focus can bury a non-child Metal overlay under the black Canvas. Refresh
@@ -636,6 +700,9 @@ private class MirrorPanel(
                 highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
                 highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
                 highlightBottom = highlight?.get(3)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 0f,
+                contentZoom = next.contentZoom.coerceAtLeast(1f),
+                contentPanX = next.contentPanX.coerceIn(0f, 1f),
+                contentPanY = next.contentPanY.coerceIn(0f, 1f),
             )
             return
         }
@@ -720,10 +787,18 @@ private class MirrorPanel(
         val (contentWidth, contentHeight) = mirrorContentSize() ?: return null
         val localX = point.x - rect.x
         val localY = point.y - rect.y
-        if (!clamp && (localX < 0.0 || localY < 0.0 || localX > rect.width || localY > rect.height)) return null
+        if (!clamp && (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height)) return null
+        // Must be floating-point division — Int/Int truncates to 0 for every pixel inside the rect.
+        val hostU = (localX.toFloat() / rect.width.toFloat()).coerceIn(0f, 1f)
+        val hostV = (localY.toFloat() / rect.height.toFloat()).coerceIn(0f, 1f)
+        val zoom = overlay.contentZoom.coerceAtLeast(1f)
+        val originX = overlay.contentPanX.coerceIn(0f, 1f) * (1f - 1f / zoom)
+        val originY = overlay.contentPanY.coerceIn(0f, 1f) * (1f - 1f / zoom)
+        val contentU = (originX + hostU / zoom).coerceIn(0f, 1f)
+        val contentV = (originY + hostV / zoom).coerceIn(0f, 1f)
         return DevicePoint(
-            x = (localX / rect.scale).roundToInt().coerceIn(0, contentWidth - 1),
-            y = (localY / rect.scale).roundToInt().coerceIn(0, contentHeight - 1),
+            x = (contentU * contentWidth).roundToInt().coerceIn(0, contentWidth - 1),
+            y = (contentV * contentHeight).roundToInt().coerceIn(0, contentHeight - 1),
         )
     }
 
@@ -808,10 +883,10 @@ private class MirrorPanel(
             g2.drawLine(rect.x, drawY, rect.x + rect.width, drawY)
             g2.fillOval(drawX - 4, rect.y + rect.height / 2 - 4, 8, 8)
             g2.fillOval(rect.x + rect.width / 2 - 4, drawY - 4, 8, 8)
-            drawPill(g2, drawX + 8, rect.y + 8, "L ${xPx.roundToInt()}")
-            drawPill(g2, (drawX - 70).coerceAtLeast(rect.x + 4), rect.y + rect.height - 24, "R ${(sourceWidth - xPx).roundToInt()}")
-            drawPill(g2, rect.x + 8, drawY + 8, "T ${yPx.roundToInt()}")
-            drawPill(g2, rect.x + rect.width - 74, (drawY - 24).coerceAtLeast(rect.y + 4), "B ${(sourceHeight - yPx).roundToInt()}")
+            drawPill(g2, drawX + 8, rect.y + 8, xPx.roundToInt().toString())
+            drawPill(g2, (drawX - 70).coerceAtLeast(rect.x + 4), rect.y + rect.height - 24, (sourceWidth - xPx).roundToInt().toString())
+            drawPill(g2, rect.x + 8, drawY + 8, yPx.roundToInt().toString())
+            drawPill(g2, rect.x + rect.width - 74, (drawY - 24).coerceAtLeast(rect.y + 4), (sourceHeight - yPx).roundToInt().toString())
         }
         parseBounds(overlay.highlightBounds)?.let { bounds ->
             val sourceWidth = overlay.sourceWidth ?: frameImage.width
@@ -957,22 +1032,31 @@ private class MirrorPanel(
     }
 
     private fun updateHoverColor(point: Point): String? {
-        val frameImage = image ?: return null
+        val frameImage = image
         val (contentWidth, contentHeight) = mirrorContentSize() ?: return null
         val mapped = mapPoint(point) ?: run {
             pickerPoint = null
+            val gpu = ensureGpuPresenter()
+            if (overlay.pickerColor != null) {
+                gpu?.updatePickerPoint(null, null)
+                    ?: NativeMirrorJni.updatePickerPoint(null, null)
+            }
             if (!nativeMetadataFrame) presentCpuFrame()
             return null
         }
         pickerPoint = point
         val normalizedX = mapped.x.toFloat() / contentWidth
         val normalizedY = mapped.y.toFloat() / contentHeight
+        val gpu = ensureGpuPresenter()?.takeIf { usesGpuHub() }
         if (overlay.pickerColor != null) {
-            NativeMirrorJni.updatePickerPoint(normalizedX, normalizedY)
+            gpu?.updatePickerPoint(normalizedX, normalizedY)
+                ?: NativeMirrorJni.updatePickerPoint(normalizedX, normalizedY)
         }
-        val nativeHex = NativeMirrorJni.inspectPixel(normalizedX, normalizedY)
+        val nativeHex = gpu?.let { GpuMirrorJni.inspectPixel(it.decoderId, normalizedX, normalizedY) }
+            ?: NativeMirrorJni.inspectPixel(normalizedX, normalizedY)
         val hex = nativeHex ?: run {
             if (
+                frameImage == null ||
                 nativeMetadataFrame ||
                 mapped.x !in 0 until frameImage.width ||
                 mapped.y !in 0 until frameImage.height
@@ -992,10 +1076,19 @@ private class MirrorPanel(
         if (!overlay.showRuler) return DragMode.None
         val rect = fittedContentRect() ?: return DragMode.None
         val (contentWidth, contentHeight) = mirrorContentSize() ?: return DragMode.None
-        val drawX = rect.x + (overlay.rulerX.coerceIn(0f, contentWidth.toFloat()) * rect.width / contentWidth).roundToInt()
-        val drawY = rect.y + (overlay.rulerY.coerceIn(0f, contentHeight.toFloat()) * rect.height / contentHeight).roundToInt()
-        val nearVerticalLine = point.y in rect.y..(rect.y + rect.height) && kotlin.math.abs(point.x - drawX) <= 10
-        val nearHorizontalLine = point.x in rect.x..(rect.x + rect.width) && kotlin.math.abs(point.y - drawY) <= 10
+        val sourceWidth = (overlay.sourceWidth ?: contentWidth).coerceAtLeast(1)
+        val sourceHeight = (overlay.sourceHeight ?: contentHeight).coerceAtLeast(1)
+        val zoom = overlay.contentZoom.coerceAtLeast(1f)
+        val originX = overlay.contentPanX.coerceIn(0f, 1f) * (1f - 1f / zoom)
+        val originY = overlay.contentPanY.coerceIn(0f, 1f) * (1f - 1f / zoom)
+        val contentU = overlay.rulerX.coerceIn(0f, sourceWidth.toFloat()) / sourceWidth.toFloat()
+        val contentV = overlay.rulerY.coerceIn(0f, sourceHeight.toFloat()) / sourceHeight.toFloat()
+        val hostU = ((contentU - originX) * zoom).coerceIn(0f, 1f)
+        val hostV = ((contentV - originY) * zoom).coerceIn(0f, 1f)
+        val drawX = rect.x + (hostU * rect.width).roundToInt()
+        val drawY = rect.y + (hostV * rect.height).roundToInt()
+        val nearVerticalLine = point.y in rect.y..(rect.y + rect.height) && kotlin.math.abs(point.x - drawX) <= 14
+        val nearHorizontalLine = point.x in rect.x..(rect.x + rect.width) && kotlin.math.abs(point.y - drawY) <= 14
         return when {
             nearVerticalLine -> DragMode.RulerX
             nearHorizontalLine -> DragMode.RulerY
@@ -1004,21 +1097,28 @@ private class MirrorPanel(
     }
 
     private fun updateRulerDrag(point: Point) {
-        val frameImage = image ?: return
-        val mapped = mapPoint(point) ?: return
+        val mapped = mapPoint(point, clamp = true) ?: return
         val source = toSourcePoint(mapped)
-        val sourceWidth = overlay.sourceWidth ?: frameImage.width
-        val sourceHeight = overlay.sourceHeight ?: frameImage.height
+        val sourceWidth = (overlay.sourceWidth ?: mirrorContentSize()?.first ?: return)
+            .coerceAtLeast(1)
+            .toFloat()
+        val sourceHeight = (overlay.sourceHeight ?: mirrorContentSize()?.second ?: return)
+            .coerceAtLeast(1)
+            .toFloat()
         val nextX = if (dragMode == DragMode.RulerX) {
-            source.x.toFloat().coerceIn(0f, sourceWidth.toFloat())
+            source.x.toFloat().coerceIn(0f, sourceWidth - 1f)
         } else {
-            overlay.rulerX
+            overlay.rulerX.coerceIn(0f, sourceWidth - 1f)
         }
         val nextY = if (dragMode == DragMode.RulerY) {
-            source.y.toFloat().coerceIn(0f, sourceHeight.toFloat())
+            source.y.toFloat().coerceIn(0f, sourceHeight - 1f)
         } else {
-            overlay.rulerY
+            overlay.rulerY.coerceIn(0f, sourceHeight - 1f)
         }
+        // Update Metal immediately so guides stay visible during the Compose round-trip.
+        overlay = overlay.copy(rulerX = nextX, rulerY = nextY)
+        updateNativeOverlay(overlay)
+        if (!nativeMetadataFrame) presentCpuFrame()
         onRulerResize(nextX, nextY)
     }
 

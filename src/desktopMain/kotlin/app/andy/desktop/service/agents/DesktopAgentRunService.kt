@@ -100,6 +100,7 @@ class DesktopAgentRunService(
     private val actionConfig: ActionConfigStore,
     private val enableProbes: Boolean = true,
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
+    artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -116,6 +117,7 @@ class DesktopAgentRunService(
         },
         scrollbackFile = { id -> store.scrollbackFile(id) },
         mode = terminalMode,
+        artifactPollIntervalMs = artifactPollIntervalMs,
     )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
@@ -3226,8 +3228,15 @@ class DesktopAgentRunService(
         val previous = previousTaskStatuses.put(taskId, snapshot.status)
         val clearResumable = snapshot.status == AgentStatus.Working ||
             snapshot.status == AgentStatus.Blocked
-        if (task.status != snapshot.status ||
-            task.statusConfident != snapshot.confident ||
+        val statusChanged = task.status != snapshot.status
+        // Confidence-only flips while Working are scrape noise. Each updateTask republishes
+        // the tasks list and recomposes the chat pane; with a live SwingPanel that re-punches
+        // the Skiko clear-hole and reads as terminal flicker. Attention only cares about
+        // confidence on Done/Blocked/Error.
+        val confidenceChanged =
+            task.statusConfident != snapshot.confident && snapshot.status != AgentStatus.Working
+        if (statusChanged ||
+            confidenceChanged ||
             (clearResumable && task.resumable)
         ) {
             updateTask(taskId) {

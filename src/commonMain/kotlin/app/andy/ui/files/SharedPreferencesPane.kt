@@ -3,6 +3,7 @@ package app.andy.ui.files
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -41,6 +42,7 @@ import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -191,7 +193,7 @@ internal fun SharedPreferencesPane(
                             newKey,
                             { newKey = it },
                             singleLine = true,
-                            modifier = Modifier.weight(1f).height(44.dp),
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                             placeholder = { Text("new key", color = TextSecondary) },
                             colors = fieldColors(),
                         )
@@ -202,7 +204,7 @@ internal fun SharedPreferencesPane(
                             newValue,
                             { newValue = it },
                             singleLine = true,
-                            modifier = Modifier.weight(1.4f).height(44.dp),
+                            modifier = Modifier.weight(1.4f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                             placeholder = { Text("value", color = TextSecondary) },
                             colors = fieldColors(),
                         )
@@ -258,7 +260,7 @@ internal fun SharedPreferencesPane(
                                         editingValue,
                                         { editingValue = it },
                                         singleLine = true,
-                                        modifier = Modifier.weight(1f).height(44.dp),
+                                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                                         colors = fieldColors(),
                                     )
                                 } else {

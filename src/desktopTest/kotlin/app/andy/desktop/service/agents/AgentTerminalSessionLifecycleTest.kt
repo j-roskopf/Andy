@@ -6,6 +6,7 @@ import app.andy.model.AgentTask
 import app.andy.terminal.AndyKetraTermConfig
 import app.andy.terminal.TmuxAndy
 import java.io.File
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,6 +29,11 @@ import kotlinx.coroutines.withTimeout
  */
 class AgentTerminalSessionLifecycleTest {
     private val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
+
+    @BeforeTest
+    fun isolateFromLiveAndyTmux() {
+        TmuxAndy.useIsolatedServerForTests()
+    }
 
     @Test
     fun sessionStaysInteractiveUntilStoppedThenReplaysReadOnlyAfterRestart() = runBlocking {

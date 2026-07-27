@@ -53,7 +53,8 @@ void andy_hub_update_overlay(int64_t presenter_id, bool grid_enabled, float grid
                              float grid_r, float grid_g, float grid_b, float grid_a, bool ruler_enabled,
                              float ruler_x, float ruler_y, float ruler_r, float ruler_g, float ruler_b, float ruler_a,
                              float source_width, float source_height, bool picker_enabled, float highlight_left,
-                             float highlight_top, float highlight_right, float highlight_bottom);
+                             float highlight_top, float highlight_right, float highlight_bottom,
+                             float content_zoom, float content_pan_x, float content_pan_y);
 void andy_hub_update_picker_point(int64_t presenter_id, float normalized_x, float normalized_y, bool visible);
 int andy_hub_inspect_pixel(int64_t decoder_id, float normalized_x, float normalized_y);
 float andy_hub_p95_input_to_present_millis(int64_t decoder_id);

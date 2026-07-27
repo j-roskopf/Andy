@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
@@ -43,7 +44,7 @@ import app.andy.ui.theme.TextSecondary
 
 @Composable
 internal fun WorkspaceSplit(
-    sidebarWidth: Dp = 248.dp,
+    sidebarWidth: Dp = AndyLayout.ListWidth,
     modifier: Modifier = Modifier,
     sidebar: @Composable ColumnScope.() -> Unit,
     main: @Composable BoxScope.() -> Unit,
@@ -161,20 +162,20 @@ internal fun WorkspaceItemRow(
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val background = when {
-        selected -> AndyColors.Neutral700.copy(alpha = 0.88f)
-        hovered -> AndyColors.Neutral750.copy(alpha = 0.55f)
+        selected -> AndyColors.SurfaceSelected
+        hovered -> AndyColors.SurfaceHover
         else -> Color.Transparent
     }
     Row(
         modifier
             .fillMaxWidth()
-            .padding(start = if (indented) 12.dp else 0.dp)
-            .background(background, RoundedCornerShape(AndyRadius.R3))
+            .padding(start = if (indented) AndySpace.Space4 else 0.dp)
+            .background(background, RoundedCornerShape(AndyRadius.Row))
             .hoverable(interactionSource)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = if (subtitle == null) 7.dp else 6.dp),
+            .padding(horizontal = AndySpace.Space4, vertical = if (subtitle == null) 10.dp else AndySpace.Space3),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         leading?.invoke()
         Column(
@@ -183,26 +184,26 @@ internal fun WorkspaceItemRow(
         ) {
             Text(
                 title,
-                color = if (selected) TextPrimary else TextSecondary.copy(alpha = if (hovered) 0.95f else 0.88f),
+                color = if (selected) TextPrimary else TextSecondary,
                 fontFamily = DisplayFont,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                fontSize = 12.sp,
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                fontSize = 13.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (subtitle != null) {
                 Text(
                     subtitle,
-                    color = TextSecondary.copy(alpha = 0.78f),
+                    color = AndyColors.TextTertiary,
                     fontFamily = MonoFont,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
         }
         trailing?.let {
-            Box(Modifier.alpha(if (selected || hovered) 1f else 0.72f)) { it() }
+            Box(Modifier.alpha(if (selected || hovered) 1f else 0.55f)) { it() }
         }
     }
 }

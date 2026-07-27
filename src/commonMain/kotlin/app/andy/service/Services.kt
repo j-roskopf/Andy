@@ -1,5 +1,6 @@
 package app.andy.service
 
+import androidx.compose.runtime.Stable
 import app.andy.AndyDestination
 import app.andy.model.*
 import kotlinx.coroutines.flow.Flow
@@ -690,6 +691,12 @@ data class PlatformCapabilities(
     }
 }
 
+/**
+ * App-wide service graph. Marked [Stable] so panes that take it as a parameter
+ * (notably the agent [app.andy.ui.agents.AgentTerminalSurface]) can skip when only
+ * unrelated parent state changes — otherwise every tick re-enters the Swing interop host.
+ */
+@Stable
 data class AndyServices(
     val devices: DeviceService,
     val iosDevices: IosDeviceService,

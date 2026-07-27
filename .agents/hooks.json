@@ -11,7 +11,7 @@
         "Stop": [
             {
                 "type": "command",
-                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done stop",
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty fully-idle",
                 "timeout": 5
             }
         ],

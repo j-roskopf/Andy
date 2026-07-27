@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -57,6 +58,7 @@ import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
@@ -173,7 +175,7 @@ internal fun CatalogScreen(avd: AvdService) {
                     onReset = { resetFilters() },
                 )
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search package, variant, api", color = TextSecondary) }, modifier = Modifier.fillMaxWidth().height(54.dp), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
+                    TextField(value = query, onValueChange = { query = it }, singleLine = true, placeholder = { Text("Search package, variant, api", color = TextSecondary) }, modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
                     Text(
                         if (loading) "Refreshing… · ${filtered.size} of ${images.size} images" else "${filtered.size} of ${images.size} images",
                         color = TextSecondary,

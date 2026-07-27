@@ -225,6 +225,7 @@ internal fun AccessibilityScreen(
                     modifier = Modifier.fillMaxSize().padding(start = 6.dp),
                     highlightBounds = state.hoveredBounds,
                     showHardwareControls = false,
+                    showPopOut = false,
                     passThroughInput = !state.interactionMode,
                     onDevicePointClick = { x, y ->
                         state.root?.findBestNodeAt(x, y)?.let {

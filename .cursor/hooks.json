@@ -8,7 +8,12 @@
         ],
         "stop": [
             {
-                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty"
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty completed"
+            }
+        ],
+        "sessionStart": [
+            {
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
             }
         ]
     }

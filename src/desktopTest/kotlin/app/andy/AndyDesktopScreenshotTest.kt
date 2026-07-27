@@ -161,11 +161,11 @@ class AndyDesktopScreenshotTest {
                                 "Plan validation for blank, international, and partial postal codes before the next build pair.",
                             )
                             waitForIdle()
-                            onNodeWithText("include scratchpad").performClick()
+                            onNodeWithText("Include scratchpad").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.ProjectsScratchpadEditor -> {
-                            onNodeWithText("edit").performClick()
+                            onNodeWithText("Edit").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {
@@ -186,7 +186,7 @@ class AndyDesktopScreenshotTest {
                         AndyScreenshotScenario.ProjectsReviewBlocking,
                         AndyScreenshotScenario.ProjectsReviewDisabled,
                         -> onNodeWithTag("project-task-dock")
-                        else -> onNode(isRoot() and hasAnyDescendant(hasText("devices")))
+                        else -> onNode(isRoot() and hasAnyDescendant(hasText("Devices")))
                     }
                     captureTarget.captureRoboImage(
                         filePath = "src/screenshotTest/roborazzi/${baselinePlatform()}/${scenario.fileName}",

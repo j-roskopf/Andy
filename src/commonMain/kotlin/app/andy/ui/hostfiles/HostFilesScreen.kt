@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -93,6 +94,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -406,7 +408,7 @@ internal fun HostFilesScreen(
                         selectedPath,
                         { selectedPath = it },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -434,7 +436,7 @@ internal fun HostFilesScreen(
                     { state.searchQuery = it },
                     placeholder = { Text("Search indexed files", color = TextSecondary) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().height(48.dp).focusRequester(state.searchFocusRequester),
+                    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight).focusRequester(state.searchFocusRequester),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

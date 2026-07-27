@@ -68,6 +68,7 @@ class AgentTerminalManager(
         File(File(System.getProperty("user.home"), ".andy/agents"), "$id/scrollback.ansi")
     },
     private val mode: AgentTerminalMode = defaultMode(),
+    private val artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
 ) {
     data class Handle(
         val taskId: String,
@@ -423,7 +424,12 @@ class AgentTerminalManager(
                 }
             }
 
-            val artifacts = AgentWorkflowArtifacts(scope, task.id, artifactDir)
+            val artifacts = AgentWorkflowArtifacts(
+                scope = scope,
+                taskId = task.id,
+                root = artifactDir,
+                pollIntervalMs = artifactPollIntervalMs,
+            )
             val foreground = AtomicBoolean(true)
             bindSessionForeground(session, foreground)
             val tracker = AgentStatusTracker(
@@ -457,8 +463,8 @@ class AgentTerminalManager(
                     delay(scrollbackFlushDelay(handle))
                 }
             }
-            bumpSessionsRevision()
-            // Ensure Compose's Main collectors observe attachment after EDT widget creation.
+            // Publish once on Main after the EDT widget exists so Compose collectors see it
+            // without a second IO-thread bump (that forced an extra terminal recomposition).
             scope.launch(Dispatchers.Main.immediate) {
                 bumpSessionsRevision()
             }
@@ -554,7 +560,12 @@ class AgentTerminalManager(
                         taskId,
                     )
                 artifactDir.mkdirs()
-                val artifacts = AgentWorkflowArtifacts(scope, taskId, artifactDir)
+                val artifacts = AgentWorkflowArtifacts(
+                    scope = scope,
+                    taskId = taskId,
+                    root = artifactDir,
+                    pollIntervalMs = artifactPollIntervalMs,
+                )
                 val foreground = AtomicBoolean(true)
                 bindSessionForeground(session, foreground)
                 val seededStatus = listOfNotNull(retainedStatus, preferredStatus)
@@ -599,7 +610,6 @@ class AgentTerminalManager(
                     tracker.status.collect { snapshot -> onStatusSnapshot(snapshot) }
                 }
                 bumpSessionsRevision()
-                scope.launch(Dispatchers.Main.immediate) { bumpSessionsRevision() }
                 handle
             } finally {
                 if (!registered) {
@@ -624,7 +634,8 @@ class AgentTerminalManager(
             existing.foreground.set(true)
             session.reattachViewer(terminalAppearance())
             resumeBackgroundPolling(existing)
-            bumpSessionsRevision()
+            // Single Main publish — a second IO-thread bump forced an extra SwingPanel
+            // recomposition for every chat that collected sessionsRevision.
             scope.launch(Dispatchers.Main.immediate) { bumpSessionsRevision() }
             return existing
         }
@@ -673,10 +684,18 @@ class AgentTerminalManager(
                 else -> {
                     val code = handle.session.exitCode.first { it != null } ?: -1
                     withContext(Dispatchers.IO) {
-                        repeat(50) {
+                        // Trailing Direct PTY bytes can land after exit. Persist once, then
+                        // give a short grace window — not a multi-second stall on empty stubs.
+                        persistScrollback(handle)
+                        if (handle.scrollbackPath.isFile && handle.scrollbackPath.length() > 0L) {
+                            return@withContext
+                        }
+                        repeat(DIRECT_PTY_SCROLLBACK_GRACE_ATTEMPTS) {
+                            delay(DIRECT_PTY_SCROLLBACK_GRACE_MS)
                             persistScrollback(handle)
-                            if (handle.scrollbackPath.isFile && handle.scrollbackPath.length() > 0L) return@withContext
-                            delay(100)
+                            if (handle.scrollbackPath.isFile && handle.scrollbackPath.length() > 0L) {
+                                return@withContext
+                            }
                         }
                     }
                     code
@@ -881,6 +900,9 @@ class AgentTerminalManager(
     companion object {
         private const val SCROLLBACK_FLUSH_MILLIS = 2_000L
         private const val SCROLLBACK_BACKGROUND_MILLIS = 15_000L
+        /** Max wait after DirectPty exit for trailing buffer bytes when scrollback is still empty. */
+        private const val DIRECT_PTY_SCROLLBACK_GRACE_ATTEMPTS = 5
+        private const val DIRECT_PTY_SCROLLBACK_GRACE_MS = 20L
         internal const val SUBMIT_KEY_GAP_MS = 80L
         private val TURN_COMPLETE_STATUSES = setOf(
             AgentStatus.Done,

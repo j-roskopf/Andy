@@ -101,7 +101,7 @@ class DesktopWorkspaceStore(
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             proxyRules = loadProxyRules(props),
             pairedWifiDevices = loadPairedWifi(props),
-            liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 390f,
+            liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 720f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 320f,
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
             appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,

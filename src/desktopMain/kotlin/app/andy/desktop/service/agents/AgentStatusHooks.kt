@@ -55,9 +55,11 @@ internal fun installGenericStatusHookScript(artifactDir: File) {
 private fun statusHookCommand(
     status: String,
     respond: String = "none",
+    gate: String = "none",
 ): String {
     val base = "${AndyStatusHookInstaller.STABLE_HOOK_COMMAND} $status"
-    return if (respond == "none") base else "$base $respond"
+    val withRespond = if (respond == "none" && gate == "none") base else "$base $respond"
+    return if (gate == "none") withRespond else "$withRespond $gate"
 }
 
 private fun prepareStatusHooks(artifactDir: File) {
@@ -125,7 +127,7 @@ fun installClaudeStatusHooks(worktreeOrCwd: File, artifactDir: File) {
 
 /**
  * Cursor: `.cursor/hooks.json`.
- * working ← beforeSubmitPrompt; done ← stop.
+ * working ← sessionStart + beforeSubmitPrompt; done ← stop (status completed|aborted).
  * No reliable permission-wait hook — blocked stays on screen scrape.
  */
 fun installCursorStatusHooks(worktreeOrCwd: File, artifactDir: File) {
@@ -136,9 +138,10 @@ fun installCursorStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     prepareStatusHooks(artifactDir)
 
     val workingCmd = statusHookCommand("working", respond = "empty")
-    val doneCmd = statusHookCommand("done", respond = "empty")
+    val doneCmd = statusHookCommand("done", respond = "empty", gate = "completed")
     val andyHooks = JsonObject(
         mapOf(
+            "sessionStart" to JsonArray(listOf(cursorCommandEntry(workingCmd))),
             "beforeSubmitPrompt" to JsonArray(listOf(cursorCommandEntry(workingCmd))),
             "stop" to JsonArray(listOf(cursorCommandEntry(doneCmd))),
         ),
@@ -177,7 +180,8 @@ fun installCodexStatusHooks(worktreeOrCwd: File, artifactDir: File) {
 
 /**
  * Antigravity: `.agents/hooks.json` named hook `andy-status`.
- * working ← PreInvocation; done ← Stop (fullyIdle path); blocked ← ask_* tools.
+ * working ← PreInvocation; done ← Stop gated on fullyIdle; blocked ← ask_* tools.
+ * Stop always returns `{}` (allow natural termination); only records done when idle.
  */
 fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     if (shouldSkipProjectHooks(worktreeOrCwd)) return
@@ -187,7 +191,7 @@ fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     prepareStatusHooks(artifactDir)
 
     val workingCmd = statusHookCommand("working", respond = "empty")
-    val doneCmd = statusHookCommand("done", respond = "stop")
+    val doneCmd = statusHookCommand("done", respond = "empty", gate = "fully-idle")
     val blockedCmd = statusHookCommand("blocked", respond = "allow")
     val andyHook = JsonObject(
         mapOf(

@@ -287,10 +287,14 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         socketPath = socket,
     )
-    // Local attach-only terminal surface for live tmux sessions owned by andyd.
+    // Attach-only terminal host: must not open ~/.andy/agents.db. andyd owns that
+    // store; a second writer silently reverts chats / unread badges on GUI quit.
+    val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
     val localAttach = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-        store = DesktopAgentTaskStore(),
+        store = DesktopAgentTaskStore(
+            databaseFile = File(attachStoreDir, "agents-${ProcessHandle.current().pid()}.db"),
+        ),
         locator = AgentCliLocator(),
         adapters = mapOf(
             AgentKind.ClaudeCode to ClaudeCodeAdapter(),

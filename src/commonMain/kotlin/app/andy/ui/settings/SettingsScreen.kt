@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -72,6 +73,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndySurfaceMode
@@ -357,8 +359,8 @@ private fun AppearancePanel(
     val selectedSurface = AndySurfaceMode.fromId(workspace.surfaceModeId)
     PanelCard {
         SettingsSectionHeader(
-            title = "Accent tint",
-            description = "Used for selection, controls, and emphasis. Andy blue is the default.",
+            title = "Accent",
+            description = "Punctuation for selection, links, and status. Surfaces stay neutral.",
         )
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -392,30 +394,16 @@ private fun AppearancePanel(
     PanelCard {
         SettingsSectionHeader(
             title = "Background",
-            description = "Tinted keeps a subtle hue wash from the accent. Dark uses true black surfaces. Light flips the shell to a bright workspace.",
+            description = "Tinted washes chrome with the accent hue. Dark uses quiet macOS neutrals. Light uses an independently tuned bright palette.",
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AndySurfaceMode.entries.forEach { mode ->
-                val selected = mode == selectedSurface
-                TextButton(
+                SettingsChoicePill(
+                    label = mode.label,
+                    selected = mode == selectedSurface,
+                    contentDescription = "${mode.label} background",
                     onClick = { update { it.copy(surfaceModeId = mode.id) } },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
-                    ),
-                    modifier = Modifier
-                        .background(
-                            if (selected) AndyColors.OrangeSubtle else PanelSoft,
-                            RoundedCornerShape(AndyRadius.R3),
-                        )
-                        .border(
-                            1.dp,
-                            if (selected) AndyColors.OrangeBorder else Border,
-                            RoundedCornerShape(AndyRadius.R3),
-                        )
-                        .semantics { contentDescription = "${mode.label} background" },
-                ) {
-                    Text(mode.label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-                }
+                )
             }
         }
     }
@@ -431,26 +419,12 @@ private fun AppearancePanel(
         ) {
             val selectedTheme = EditorSyntaxTheme.fromId(workspace.editorSyntaxThemeId)
             EditorSyntaxTheme.entries.forEach { theme ->
-                val selected = theme == selectedTheme
-                TextButton(
+                SettingsChoicePill(
+                    label = theme.label,
+                    selected = theme == selectedTheme,
+                    contentDescription = "${theme.label} editor theme",
                     onClick = { update { it.copy(editorSyntaxThemeId = theme.id) } },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
-                    ),
-                    modifier = Modifier
-                        .background(
-                            if (selected) AndyColors.OrangeSubtle else PanelSoft,
-                            RoundedCornerShape(AndyRadius.R3),
-                        )
-                        .border(
-                            1.dp,
-                            if (selected) AndyColors.OrangeBorder else Border,
-                            RoundedCornerShape(AndyRadius.R3),
-                        )
-                        .semantics { contentDescription = "${theme.label} editor theme" },
-                ) {
-                    Text(theme.label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-                }
+                )
             }
         }
         Text("Selected: ${EditorSyntaxTheme.fromId(workspace.editorSyntaxThemeId).label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
@@ -546,24 +520,26 @@ private fun SettingsChoicePill(
     contentDescription: String,
     onClick: () -> Unit,
 ) {
-    TextButton(
-        onClick = onClick,
-        colors = ButtonDefaults.textButtonColors(
-            contentColor = if (selected) AndyColors.Neutral100 else TextSecondary,
-        ),
-        modifier = Modifier
+    val shape = RoundedCornerShape(AndyRadius.Control)
+    Box(
+        Modifier
+            .height(AndyLayout.ControlHeightSm)
             .background(
-                if (selected) AndyColors.OrangeSubtle else PanelSoft,
-                RoundedCornerShape(AndyRadius.R3),
+                if (selected) AndyColors.SurfaceSelected else Color.Transparent,
+                shape,
             )
-            .border(
-                1.dp,
-                if (selected) AndyColors.OrangeBorder else Border,
-                RoundedCornerShape(AndyRadius.R3),
-            )
-            .semantics { this.contentDescription = contentDescription },
+            .border(1.dp, Border, shape)
+            .clickable(onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        Text(
+            label,
+            color = if (selected) TextPrimary else TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+        )
     }
 }
 
@@ -633,7 +609,12 @@ private fun AgentNotificationsPanel(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("When to notify", color = TextSecondary, fontSize = 13.sp)
             Box {
-                Button(onClick = { timingExpanded = true }) { Text(if (workspace.agentNotificationTiming == AgentNotificationTiming.Always) "Always" else "Background only") }
+                SettingsChoicePill(
+                    label = if (workspace.agentNotificationTiming == AgentNotificationTiming.Always) "Always" else "Background only",
+                    selected = true,
+                    contentDescription = "When to notify",
+                    onClick = { timingExpanded = true },
+                )
                 DropdownMenu(timingExpanded, { timingExpanded = false }) {
                     AgentNotificationTiming.entries.forEach { timing -> DropdownMenuItem({ Text(if (timing == AgentNotificationTiming.Always) "Always" else "Background only") }, { update { it.copy(agentNotificationTiming = timing) }; timingExpanded = false }) }
                 }
@@ -642,12 +623,22 @@ private fun AgentNotificationsPanel(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Sound", color = if (workspace.agentNotificationSoundEnabled) TextSecondary else TextSecondary.copy(alpha = .5f), fontSize = 13.sp)
             Box {
-                Button(onClick = { soundExpanded = true }, enabled = workspace.agentNotificationSoundEnabled) { Text(sound.label) }
+                SettingsChoicePill(
+                    label = sound.label,
+                    selected = workspace.agentNotificationSoundEnabled,
+                    contentDescription = "Notification sound",
+                    onClick = { if (workspace.agentNotificationSoundEnabled) soundExpanded = true },
+                )
                 DropdownMenu(soundExpanded, { soundExpanded = false }) {
                     AgentNotificationSound.entries.forEach { option -> DropdownMenuItem({ Text(option.label) }, { update { it.copy(agentNotificationSoundId = option.id) }; soundExpanded = false }) }
                 }
             }
-            Button(onClick = { services.notificationSounds.play(sound.id) }) { Text("Preview") }
+            SettingsChoicePill(
+                label = "Preview",
+                selected = false,
+                contentDescription = "Preview notification sound",
+                onClick = { services.notificationSounds.play(sound.id) },
+            )
         }
     }
 }
@@ -717,7 +708,7 @@ private fun ProxyPanel(
                 }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
             textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
             colors = fieldColors(),
             placeholder = {
@@ -774,7 +765,7 @@ private fun McpServerPanel(
                         }
                     },
                     singleLine = true,
-                    modifier = Modifier.width(96.dp).height(50.dp),
+                    modifier = Modifier.width(96.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                     colors = fieldColors(),
                 )

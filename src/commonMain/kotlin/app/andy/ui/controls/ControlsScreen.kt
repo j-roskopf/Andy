@@ -3,6 +3,7 @@ package app.andy.ui.controls
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -50,6 +51,7 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.MonoFont
@@ -355,7 +357,7 @@ private fun ValueCommandTile(
             TextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).height(42.dp),
+                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                 colors = fieldColors(),

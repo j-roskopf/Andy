@@ -30,8 +30,11 @@ Optional override: `ANDY_TMUX=/path/to/tmux`
 | `~/.andy/bin/andy-status-hook.sh` | Stable vendor-hook helper (desktop / andyd / installer) |
 | `$PWD/.andy/active-task` | Gitignored pointer to the active task id for status hooks |
 | `$PWD/.andy/<taskId>/` | Per-task artifacts (`status.json`, plan/review, …) |
-| `tmux -L andy` | Dedicated Andy tmux server |
+| `tmux -L andy` | Dedicated Andy tmux server (live agents / GUI / andyd) |
+| `tmux -L andy-test` | Isolated socket used by `desktopTest` so tests cannot `kill-server` live chats |
 | `andy-task-<taskId>` | Per-task tmux session name |
+
+Optional socket override: `ANDY_TMUX_SOCKET=name` (defaults to `andy`).
 
 ## Run the daemon
 

@@ -1,7 +1,6 @@
 package app.andy.ui.shell
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -47,14 +46,18 @@ import app.andy.model.ProjectAction
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.bottomBorder
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
@@ -93,27 +96,39 @@ internal fun TopChrome(
     }
 
     Row(
-        Modifier.fillMaxWidth().height(62.dp)
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(horizontal = 14.dp),
+        Modifier
+            .fillMaxWidth()
+            .height(AndyLayout.ToolbarHeight)
+            .background(AndyColors.ContentBg)
+            .bottomBorder(Border)
+            .padding(horizontal = AndySpace.Space5),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f).padding(end = 10.dp)) {
-            Text(destination.label.lowercase(), color = AndyColors.Neutral100, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, lineHeight = 24.sp)
+        Column(Modifier.weight(1f).padding(end = AndySpace.Space4)) {
             Text(
-                selectedIosTarget?.displayName ?: selectedDevice?.let { "${it.displayName} / api ${it.apiLevel ?: "-"} / ${it.abi ?: "-"}" } ?: "no device selected",
-                color = TextSecondary,
-                fontFamily = MonoFont,
+                destination.label,
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 14.sp,
+                lineHeight = 18.sp,
+            )
+            Text(
+                selectedIosTarget?.displayName
+                    ?: selectedDevice?.let { "${it.displayName} · API ${it.apiLevel ?: "—"} · ${it.abi ?: "—"}" }
+                    ?: "No device selected",
+                color = AndyColors.TextTertiary,
+                fontFamily = DisplayFont,
                 fontSize = 11.sp,
                 lineHeight = 14.sp,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         actions()
         if (destination != AndyDestination.Network && proxyRunning) {
             ProxyToolbarIndicator()
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(AndySpace.Space3))
         }
         if (hasActionRunnerControls) {
             ActionRunnerSelector(
@@ -124,23 +139,32 @@ internal fun TopChrome(
                 actionExpanded = actionMenuExpanded,
                 onActionExpandedChange = { actionMenuExpanded = it },
             )
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(AndySpace.Space3))
         }
         if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
                 enabled = stoppingEmulatorSerial != selectedDevice.serial,
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(AndyRadius.Row),
+                contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
             ) {
-                Text(if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop emulator", fontSize = 12.sp)
+                Text(
+                    if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop Emulator",
+                    fontFamily = DisplayFont,
+                    fontSize = 12.sp,
+                )
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(AndySpace.Space3))
         }
-        Button(onClick = onRefresh, colors = primaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("Refresh", color = TextPrimary, fontSize = 12.sp)
+        Button(
+            onClick = onRefresh,
+            colors = secondaryButtonColors(),
+            shape = RoundedCornerShape(AndyRadius.Row),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+        ) {
+            Text("Refresh", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(AndySpace.Space3))
         DevicePicker(
             devices = devices,
             selectedDevice = selectedDevice,
@@ -159,15 +183,21 @@ internal fun TopChrome(
 @Composable
 private fun ProxyToolbarIndicator() {
     Row(
-        Modifier.height(30.dp)
-            .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.Pill))
-            .border(1.dp, Green.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.Pill))
+        Modifier
+            .height(AndyLayout.ControlHeightMd)
+            .background(AndyColors.SurfaceHover, RoundedCornerShape(AndyRadius.Control))
             .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        GlowingDot(isGreen = true, modifier = Modifier.size(14.dp))
-        Text("proxy", color = AndyColors.GreenSoft, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+        GlowingDot(isGreen = true, modifier = Modifier.size(AndyLayout.IconMd))
+        Text(
+            "Proxy",
+            color = Green,
+            fontFamily = DisplayFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -193,24 +223,29 @@ private fun ActionRunnerSelector(
     Row(
         modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Box {
             Button(
                 onClick = { onProjectExpandedChange(true) },
                 colors = secondaryButtonColors(),
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(AndyRadius.Control),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
                 modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
             ) {
-                Text("prj", color = Rust, fontFamily = MonoFont, fontSize = 10.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(project?.name ?: "project", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Prj", color = Rust, fontFamily = DisplayFont, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.width(AndySpace.Space2))
+                Text(project?.name ?: "Project", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = projectExpanded, onDismissRequest = { onProjectExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
+            DropdownMenu(
+                expanded = projectExpanded,
+                onDismissRequest = { onProjectExpandedChange(false) },
+                containerColor = AndyColors.SurfaceRaised,
+                shape = RoundedCornerShape(AndyRadius.Menu),
+            ) {
                 config.projects.forEach { item ->
                     DropdownMenuItem(
-                        text = { Text(item.name, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        text = { Text(item.name, color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
                             selectedProjectId = item.id
                             selectedActionId = item.actions.firstOrNull()?.id
@@ -226,18 +261,23 @@ private fun ActionRunnerSelector(
                 onClick = { onActionExpandedChange(true) },
                 enabled = project?.actions?.isNotEmpty() == true,
                 colors = secondaryButtonColors(),
-                shape = RoundedCornerShape(AndyRadius.R2),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(AndyRadius.Control),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
                 modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
             ) {
-                Text(action?.let { actionIconMarker(it.icon) } ?: "--", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(action?.name ?: "no actions", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                Spacer(Modifier.width(AndySpace.Space2))
+                Text(action?.name ?: "No actions", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = actionExpanded, onDismissRequest = { onActionExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
+            DropdownMenu(
+                expanded = actionExpanded,
+                onDismissRequest = { onActionExpandedChange(false) },
+                containerColor = AndyColors.SurfaceRaised,
+                shape = RoundedCornerShape(AndyRadius.Menu),
+            ) {
                 project?.actions.orEmpty().forEach { item ->
                     DropdownMenuItem(
-                        text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
                             selectedActionId = item.id
                             onActionExpandedChange(false)
@@ -257,10 +297,10 @@ private fun ActionRunnerSelector(
             },
             enabled = project != null && action != null,
             colors = primaryButtonColors(),
-            shape = RoundedCornerShape(AndyRadius.R2),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(AndyRadius.Row),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) {
-            Text("run", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text("Run", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -285,22 +325,32 @@ private fun DevicePicker(
         iosTargets.filter { it.isLiveReady }
     }
     Box {
-        Button(onClick = { onExpandedChange(true) }, colors = secondaryButtonColors(), shape = RoundedCornerShape(AndyRadius.R2), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
-            Text("•", color = Green, fontSize = 18.sp)
-            Spacer(Modifier.width(6.dp))
+        Button(
+            onClick = { onExpandedChange(true) },
+            colors = secondaryButtonColors(),
+            shape = RoundedCornerShape(AndyRadius.Control),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+        ) {
+            Text("•", color = Green, fontSize = 16.sp)
+            Spacer(Modifier.width(AndySpace.Space2))
             Text(
-                selectedIosTarget?.displayName ?: selectedDevice?.displayName ?: "no device",
+                selectedIosTarget?.displayName ?: selectedDevice?.displayName ?: "No device",
                 color = TextPrimary,
-                fontFamily = MonoFont,
+                fontFamily = DisplayFont,
                 fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }, containerColor = AndyColors.Neutral750) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            containerColor = AndyColors.SurfaceRaised,
+            shape = RoundedCornerShape(AndyRadius.Menu),
+        ) {
             if (activeDevices.isNotEmpty()) {
                 DropdownMenuItem(
-                    text = { Text("Android", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    text = { Text("Android", color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp) },
                     onClick = {},
                     enabled = false,
                 )
@@ -326,14 +376,14 @@ private fun DevicePicker(
             }
             if (activeIosTargets.isNotEmpty()) {
                 DropdownMenuItem(
-                    text = { Text("iOS", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) },
+                    text = { Text("iOS", color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp) },
                     onClick = {},
                     enabled = false,
                 )
                 activeIosTargets.forEach { target ->
                     val subtitle = when (target.kind) {
-                        IosTargetKind.Physical -> "usb"
-                        IosTargetKind.Simulator -> "booted"
+                        IosTargetKind.Physical -> "USB"
+                        IosTargetKind.Simulator -> "Booted"
                     }
                     DropdownMenuItem(
                         text = {
@@ -371,15 +421,15 @@ private fun DeviceMenuRow(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, color = TextPrimary)
+            Text(title, color = TextPrimary, fontFamily = DisplayFont)
             if (subtitle != null) {
-                Text(subtitle, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+                Text(subtitle, color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp)
             }
         }
         if (showPopOut) {
             Box(
                 Modifier
-                    .size(28.dp)
+                    .size(AndyLayout.ToolbarButtonSize)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -390,7 +440,7 @@ private fun DeviceMenuRow(
                 Image(
                     painter = painterResource(Res.drawable.hardware_pop_out),
                     contentDescription = "Pop out mirror",
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(AndyLayout.IconMd),
                     colorFilter = ColorFilter.tint(Cyan),
                 )
             }

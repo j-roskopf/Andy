@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,10 +25,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,7 +80,7 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.Flow
 import org.jetbrains.compose.resources.painterResource
-
+import kotlin.math.roundToInt
 internal data class MirrorSourceSize(val width: Int, val height: Int)
 
 internal data class FoldableStreamContext(
@@ -269,7 +271,11 @@ internal fun liveDevicePaneFittedWidth(
     val navHeight = if (showChromeControls) 60.dp else 0.dp
     val mirrorViewportHeight = (maxPaneHeight - verticalChrome - headerBlock - navHeight).coerceAtLeast(1.dp)
     val mirrorWidth = mirrorViewportHeight * aspect
-    return toolbarWidth + toolbarGap + horizontalChrome + mirrorWidth
+    val fittedToMirror = toolbarWidth + toolbarGap + horizontalChrome + mirrorWidth
+    // Tall phones fit the mirror into a narrow column; keep enough room for stream
+    // chips + Pop out so the header does not feel crushed on first load.
+    val headerFloor = if (showDeviceHeader) 560.dp else 0.dp
+    return maxOf(fittedToMirror, headerFloor)
 }
 
 @Composable
@@ -375,11 +381,15 @@ internal fun LiveDevicePane(
                 recordingDuration = recordingDuration,
                 showRecord = showRecord,
                 onClipText = onClipText,
+                showPopOut = showPopOut,
+                onPopOut = onPopOut,
             )
-        } else if (showClipTextControl) {
+        } else if (showClipTextControl || showPopOut) {
             LiveClipTextToolbar(
                 enabled = serial != null,
-                onClipText = onClipText,
+                onClipText = onClipText.takeIf { showClipTextControl },
+                showPopOut = showPopOut,
+                onPopOut = onPopOut,
             )
         }
 
@@ -406,9 +416,6 @@ internal fun LiveDevicePane(
                 }
                 LiveStreamHeader(
                     chips = streamChips,
-                    showPopOut = showPopOut,
-                    popOutEnabled = true,
-                    onPopOut = onPopOut,
                     terminalPlacement = terminalPlacement,
                     onTerminalToggle = onTerminalToggle,
                 )
@@ -416,7 +423,7 @@ internal fun LiveDevicePane(
             }
 
             BoxWithConstraints(
-                Modifier.weight(1f),
+                Modifier.weight(1f).clip(RoundedCornerShape(deviceCornerRadius)),
                 contentAlignment = Alignment.Center,
             ) {
                 val viewportWidth = maxWidth
@@ -441,15 +448,31 @@ internal fun LiveDevicePane(
                 val aspect = layoutSource.width.toFloat() / layoutSource.height.toFloat()
                 val navHeight = if (showChromeControls) 60.dp else 0.dp
                 val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)
-                val baseWidth = minOf(viewportWidth, viewportHeight * aspect)
+                // Keep the host fitted to the pane so Metal never paints outside Compose bounds.
+                // Zoom-in pans inside the fixed frame; zoom-out shrinks the fitted host.
+                val layoutScale = zoomFactor.coerceAtMost(1f)
+                val contentZoomFactor = zoomFactor.coerceAtLeast(1f)
+                val baseWidth = minOf(viewportWidth, viewportHeight * aspect) * layoutScale
+                val mirrorHeight = baseWidth / aspect
+                // SwingPanel/Metal steals pointer events, so Compose scroll cannot pan.
+                // Pan is applied in the native surface and synced back here.
+                var contentPanX by remember { mutableFloatStateOf(0f) }
+                var contentPanY by remember { mutableFloatStateOf(0f) }
+                LaunchedEffect(contentZoomFactor) {
+                    if (contentZoomFactor <= 1.01f) {
+                        contentPanX = 0f
+                        contentPanY = 0f
+                    }
+                }
+                val panX = if (contentZoomFactor > 1.01f) contentPanX else 0f
+                val panY = if (contentZoomFactor > 1.01f) contentPanY else 0f
                 Box(
-                    Modifier.fillMaxSize()
-                        .horizontalScroll(rememberScrollState())
-                        .verticalScroll(rememberScrollState()),
-                    contentAlignment = Alignment.Center,
+                    Modifier
+                        .width(baseWidth)
+                        .height(mirrorHeight + navHeight),
                 ) {
                     Column(
-                        Modifier.width(baseWidth * zoomFactor),
+                        Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Box(
@@ -517,9 +540,16 @@ internal fun LiveDevicePane(
                                     referenceImagePath = referenceImagePath,
                                     referenceImageKey = referenceImageKey,
                                     referenceImageOpacity = referenceImageOpacity,
+                                    contentZoom = contentZoomFactor,
+                                    contentPanX = panX,
+                                    contentPanY = panY,
                                 )
                                 val deferNative = mirrorLoading && device != null
                                 val inputEnabled = passThroughInput
+                                val onContentPan: (Float, Float) -> Unit = { x, y ->
+                                    contentPanX = x.coerceIn(0f, 1f)
+                                    contentPanY = y.coerceIn(0f, 1f)
+                                }
                                 if (frameFlow != null) {
                                     MirrorVideoSurface(
                                         frames = frameFlow,
@@ -531,6 +561,7 @@ internal fun LiveDevicePane(
                                         onPickerClick = onPickerClick,
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
+                                        onContentPan = onContentPan,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
                                         deferNativePresentation = deferNative,
@@ -548,12 +579,25 @@ internal fun LiveDevicePane(
                                         onPickerClick = onPickerClick,
                                         onDevicePointClick = onDevicePointClick,
                                         onRulerResize = onRulerResize,
+                                        onContentPan = onContentPan,
                                         overlay = surfaceOverlay,
                                         occluded = surfaceOccluded,
                                         deferNativePresentation = deferNative,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
                                         gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
+                                    )
+                                }
+                                if (showRuler) {
+                                    RulerDistanceLabels(
+                                        rulerX = rulerX,
+                                        rulerY = rulerY,
+                                        sourceWidth = sourceWidth,
+                                        sourceHeight = sourceHeight,
+                                        contentZoom = contentZoomFactor,
+                                        contentPanX = panX,
+                                        contentPanY = panY,
+                                        modifier = Modifier.fillMaxSize(),
                                     )
                                 }
                                 if (mirrorLoading) {
@@ -638,6 +682,81 @@ internal fun LiveDevicePane(
 }
 
 @Composable
+private fun RulerDistanceLabels(
+    rulerX: Float,
+    rulerY: Float,
+    sourceWidth: Int,
+    sourceHeight: Int,
+    contentZoom: Float,
+    contentPanX: Float,
+    contentPanY: Float,
+    modifier: Modifier = Modifier,
+) {
+    val width = sourceWidth.coerceAtLeast(1)
+    val height = sourceHeight.coerceAtLeast(1)
+    val xPx = rulerX.coerceIn(0f, width.toFloat())
+    val yPx = rulerY.coerceIn(0f, height.toFloat())
+    val zoom = contentZoom.coerceAtLeast(1f)
+    val originX = contentPanX.coerceIn(0f, 1f) * (1f - 1f / zoom)
+    val originY = contentPanY.coerceIn(0f, 1f) * (1f - 1f / zoom)
+    fun contentToHost(contentFrac: Float, origin: Float): Float =
+        ((contentFrac - origin) * zoom).coerceIn(0f, 1f)
+    val hostX = contentToHost(xPx / width, originX)
+    val hostY = contentToHost(yPx / height, originY)
+    BoxWithConstraints(modifier) {
+        val xDp = maxWidth * hostX
+        val yDp = maxHeight * hostY
+        Box(
+            Modifier
+                .offset(x = xDp)
+                .width(1.dp)
+                .fillMaxHeight()
+                .background(Rust.copy(alpha = 0.95f)),
+        )
+        Box(
+            Modifier
+                .offset(y = yDp)
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Rust.copy(alpha = 0.95f)),
+        )
+        RulerBadge(
+            xPx.roundToInt().toString(),
+            Modifier.offset(x = (xDp + 8.dp).coerceAtMost(maxWidth - 48.dp), y = 8.dp),
+        )
+        RulerBadge(
+            (width - xPx).roundToInt().toString(),
+            Modifier.offset(
+                x = (xDp - 48.dp).coerceAtLeast(4.dp),
+                y = (maxHeight - 28.dp).coerceAtLeast(4.dp),
+            ),
+        )
+        RulerBadge(
+            yPx.roundToInt().toString(),
+            Modifier.offset(x = 8.dp, y = (yDp + 8.dp).coerceAtMost(maxHeight - 28.dp)),
+        )
+        RulerBadge(
+            (height - yPx).roundToInt().toString(),
+            Modifier.offset(
+                x = (maxWidth - 48.dp).coerceAtLeast(4.dp),
+                y = (yDp - 28.dp).coerceAtLeast(4.dp),
+            ),
+        )
+    }
+}
+
+@Composable
+private fun RulerBadge(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .background(Rust.copy(alpha = 0.96f), RoundedCornerShape(AndyRadius.Control))
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+    ) {
+        Text(text, color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
 internal fun CompactHardwareButton(label: String, serial: String?, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
@@ -652,7 +771,9 @@ internal fun CompactHardwareButton(label: String, serial: String?, onClick: () -
 @Composable
 internal fun LiveClipTextToolbar(
     enabled: Boolean,
-    onClipText: () -> Unit,
+    onClipText: (() -> Unit)? = null,
+    showPopOut: Boolean = false,
+    onPopOut: () -> Unit = {},
 ) {
     Box(
         Modifier.width(68.dp).fillMaxHeight(),
@@ -668,7 +789,12 @@ internal fun LiveClipTextToolbar(
             verticalArrangement = Arrangement.spacedBy(3.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
+            if (onClipText != null) {
+                ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
+            }
+            if (showPopOut) {
+                ToolbarButton(HardwareIcon.PopOut, "Pop out", enabled, onPopOut)
+            }
         }
     }
 }
@@ -688,6 +814,8 @@ internal fun LiveHardwareToolbar(
     recordingDuration: String?,
     showRecord: Boolean,
     onClipText: () -> Unit,
+    showPopOut: Boolean = false,
+    onPopOut: () -> Unit = {},
 ) {
     Box(
         Modifier.width(68.dp).fillMaxHeight(),
@@ -715,6 +843,9 @@ internal fun LiveHardwareToolbar(
                 recordingDuration?.let { duration ->
                     Text(duration, color = Red, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
                 }
+            }
+            if (showPopOut) {
+                ToolbarButton(HardwareIcon.PopOut, "Pop out", enabled, onPopOut)
             }
         }
     }
@@ -781,23 +912,18 @@ internal fun HardwareControlIcon(icon: HardwareIcon, color: Color, modifier: Mod
 @Composable
 internal fun LiveStreamHeader(
     chips: List<LiveStreamChip>,
-    showPopOut: Boolean,
-    popOutEnabled: Boolean,
-    onPopOut: () -> Unit,
     terminalPlacement: DockPlacement? = null,
     onTerminalToggle: ((DockPlacement) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    Box(
         modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             Modifier
-                .weight(1f)
+                .align(Alignment.Center)
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -809,25 +935,11 @@ internal fun LiveStreamHeader(
             }
         }
         if (onTerminalToggle != null) {
-            TerminalDockToggleRow(
-                terminalPlacement = terminalPlacement,
-                onToggle = onTerminalToggle,
-            )
-        }
-        if (showPopOut) {
-            OutlinedButton(
-                onClick = onPopOut,
-                enabled = popOutEnabled,
-                modifier = Modifier.height(32.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-            ) {
-                HardwareControlIcon(
-                    HardwareIcon.PopOut,
-                    if (popOutEnabled) TextPrimary else TextSecondary.copy(alpha = 0.38f),
-                    Modifier.size(14.dp),
+            Box(Modifier.align(Alignment.CenterEnd)) {
+                TerminalDockToggleRow(
+                    terminalPlacement = terminalPlacement,
+                    onToggle = onTerminalToggle,
                 )
-                Spacer(Modifier.width(6.dp))
-                Text("Pop out", fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
             }
         }
     }

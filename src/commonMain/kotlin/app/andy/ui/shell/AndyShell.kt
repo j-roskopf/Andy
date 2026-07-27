@@ -1,7 +1,6 @@
 package app.andy.ui.shell
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +8,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -18,8 +16,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
 import app.andy.availableWithIosTarget
@@ -36,7 +32,6 @@ import app.andy.ui.catalog.CatalogScreen
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.PendingConfirmation
-import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.controls.ControlsScreen
 import app.andy.ui.design.DesignScreen
 import app.andy.ui.devices.DevicesScreen
@@ -59,9 +54,7 @@ import app.andy.ui.settings.SettingsScreen
 import app.andy.ui.settings.UpdateInstallConfirmationDialog
 import app.andy.ui.snapshots.SnapshotsScreen
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyTheme
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Ink
 import app.andy.ui.theme.Rust
@@ -210,14 +203,12 @@ internal fun AndyShell(
         LocalSuppressHeavyweightSurfaces provides state.chromeMenuExpanded,
     ) {
     Box(
-        Modifier.fillMaxSize()
-            .background(Brush.radialGradient(listOf(AndyColors.Neutral700, Ink), center = Offset(0f, 0f), radius = 1400f))
-            .noiseGridOverlay(0.035f)
+        Modifier.fillMaxSize().background(Ink)
     ) {
         val knownProjectIds = remember(state.actionsConfig.projects) {
             state.actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
         }
-        Row(Modifier.fillMaxSize().padding(top = contentTopPadding, start = 14.dp, end = 14.dp, bottom = 14.dp)) {
+        Row(Modifier.fillMaxSize().padding(top = contentTopPadding)) {
             Sidebar(
                 current = state.destination,
                 destinations = capabilities.destinations,
@@ -243,7 +234,11 @@ internal fun AndyShell(
                 mcpRunning = mcpRunning,
                 mcpPort = state.workspaceState.mcpServerPort
             )
-            Column(Modifier.fillMaxSize().padding(start = 10.dp)) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(AndyColors.ContentBg)
+            ) {
                 TopChrome(
                     destination = state.destination,
                     selectedDevice = state.devices.firstOrNull { it.serial == state.selectedSerial },
@@ -285,10 +280,10 @@ internal fun AndyShell(
                     },
                 )
                 Box(
-                    Modifier.fillMaxSize()
-                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                        .padding(horizontal = 18.dp, vertical = 16.dp)
+                    Modifier
+                        .fillMaxSize()
+                        .background(AndyColors.ContentBg)
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
                 ) {
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents

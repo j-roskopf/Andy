@@ -30,7 +30,7 @@ class LiveDevicePaneFittedWidthTest {
             showChromeControls = true,
         )
 
-        assertTrue(fitted.value < 500f)
-        assertTrue(fitted.value > 200f)
+        assertTrue(fitted.value >= 560f, "header chips need a wider floor than a tall-phone mirror fit")
+        assertTrue(fitted.value < 900f)
     }
 }

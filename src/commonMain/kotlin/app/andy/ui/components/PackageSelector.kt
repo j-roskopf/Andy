@@ -1,6 +1,7 @@
 package app.andy.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidApp
 import app.andy.service.AppService
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -113,7 +115,7 @@ internal fun PackageSelector(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .height(48.dp),
+                    .defaultMinSize(minHeight = AndyLayout.FieldHeight),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
                 colors = fieldColors(),
             )
