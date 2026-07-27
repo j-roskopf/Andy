@@ -51,5 +51,12 @@ internal fun shouldIgnoreStatusSnapshot(
     ) {
         return true
     }
+    // A finished turn must not flip back to Working until resume clears finishedAtMillis.
+    if (snapshot.status == AgentStatus.Working &&
+        task.finishedAtMillis != null &&
+        task.status != AgentStatus.Working
+    ) {
+        return true
+    }
     return false
 }

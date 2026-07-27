@@ -119,7 +119,7 @@ internal object AndydProcess {
         return macOs.takeIf { it.isDirectory }
     }
 
-    private fun devJavaLaunchCommand(): List<String>? {
+    internal fun devJavaLaunchCommand(): List<String>? {
         val classpath = System.getProperty("java.class.path")?.takeIf { it.isNotBlank() } ?: return null
         val javaBin = File(System.getProperty("java.home"), "bin")
         val java = sequenceOf("java.exe", "java")

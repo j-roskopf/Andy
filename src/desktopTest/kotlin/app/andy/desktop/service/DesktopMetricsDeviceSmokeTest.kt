@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.test.OptInGates
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
@@ -11,7 +12,7 @@ import kotlin.test.assertTrue
 class DesktopMetricsDeviceSmokeTest {
     @Test
     fun metricsStreamEmitsFreshSamplesForConnectedDevice() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
 
         val services = createDesktopServices()
         val requestedSerial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }

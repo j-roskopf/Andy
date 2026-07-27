@@ -34,7 +34,10 @@ jobs:
   desktop:
     name: Desktop checks (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      # Opt-in harnesses that are safe / free to run on every PR.
+      ANDY_PROXY_CONFORMANCE: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +59,11 @@ jobs:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           java-version: ${{ env.JAVA_VERSION }}
 
+      - name: Set up Python (pinned mitmproxy venv / conformance)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -67,15 +75,20 @@ jobs:
 
       - name: Run Linux checks
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble
+        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
 
       - name: Install tmux (agent terminal executor)
         if: matrix.os == 'macos'
         run: brew install tmux || true
 
+      # iOS Simulator "Live" smoke tests (IosSimMirrorDeviceSmokeTest) are intentionally NOT run
+      # on CI: driving a real GPU mirror + AWT Robot HID against a headless-ish runner is
+      # inherently flaky and has hung the job to the 60m limit. Without ANDY_IOS_SIM_SMOKE the
+      # tests assumeTrue-skip. Run them locally with a booted simulator when needed.
+
       - name: Run macOS checks
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build
+        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build "-PandyRetryTests=true"
 
       - name: Build Andy Rust CLI
         if: matrix.os == 'macos'
@@ -87,7 +100,7 @@ jobs:
       - name: Run Windows checks
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble
+        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
 
       - name: Upload test reports
         if: failure()

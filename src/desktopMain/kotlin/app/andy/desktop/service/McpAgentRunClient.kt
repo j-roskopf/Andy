@@ -1,6 +1,7 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
@@ -29,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,6 +78,12 @@ class McpAgentRunClient(
      * refresh may still be returning the previous list.
      */
     private val locallyDeletedTaskIds = ConcurrentHashMap.newKeySet<String>()
+    /**
+     * Chats the user has read locally while waiting for the daemon to persist
+     * [AgentTask.unread] = false. Prevents periodic refresh from re-badging them.
+     */
+    private val clientReadTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val clientViewingTaskId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
@@ -98,7 +106,10 @@ class McpAgentRunClient(
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
 
-    private val skillFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentSkill>>>()
+    private data class SkillScope(val agent: AgentKind, val directory: String?)
+
+    private val skillFlows = ConcurrentHashMap<SkillScope, MutableStateFlow<List<AgentSkill>>>()
+    private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
 
     private var localBridge: DesktopAgentRunService? = null
@@ -135,41 +146,90 @@ class McpAgentRunClient(
     fun terminalHost(): DesktopAgentRunService? = localBridge
 
     internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
-        scope.launch { refreshTasks() }
+        if (!isViewing(taskId)) return
+        scope.launch {
+            runCatching {
+                callTool("chat.reconcile", mapOf("taskId" to JsonPrimitive(taskId)))
+            }
+            runCatching { refreshTasks() }
+        }
     }
+
+    private fun acknowledgeRead(taskId: String) {
+        clientReadTaskIds += taskId
+        patchTask(taskId) { it.copy(unread = false) }
+    }
+
+    private fun viewingTaskIdsForMerge(): Set<String> =
+        clientViewingTaskId.get()?.let(::setOf).orEmpty()
 
     private suspend fun refreshTasks() {
         refreshComposerOptions()
         val raw = callTool("chat.list", emptyMap())
         val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return
-        // Keep a lightweight task list for the GUI; full AgentTask fields are filled where possible.
-        val refreshedTasks = arr.mapNotNull { el ->
-            val obj = el.jsonObject
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val agentName = obj["agent"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val agent = AgentKind.entries.firstOrNull { it.name == agentName } ?: return@mapNotNull null
-            val statusName = obj["status"]?.jsonPrimitive?.contentOrNull
-            AgentTask(
-                id = id,
-                title = obj["title"]?.jsonPrimitive?.contentOrNull ?: id,
-                prompt = "",
-                agent = agent,
-                projectId = obj["projectId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
-                cwd = obj["cwd"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
-                status = app.andy.model.AgentStatus.entries.firstOrNull { it.name == statusName },
-                createdAtMillis = obj["createdAtMillis"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
-                    ?: obj["createdAtMillis"]?.jsonPrimitive?.longOrNull
-                    ?: 0L,
-                unread = obj["unread"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-                    ?: obj["unread"]?.jsonPrimitive?.booleanOrNull
-                    ?: false,
-                archived = obj["archived"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-                    ?: obj["archived"]?.jsonPrimitive?.booleanOrNull
-                    ?: false,
-            )
-        }
-        _tasks.value = refreshedTasks.filterNot { it.id in locallyDeletedTaskIds }
+        // Keep a lightweight task list for the GUI; lifecycle fields must round-trip so
+        // badges/labels match the daemon (startedAtMillis drives isQueued).
+        val refreshedTasks = arr.mapNotNull { el -> parseListedTask(el.jsonObject) }
+        dropConfirmedClientReads(clientReadTaskIds, refreshedTasks)
+        _tasks.value = mergeRefreshedAgentTasks(
+            refreshed = refreshedTasks,
+            clientReadTaskIds = clientReadTaskIds,
+            viewingTaskIds = viewingTaskIdsForMerge(),
+        ).filterNot { it.id in locallyDeletedTaskIds }
         locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
+    }
+
+    private fun parseListedTask(obj: JsonObject): AgentTask? {
+        val id = obj.string("id") ?: return null
+        val agentName = obj.string("agent") ?: return null
+        val agent = AgentKind.entries.firstOrNull { it.name == agentName } ?: return null
+        val statusName = obj.string("status")
+        val exitCodeRaw = obj.long("exitCode")
+        return AgentTask(
+            id = id,
+            title = obj.string("title") ?: id,
+            prompt = "",
+            agent = agent,
+            projectId = obj.string("projectId")?.takeIf { it.isNotBlank() },
+            cwd = obj.string("cwd")?.takeIf { it.isNotBlank() },
+            status = app.andy.model.AgentStatus.entries.firstOrNull { it.name == statusName },
+            stoppedByUser = obj.bool("stoppedByUser"),
+            resumable = obj.bool("resumable"),
+            interrupted = obj.bool("interrupted"),
+            statusConfident = obj.bool("statusConfident"),
+            vendorSessionId = obj.string("vendorSessionId")?.takeIf { it.isNotBlank() },
+            createdAtMillis = obj.long("createdAtMillis") ?: 0L,
+            startedAtMillis = obj.long("startedAtMillis")?.takeIf { it > 0 },
+            finishedAtMillis = obj.long("finishedAtMillis")?.takeIf { it > 0 },
+            exitCode = exitCodeRaw?.takeUnless { it == Int.MIN_VALUE.toLong() }?.toInt(),
+            unread = obj.bool("unread"),
+            archived = obj.bool("archived"),
+        )
+    }
+
+    private fun JsonObject.string(key: String): String? =
+        this[key]?.jsonPrimitive?.contentOrNull
+
+    private fun JsonObject.bool(key: String): Boolean =
+        this[key]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: this[key]?.jsonPrimitive?.booleanOrNull
+            ?: false
+
+    private fun JsonObject.long(key: String): Long? =
+        this[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+            ?: this[key]?.jsonPrimitive?.longOrNull
+
+    private fun patchTask(taskId: String, transform: (AgentTask) -> AgentTask) {
+        _tasks.value = _tasks.value.map { if (it.id == taskId) transform(it) else it }
+    }
+
+    private fun callTaskMutation(tool: String, taskId: String) {
+        scope.launch {
+            runCatching {
+                callTool(tool, mapOf("taskId" to JsonPrimitive(taskId)))
+            }
+            runCatching { refreshTasks() }
+        }
     }
 
     private suspend fun refreshComposerOptions() {
@@ -286,10 +346,31 @@ class McpAgentRunClient(
 
     override suspend fun refreshProviderQuotas() = Unit
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
-    override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> =
-        skillFlows.computeIfAbsent("$agent:${directory.orEmpty()}") { MutableStateFlow(emptyList()) }
+    override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = SkillScope(agent, normalizedDirectory)
+        val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
+        if (loadedSkillScopes.add(skillScope)) {
+            scope.launch(Dispatchers.IO) {
+                flow.value = discoverAgentSkills(agent, normalizedDirectory)
+            }
+        }
+        return flow
+    }
 
-    override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
+    override fun refreshSkills(agent: AgentKind, directory: String?) {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = SkillScope(agent, normalizedDirectory)
+        val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
+        loadedSkillScopes.add(skillScope)
+        scope.launch(Dispatchers.IO) {
+            flow.value = discoverAgentSkills(agent, normalizedDirectory)
+        }
+    }
 
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
         val raw = callTool(
@@ -355,7 +436,7 @@ class McpAgentRunClient(
         localBridge?.isTerminalLive(taskId) == true
 
     override fun isViewing(taskId: String): Boolean =
-        localBridge?.isViewing(taskId) == true
+        clientViewingTaskId.get() == taskId || localBridge?.isViewing(taskId) == true
 
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         scope.launch {
@@ -394,17 +475,65 @@ class McpAgentRunClient(
         scope.launch { runCatching { refreshTasks() } }
     }
 
-    override fun markRead(taskId: String) = Unit
-    override fun markUnread(taskId: String) = Unit
+    override fun markRead(taskId: String) {
+        val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
+        // Skip only once the daemon list agrees the chat is read (id dropped from
+        // clientReadTaskIds). A local ack alone must still RPC — otherwise quit/restart
+        // reloads unread=true from andyd.
+        if (!task.unread && taskId !in clientReadTaskIds) return
+        acknowledgeRead(taskId)
+        callTaskMutation("chat.mark_read", taskId)
+    }
+
+    override fun markUnread(taskId: String) {
+        val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
+        if (task.unread) return
+        patchTask(taskId) { it.copy(unread = true) }
+        callTaskMutation("chat.mark_unread", taskId)
+    }
+
     override fun setChatViewing(taskId: String?, viewing: Boolean) {
+        when {
+            taskId == null -> clientViewingTaskId.set(null)
+            viewing -> clientViewingTaskId.set(taskId)
+            clientViewingTaskId.get() == taskId -> clientViewingTaskId.set(null)
+        }
         localBridge?.setChatViewing(taskId, viewing)
+        // Persist read on the daemon. Local acknowledge alone is wiped on GUI restart;
+        // chat.set_viewing may also mark read, but older andyd builds only track viewing.
+        if (viewing && taskId != null) {
+            markRead(taskId)
+        }
+        scope.launch {
+            runCatching {
+                callTool(
+                    "chat.set_viewing",
+                    buildMap {
+                        put("viewing", JsonPrimitive(viewing))
+                        if (taskId != null) put("taskId", JsonPrimitive(taskId))
+                    },
+                )
+            }
+        }
     }
 
     override fun releaseTerminalViewer(taskId: String) {
         localBridge?.releaseTerminalViewer(taskId)
     }
-    override fun archive(taskId: String) = Unit
-    override fun unarchive(taskId: String) = Unit
+
+    override fun archive(taskId: String) {
+        val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
+        if (task.archived || task.isActive) return
+        patchTask(taskId) { it.copy(archived = true, unread = false) }
+        callTaskMutation("chat.archive", taskId)
+    }
+
+    override fun unarchive(taskId: String) {
+        val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
+        if (!task.archived) return
+        patchTask(taskId) { it.copy(archived = false) }
+        callTaskMutation("chat.unarchive", taskId)
+    }
     override fun events(taskId: String): StateFlow<List<AgentEvent>> = emptyEvents
 
     override fun interactiveResumeCommand(taskId: String): String? =
@@ -429,7 +558,10 @@ class McpAgentRunClient(
 
     // ProjectWorkflowService — minimal remote stubs
     override suspend fun projectContextDir(projectId: String): String? = null
-    override suspend fun ensureProject(projectId: String) = Unit
+    override suspend fun ensureProject(projectId: String) {
+        if (projectId in _projects.value) return
+        _projects.update { it + (projectId to ProjectWorkflowState(projectId)) }
+    }
     override suspend fun updateScratchpad(projectId: String, text: String) = Unit
     override suspend fun updateProfile(projectId: String, kind: ProjectTaskKind, profile: ProjectAgentProfile) = Unit
     override suspend fun saveSpec(draft: ProjectSpecDraft): String {

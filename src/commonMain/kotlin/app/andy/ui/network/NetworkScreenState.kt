@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import app.andy.domain.NetworkTrafficView
+import app.andy.domain.toggleFocusedPath
 import app.andy.model.NetworkDiagnosis
 import app.andy.model.NetworkExchange
 import app.andy.model.NetworkRouteDiagnostics
@@ -25,8 +27,6 @@ internal class NetworkScreenState(
     var diagnoses by mutableStateOf<List<NetworkDiagnosis>>(emptyList())
     var selectedFlowId by mutableStateOf<String?>(null)
     var setupExpanded by mutableStateOf(false)
-    var setupManuallyToggled by mutableStateOf(false)
-    var setupDefaultApplied by mutableStateOf(false)
     var selectedExpanded by mutableStateOf(true)
     var seenFlowIds by mutableStateOf<Set<String>>(emptySet())
     val expandedTrafficKeys = mutableStateMapOf<String, Boolean>()
@@ -44,7 +44,8 @@ internal class NetworkScreenState(
     var typeWidth by mutableStateOf(150f)
     var sizeWidth by mutableStateOf(80f)
     var msWidth by mutableStateOf(70f)
-    var focusedPath by mutableStateOf<String?>(null)
+    var focusedPaths by mutableStateOf<Set<String>>(emptySet())
+    var trafficView by mutableStateOf(NetworkTrafficView.Tree)
     var engineChecked by mutableStateOf(false)
     var deviceReadinessChecked by mutableStateOf(false)
     var caInstalled by mutableStateOf(false)
@@ -86,5 +87,9 @@ internal class NetworkScreenState(
         ruleRemoveHeaders = removeHeaders
         ruleBody = body
         editingRuleId = ruleId
+    }
+
+    fun toggleFocusPath(path: String) {
+        focusedPaths = toggleFocusedPath(focusedPaths, path)
     }
 }

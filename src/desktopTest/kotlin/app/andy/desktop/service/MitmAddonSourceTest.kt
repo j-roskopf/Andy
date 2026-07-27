@@ -17,7 +17,7 @@ class MitmAddonSourceTest {
     companion object {
         /** SHA-256 of `src/desktopMain/resources/proxy/andy_mitm_addon.py` (runtime source). */
         const val EXPECTED_RESOURCE_SHA256 =
-            "6b2b7f7b51d032768110169947c9fef8d7174618c0376f5bbba5dc7079e8317e"
+            "4a5eae319c815f08889822fcbc6cc47d61ec2b3f659c6c9983800e02f22a8e3f"
     }
 
     @Test
@@ -30,11 +30,19 @@ class MitmAddonSourceTest {
         assertTrue(source.contains("def request("))
         assertTrue(source.contains("def tls_failed_client("))
         assertTrue(source.contains("tls_failed"))
+        assertTrue(source.contains("def tls_clienthello("))
+        assertTrue(source.contains("tls_passthrough"))
+        assertTrue(source.contains("happy_eyeballs_delay"))
+        assertTrue(source.contains("ANDY_HAPPY_EYEBALLS_DELAY"))
+        assertTrue(source.contains("_install_happy_eyeballs"))
         assertTrue(source.contains("def client_connected("))
         assertTrue(source.contains("async def server_connect("))
         assertTrue(source.contains("events_dropped"))
         assertTrue(source.contains("addon_hello"))
         assertTrue(source.contains("put_nowait"))
+        assertTrue(source.contains("raw_content"))
+        // Hot path must not call message.content (full synchronous decompress).
+        assertTrue(!source.contains("message.content"))
     }
 
     @Test

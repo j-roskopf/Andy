@@ -60,8 +60,13 @@ Install from the latest GitHub Release (macOS arm64 / Linux x86_64):
 
 ```sh
 curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
-export PATH="$HOME/.andy/bin:$PATH"   # once; add to shell rc if you want
+
+# Permanently add ~/.andy/bin to your PATH (pick your shell):
+echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.zshrc   # zsh
+# echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.bashrc  # bash
 ```
+
+Restart your shell (or `source` the rc file you edited) so `andy` is on your `PATH`.
 
 The installer places `andy`, `andyd`, `andyd.jar`, bundled `tmux`, and
 `andy-status-hook.sh` under `~/.andy`. Requires Java 21+.
@@ -70,7 +75,7 @@ From a source checkout:
 
 ```sh
 ./gradlew installAndyCli installAndyd
-export PATH="$HOME/.andy/bin:$PATH"
+echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 ```
 
 Release assets:
@@ -92,6 +97,27 @@ andy tui                       # n new chat · grouped projects · a / Enter att
 andy chat resume <taskId> "…"  # when quiet reattach isn't possible
 andy --remote user@mac.local chat list   # SSH tunnel the socket
 ```
+
+### Device / network scripting
+
+The CLI also wraps every device-side MCP tool as noun-verb commands (plus a
+generic escape hatch). Output is human-readable by default; pass global
+`--json` for the raw MCP payload. Target a device with `--serial` on the
+command or `ANDY_SERIAL` in the environment. Destructive commands never prompt.
+
+```sh
+andy device list
+andy emulator start Pixel_7 --wait --timeout 180
+andy network proxy start 8080
+andy network rule upsert --url-pattern '*/api/*' --status-code 500 --name boom
+andy device screenshot -o /tmp/screen.png --serial emulator-5554
+andy tool list                              # all MCP tools (device + agent)
+andy tool call chat.archive --arg taskId=…  # agent/workflow tools: escape hatch only
+```
+
+Curated groups: `device`, `emulator`, `avd`, `system-image`, `snapshot`,
+`input`, `app`, `intent`, `file`, `network`. Extra tool args:
+`--arg key=value` (JSON literals coerced) and `--json-args '{…}'`.
 
 `andy attach` / TUI attach first checks for a live `tmux -L andy` session. If the
 chat has ended but Andy can reopen the provider CLI (same as GUI reattach), it

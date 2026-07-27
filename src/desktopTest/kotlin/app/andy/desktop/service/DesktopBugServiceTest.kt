@@ -110,7 +110,11 @@ class DesktopBugServiceTest {
         val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home, FakeForegroundDeviceService())
 
         service.startCapture("emulator-5554", null)
-        delay(150)
+        // The foreground-screen poll records asynchronously. Wait for the recorded action
+        // instead of guessing a fixed delay — 150ms is usually enough locally but not on
+        // slower CI runners, which is exactly how this test flaked on macOS CI.
+        val deadline = System.currentTimeMillis() + 15_000
+        while (service.status.value.actionCount < 1 && System.currentTimeMillis() < deadline) delay(20)
 
         val report = service.saveBug(BugCaptureDraft("Screen changed"), null)
 

@@ -198,7 +198,15 @@ class AgentSessionRecoveryTest {
             assertEquals(AgentStatus.Done, recovered.status)
             assertEquals(0, recovered.exitCode)
             assertTrue(recovered.finishedAtMillis != null)
-            assertTrue(recovered.unread)
+            assertFalse(recovered.unread)
+            assertTrue(
+                statusNeedsUnread(
+                    task = task,
+                    previous = AgentStatus.Working,
+                    next = recovered.status,
+                    viewing = false,
+                ),
+            )
         } finally {
             root.deleteRecursively()
         }
@@ -305,5 +313,68 @@ class AgentSessionRecoveryTest {
         )
         val recovered = recoverInterruptedTaskStatus(task, File("/tmp/missing-scrollback"))
         assertEquals(AgentStatus.Blocked, recovered.status)
+    }
+
+    @Test
+    fun recoverInterruptedTaskStatusPreservesUnread() {
+        val task = AgentTask(
+            id = "task-stale-working",
+            title = "t",
+            prompt = "p",
+            agent = AgentKind.Cursor,
+            cwd = "/tmp",
+            originDir = "/tmp",
+            status = AgentStatus.Working,
+            statusConfident = true,
+            createdAtMillis = 1,
+            startedAtMillis = 2,
+            finishedAtMillis = 3,
+            exitCode = 0,
+            unread = true,
+        )
+        val recovered = recoverInterruptedTaskStatus(task, File("/tmp/missing-scrollback"))
+        assertEquals(AgentStatus.Done, recovered.status)
+        assertTrue(recovered.resumable)
+        assertEquals(3L, recovered.finishedAtMillis)
+        assertTrue(recovered.unread)
+    }
+
+    @Test
+    fun recoverInterruptedTaskStatusDoesNotPromoteUnread() {
+        val root = File.createTempFile("andy-store", null).also { it.delete(); it.mkdirs() }
+        try {
+            val task = AgentTask(
+                id = "task-read",
+                title = "t",
+                prompt = "p",
+                agent = AgentKind.ClaudeCode,
+                cwd = root.absolutePath,
+                originDir = root.absolutePath,
+                status = AgentStatus.Working,
+                createdAtMillis = 1,
+                startedAtMillis = 2,
+                unread = false,
+            )
+            val scrollback = File(root, "scrollback/${task.id}.ansi")
+            scrollback.parentFile?.mkdirs()
+            scrollback.writeText("72F and sunny.\n> ")
+            File(AgentWorkflowArtifacts.dirFor(root, task.id), "status.json")
+                .apply { parentFile.mkdirs() }
+                .writeText("""{"status":"done","at":1}""" + "\n")
+
+            val recovered = recoverInterruptedTaskStatus(task, scrollback)
+            assertEquals(AgentStatus.Done, recovered.status)
+            assertFalse(recovered.unread)
+            assertFalse(
+                statusNeedsUnread(
+                    task = task,
+                    previous = AgentStatus.Working,
+                    next = recovered.status,
+                    viewing = true,
+                ),
+            )
+        } finally {
+            root.deleteRecursively()
+        }
     }
 }

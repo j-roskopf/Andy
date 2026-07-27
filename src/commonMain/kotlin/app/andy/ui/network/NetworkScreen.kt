@@ -58,6 +58,7 @@ import app.andy.ui.components.HeaderCell
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
 import app.andy.model.NetworkDiagnosis
+import app.andy.model.NetworkDiagnosisAction
 import app.andy.model.NetworkDiagnosisSeverity
 import app.andy.model.NetworkExchange
 import app.andy.model.NetworkRouteDiagnostics
@@ -69,6 +70,7 @@ import app.andy.service.AndyServices
 import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.FilterPill
 import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
@@ -80,6 +82,7 @@ import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
@@ -120,9 +123,10 @@ private fun manualCertificateSteps(caPath: String, proxyHost: String, port: Int)
 
 private fun hostSetupSteps(engineReady: Boolean): List<String> {
     val mitmproxyStep = if (engineReady) {
-        "mitmproxy is installed; Andy will start mitmdump automatically for Network."
+        "mitmproxy runtime is ready; Andy starts its managed mitmdump automatically for Network."
     } else {
-        "Install mitmproxy on the host: brew install mitmproxy. Andy uses mitmdump from that package."
+        "Andy installs a pinned mitmproxy into ~/.andy/proxy/venv on first use (needs Python 3.12+). " +
+            "Optional fallback: brew install mitmproxy."
     }
     return listOf(
         "Install Android Studio or Android command-line tools so Andy can find adb, emulator, sdkmanager, and avdmanager.",
@@ -157,19 +161,37 @@ internal fun NetworkScreen(
     val selected = state.exchanges.firstOrNull { it.flowId == state.selectedFlowId } ?: state.exchanges.lastOrNull()
 
     val currentPort = portText.toIntOrNull()?.coerceIn(1, 65535) ?: port
-    val filteredExchanges = remember(state.exchanges, state.focusedPath) {
-        if (state.focusedPath == null) {
-            state.exchanges
-        } else {
-            state.exchanges.filter { exchange ->
-                state.focusedPath in networkTrafficAncestorKeys(exchange)
+    val visibleTrafficRows = remember(
+        state.exchanges,
+        state.focusedPaths,
+        state.expandedTrafficKeys.toMap(),
+        state.trafficView,
+    ) {
+        when (state.trafficView) {
+            NetworkTrafficView.Tree -> {
+                val tree = buildFocusedNetworkTrafficTree(state.exchanges, state.focusedPaths)
+                flattenNetworkTrafficTree(tree, state.expandedTrafficKeys)
             }
+            NetworkTrafficView.History -> historyTrafficRows(
+                exchanges = state.exchanges,
+                focusedPaths = state.focusedPaths,
+                expandedKeys = state.expandedTrafficKeys,
+            )
         }
     }
-    val trafficTree = remember(filteredExchanges) { buildNetworkTrafficTree(filteredExchanges) }
-    val visibleTrafficRows = remember(trafficTree, state.expandedTrafficKeys.toMap()) {
-        flattenNetworkTrafficTree(trafficTree, state.expandedTrafficKeys)
-    }
+    val setupReadinessRedCount = listOf(
+        sdk.hasAdb,
+        true,
+        state.engineReady,
+        state.proxyStatus.contains("listening on"),
+        serial == null || state.caInstalled || state.proxyTrafficObservedForDevice || state.userCaVerifiedByTrafficForDevice,
+        serial == null || state.proxyConfigured,
+        serial == null || (
+            state.routeDiagnostics?.vpnActive != true &&
+                state.routeDiagnostics?.routeUsesVpn != true
+            ),
+    ).count { !it }
+    val setupHealthy = state.engineChecked && state.deviceReadinessChecked && setupReadinessRedCount == 0
     val latestRules by rememberUpdatedState(rules)
     fun currentStartOptions() = ProxyStartOptions(
         sslInsecure = sslInsecure,
@@ -281,31 +303,6 @@ internal fun NetworkScreen(
             delay(3000)
         }
     }
-    LaunchedEffect(
-        state.engineChecked,
-        state.deviceReadinessChecked,
-        sdk.hasAdb,
-        state.engineReady,
-        state.proxyStatus,
-        serial,
-        state.caInstalled,
-        state.proxyTrafficObservedForDevice,
-        state.proxyConfigured,
-        state.routeDiagnostics,
-    ) {
-        if (state.setupDefaultApplied || state.setupManuallyToggled || !state.engineChecked || !state.deviceReadinessChecked) return@LaunchedEffect
-        val redCount = listOf(
-            sdk.hasAdb,
-            true,
-            state.engineReady,
-            state.proxyStatus.contains("listening on"),
-            serial != null && (state.caInstalled || state.proxyTrafficObservedForDevice),
-            serial != null && state.proxyConfigured,
-            serial != null && state.routeDiagnostics?.vpnActive != true && state.routeDiagnostics?.routeUsesVpn != true,
-        ).count { !it }
-        state.setupExpanded = redCount > 2
-        state.setupDefaultApplied = true
-    }
     LaunchedEffect(serial) {
         state.proxyHost = serial?.let { selectedSerial ->
             val activation = proxy.activatePersistedCertificateAuthority(selectedSerial)
@@ -408,18 +405,31 @@ internal fun NetworkScreen(
             PanelCard(Modifier.animateContentSize()) {
                 val copyText = rememberCopyText()
                 var configCopied by remember { mutableStateOf(false) }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    Text("Debug-app HTTPS proxy", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                    OutlinedButton(onClick = ::clearCapturedTraffic) { Text("Clear traffic") }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text(
-                        if (state.setupExpanded) "Hide setup" else "Show setup",
-                        color = Rust,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable {
-                            state.setupManuallyToggled = true
-                            state.setupExpanded = !state.setupExpanded
-                        },
+                        "Debug-app HTTPS proxy",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    FilterPill("Tree", state.trafficView == NetworkTrafficView.Tree, Cyan) {
+                        state.trafficView = NetworkTrafficView.Tree
+                    }
+                    FilterPill("History", state.trafficView == NetworkTrafficView.History, Rust) {
+                        state.trafficView = NetworkTrafficView.History
+                    }
+                    OutlinedButton(onClick = ::clearCapturedTraffic) { Text("Clear traffic") }
+                    SetupToggleButton(
+                        expanded = state.setupExpanded,
+                        healthy = setupHealthy,
+                        ready = state.engineChecked && state.deviceReadinessChecked,
+                        onClick = { state.setupExpanded = !state.setupExpanded },
                     )
                 }
                 val proxyStarted = state.proxyStatus.contains("listening on")
@@ -479,16 +489,16 @@ internal fun NetworkScreen(
                         ) {
                             SetupStepCard(
                                 step = 1,
-                                title = "Install mitmproxy",
+                                title = "mitmproxy runtime",
                                 ok = state.engineReady,
                                 instruction = if (state.engineReady) {
                                     state.engineStatus
                                 } else {
-                                    "Required for Network capture and rewrite rules. Install on the host, then Andy will start mitmdump automatically."
+                                    "Andy provisions a pinned mitmproxy into ~/.andy/proxy/venv (Python 3.12+). Optional fallback: brew install mitmproxy."
                                 },
                                 modifier = Modifier.widthIn(min = 260.dp).weight(1f),
                             ) {
-                                Text("brew install mitmproxy", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                                Text("~/.andy/proxy/venv (auto)", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
                             }
                             SetupStepCard(
                                 step = 2,
@@ -742,48 +752,43 @@ internal fun NetworkScreen(
                 }
             }
 
-            NetworkDiagnosisStrip(state.diagnoses)
+            NetworkDiagnosisStrip(
+                diagnoses = state.diagnoses,
+                onAction = { action ->
+                    when (action) {
+                        NetworkDiagnosisAction.DisableUpstreamVerification -> {
+                            onSslInsecureChange(true)
+                            state.sslInsecure = true
+                            scope.launch {
+                                proxy.stop()
+                                val result = proxy.start(
+                                    currentPort,
+                                    latestRules,
+                                    ProxyStartOptions(
+                                        sslInsecure = true,
+                                        upstreamTrustedCaPath = state.upstreamTrustedCaPath.trim().takeIf { it.isNotBlank() },
+                                    ),
+                                )
+                                val message = if (result.isSuccess) result.stdout else result.stderr
+                                state.status = message
+                                if (result.isSuccess) state.proxyStatus = message
+                            }
+                        }
+                    }
+                },
+            )
             Column(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-            if (state.focusedPath != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
-                        .border(1.dp, AndyColors.OrangeBorder, RoundedCornerShape(AndyRadius.R3))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(AndyColors.Orange, RoundedCornerShape(AndyRadius.Pill))
-                        )
-                        Text(
-                            text = "Focus mode: showing only ${state.focusedPath?.removePrefix("base:")}",
-                            color = AndyColors.Neutral100,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                    Text(
-                        text = "Exit Focus",
-                        color = AndyColors.Orange,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clickable { state.focusedPath = null }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+            if (state.focusedPaths.isNotEmpty()) {
+                FocusChipsBar(
+                    focusedPaths = state.focusedPaths,
+                    onRemove = { path -> state.focusedPaths = state.focusedPaths - path },
+                    onClear = { state.focusedPaths = emptySet() },
+                )
             }
             Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 HeaderCell("TRAFFIC", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(160f, 2400f) }
@@ -795,10 +800,18 @@ internal fun NetworkScreen(
             }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->
+                    val exchange = row.exchange
+                    val leafKey = exchange?.let(::networkTrafficLeafKey)
+                    val hostKey = exchange?.let(::networkTrafficHostKey)
                     NetworkTrafficRowItem(
                         row = row,
                         expanded = state.expandedTrafficKeys[row.key] == true,
                         flashing = row.key in state.flashingTrafficKeys,
+                        focused = exchange == null &&
+                            !isOtherTrafficKey(row.key) &&
+                            trafficFocusPathKey(row.key) in state.focusedPaths,
+                        pathFocused = leafKey != null && leafKey in state.focusedPaths,
+                        hostFocused = hostKey != null && hostKey in state.focusedPaths,
                         trafficWidth = state.trafficWidth,
                         statusWidth = state.statusWidth,
                         typeWidth = state.typeWidth,
@@ -810,18 +823,26 @@ internal fun NetworkScreen(
                                 state.flashingTrafficKeys.remove(row.key)
                             }
                         },
-                        onSelect = { exchange ->
-                            state.selectedFlowId = exchange.flowId
+                        onSelect = { selectedExchange ->
+                            state.selectedFlowId = selectedExchange.flowId
                         },
                         onFocus = { path ->
-                            state.focusedPath = path
+                            if (path != OtherTrafficKey) {
+                                state.toggleFocusPath(trafficFocusPathKey(path))
+                            }
                         },
-                        onAddRule = { exchange ->
-                            val pathSegment = exchange.url.substringAfterLast("/").substringBefore("?")
+                        onToggleFocusPath = { selectedExchange ->
+                            state.toggleFocusPath(networkTrafficLeafKey(selectedExchange))
+                        },
+                        onToggleFocusHost = { selectedExchange ->
+                            state.toggleFocusPath(networkTrafficHostKey(selectedExchange))
+                        },
+                        onAddRule = { selectedExchange ->
+                            val pathSegment = selectedExchange.url.substringAfterLast("/").substringBefore("?")
                             state.ruleName = if (pathSegment.isNotBlank()) "Mock $pathSegment" else "Mock response"
-                            state.rulePattern = exchange.url
-                            state.ruleMethod = exchange.method
-                            state.ruleStatus = exchange.statusCode?.toString() ?: "200"
+                            state.rulePattern = selectedExchange.url
+                            state.ruleMethod = selectedExchange.method
+                            state.ruleStatus = selectedExchange.statusCode?.toString() ?: "200"
                             val excludedHeaders = setOf(
                                 "content-length",
                                 "content-encoding",
@@ -834,11 +855,11 @@ internal fun NetworkScreen(
                                 "content-range",
                                 "age"
                             )
-                            state.ruleSetHeaders = exchange.responseHeaders.entries
+                            state.ruleSetHeaders = selectedExchange.responseHeaders.entries
                                 .filter { it.key.lowercase() !in excludedHeaders }
                                 .joinToString("\n") { "${it.key}: ${it.value}" }
                             state.ruleRemoveHeaders = ""
-                            state.ruleBody = exchange.responseBodyPreview ?: ""
+                            state.ruleBody = selectedExchange.responseBodyPreview ?: ""
                             onRulesVisibleChange(true)
                         }
                     )
@@ -846,7 +867,7 @@ internal fun NetworkScreen(
                 if (visibleTrafficRows.isEmpty()) {
                     item {
                         val emptyMessage = state.diagnoses.firstOrNull { it.severity == NetworkDiagnosisSeverity.Red }?.let {
-                            "${it.title}. ${it.fix}"
+                            "${it.title}. ${it.detail}"
                         } ?: "No traffic yet. Start the proxy, configure a device, then make a request."
                         EmptyState(emptyMessage)
                     }
@@ -977,7 +998,78 @@ internal fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun NetworkDiagnosisStrip(diagnoses: List<NetworkDiagnosis>, modifier: Modifier = Modifier) {
+private fun SetupToggleButton(
+    expanded: Boolean,
+    healthy: Boolean,
+    ready: Boolean,
+    onClick: () -> Unit,
+) {
+    Box {
+        OutlinedButton(onClick = onClick) {
+            Text(if (expanded) "Hide setup" else "Setup")
+        }
+        if (ready) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .size(8.dp)
+                    .background(if (healthy) Green else Red, CircleShape)
+                    .border(1.dp, AndyColors.Neutral900, CircleShape),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FocusChipsBar(
+    focusedPaths: Set<String>,
+    onRemove: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
+            .border(1.dp, AndyColors.OrangeBorder, RoundedCornerShape(AndyRadius.R3))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        FlowRow(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            focusedPaths.forEach { path ->
+                FilterPill(
+                    text = "${focusedPathLabel(path)} ×",
+                    selected = true,
+                    color = AndyColors.Orange,
+                    onClick = { onRemove(path) },
+                )
+            }
+        }
+        Text(
+            text = "Clear focus",
+            color = AndyColors.Orange,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .clickable(onClick = onClear)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun NetworkDiagnosisStrip(
+    diagnoses: List<NetworkDiagnosis>,
+    modifier: Modifier = Modifier,
+    onAction: (NetworkDiagnosisAction) -> Unit = {},
+) {
     if (diagnoses.isEmpty()) return
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         diagnoses.forEach { diagnosis ->
@@ -1001,6 +1093,13 @@ private fun NetworkDiagnosisStrip(diagnoses: List<NetworkDiagnosis>, modifier: M
                 Text(diagnosis.detail, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp)
                 if (diagnosis.fix.isNotBlank()) {
                     Text(diagnosis.fix, color = accent, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+                val action = diagnosis.action
+                val actionLabel = diagnosis.actionLabel
+                if (action != null && !actionLabel.isNullOrBlank()) {
+                    Button(onClick = { onAction(action) }) {
+                        Text(actionLabel)
+                    }
                 }
             }
         }

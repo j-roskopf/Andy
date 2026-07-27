@@ -117,6 +117,98 @@ class NetworkDiagnosisTest {
     }
 
     @Test
+    fun upstreamTlsFailureOffersOneClickDisableVerification() {
+        val diagnoses = diagnoseNetworkTraffic(
+            proxyStarted = true,
+            caInstalled = true,
+            proxyConfigured = true,
+            routeDiagnostics = NetworkRouteDiagnostics(
+                expectedProxy = "10.0.2.2:8888",
+                configuredProxy = "10.0.2.2:8888",
+                proxyConfigured = true,
+                vpnActive = false,
+                hostProxyActive = true,
+                hostUpstreamProxy = "http://proxy.corp:8080",
+            ),
+            exchanges = listOf(
+                NetworkExchange(
+                    id = "flow-1",
+                    flowId = "flow-1",
+                    startedAtMillis = 1,
+                    completedAtMillis = 2,
+                    method = "GET",
+                    url = "https://api.example.com/",
+                    statusCode = null,
+                    contentType = null,
+                    sizeBytes = null,
+                    durationMillis = 1,
+                    requestHeaders = emptyMap(),
+                    responseHeaders = emptyMap(),
+                    requestBodyPreview = null,
+                    responseBodyPreview = null,
+                    error = "Certificate verify failed",
+                    tlsStatus = "tls",
+                    matchedRuleId = null,
+                ),
+            ),
+            warnings = emptyList(),
+            clientConnectionsObserved = 1,
+            sslInsecure = false,
+            upstreamTrustedCaPath = null,
+        )
+
+        val corporate = diagnoses.first { it.mode == NetworkFailureMode.CorporateTlsInspection }
+        assertEquals(NetworkDiagnosisAction.DisableUpstreamVerification, corporate.action)
+        assertEquals("Disable upstream verification", corporate.actionLabel)
+    }
+
+    @Test
+    fun tlsPassthroughSurfacesAmberNotDecryptedDiagnosis() {
+        val diagnoses = diagnoseNetworkTraffic(
+            proxyStarted = true,
+            caInstalled = false,
+            proxyConfigured = true,
+            routeDiagnostics = null,
+            exchanges = listOf(
+                NetworkExchange(
+                    id = "pass-1",
+                    flowId = "pass-1",
+                    startedAtMillis = 1,
+                    completedAtMillis = 1,
+                    method = "PASS",
+                    url = "https://pinned.example/",
+                    statusCode = null,
+                    contentType = null,
+                    sizeBytes = null,
+                    durationMillis = 0,
+                    requestHeaders = emptyMap(),
+                    responseHeaders = emptyMap(),
+                    requestBodyPreview = null,
+                    responseBodyPreview = "Not decrypted — CA not trusted / pinned",
+                    error = "Not decrypted — CA not trusted / pinned",
+                    tlsStatus = "passthrough",
+                    matchedRuleId = null,
+                ),
+            ),
+            warnings = listOf(
+                ProxyWarning(
+                    id = "w1",
+                    atMillis = 1,
+                    kind = ProxyWarningKind.TlsPassthrough,
+                    message = "Not decrypted — CA not trusted / pinned",
+                    sni = "pinned.example",
+                ),
+            ),
+            clientConnectionsObserved = 1,
+            sslInsecure = false,
+            upstreamTrustedCaPath = null,
+        )
+
+        assertTrue(diagnoses.any { it.mode == NetworkFailureMode.TlsPassthrough && it.severity == NetworkDiagnosisSeverity.Amber })
+        assertTrue(diagnoses.none { it.mode == NetworkFailureMode.ClientRejectedCa })
+    }
+
+    @Test
     fun addonErrorsSurfaceAlongsideHealthyCapture() {
         val diagnoses = diagnoseNetworkTraffic(
             proxyStarted = true,

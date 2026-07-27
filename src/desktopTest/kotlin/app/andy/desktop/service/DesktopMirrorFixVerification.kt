@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.test.OptInGates
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
@@ -12,12 +13,12 @@ import kotlin.test.assertTrue
 
 /**
  * Verifies the Stop/tap/fling fixes against a live emulator. Gated behind
- * ANDY_DEVICE_SMOKE=1 so it never runs in CI.
+ * ANDY_DEVICE_SMOKE=1 (needs a connected Android device; not on PR CI).
  */
 class DesktopMirrorFixVerification {
     @Test
     fun disconnectClearsFrameAndCompletedGestureLeavesTapsWorking() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
         val services = createDesktopServices()
         val serial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }
             ?: services.devices.listDevices().first { it.state.name == "Online" }.serial

@@ -66,9 +66,12 @@ internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
 }
 
 internal fun agentStatusLabel(task: AgentTask): String = when {
-    task.isQueued -> "queued"
+    // Prefer the lifecycle status when present so thin/partial clients cannot show
+    // "queued" for a Done/Working chat that merely omitted startedAtMillis.
+    task.status != null -> task.status.name.lowercase()
     isChatRelaunching(task) -> "launching"
-    else -> task.status?.name?.lowercase() ?: "queued"
+    task.isQueued -> "queued"
+    else -> "queued"
 }
 
 @Composable

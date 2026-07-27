@@ -82,7 +82,7 @@ internal fun parseMitmproxyEvent(line: String): MitmproxyEvent? {
         ProxyJsonFormat.decodeFromString(MitmproxyFlowLineDto.serializer(), line)
     }.getOrNull() ?: return null
     return when (dto.type) {
-        "flow", "tls_failed" -> {
+        "flow", "tls_failed", "tls_passthrough" -> {
             val id = dto.id ?: return null
             MitmproxyEvent.Exchange(dto.toNetworkExchange(id))
         }
@@ -113,18 +113,24 @@ internal fun parseMitmproxyEvent(line: String): MitmproxyEvent? {
 
 private fun MitmproxyFlowLineDto.toNetworkExchange(id: String): NetworkExchange {
     val host = sni ?: url?.removePrefix("https://")?.substringBefore('/') ?: "unknown-host"
-    val synthesizedError = when {
-        type != "tls_failed" -> error
-        !error.isNullOrBlank() -> error
-        else -> "Client rejected Andy's CA for $host: ${reason ?: "client TLS handshake failed"}"
+    val synthesizedError = when (type) {
+        "tls_failed" -> error?.takeIf { it.isNotBlank() }
+            ?: "Client rejected Andy's CA for $host: ${reason ?: "client TLS handshake failed"}"
+        "tls_passthrough" -> error?.takeIf { it.isNotBlank() }
+            ?: "Not decrypted — CA not trusted / pinned"
+        else -> error
     }
     return NetworkExchange(
         id = id,
         flowId = id,
         startedAtMillis = startedAtMillis ?: System.currentTimeMillis(),
         completedAtMillis = completedAtMillis,
-        method = method ?: if (type == "tls_failed") "TLS" else "-",
-        url = url ?: if (type == "tls_failed") "https://$host/" else "-",
+        method = method ?: when (type) {
+            "tls_failed" -> "TLS"
+            "tls_passthrough" -> "PASS"
+            else -> "-"
+        },
+        url = url ?: if (type == "tls_failed" || type == "tls_passthrough") "https://$host/" else "-",
         statusCode = statusCode,
         contentType = contentType,
         sizeBytes = sizeBytes,
@@ -132,9 +138,14 @@ private fun MitmproxyFlowLineDto.toNetworkExchange(id: String): NetworkExchange 
         requestHeaders = requestHeaders,
         responseHeaders = responseHeaders,
         requestBodyPreview = requestBodyPreview,
-        responseBodyPreview = responseBodyPreview,
+        responseBodyPreview = responseBodyPreview
+            ?: if (type == "tls_passthrough") "Not decrypted — CA not trusted / pinned" else null,
         error = synthesizedError,
-        tlsStatus = tlsStatus ?: if (type == "tls_failed") "tls" else null,
+        tlsStatus = tlsStatus ?: when (type) {
+            "tls_failed" -> "tls"
+            "tls_passthrough" -> "passthrough"
+            else -> null
+        },
         matchedRuleId = matchedRuleId,
     )
 }

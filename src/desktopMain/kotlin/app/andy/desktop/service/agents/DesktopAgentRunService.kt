@@ -263,16 +263,35 @@ class DesktopAgentRunService(
     /**
      * Repairs tasks left [AgentStatus.Working]/[null] after the PTY
      * exited without a clean [finishTask] (e.g. crash). Safe to call when opening history.
-     * Does not mark stale while a `tmux -L andy` session for the task still exists.
+     * Does not mark stale while a `tmux -L andy` session for the task still exists,
+     * except when [AgentTask.finishedAtMillis] contradicts a lingering Working badge.
      */
     internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
+        // History repair is tied to the chat on screen. A late reconcile after the user
+        // clicked away must not re-badge chats they already read.
+        if (taskId !in viewingTaskIds) return
         val task = currentTask(taskId) ?: return
-        if (!task.isActive && task.status != AgentStatus.Blocked) return
-        val jobActive = handles[taskId]?.job?.isActive == true
-        if (jobActive || terminals.isAlive(taskId)) return
-        val recovered = recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+        val viewing = true
+        val recovered = when {
+            task.finishedAtMillis != null && task.status == AgentStatus.Working ->
+                recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+            !task.isActive && task.status != AgentStatus.Blocked -> return
+            handles[taskId]?.job?.isActive == true || terminals.isAlive(taskId) -> return
+            else -> recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+        }
         if (recovered == task) return
+        val previousStatus = task.status
         updateTask(taskId) { recovered }
+        if (statusNeedsUnread(
+                task = task,
+                previous = previousStatus,
+                next = recovered.status,
+                viewing = viewing,
+                terminalLive = terminals.isAlive(taskId),
+            ) && task.unread
+        ) {
+            markUnread(taskId)
+        }
         scope.launch { persist() }
     }
 
@@ -284,7 +303,7 @@ class DesktopAgentRunService(
         val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
         if (loadedSkillScopes.add(skillScope)) {
             scope.launch(Dispatchers.IO) {
-                flow.value = discoverSkills(agent, normalizedDirectory)
+                flow.value = discoverAgentSkills(agent, normalizedDirectory)
             }
         }
         return flow
@@ -298,7 +317,7 @@ class DesktopAgentRunService(
         val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
         loadedSkillScopes.add(skillScope)
         scope.launch(Dispatchers.IO) {
-            flow.value = discoverSkills(agent, normalizedDirectory)
+            flow.value = discoverAgentSkills(agent, normalizedDirectory)
         }
     }
 
@@ -368,7 +387,7 @@ class DesktopAgentRunService(
             persist()
             return
         }
-        val installedSkills = withContext(Dispatchers.IO) { discoverSkills(spec.profile.agent, directory) }
+        val installedSkills = withContext(Dispatchers.IO) { discoverAgentSkills(spec.profile.agent, directory) }
         val grillSkills = installedSkills.filter { isGrillMeSkillName(it.name) }
         val scratchpad = project.scratchpad.takeIf { spec.includeScratchpad && it.isNotBlank() }
         val attempt = spec.attempts.count { it.stage == ProjectWorkflowStage.Spec } + 1
@@ -794,7 +813,7 @@ class DesktopAgentRunService(
         val discoveredSkillPaths = if (draft.skills.isEmpty()) {
             emptySet()
         } else {
-            withContext(Dispatchers.IO) { discoverSkills(draft.agent, draft.existingWorktreePath ?: draft.directory) }
+            withContext(Dispatchers.IO) { discoverAgentSkills(draft.agent, draft.existingWorktreePath ?: draft.directory) }
                 .mapTo(mutableSetOf()) { it.path }
         }
         val now = System.currentTimeMillis()
@@ -1718,18 +1737,18 @@ class DesktopAgentRunService(
             }
             val liveStatus = terminals.liveSessionStatus(task.id)
             when {
+                // Status repair only — never revive unread. finishTask/markUnread own
+                // attention while live; markRead must survive quit/restart.
                 inferCompletedTurn(task.agent, artifactDir, scrollback, liveStatus) ->
                     task.copy(
                         status = AgentStatus.Done,
                         exitCode = task.exitCode ?: 0,
                         finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
-                        unread = true,
                     )
                 inferPausedAtPrompt(task.agent, artifactDir, scrollback, liveStatus) ->
                     task.copy(
                         status = AgentStatus.Done,
                         finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
-                        unread = true,
                     )
                 else -> task
             }
@@ -3191,6 +3210,7 @@ class DesktopAgentRunService(
             viewing -> {
                 viewingTaskIds.add(taskId)
                 terminals.setOnlyForeground(taskId)
+                markRead(taskId)
             }
             else -> {
                 viewingTaskIds.remove(taskId)
@@ -3362,77 +3382,6 @@ class DesktopAgentRunService(
             file.appendText("\n$text")
         }
     }
-
-    /** Discovers each CLI's native roots plus explicitly supported compatibility roots. */
-    private fun discoverSkills(agent: AgentKind, directory: String?): List<AgentSkill> {
-        val home = System.getProperty("user.home") ?: return emptyList()
-        val workspace = directory?.let(::File)?.takeIf(File::isDirectory)
-        val codexHome = System.getenv("CODEX_HOME")
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::File)
-            ?: File(home, ".codex")
-        val roots = skillRootsFor(agent, workspace, File(home), codexHome)
-        val discovered = linkedMapOf<String, AgentSkill>()
-        roots.forEach { root ->
-            if (!root.isDirectory) return@forEach
-            root.walkTopDown()
-                .maxDepth(8)
-                .filter { file -> file.name == "SKILL.md" && file.isFile }
-                .take(200)
-                .forEach { file ->
-                    val header = runCatching { file.useLines { lines -> lines.take(24).toList() } }.getOrDefault(emptyList())
-                    val name = header.firstOrNull { it.startsWith("name:") }
-                        ?.substringAfter(':')?.trim()?.trim('"', '\'')
-                        ?.takeIf { it.isNotBlank() }
-                        ?: file.parentFile.name
-                    val description = header.firstOrNull { it.startsWith("description:") }
-                        ?.substringAfter(':')?.trim()?.trim('"', '\'')
-                        .orEmpty()
-                    discovered.putIfAbsent(name.lowercase(), AgentSkill(name, description, file.absolutePath))
-                }
-        }
-        return discovered.values.sortedBy { it.name.lowercase() }
-    }
-}
-
-/**
- * Skill roots are ordered from the provider's native locations to compatible
- * locations. Earlier roots win when two skills use the same name.
- */
-internal fun skillRootsFor(
-    agent: AgentKind,
-    workspace: File?,
-    home: File,
-    codexHome: File = File(home, ".codex"),
-): List<File> = when (agent) {
-    // Codex desktop also exposes portable Agent Skills installed under
-    // ~/.agents/skills (for example, skills installed by `npx skills`).
-    AgentKind.Codex -> listOf(
-        File(codexHome, "skills"),
-        File(home, ".agents/skills"),
-        File(codexHome, "plugins/cache"),
-    )
-    // Claude gives personal skills precedence over the project directory.
-    AgentKind.ClaudeCode -> listOfNotNull(
-        File(home, ".claude/skills"),
-        workspace?.let { File(it, ".claude/skills") },
-    )
-    // Cursor discovers its own and portable Agent Skills at workspace and user
-    // scope. It also recognizes compatible Codex skills, so include that root
-    // after Cursor's native locations rather than hiding installed workflows.
-    AgentKind.Cursor -> listOfNotNull(
-        workspace?.let { File(it, ".cursor/skills") },
-        workspace?.let { File(it, ".agents/skills") },
-        File(home, ".cursor/skills"),
-        File(home, ".cursor/skills-cursor"),
-        File(home, ".agents/skills"),
-        File(codexHome, "skills"),
-    )
-    // Antigravity CLI loads workspace Agent Skills and its own global root.
-    AgentKind.Antigravity -> listOfNotNull(
-        workspace?.let { File(it, ".agents/skills") },
-        File(home, ".gemini/antigravity-cli/skills"),
-    )
 }
 
 internal fun agentFailureMessage(

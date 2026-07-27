@@ -204,7 +204,11 @@ private fun ProjectCockpit(
     var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
-    val projectWorkflow = loadedProjectWorkflow
+    val effectiveProjectWorkflow = project?.let { loadedProjectWorkflow ?: ProjectWorkflowState(it.id) }
+
+    fun ensureWorkflowProjectLoaded() {
+        project?.id?.let { projectId -> scope.launch { services.projectWorkflows.ensureProject(projectId) } }
+    }
 
     fun requestDeleteChat(task: AgentTask) {
         pendingConfirmation = PendingConfirmation(
@@ -267,7 +271,7 @@ private fun ProjectCockpit(
             selectedTaskId = task.id
             if (task.archived) viewingArchivedForProjectId = task.projectId
             canvas = ProjectCanvas.Chat
-            services.agentRuns.markRead(task.id)
+            services.agentRuns.setChatViewing(task.id, viewing = true)
         }
         onRequestedAgentTaskConsumed()
     }
@@ -340,7 +344,6 @@ private fun ProjectCockpit(
         val taskId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
         if (taskId != null) {
             services.agentRuns.setChatViewing(taskId, viewing = true)
-            services.agentRuns.markRead(taskId)
         }
         onDispose {
             if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
@@ -427,7 +430,7 @@ private fun ProjectCockpit(
                                     selectedProjectId = item.id
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
-                                    services.agentRuns.markRead(task.id)
+                                    services.agentRuns.setChatViewing(task.id, viewing = true)
                                 },
                                 onMarkSessionUnread = { task -> services.agentRuns.markUnread(task.id) },
                                 onArchiveSession = { task ->
@@ -502,7 +505,7 @@ private fun ProjectCockpit(
                                     }
                                 }
                                 ProjectCanvas.Tasks -> {
-                                    val workflow = projectWorkflow ?: ProjectWorkflowState(current.id)
+                                    val workflow = effectiveProjectWorkflow ?: ProjectWorkflowState(current.id)
                                     Row(
                                         Modifier.fillMaxSize(),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -511,9 +514,19 @@ private fun ProjectCockpit(
                                             workflow = workflow,
                                             selectedTaskId = selectedWorkflowTaskId,
                                             onSelectTask = { selectedWorkflowTaskId = it },
-                                            onNewSpec = { editingSpec = null; specEditorOpen = true },
-                                            onNewBuild = { buildEditor = BuildEditorSeed() },
-                                            onProfiles = { profilesOpen = true },
+                                            onNewSpec = {
+                                                ensureWorkflowProjectLoaded()
+                                                editingSpec = null
+                                                specEditorOpen = true
+                                            },
+                                            onNewBuild = {
+                                                ensureWorkflowProjectLoaded()
+                                                buildEditor = BuildEditorSeed()
+                                            },
+                                            onProfiles = {
+                                                ensureWorkflowProjectLoaded()
+                                                profilesOpen = true
+                                            },
                                             modifier = Modifier.width(360.dp).fillMaxHeight(),
                                         )
                                         PaneDivider(onDrag = {})
@@ -523,10 +536,19 @@ private fun ProjectCockpit(
                                             task = workflow.tasks.firstOrNull { it.id == selectedWorkflowTaskId },
                                             agentTasks = projectTasks,
                                             onNewBuildFromPlan = { buildEditor = BuildEditorSeed(plan = it) },
-                                            onOpenRun = { runId -> selectedTaskId = runId; canvas = ProjectCanvas.Chat; services.agentRuns.markRead(runId) },
+                                            onOpenRun = { runId ->
+                                                selectedTaskId = runId
+                                                canvas = ProjectCanvas.Chat
+                                                services.agentRuns.setChatViewing(runId, viewing = true)
+                                            },
                                             onEdit = { task ->
-                                                if (task.kind == ProjectTaskKind.Spec) { editingSpec = task; specEditorOpen = true }
-                                                else buildEditor = BuildEditorSeed(buildTaskId = task.linkedBuildTaskId ?: task.id)
+                                                ensureWorkflowProjectLoaded()
+                                                if (task.kind == ProjectTaskKind.Spec) {
+                                                    editingSpec = task
+                                                    specEditorOpen = true
+                                                } else {
+                                                    buildEditor = BuildEditorSeed(buildTaskId = task.linkedBuildTaskId ?: task.id)
+                                                }
                                             },
                                             onDelete = { task ->
                                                 val hasChildren = task.kind == ProjectTaskKind.Spec && workflow.tasks.any { it.linkedSpecTaskId == task.id }
@@ -555,7 +577,7 @@ private fun ProjectCockpit(
                                 ProjectCanvas.Scratchpad -> ProjectScratchpadEditor(
                                     services = services,
                                     projectId = current.id,
-                                    persistedText = projectWorkflow?.scratchpad.orEmpty(),
+                                    persistedText = effectiveProjectWorkflow?.scratchpad.orEmpty(),
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
@@ -644,19 +666,23 @@ private fun ProjectCockpit(
         }
     }
     editingAction?.let { edit -> ActionDialog(config.projects, edit.projectId, edit.action, { editingAction = null }) { projectId, action -> editingAction = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == projectId) project.copy(actions = project.actions.filterNot { it.id == action.id } + action) else project })) } }
-    if (specEditorOpen && project != null && projectWorkflow != null) {
-        SpecTaskDialog(services, project, projectWorkflow, editingSpec, agentCliStatuses, onDismiss = { specEditorOpen = false }) { id ->
+    if (specEditorOpen && project != null && effectiveProjectWorkflow != null) {
+        SpecTaskDialog(services, project, effectiveProjectWorkflow, editingSpec, agentCliStatuses, onDismiss = { specEditorOpen = false }) { id ->
             specEditorOpen = false
             selectedWorkflowTaskId = id
         }
     }
     buildEditor?.let { seed ->
-        if (project != null && projectWorkflow != null) BuildPairDialog(services, project, projectWorkflow, seed, agentCliStatuses, onDismiss = { buildEditor = null }) { id ->
-            buildEditor = null
-            selectedWorkflowTaskId = id
+        if (project != null && effectiveProjectWorkflow != null) {
+            BuildPairDialog(services, project, effectiveProjectWorkflow, seed, agentCliStatuses, onDismiss = { buildEditor = null }) { id ->
+                buildEditor = null
+                selectedWorkflowTaskId = id
+            }
         }
     }
-    if (profilesOpen && projectWorkflow != null) ProjectProfilesDialog(services, projectWorkflow, agentCliStatuses) { profilesOpen = false }
+    if (profilesOpen && effectiveProjectWorkflow != null) {
+        ProjectProfilesDialog(services, effectiveProjectWorkflow, agentCliStatuses) { profilesOpen = false }
+    }
     pendingConfirmation?.let { confirmation ->
         ConfirmationDialog(
             confirmation = confirmation,
@@ -1054,14 +1080,15 @@ private fun ProjectRunbook(
     onNewAction: () -> Unit,
     onRunAction: (ProjectAction) -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text("Runbook", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-        Button(onClick = onNewAction) { Text("Add action") }
-    }
-    if (project.actions.isEmpty() && project.notes.isEmpty()) {
-        EmptyState("Add the commands you use most")
-    } else {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Runbook", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            Button(onClick = onNewAction) { Text("Add action") }
+        }
+        if (project.actions.isEmpty() && project.notes.isEmpty()) {
+            EmptyState("Add the commands you use most")
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (project.actions.isNotEmpty()) {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f, fill = false)) {
                     items(project.actions, key = { it.id }) { action ->
@@ -1129,6 +1156,7 @@ private fun ProjectRunbook(
                     }
                 }
             }
+        }
         }
     }
 }

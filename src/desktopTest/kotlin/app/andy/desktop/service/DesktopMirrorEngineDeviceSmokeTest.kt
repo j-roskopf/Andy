@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.test.OptInGates
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorVideoConfig
@@ -18,7 +19,7 @@ import kotlin.test.assertTrue
 class DesktopMirrorEngineDeviceSmokeTest {
     @Test
     fun embeddedMirrorDecodesConnectedDeviceFrames() = runBlocking {
-        if (System.getenv("ANDY_DEVICE_SMOKE") != "1") return@runBlocking
+        OptInGates.requireDeviceSmoke()
 
         val services = createDesktopServices()
         val requestedSerial = System.getenv("ANDY_DEVICE_SERIAL")?.takeIf { it.isNotBlank() }

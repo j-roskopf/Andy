@@ -109,4 +109,17 @@ class AgentSessionAttentionTest {
             ),
         )
     }
+
+    @Test
+    fun finishedTurnIgnoresWorkingUntilResumeClearsFinishedAt() {
+        assertTrue(
+            shouldIgnoreStatusSnapshot(
+                task = task(AgentStatus.Done).copy(
+                    statusConfident = true,
+                    finishedAtMillis = 5L,
+                ),
+                snapshot = AgentStatusSnapshot(AgentStatus.Working, confident = true),
+            ),
+        )
+    }
 }

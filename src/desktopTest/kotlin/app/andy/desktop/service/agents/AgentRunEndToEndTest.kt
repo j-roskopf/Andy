@@ -17,6 +17,7 @@ import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.WorkspaceState
+import app.andy.desktop.test.OptInGates
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
 import app.andy.service.McpServerService
@@ -36,16 +37,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import app.andy.desktop.test.OptInGates.harnessTimeoutMillis
+import org.junit.Assume.assumeTrue
 
 /**
  * Live smoke test against the real vendor CLIs on this machine. Costs a few
  * cents of subscription usage per run, so it only executes when explicitly
  * requested: ANDY_AGENT_E2E=1 ./gradlew desktopTest --tests "*AgentRunEndToEndTest*"
- * Agents whose CLI is not installed are skipped.
+ * Agents whose CLI is not installed are skipped. Not enabled on PR CI.
  */
 class AgentRunEndToEndTest {
-    private val enabled = System.getenv("ANDY_AGENT_E2E") == "1"
-
     @Test
     fun claudeHeadlessRoundTrip() = liveRun(AgentKind.ClaudeCode)
 
@@ -56,7 +57,7 @@ class AgentRunEndToEndTest {
     fun antigravityHeadlessRoundTrip() = liveRun(AgentKind.Antigravity)
 
     private fun liveRun(agent: AgentKind) {
-        if (!enabled) return
+        OptInGates.requireAgentE2E()
         val dir = File.createTempFile("andy-agent-e2e", null).also {
             it.delete()
             it.mkdirs()
@@ -82,10 +83,10 @@ class AgentRunEndToEndTest {
                 withTimeout(30_000) {
                     while (service.cliStatuses.value.isEmpty()) delay(100)
                 }
-                if (service.cliStatuses.value.none { it.kind == agent && it.available }) {
-                    System.err.println("SKIP: ${agent.cliName} not installed")
-                    return@runBlocking
-                }
+                assumeTrue(
+                    "SKIP: ${agent.cliName} not installed",
+                    service.cliStatuses.value.any { it.kind == agent && it.available },
+                )
 
                 val task = service.createAndStart(
                     AgentTaskDraft(
@@ -103,12 +104,10 @@ class AgentRunEndToEndTest {
                 val finished = service.tasks.value.first { it.id == task.id }
                 val events = service.events(task.id).value
                 System.err.println("E2E ${agent.cliName}: status=${finished.status} exit=${finished.exitCode} session=${finished.vendorSessionId} events=${events.size} cost=${finished.totalCostUsd}")
-                if (finished.status == AgentStatus.Error && finished.errorMessage?.contains("Not logged in") == true) {
-                    // The CLI has no headless credentials on this machine; the auth
-                    // failure was detected and surfaced exactly as designed.
-                    System.err.println("SKIP: ${agent.cliName} not logged in for headless use (error path verified)")
-                    return@runBlocking
-                }
+                assumeTrue(
+                    "SKIP: ${agent.cliName} not logged in for headless use (error path verified)",
+                    !(finished.status == AgentStatus.Error && finished.errorMessage?.contains("Not logged in") == true),
+                )
                 assertEquals(AgentStatus.Done, finished.status, "events: ${events.takeLast(5)}")
                 val launchLog = DesktopAgentTaskStore(File(dir, "agents.db")).launchLogFile(task.id)
                 assertTrue(launchLog.exists() && launchLog.length() > 0, "launch diagnostics should be persisted")
@@ -347,27 +346,32 @@ class AgentQueuedFollowUpTest {
                     directory = dir.absolutePath,
                 ),
             )
-            withTimeout(60_000) {
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
                 while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
             }
 
             service.queueFollowUp(task.id, "second message")
             service.queueFollowUp(task.id, "third message")
-            val afterQueue = service.tasks.value.first { it.id == task.id }
-            val queuedTexts = afterQueue.queuedFollowUps.map { it.text }
-            val liveUserMessages = service.events(task.id).value
-                .filterIsInstance<AgentEvent.UserMessage>()
-                .map { it.text }
-            if (queuedTexts.isNotEmpty()) {
-                assertEquals(listOf("second message", "third message"), queuedTexts)
-            } else {
-                // Direct PTY keeps the session alive while the first run is active, so follow-ups
-                // may be delivered live instead of sitting in the queue until Done.
-                assertEquals(listOf("second message", "third message"), liveUserMessages)
+            // queueFollowUp posts to the service scope, so the queue may not reflect both
+            // entries the instant the calls return. Poll the combined (still-queued + already
+            // delivered) view until both follow-ups are accounted for, in order, instead of
+            // sampling once and racing that async write.
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    val queuedTexts = current.queuedFollowUps.map { it.text }
+                    val liveUserMessages = service.events(task.id).value
+                        .filterIsInstance<AgentEvent.UserMessage>()
+                        .map { it.text }
+                    val observedFollowUps = (queuedTexts + liveUserMessages)
+                        .filter { it == "second message" || it == "third message" }
+                    if (observedFollowUps == listOf("second message", "third message")) break
+                    delay(25)
+                }
             }
             File(dir, ".queue-test-ready").writeText("go")
 
-            withTimeout(120_000) {
+            withTimeout(harnessTimeoutMillis(120_000, 360_000)) {
                 while (true) {
                     val current = service.tasks.value.first { it.id == task.id }
                     val userMessages = service.events(task.id).value

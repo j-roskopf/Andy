@@ -57,12 +57,16 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 
 @Composable
 internal fun NetworkTrafficRowItem(
     row: NetworkTrafficRow,
     expanded: Boolean,
     flashing: Boolean,
+    focused: Boolean,
+    pathFocused: Boolean,
+    hostFocused: Boolean,
     trafficWidth: Float,
     statusWidth: Float,
     typeWidth: Float,
@@ -71,11 +75,17 @@ internal fun NetworkTrafficRowItem(
     onToggle: () -> Unit,
     onSelect: (NetworkExchange) -> Unit,
     onFocus: (String) -> Unit,
+    onToggleFocusPath: (NetworkExchange) -> Unit,
+    onToggleFocusHost: (NetworkExchange) -> Unit,
     onAddRule: (NetworkExchange) -> Unit,
 ) {
     val latest = row.latest
     val flashColor by animateColorAsState(
-        targetValue = if (flashing) Rust.copy(alpha = 0.24f) else AndyColors.Neutral900.copy(alpha = 0.65f),
+        targetValue = when {
+            focused -> AndyColors.Orange.copy(alpha = 0.18f)
+            flashing -> Rust.copy(alpha = 0.24f)
+            else -> AndyColors.Neutral900.copy(alpha = 0.65f)
+        },
     )
     val selectedColor = if (row.exchange != null) AndyColors.Neutral800.copy(alpha = 0.9f) else flashColor
     var showMenu by remember { mutableStateOf(false) }
@@ -85,7 +95,14 @@ internal fun NetworkTrafficRowItem(
             Modifier.fillMaxWidth()
                 .heightIn(min = 32.dp)
                 .background(selectedColor)
-                .border(1.dp, if (flashing) Rust.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.05f))
+                .border(
+                    1.dp,
+                    when {
+                        focused -> AndyColors.Orange.copy(alpha = 0.55f)
+                        flashing -> Rust.copy(alpha = 0.55f)
+                        else -> Color.White.copy(alpha = 0.05f)
+                    },
+                )
                 .clickable {
                     row.exchange?.let(onSelect) ?: onToggle()
                 }
@@ -132,8 +149,29 @@ internal fun NetworkTrafficRowItem(
                 )
             }
             val response = row.exchange
-            MonoCell(if (response != null) response.statusCode?.toString() ?: "-" else "", statusWidth.dp, if ((response?.statusCode ?: 200) >= 400) Red else TextSecondary)
-            MonoCell(if (response != null) response.contentType?.substringBefore(';') ?: "-" else "", typeWidth.dp, TextSecondary)
+            val isPassthrough = response?.tlsStatus == "passthrough" || response?.method == "PASS"
+            MonoCell(
+                when {
+                    response == null -> ""
+                    isPassthrough -> "PASS"
+                    else -> response.statusCode?.toString() ?: "-"
+                },
+                statusWidth.dp,
+                when {
+                    isPassthrough -> Yellow
+                    (response?.statusCode ?: 200) >= 400 -> Red
+                    else -> TextSecondary
+                },
+            )
+            MonoCell(
+                when {
+                    response == null -> ""
+                    isPassthrough -> "Not decrypted — CA not trusted / pinned"
+                    else -> response.contentType?.substringBefore(';') ?: "-"
+                },
+                typeWidth.dp,
+                if (isPassthrough) Yellow else TextSecondary,
+            )
             MonoCell(if (response != null) response.sizeBytes?.toString() ?: "-" else "", sizeWidth.dp, TextSecondary)
             MonoCell(if (response != null) response.durationMillis?.toString() ?: "-" else "", msWidth.dp, TextSecondary)
             Box(Modifier.weight(1f).padding(horizontal = 4.dp)) {
@@ -154,6 +192,30 @@ internal fun NetworkTrafficRowItem(
                 onDismissRequest = { showMenu = false },
                 containerColor = PanelSoft
             ) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (pathFocused) "Unfocus path" else "Focus path",
+                            color = TextPrimary,
+                        )
+                    },
+                    onClick = {
+                        showMenu = false
+                        onToggleFocusPath(row.exchange)
+                    }
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (hostFocused) "Unfocus host" else "Focus host",
+                            color = TextPrimary,
+                        )
+                    },
+                    onClick = {
+                        showMenu = false
+                        onToggleFocusHost(row.exchange)
+                    }
+                )
                 DropdownMenuItem(
                     text = { Text("Add rule", color = TextPrimary) },
                     onClick = {
@@ -186,21 +248,26 @@ internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, on
             if (selected == null) {
                 EmptyState("Select a network call to inspect headers and body.")
             } else {
-                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    FlowPreviewScrollable(
-                        title = "Request",
-                        headers = selected.requestHeaders,
-                        body = selected.requestBodyPreview,
-                        formatJson = true,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
-                    FlowPreviewScrollable(
-                        title = "Response",
-                        headers = selected.responseHeaders,
-                        body = selected.responseBodyPreview,
-                        formatJson = true,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    selected.error?.takeIf { it.isNotBlank() }?.let { error ->
+                        Text(error, color = Yellow, fontSize = 12.sp, lineHeight = 16.sp)
+                    }
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        FlowPreviewScrollable(
+                            title = "Request",
+                            headers = selected.requestHeaders,
+                            body = selected.requestBodyPreview,
+                            formatJson = true,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                        FlowPreviewScrollable(
+                            title = "Response",
+                            headers = selected.responseHeaders,
+                            body = selected.responseBodyPreview,
+                            formatJson = true,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
                 }
             }
         }

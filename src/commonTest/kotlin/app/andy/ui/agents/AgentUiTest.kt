@@ -77,6 +77,23 @@ class AgentUiTest {
     }
 
     @Test
+    fun statusLabelPrefersLifecycleStatusWhenStartedAtIsMissing() {
+        // Thin MCP list payloads used to omit startedAtMillis; never show "queued" for Done/Working.
+        assertEquals(
+            "done",
+            agentStatusLabel(task(AgentStatus.Done).copy(startedAtMillis = null, finishedAtMillis = 5L)),
+        )
+        assertEquals(
+            "working",
+            agentStatusLabel(task(AgentStatus.Working).copy(startedAtMillis = null)),
+        )
+        assertEquals(
+            "queued",
+            agentStatusLabel(task().copy(status = null, startedAtMillis = null, finishedAtMillis = null)),
+        )
+    }
+
+    @Test
     fun composerAppearsInReadOnlyModeOrWhenImagesAreStaged() {
         assertTrue(showsChatFollowUpComposer(interactive = false, hasStagedImages = false))
         assertFalse(showsChatFollowUpComposer(interactive = true, hasStagedImages = false))
