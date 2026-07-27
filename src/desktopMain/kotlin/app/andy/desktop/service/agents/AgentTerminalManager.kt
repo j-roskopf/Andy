@@ -457,6 +457,9 @@ class AgentTerminalManager(
             )
             handles[task.id] = handle
             ownedTaskIds += task.id
+            // Synchronous so a caller awaiting start() sees accurate interactivity right away;
+            // StateFlow conflates the identical value the Main-dispatched bump below recomputes.
+            _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
             handle.scrollbackJob = scope.launch(Dispatchers.IO) {
                 while (isActive && handles[task.id] === handle) {
                     persistScrollback(handle)
