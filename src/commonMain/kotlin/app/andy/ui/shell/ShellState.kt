@@ -437,10 +437,47 @@ internal class ShellState(
     }
 
     fun runAction(project: ActionProject, action: ProjectAction) {
+        updateWorkspace {
+            it.copy(
+                lastActionProjectId = project.id,
+                lastActionId = action.id,
+            )
+        }
         val runId = services.actionRuns.run(project, action)
         activeRunId = runId
         terminalRunId = runId
         destination = AndyDestination.Actions
+    }
+
+    fun rememberActionSelection(projectId: String, actionId: String?) {
+        if (
+            workspaceState.lastActionProjectId == projectId &&
+            workspaceState.lastActionId == actionId
+        ) {
+            return
+        }
+        updateWorkspace {
+            it.copy(
+                lastActionProjectId = projectId,
+                lastActionId = actionId,
+            )
+        }
+    }
+
+    fun rememberLastProject(projectId: String) {
+        if (workspaceState.lastActionProjectId == projectId) return
+        val actionId = workspaceState.lastActionId?.takeIf { actionId ->
+            actionsConfig.projects
+                .firstOrNull { it.id == projectId }
+                ?.actions
+                ?.any { it.id == actionId } == true
+        } ?: actionsConfig.projects.firstOrNull { it.id == projectId }?.actions?.firstOrNull()?.id
+        updateWorkspace {
+            it.copy(
+                lastActionProjectId = projectId,
+                lastActionId = actionId,
+            )
+        }
     }
 
     fun stopAction(run: RunningAction) {

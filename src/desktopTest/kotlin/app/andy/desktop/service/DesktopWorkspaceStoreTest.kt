@@ -72,6 +72,8 @@ class DesktopWorkspaceStoreTest {
                 workspaceStatusExpanded = true,
                 performanceTab = "Tracing",
                 filesTab = "Database",
+                lastActionProjectId = "garden",
+                lastActionId = "test",
             ),
         )
         val tracing = DesktopWorkspaceStore(file).load()
@@ -83,6 +85,8 @@ class DesktopWorkspaceStoreTest {
         assertEquals(true, tracing.workspaceStatusExpanded)
         assertEquals("Tracing", tracing.performanceTab)
         assertEquals("Database", tracing.filesTab)
+        assertEquals("garden", tracing.lastActionProjectId)
+        assertEquals("test", tracing.lastActionId)
 
         file.writeText(file.readText().replace("performanceTab=Tracing", "performanceTab=Nope"))
         assertEquals("Metrics", DesktopWorkspaceStore(file).load().performanceTab)

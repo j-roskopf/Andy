@@ -84,6 +84,10 @@ data class WorkspaceState(
     val hostFileTreePaneWidth: Float = 320f,
     val hostFileSearchPaneWidth: Float = 430f,
     val selectedPackage: String? = null,
+    /** Last project shown in the header action runner / Projects page. */
+    val lastActionProjectId: String? = null,
+    /** Last action shown in the header action runner. */
+    val lastActionId: String? = null,
     val agentOsNotificationsEnabled: Boolean = true,
     val agentNotificationSoundEnabled: Boolean = true,
     val agentIconBadgeEnabled: Boolean = true,

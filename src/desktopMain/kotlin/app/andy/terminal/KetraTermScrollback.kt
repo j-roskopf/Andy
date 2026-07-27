@@ -44,6 +44,12 @@ class ScrollbackAnsiTee(
     private var scanPos: Int = 0
 
     /**
+     * Incomplete trailing UTF-8 bytes from the previous [append]. Decoding each PTY read in
+     * isolation turns a glyph split across chunks into U+FFFD in scrollback replay.
+     */
+    private var pendingUtf8 = ByteArray(0)
+
+    /**
      * Bytes ever appended. The tee sits on the PTY read path ahead of the emulator, so this
      * only moves when the host actually sent something — which makes it a sound "the screen
      * may have changed" signal for pollers. Unchanged is proof of *no* change; a change is
@@ -58,10 +64,12 @@ class ScrollbackAnsiTee(
 
     fun append(bytes: ByteArray, offset: Int, length: Int) {
         if (length <= 0) return
-        val chunk = String(bytes, offset, length, StandardCharsets.UTF_8)
         synchronized(lock) {
-            buffer.append(chunk)
-            trimToCap()
+            val decoded = decodeUtf8CarryingIncomplete(bytes, offset, length)
+            if (decoded.isNotEmpty()) {
+                buffer.append(decoded)
+                trimToCap()
+            }
             bytesSeen += length
         }
     }
@@ -86,7 +94,37 @@ class ScrollbackAnsiTee(
             scanPos = 0
             latestTitle = ""
             latestProgress = ""
+            pendingUtf8 = ByteArray(0)
         }
+    }
+
+    /**
+     * Decode [bytes] as UTF-8, prefixing any [pendingUtf8] leftover. Complete characters go
+     * into the returned string; a trailing partial sequence stays in [pendingUtf8].
+     */
+    private fun decodeUtf8CarryingIncomplete(bytes: ByteArray, offset: Int, length: Int): String {
+        val combined: ByteArray
+        val start: Int
+        val total: Int
+        if (pendingUtf8.isEmpty()) {
+            combined = bytes
+            start = offset
+            total = length
+        } else {
+            combined = ByteArray(pendingUtf8.size + length)
+            pendingUtf8.copyInto(combined)
+            bytes.copyInto(combined, destinationOffset = pendingUtf8.size, startIndex = offset, endIndex = offset + length)
+            start = 0
+            total = combined.size
+        }
+        val completeLen = utf8CompletePrefixLength(combined, start, total)
+        pendingUtf8 = if (completeLen < total) {
+            combined.copyOfRange(start + completeLen, start + total)
+        } else {
+            ByteArray(0)
+        }
+        if (completeLen == 0) return ""
+        return String(combined, start, completeLen, StandardCharsets.UTF_8)
     }
 
     /**
@@ -127,6 +165,37 @@ class ScrollbackAnsiTee(
         /** Longest partial OSC sequence carried between chunks. Titles are far shorter. */
         private const val OSC_CARRY_MAX = 4096
     }
+}
+
+/**
+ * Length of the leading complete UTF-8 sequences in [bytes] `[offset, offset + length)`.
+ * Stops before a trailing partial multi-byte character so the caller can carry it.
+ */
+internal fun utf8CompletePrefixLength(bytes: ByteArray, offset: Int, length: Int): Int {
+    val end = offset + length
+    var i = offset
+    while (i < end) {
+        val lead = bytes[i].toInt() and 0xFF
+        var need = when {
+            lead < 0x80 -> 1
+            lead and 0xE0 == 0xC0 -> 2
+            lead and 0xF0 == 0xE0 -> 3
+            lead and 0xF8 == 0xF0 -> 4
+            else -> 1 // lone continuation / invalid lead — consume so it becomes U+FFFD once
+        }
+        if (need > 1) {
+            for (j in 1 until need) {
+                if (i + j >= end) break
+                if (bytes[i + j].toInt() and 0xC0 != 0x80) {
+                    need = 1
+                    break
+                }
+            }
+        }
+        if (i + need > end) return i - offset
+        i += need
+    }
+    return length
 }
 
 /**

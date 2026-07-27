@@ -168,6 +168,9 @@ private fun ProjectCockpit(
     onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
+    preferredProjectId: String?,
+    onPreferredProjectChange: (String) -> Unit,
+    workspaceReady: Boolean,
     initialWorkflowTaskId: String?,
     initialCanvasLabel: String?,
     requestedAgentTaskId: String?,
@@ -207,6 +210,11 @@ private fun ProjectCockpit(
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
     val effectiveProjectWorkflow = project?.let { loadedProjectWorkflow ?: ProjectWorkflowState(it.id) }
+
+    fun selectProject(projectId: String, rememberAsPreferred: Boolean = true) {
+        selectedProjectId = projectId
+        if (rememberAsPreferred) onPreferredProjectChange(projectId)
+    }
 
     fun ensureWorkflowProjectLoaded() {
         project?.id?.let { projectId -> scope.launch { services.projectWorkflows.ensureProject(projectId) } }
@@ -262,14 +270,19 @@ private fun ProjectCockpit(
         docks = docks.toggle(placement, kind)
     }
 
-    LaunchedEffect(config.projects) {
-        if (selectedProjectId !in config.projects.map { it.id }) selectedProjectId = config.projects.firstOrNull()?.id
+    LaunchedEffect(workspaceReady, config.projects, preferredProjectId) {
+        if (!workspaceReady) return@LaunchedEffect
+        val projectIds = config.projects.map { it.id }
+        if (selectedProjectId !in projectIds) {
+            selectedProjectId = preferredProjectId?.takeIf { it in projectIds }
+                ?: config.projects.firstOrNull()?.id
+        }
     }
     LaunchedEffect(requestedAgentTaskId, requestedProjectId, agentTasks) {
         val taskId = requestedAgentTaskId ?: return@LaunchedEffect
         val task = agentTasks.firstOrNull { it.id == taskId && it.projectId == requestedProjectId }
         if (task != null) {
-            selectedProjectId = task.projectId
+            task.projectId?.let { selectProject(it) }
             selectedTaskId = task.id
             if (task.archived) viewingArchivedForProjectId = task.projectId
             canvas = ProjectCanvas.Chat
@@ -298,7 +311,7 @@ private fun ProjectCockpit(
         val runId = terminalRunId ?: return@LaunchedEffect
         if (runId == handledTerminalRunId) return@LaunchedEffect
         val terminalRun = running.firstOrNull { it.runId == runId } ?: return@LaunchedEffect
-        selectedProjectId = terminalRun.projectId
+        selectProject(terminalRun.projectId)
         selectTerminalTab(runId)
         ensureTerminalDock(lastTerminalPlacement)
         handledTerminalRunId = runId
@@ -421,7 +434,7 @@ private fun ProjectCockpit(
                                         }
                                     } else {
                                         collapsedProjectIds = collapsedProjectIds - item.id
-                                        selectedProjectId = item.id
+                                        selectProject(item.id)
                                         selectedTaskId = sessions.firstOrNull()?.id
                                         selectedWorkflowTaskId = null
                                         canvas = ProjectCanvas.Chat
@@ -429,7 +442,7 @@ private fun ProjectCockpit(
                                 },
                                 onOpenSession = { task ->
                                     collapsedProjectIds = collapsedProjectIds - item.id
-                                    selectedProjectId = item.id
+                                    selectProject(item.id)
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
                                     services.agentRuns.setChatViewing(task.id, viewing = true)
@@ -449,7 +462,7 @@ private fun ProjectCockpit(
                                 onNewChat = {
                                     collapsedProjectIds = collapsedProjectIds - item.id
                                     viewingArchivedForProjectId = null
-                                    selectedProjectId = item.id
+                                    selectProject(item.id)
                                     selectedTaskId = null
                                     selectedWorkflowTaskId = null
                                     canvas = ProjectCanvas.Chat
@@ -708,6 +721,9 @@ internal fun ActionsScreen(
     agentTasks: List<AgentTask>,
     showIntroduction: Boolean = false,
     onIntroductionComplete: () -> Unit = {},
+    preferredProjectId: String? = null,
+    onPreferredProjectChange: (String) -> Unit = {},
+    workspaceReady: Boolean = true,
     active: Boolean = true,
     initialWorkflowTaskId: String? = null,
     initialCanvasLabel: String? = null,
@@ -730,6 +746,9 @@ internal fun ActionsScreen(
             onActiveRunIdChange = onActiveRunIdChange,
             onConfigChange = onConfigChange,
             agentTasks = agentTasks,
+            preferredProjectId = preferredProjectId,
+            onPreferredProjectChange = onPreferredProjectChange,
+            workspaceReady = workspaceReady,
             initialWorkflowTaskId = initialWorkflowTaskId,
             initialCanvasLabel = initialCanvasLabel,
             requestedAgentTaskId = requestedAgentTaskId,

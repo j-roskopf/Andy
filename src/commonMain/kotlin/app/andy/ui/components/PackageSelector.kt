@@ -127,7 +127,7 @@ internal fun PackageSelector(
                 contentColor = TextPrimary,
             ),
             shape = RoundedCornerShape(AndyRadius.R2),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
         ) {
             val selectedApp = installedApps.firstOrNull { it.packageName == selectedPackage }
             val label = selectedApp?.label ?: selectedPackage ?: placeholder
