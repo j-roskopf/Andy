@@ -122,17 +122,20 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
 }
 
 /**
- * Sidebar / session-row activity marker — dotted thinking orb (working/orbits).
+ * Sidebar / session-row activity marker.
  *
- * Animated on a coarse wall-clock cadence (~12 fps) so multiple markers stay in
- * phase and Skiko invalidation stays cheaper than a Material infinite spinner,
- * which previously flickered SwingPanel terminals.
+ * Intentionally not animated. `TerminalRepaintThrottle` only caps repaints of
+ * terminal widgets; a Compose recomposition here still forces a normal
+ * full-window Skiko redraw no matter how coarse the tick is, and reads as
+ * terminal flicker while a chat is working. A static dotted orb still marks
+ * live work without that cost.
  */
 @Composable
 internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
     ThinkingOrb(
         size = size,
         color = Cyan,
+        animate = false,
         contentDescription = "Working",
     )
 }

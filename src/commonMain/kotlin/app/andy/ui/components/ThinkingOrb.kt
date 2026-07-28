@@ -18,7 +18,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.andy.currentTimeMillis
-import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.Cyan
 import kotlin.math.PI
 import kotlin.math.abs
@@ -52,7 +51,6 @@ internal fun ThinkingOrb(
     val density = LocalDensity.current
     val sizePx = with(density) { size.toPx() }
     val preset = remember(sizePx) { resolveSpherePreset(sizePx) }
-    val dark = !AndyColors.isLight
     var tSec by remember { mutableFloatStateOf(0.6f) }
 
     LaunchedEffect(animate, speed, preset.speed) {
@@ -81,7 +79,7 @@ internal fun ThinkingOrb(
             .size(size)
             .semantics { this.contentDescription = contentDescription },
     ) {
-        paintDots(dots, color, dark, preset.rMin)
+        paintDots(dots, color, preset.rMin)
     }
 }
 
@@ -133,7 +131,7 @@ internal data class OrbDot(
     val y: Float,
     val z: Float,
     val r: Float,
-    /** Ink value: 0 = darkest on paper; mirrored on dark substrates. */
+    /** 0 = nearest/boldest dot (painted most opaque), 1 = farthest/faintest. */
     val white: Float,
     val a: Float = 1f,
 )
@@ -187,14 +185,13 @@ internal fun buildSphereDots(
 private fun DrawScope.paintDots(
     dots: List<OrbDot>,
     color: Color,
-    dark: Boolean,
     rMin: Float,
 ) {
     val sorted = dots.sortedBy { it.z }
     for (d in sorted) {
         if (d.a < 0.02f) continue
         val w = min(1f, max(0f, d.white))
-        val ink = if (dark) 1f - w else w
+        val ink = 1f - w
         drawCircle(
             color = color.copy(alpha = (ink * d.a).coerceIn(0f, 1f)),
             radius = max(rMin, d.r),
