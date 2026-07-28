@@ -1,6 +1,11 @@
 {
     "version": 1,
     "hooks": {
+        "sessionStart": [
+            {
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
+            }
+        ],
         "beforeSubmitPrompt": [
             {
                 "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
@@ -9,11 +14,6 @@
         "stop": [
             {
                 "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done empty completed"
-            }
-        ],
-        "sessionStart": [
-            {
-                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
             }
         ]
     }

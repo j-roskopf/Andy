@@ -243,7 +243,7 @@ internal fun Sidebar(
                                 (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
                             ) UnreadDot()
                             if (item == AndyDestination.Actions && hasActiveProjectAgentTasks) {
-                                ProjectActivityIndicator(10.dp)
+                                ProjectActivityIndicator(16.dp)
                             }
                         }
                     }

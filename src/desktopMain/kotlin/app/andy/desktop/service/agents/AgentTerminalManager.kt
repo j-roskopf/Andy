@@ -966,10 +966,15 @@ class AgentTerminalManager(
 
         /**
          * How long a dead Direct PTY may go without publishing an exit code before
-         * [awaitDirectPtyExit] gives up. Publishing only needs the backend's wait coroutine
-         * to be scheduled, so this is generous even on a loaded CI runner.
+         * [awaitDirectPtyExit] gives up. Publishing needs [KetraTermBackend]'s own wait
+         * coroutine — parked in a blocking `pty.waitFor()` on its own internal scope,
+         * independent of this process's dispatcher — to actually get scheduled and observe
+         * the reap. 2s proved too tight under real scheduler/GC jitter (a shared CI runner,
+         * or just a busy dev machine): the exit code lands a beat late, [isAlive] has already
+         * flipped false, and the turn is misreported as [AgentStatus.Error] with an unknown
+         * exit code instead of the [AgentStatus.Done] it actually reached.
          */
-        private const val EXIT_CODE_GRACE_MS = 2_000L
+        private const val EXIT_CODE_GRACE_MS = 8_000L
 
         /** Returned when a session ends without ever reporting a status. */
         const val UNKNOWN_EXIT_CODE = KetraTermBackend.CLOSED_EXIT_CODE

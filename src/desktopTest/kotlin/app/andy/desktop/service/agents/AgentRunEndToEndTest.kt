@@ -143,6 +143,7 @@ class AgentRetryTest {
             it.mkdirs()
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             val task = AgentTask(
@@ -174,7 +175,7 @@ class AgentRetryTest {
                 resolve("legacy-artifact.txt").writeText("old output\n")
             }
 
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
                 locator = AgentCliLocator(),
@@ -207,6 +208,14 @@ class AgentRetryTest {
             assertNull(retried.totalCostUsd)
             assertFalse(store.taskDir(task.id).resolve("legacy-artifact.txt").exists())
         } finally {
+            // The service's terminal sessions (KetraTermBackend) run their PTY wait/scrape
+            // loops on their own internal scope, independent of the outer test scope above —
+            // scope.cancel() alone never reaches them. Left open, those loops keep polling
+            // pty.waitFor() for the rest of the (single-JVM, sequential) suite run, competing
+            // with later tests for Dispatchers.IO and occasionally starving their own exit-code
+            // detection past its grace window (observed: a later test's process finished but
+            // its status read back Error/null instead of Done because of exactly this leak).
+            runCatching { service?.close() }
             scope.cancel()
             dir.deleteRecursively()
         }
@@ -322,10 +331,11 @@ class AgentQueuedFollowUpTest {
             it.mkdirs()
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
                 locator = AgentCliLocator(),
@@ -394,6 +404,9 @@ class AgentQueuedFollowUpTest {
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().map { it.text } == listOf("second message", "third message"),
             )
         } finally {
+            // See AgentRetryTest's finally block for why this matters: without it, this
+            // test's PTY wait/scrape loop leaks into the rest of the suite.
+            runCatching { service?.close() }
             scope.cancel()
             dir.deleteRecursively()
         }
@@ -410,10 +423,11 @@ class AgentUserInputResumeTest {
             it.mkdirs()
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
                 locator = AgentCliLocator(),
@@ -447,6 +461,9 @@ class AgentUserInputResumeTest {
                     .any { it.text.contains("Desktop") },
             )
         } finally {
+            // See AgentRetryTest's finally block for why this matters: without it, this
+            // test's PTY wait/scrape loop leaks into the rest of the suite.
+            runCatching { service?.close() }
             scope.cancel()
             dir.deleteRecursively()
         }
@@ -461,6 +478,7 @@ class CursorPlanBackfillTest {
             it.mkdirs()
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
         try {
             val oldPlan = "Gathering details. Writing the specification."
             val recoveredPlan = "# iOS Live Mirror\n\n- Keep Android and iOS sessions independent."
@@ -507,7 +525,7 @@ class CursorPlanBackfillTest {
             val artifactDir = AgentWorkflowArtifacts.dirFor(dir, run.id).apply { mkdirs() }
             File(artifactDir, "plan.md").writeText(recoveredPlan)
 
-            val service = DesktopAgentRunService(
+            service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
                 locator = AgentCliLocator(),
@@ -539,6 +557,9 @@ class CursorPlanBackfillTest {
             assertEquals(recoveredPlan, saved.tasks.single().completedPlanText)
             assertEquals(recoveredPlan, saved.projectWorkflows[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
         } finally {
+            // See AgentRetryTest's finally block for why this matters: without it, this
+            // test's PTY wait/scrape loop leaks into the rest of the suite.
+            runCatching { service?.close() }
             scope.cancel()
             dir.deleteRecursively()
         }

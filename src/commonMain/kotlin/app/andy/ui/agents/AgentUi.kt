@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -26,13 +25,13 @@ import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
+import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
-import app.andy.ui.theme.TextSecondary
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -125,17 +124,19 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
 /**
  * Sidebar / session-row activity marker.
  *
- * Intentionally not animated. A timer-driven spinner invalidates the whole Skiko
- * window (including any agent SwingPanel clear-hole) and reads as terminal flicker
- * while a chat is working. A static cyan ring still marks live work without that cost.
+ * Intentionally not animated. `TerminalRepaintThrottle` only caps repaints of
+ * terminal widgets; a Compose recomposition here still forces a normal
+ * full-window Skiko redraw no matter how coarse the tick is, and reads as
+ * terminal flicker while a chat is working. A static dotted orb still marks
+ * live work without that cost.
  */
 @Composable
-internal fun ProjectActivityIndicator(size: Dp = 10.dp) {
-    CircularProgressIndicator(
-        progress = { 0.7f },
-        modifier = Modifier.size(size),
+internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
+    ThinkingOrb(
+        size = size,
         color = Cyan,
-        strokeWidth = 1.5.dp,
+        animate = false,
+        contentDescription = "Working",
     )
 }
 
