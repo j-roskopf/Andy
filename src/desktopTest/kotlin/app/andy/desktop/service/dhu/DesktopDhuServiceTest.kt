@@ -28,6 +28,75 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopDhuServiceTest {
+    private companion object {
+        private val onWindows =
+            System.getProperty("os.name").orEmpty().contains("windows", ignoreCase = true)
+        private val testHostKind = if (onWindows) DhuHostKind.Windows else DhuHostKind.MacOs
+
+        private fun installFakeDhu(
+            autoDir: File,
+            unixScript: String,
+            windowsCmd: String = unixScriptToCmd(unixScript),
+        ) {
+            if (onWindows) {
+                File(autoDir, "desktop-head-unit.cmd").writeText(windowsCmd)
+                File(autoDir, "libusb-1.0.dll").writeText("stub")
+            } else {
+                File(autoDir, "desktop-head-unit").also {
+                    it.writeText(unixScript.trimIndent().let { body ->
+                        if (body.startsWith("#!")) body else "#!/bin/sh\n$body"
+                    })
+                    it.setExecutable(true)
+                }
+                File(autoDir, "libusb-1.0.dylib").writeText("stub")
+            }
+        }
+
+        private fun unixScriptToCmd(unixScript: String): String {
+            val lines = unixScript.lineSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#!") }
+                .toList()
+            return buildString {
+                appendLine("@echo off")
+                for (line in lines) {
+                    when {
+                        line.startsWith("echo ") -> appendLine(line)
+                        line.startsWith("sleep ") -> {
+                            val secs = line.removePrefix("sleep ").trim().substringBefore(' ').toIntOrNull() ?: 1
+                            appendLine("timeout /t $secs /nobreak >nul")
+                        }
+                        line.startsWith("while true") -> {
+                            appendLine(":loop")
+                            appendLine("timeout /t 60 /nobreak >nul")
+                            appendLine("goto loop")
+                        }
+                        line.startsWith("exit ") -> {
+                            val code = line.removePrefix("exit ").trim().toIntOrNull() ?: 1
+                            appendLine("exit /b $code")
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+        }
+
+        private fun testHost(): DhuWindowHost = object : DhuWindowHost by UnsupportedDhuWindowHost(testHostKind) {
+            override fun environment() = DhuHostEnvironment(
+                hostKind = testHostKind,
+                isWindows = onWindows,
+                capturePermissionGranted = true,
+                capturePermissionDetail = "ok",
+            )
+            override fun findWindow(processPid: Long?, titleHint: String) =
+                DhuWindowRef(id = "1", pid = processPid, title = titleHint)
+            override fun hideFromUser(window: DhuWindowRef) = true
+            override fun capture(window: DhuWindowRef) =
+                DhuCaptureFrame(2, 2, intArrayOf(0, 0, 0, 0), 1)
+            override fun bounds(window: DhuWindowRef) = DhuWindowBounds(0, 0, 2, 2)
+            override fun resize(window: DhuWindowRef, width: Int, height: Int) = true
+        }
+    }
     @Test
     fun interpretTransportDisconnectAsHeadUnitServerGuidance() {
         val msg = DesktopDhuService.interpretDhuExit(
@@ -85,11 +154,7 @@ class DesktopDhuServiceTest {
     fun startFailsWhenHeadUnitServerNotListening() = runBlocking {
         val sdk = createTempDirectory(prefix = "andy-sdk-hus-").toFile()
         val autoDir = File(sdk, "extras/google/auto").also { it.mkdirs() }
-        File(autoDir, "desktop-head-unit").also {
-            it.writeText("#!/bin/sh\nexit 0\n")
-            it.setExecutable(true)
-        }
-        File(autoDir, "libusb-1.0.dylib").writeText("stub")
+        installFakeDhu(autoDir, "#!/bin/sh\nexit 0\n")
         val runner = CommandRunner { command, _ ->
             when {
                 command.contains("shell") && command.any { it.contains("/proc/net/tcp") } -> {
@@ -99,14 +164,6 @@ class DesktopDhuServiceTest {
                 }
                 else -> CommandResult.success()
             }
-        }
-        val host = object : DhuWindowHost by UnsupportedDhuWindowHost(DhuHostKind.MacOs) {
-            override fun environment() = DhuHostEnvironment(
-                hostKind = DhuHostKind.MacOs,
-                isWindows = false,
-                capturePermissionGranted = true,
-                capturePermissionDetail = "ok",
-            )
         }
         val service = DesktopDhuService(
             devices = FakeDevices(
@@ -122,7 +179,7 @@ class DesktopDhuServiceTest {
                 ),
             ),
             runner = runner,
-            host = host,
+            host = testHost(),
             configDir = createTempDirectory(prefix = "andy-dhu-hus-").toFile(),
         )
         try {
@@ -144,18 +201,15 @@ class DesktopDhuServiceTest {
     fun singleSessionReplacementRemovesPreviousForward() = runBlocking {
         val sdk = createTempDirectory(prefix = "andy-sdk-").toFile()
         val autoDir = File(sdk, "extras/google/auto").also { it.mkdirs() }
-        File(autoDir, "desktop-head-unit").also {
-            it.writeText(
-                """
-                #!/bin/sh
-                echo "SSL negotiation finished successfully 1"
-                echo "Verify returned: ok"
-                while true; do sleep 60; done
-                """.trimIndent(),
-            )
-            it.setExecutable(true)
-        }
-        File(autoDir, "libusb-1.0.dylib").writeText("stub")
+        installFakeDhu(
+            autoDir,
+            """
+            #!/bin/sh
+            echo "SSL negotiation finished successfully 1"
+            echo "Verify returned: ok"
+            while true; do sleep 60; done
+            """,
+        )
 
         val removed = mutableListOf<Int>()
         val forwarded = mutableListOf<String>()
@@ -182,21 +236,6 @@ class DesktopDhuServiceTest {
                 else -> CommandResult.success()
             }
         }
-        val host = object : DhuWindowHost by UnsupportedDhuWindowHost(DhuHostKind.MacOs) {
-            override fun environment() = DhuHostEnvironment(
-                hostKind = DhuHostKind.MacOs,
-                isWindows = false,
-                capturePermissionGranted = true,
-                capturePermissionDetail = "ok",
-            )
-            override fun findWindow(processPid: Long?, titleHint: String) =
-                DhuWindowRef(id = "1", pid = processPid, title = titleHint)
-            override fun hideFromUser(window: DhuWindowRef) = true
-            override fun capture(window: DhuWindowRef) =
-                DhuCaptureFrame(2, 2, intArrayOf(0, 0, 0, 0), 1)
-            override fun bounds(window: DhuWindowRef) = DhuWindowBounds(0, 0, 2, 2)
-            override fun resize(window: DhuWindowRef, width: Int, height: Int) = true
-        }
         val devices = FakeDevices(
             online = true,
             kind = DeviceKind.Emulator,
@@ -212,7 +251,7 @@ class DesktopDhuServiceTest {
         val service = DesktopDhuService(
             devices = devices,
             runner = runner,
-            host = host,
+            host = testHost(),
             configDir = createTempDirectory(prefix = "andy-dhu-cfg-").toFile(),
         )
         try {
@@ -234,18 +273,15 @@ class DesktopDhuServiceTest {
     fun usbPhysicalDeviceSkipsAdbForwardAndHeadUnitServer() = runBlocking {
         val sdk = createTempDirectory(prefix = "andy-sdk-usb-").toFile()
         val autoDir = File(sdk, "extras/google/auto").also { it.mkdirs() }
-        File(autoDir, "desktop-head-unit").also {
-            it.writeText(
-                """
-                #!/bin/sh
-                echo "SSL negotiation finished successfully 1"
-                echo "Verify returned: ok"
-                while true; do sleep 60; done
-                """.trimIndent(),
-            )
-            it.setExecutable(true)
-        }
-        File(autoDir, "libusb-1.0.dylib").writeText("stub")
+        installFakeDhu(
+            autoDir,
+            """
+            #!/bin/sh
+            echo "SSL negotiation finished successfully 1"
+            echo "Verify returned: ok"
+            while true; do sleep 60; done
+            """,
+        )
         val forwarded = mutableListOf<String>()
         val runner = CommandRunner { command, _ ->
             when {
@@ -262,21 +298,6 @@ class DesktopDhuServiceTest {
                 else -> CommandResult.success()
             }
         }
-        val host = object : DhuWindowHost by UnsupportedDhuWindowHost(DhuHostKind.MacOs) {
-            override fun environment() = DhuHostEnvironment(
-                hostKind = DhuHostKind.MacOs,
-                isWindows = false,
-                capturePermissionGranted = true,
-                capturePermissionDetail = "ok",
-            )
-            override fun findWindow(processPid: Long?, titleHint: String) =
-                DhuWindowRef(id = "1", pid = processPid, title = titleHint)
-            override fun hideFromUser(window: DhuWindowRef) = true
-            override fun capture(window: DhuWindowRef) =
-                DhuCaptureFrame(2, 2, intArrayOf(0, 0, 0, 0), 1)
-            override fun bounds(window: DhuWindowRef) = DhuWindowBounds(0, 0, 2, 2)
-            override fun resize(window: DhuWindowRef, width: Int, height: Int) = true
-        }
         val service = DesktopDhuService(
             devices = FakeDevices(
                 online = true,
@@ -291,7 +312,7 @@ class DesktopDhuServiceTest {
                 ),
             ),
             runner = runner,
-            host = host,
+            host = testHost(),
             configDir = createTempDirectory(prefix = "andy-dhu-usb-").toFile(),
         )
         try {
@@ -327,19 +348,16 @@ class DesktopDhuServiceTest {
     fun spontaneousProcessExitRemovesAdbForward() = runBlocking {
         val sdk = createTempDirectory(prefix = "andy-sdk-exit-").toFile()
         val autoDir = File(sdk, "extras/google/auto").also { it.mkdirs() }
-        File(autoDir, "desktop-head-unit").also {
-            it.writeText(
-                """
-                #!/bin/sh
-                echo "SSL negotiation finished successfully 1"
-                echo "Verify returned: ok"
-                sleep 1
-                exit 1
-                """.trimIndent(),
-            )
-            it.setExecutable(true)
-        }
-        File(autoDir, "libusb-1.0.dylib").writeText("stub")
+        installFakeDhu(
+            autoDir,
+            """
+            #!/bin/sh
+            echo "SSL negotiation finished successfully 1"
+            echo "Verify returned: ok"
+            sleep 1
+            exit 1
+            """,
+        )
         val removed = mutableListOf<Int>()
         val runner = CommandRunner { command, _ ->
             when {
@@ -356,21 +374,6 @@ class DesktopDhuServiceTest {
                 else -> CommandResult.success()
             }
         }
-        val host = object : DhuWindowHost by UnsupportedDhuWindowHost(DhuHostKind.MacOs) {
-            override fun environment() = DhuHostEnvironment(
-                hostKind = DhuHostKind.MacOs,
-                isWindows = false,
-                capturePermissionGranted = true,
-                capturePermissionDetail = "ok",
-            )
-            override fun findWindow(processPid: Long?, titleHint: String) =
-                DhuWindowRef(id = "1", pid = processPid, title = titleHint)
-            override fun hideFromUser(window: DhuWindowRef) = true
-            override fun capture(window: DhuWindowRef) =
-                DhuCaptureFrame(2, 2, intArrayOf(0, 0, 0, 0), 1)
-            override fun bounds(window: DhuWindowRef) = DhuWindowBounds(0, 0, 2, 2)
-            override fun resize(window: DhuWindowRef, width: Int, height: Int) = true
-        }
         val service = DesktopDhuService(
             devices = FakeDevices(
                 online = true,
@@ -385,7 +388,7 @@ class DesktopDhuServiceTest {
                 ),
             ),
             runner = runner,
-            host = host,
+            host = testHost(),
             configDir = createTempDirectory(prefix = "andy-dhu-exit-").toFile(),
         )
         try {

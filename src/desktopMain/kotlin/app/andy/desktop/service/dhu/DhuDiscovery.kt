@@ -20,7 +20,12 @@ internal class JavaDhuFs : DhuFs {
     override fun isDirectory(path: String): Boolean = File(path).isDirectory
     override fun isExecutable(path: String): Boolean {
         val file = File(path)
-        return file.isFile && (file.canExecute() || file.name.endsWith(".exe", ignoreCase = true))
+        if (!file.isFile) return false
+        val name = file.name.lowercase()
+        return file.canExecute() ||
+            name.endsWith(".exe") ||
+            name.endsWith(".cmd") ||
+            name.endsWith(".bat")
     }
     override fun isFile(path: String): Boolean = File(path).isFile
     override fun listNames(dir: String): List<String> =
@@ -40,11 +45,20 @@ internal data class DhuHostEnvironment(
 internal object DhuDiscovery {
     fun autoDir(sdkPath: String?): String? {
         if (sdkPath.isNullOrBlank()) return null
-        return File(sdkPath, "extras/google/auto").absolutePath
+        // Avoid File(...).absolutePath so injectable MapFs tests keep stable logical paths on Windows.
+        return joinAutoPath(sdkPath, "extras/google/auto")
     }
 
     fun executableName(isWindows: Boolean): String =
         if (isWindows) "desktop-head-unit.exe" else "desktop-head-unit"
+
+    /** Candidate DHU binary names for [findExecutable] (Windows also accepts .cmd/.bat test stubs). */
+    fun executableCandidates(isWindows: Boolean): List<String> =
+        if (isWindows) {
+            listOf("desktop-head-unit.exe", "desktop-head-unit.cmd", "desktop-head-unit.bat")
+        } else {
+            listOf("desktop-head-unit")
+        }
 
     /**
      * Exact names the Google auto package has shipped. Prefer these first; [isLibusbFileName]
@@ -61,11 +75,18 @@ internal object DhuDiscovery {
     fun isLibusbFileName(name: String): Boolean =
         name.lowercase().matches(Regex("""libusb[-_]?1\.0(\.\d+)?\.(so|dylib|dll)(\.\d+)*"""))
 
+    /** Join [dir]/[name] using the separator already present in [dir]. */
+    internal fun joinAutoPath(dir: String, name: String): String {
+        val useBackslash = '\\' in dir && '/' !in dir
+        val sep = if (useBackslash) '\\' else '/'
+        return dir.trimEnd('/', '\\') + sep + name
+    }
+
     fun findExecutable(autoDir: String?, isWindows: Boolean, fs: DhuFs): String? {
         if (autoDir.isNullOrBlank() || !fs.isDirectory(autoDir)) return null
-        val name = executableName(isWindows)
-        val path = File(autoDir, name).absolutePath
-        return path.takeIf { fs.isExecutable(it) }
+        return executableCandidates(isWindows)
+            .map { joinAutoPath(autoDir, it) }
+            .firstOrNull { fs.isExecutable(it) }
     }
 
     fun findLibusb(autoDir: String?, isWindows: Boolean, hostKind: DhuHostKind, fs: DhuFs): String? {
@@ -78,7 +99,7 @@ internal object DhuDiscovery {
         val matched = exact ?: names.firstOrNull(::isLibusbFileName)
         return matched
             ?.let { fileName -> names.first { it.equals(fileName, ignoreCase = true) } }
-            ?.let { File(autoDir, it).absolutePath }
+            ?.let { joinAutoPath(autoDir, it) }
             ?.takeIf { fs.isFile(it) }
     }
 
