@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -65,6 +66,10 @@ internal fun LiveSidePanel(
     displayName: String?,
     showLogcat: Boolean,
     showMirrorStreamControls: Boolean,
+    showAndroidAuto: Boolean = false,
+    androidAutoEnabled: Boolean = false,
+    onAndroidAutoEnabledChange: (Boolean) -> Unit = {},
+    androidAutoReadyHint: String? = null,
     acceleratedMirror: Boolean,
     isWeb: Boolean,
     maxSize: String,
@@ -159,6 +164,10 @@ internal fun LiveSidePanel(
                     serial = serial,
                     device = device,
                     showMirrorStreamControls = showMirrorStreamControls,
+                    showAndroidAuto = showAndroidAuto,
+                    androidAutoEnabled = androidAutoEnabled,
+                    onAndroidAutoEnabledChange = onAndroidAutoEnabledChange,
+                    androidAutoReadyHint = androidAutoReadyHint,
                     acceleratedMirror = acceleratedMirror,
                     isWeb = isWeb,
                     maxSize = maxSize,
@@ -206,6 +215,10 @@ private fun LiveInfoTabContent(
     serial: String?,
     device: AndroidDevice?,
     showMirrorStreamControls: Boolean,
+    showAndroidAuto: Boolean = false,
+    androidAutoEnabled: Boolean = false,
+    onAndroidAutoEnabledChange: (Boolean) -> Unit = {},
+    androidAutoReadyHint: String? = null,
     acceleratedMirror: Boolean,
     isWeb: Boolean,
     maxSize: String,
@@ -240,6 +253,14 @@ private fun LiveInfoTabContent(
         if (device != null) {
             WorkspaceSectionLabel("Device")
             LiveDeviceFacts(device)
+            if (showAndroidAuto) {
+                Spacer(Modifier.height(4.dp))
+                AndroidAutoToggle(
+                    enabled = androidAutoEnabled,
+                    onEnabledChange = onAndroidAutoEnabledChange,
+                    readyHint = androidAutoReadyHint,
+                )
+            }
         }
 
         if (showMirrorStreamControls) {

@@ -200,7 +200,8 @@ internal fun AndyShell(
     CompositionLocalProvider(
         // Keep SwingPanel mounted during window resize; MirrorPresentationGuard blocks geometry
         // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
-        LocalSuppressHeavyweightSurfaces provides state.chromeMenuExpanded,
+        // Modal dialogs share the same rule as chrome menus: interop surfaces paint over them.
+        LocalSuppressHeavyweightSurfaces provides (state.chromeMenuExpanded || ModalDialogRegistry.anyOpen),
     ) {
     Box(
         Modifier.fillMaxSize().background(Ink)

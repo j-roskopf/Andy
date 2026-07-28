@@ -728,6 +728,7 @@ data class AndyServices(
     val traceViewer: TraceViewerService = UnavailableTraceViewerService,
     val sharedPrefs: SharedPrefsService = UnavailableSharedPrefsService,
     val appDatabase: AppDatabaseService = UnavailableAppDatabaseService,
+    val dhu: DhuService = UnavailableDhuService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val mcp: McpServerService,
