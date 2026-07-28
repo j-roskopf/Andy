@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -83,11 +85,25 @@ class McpAgentRunClient(
      * [AgentTask.unread] = false. Prevents periodic refresh from re-badging them.
      */
     private val clientReadTaskIds = ConcurrentHashMap.newKeySet<String>()
+
+    /** Ids whose `chat.mark_read` RPC the daemon has acknowledged; see [dropSettledClientReads]. */
+    private val daemonAckedReadTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val clientViewingTaskId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
     /** Window visibility/focus. An open chat only counts as watched while the window is up. */
     @Volatile
     private var appForeground: Boolean = true
+
+    /**
+     * Serializes `chat.set_app_focus` RPCs. Each [callTool] opens its own Unix connection and
+     * the daemon handles connections concurrently, so unsynchronized sends can land out of
+     * order and leave the daemon believing the window is foreground after it went away —
+     * exactly the state that suppresses the badge this focus tracking exists to produce.
+     */
+    private val appFocusRpcMutex = Mutex()
+
+    /** Last value the daemon accepted, so redundant transitions do not re-send. */
+    private var lastSentAppForeground: Boolean? = null
 
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
@@ -162,6 +178,9 @@ class McpAgentRunClient(
 
     private fun acknowledgeRead(taskId: String) {
         clientReadTaskIds += taskId
+        // This ack is pending again until its own RPC lands; an earlier settle marker would
+        // otherwise retire it on the next refresh and flash the badge back.
+        daemonAckedReadTaskIds -= taskId
         patchTask(taskId) { it.copy(unread = false) }
     }
 
@@ -172,11 +191,15 @@ class McpAgentRunClient(
 
     private suspend fun refreshTasks() {
         refreshComposerOptions()
+        // Snapshot before the fetch: the list we are about to request is produced after the
+        // daemon acknowledged these reads, so it already reflects them.
+        val settledReads = daemonAckedReadTaskIds.toSet()
         val raw = callTool("chat.list", emptyMap())
         val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return
         // Keep a lightweight task list for the GUI; lifecycle fields must round-trip so
         // badges/labels match the daemon (startedAtMillis drives isQueued).
         val refreshedTasks = arr.mapNotNull { el -> parseListedTask(el.jsonObject) }
+        dropSettledClientReads(clientReadTaskIds, daemonAckedReadTaskIds, settledReads)
         dropConfirmedClientReads(clientReadTaskIds, refreshedTasks)
         _tasks.value = mergeRefreshedAgentTasks(
             refreshed = refreshedTasks,
@@ -230,10 +253,12 @@ class McpAgentRunClient(
         _tasks.value = _tasks.value.map { if (it.id == taskId) transform(it) else it }
     }
 
-    private fun callTaskMutation(tool: String, taskId: String) {
+    private fun callTaskMutation(tool: String, taskId: String, onApplied: (() -> Unit)? = null) {
         scope.launch {
             runCatching {
                 callTool(tool, mapOf("taskId" to JsonPrimitive(taskId)))
+            }.onSuccess {
+                onApplied?.invoke()
             }.onFailure { error ->
                 // Local clientReadTaskIds clear the badge for this session only;
                 // if the daemon RPC fails (e.g. stale andyd without chat.mark_read),
@@ -461,14 +486,27 @@ class McpAgentRunClient(
         if (appForeground == foreground) return
         appForeground = foreground
         localBridge?.setAppForeground(foreground)
-        // The daemon owns unread, so it needs the same signal; older andyd builds without
-        // the tool simply keep the previous (always-foreground) behaviour.
+        publishAppForeground()
+        if (foreground) clientViewingTaskId.get()?.let(::markRead)
+    }
+
+    /**
+     * Pushes window focus to the daemon, which owns unread. Sends are serialized and always
+     * carry the *current* state rather than the value captured at call time, so a burst of
+     * transitions converges on the latest one instead of racing. Older andyd builds without
+     * the tool simply keep the previous (always-foreground) behaviour.
+     */
+    private fun publishAppForeground() {
         scope.launch {
-            runCatching {
-                callTool("chat.set_app_focus", mapOf("focused" to JsonPrimitive(foreground)))
+            appFocusRpcMutex.withLock {
+                val desired = appForeground
+                if (lastSentAppForeground == desired) return@withLock
+                val sent = runCatching {
+                    callTool("chat.set_app_focus", mapOf("focused" to JsonPrimitive(desired)))
+                }.isSuccess
+                if (sent) lastSentAppForeground = desired
             }
         }
-        if (foreground) clientViewingTaskId.get()?.let(::markRead)
     }
 
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
@@ -515,12 +553,15 @@ class McpAgentRunClient(
         // reloads unread=true from andyd.
         if (!task.unread && taskId !in clientReadTaskIds) return
         acknowledgeRead(taskId)
-        callTaskMutation("chat.mark_read", taskId)
+        callTaskMutation("chat.mark_read", taskId) { daemonAckedReadTaskIds += taskId }
     }
 
     override fun markUnread(taskId: String) {
         val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
         if (task.unread) return
+        // A deliberate unread supersedes any in-flight read ack for the same chat.
+        clientReadTaskIds -= taskId
+        daemonAckedReadTaskIds -= taskId
         patchTask(taskId) { it.copy(unread = true) }
         callTaskMutation("chat.mark_unread", taskId)
     }

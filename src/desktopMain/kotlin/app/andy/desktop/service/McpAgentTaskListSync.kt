@@ -28,3 +28,22 @@ internal fun dropConfirmedClientReads(
 ) {
     clientReadTaskIds.removeIf { id -> refreshed.any { it.id == id && !it.unread } }
 }
+
+/**
+ * Retire local read acks the daemon has already applied.
+ *
+ * [settled] holds ids whose `chat.mark_read` RPC completed before the list currently being
+ * merged was requested, so that list already reflects the read. Any `unread = true` it still
+ * reports is therefore a *newer* transition — a turn that finished after the user opened the
+ * chat — and must not be masked by the ack. Without this, an ack placed moments before the
+ * turn completes is never confirmed (the daemon never reports the chat read again) and the
+ * badge stays suppressed for the rest of the session.
+ */
+internal fun dropSettledClientReads(
+    clientReadTaskIds: MutableSet<String>,
+    daemonAckedReadTaskIds: MutableSet<String>,
+    settled: Set<String>,
+) {
+    clientReadTaskIds.removeAll(settled)
+    daemonAckedReadTaskIds.removeAll(settled)
+}
