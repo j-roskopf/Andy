@@ -64,11 +64,13 @@ class DesktopDhuServiceTest {
                         line.startsWith("echo ") -> appendLine(line)
                         line.startsWith("sleep ") -> {
                             val secs = line.removePrefix("sleep ").trim().substringBefore(' ').toIntOrNull() ?: 1
-                            appendLine("timeout /t $secs /nobreak >nul")
+                            // `timeout` fails when ProcessBuilder keeps stdin open ("Input redirection
+                            // is not supported"); ping delays without reading stdin.
+                            appendLine("ping 127.0.0.1 -n ${secs + 1} >nul")
                         }
                         line.startsWith("while true") -> {
                             appendLine(":loop")
-                            appendLine("timeout /t 60 /nobreak >nul")
+                            appendLine("ping 127.0.0.1 -n 61 >nul")
                             appendLine("goto loop")
                         }
                         line.startsWith("exit ") -> {
