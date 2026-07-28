@@ -205,15 +205,12 @@ internal fun DhuConsolePanel(
             color = statusColor,
             fontSize = 11.sp,
         )
-        if (phase == DhuSessionPhase.Running || phase == DhuSessionPhase.Failed) {
+        if (phase == DhuSessionPhase.Running) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     scope.launch { dhu.openExternalTroubleshooting() }
                 }) {
-                    Text(
-                        if (phase == DhuSessionPhase.Running) "Focus DHU window" else "Open DHU window",
-                        fontSize = 11.sp,
-                    )
+                    Text("Focus DHU window", fontSize = 11.sp)
                 }
                 Text(
                     "DHU is a separate desktop-head-unit window — interact there.",
@@ -222,6 +219,12 @@ internal fun DhuConsolePanel(
                     modifier = Modifier.align(Alignment.CenterVertically),
                 )
             }
+        } else if (phase == DhuSessionPhase.Failed) {
+            Text(
+                "Use Retry or toggle Android Auto again to start a managed DHU session.",
+                color = TextSecondary,
+                fontSize = 10.sp,
+            )
         }
         Text(
             "Docs: ${DhuFixedConfig.HelpUrl}",

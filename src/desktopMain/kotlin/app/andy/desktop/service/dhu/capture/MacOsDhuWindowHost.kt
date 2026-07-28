@@ -9,9 +9,8 @@ import java.io.File
 import javax.imageio.ImageIO
 
 /**
- * macOS host: locate DHU via AppleScript / CG window list, park it off-screen,
- * capture with `screencapture -l` (window-id capture works off-screen), and inject
- * clicks via AppleScript System Events when possible.
+ * macOS host for the separate-window DHU flow: locate / focus the native
+ * desktop-head-unit window. Capture and pointer forwarding are unused.
  */
 internal class MacOsDhuWindowHost : ProcessDhuWindowHost() {
     override val hostKind: DhuHostKind = DhuHostKind.MacOs
@@ -23,15 +22,14 @@ internal class MacOsDhuWindowHost : ProcessDhuWindowHost() {
     private val stageOriginX = 64
     private val stageOriginY = 64
 
-    override fun environment(): DhuHostEnvironment {
-        val probe = probeScreenRecording()
-        return DhuHostEnvironment(
+    override fun environment(): DhuHostEnvironment =
+        DhuHostEnvironment(
             hostKind = hostKind,
             isWindows = false,
-            capturePermissionGranted = probe.first,
-            capturePermissionDetail = probe.second,
+            // Embedding/capture is disabled; never probe Screen Recording via screencapture.
+            capturePermissionGranted = true,
+            capturePermissionDetail = "Separate desktop-head-unit window (not embedded in Andy)",
         )
-    }
 
     override fun findWindow(processPid: Long?, titleHint: String): DhuWindowRef? {
         // Prefer CoreGraphics by PID — SDL/DHU titles vary and System Events often misses
@@ -276,30 +274,6 @@ internal class MacOsDhuWindowHost : ProcessDhuWindowHost() {
         val parts = out.split(',').mapNotNull { it.trim().toIntOrNull() }
         if (parts.size != 4) return null
         return DhuWindowBounds(parts[0], parts[1], parts[2].coerceAtLeast(1), parts[3].coerceAtLeast(1))
-    }
-
-    private fun probeScreenRecording(): Pair<Boolean, String> {
-        val tmp = File.createTempFile("andy-dhu-perm-", ".png")
-        return try {
-            val code = ProcessBuilder("screencapture", "-x", "-R", "0,0,2,2", tmp.absolutePath)
-                .redirectErrorStream(true)
-                .start()
-                .waitFor()
-            if (code != 0 || !tmp.isFile || tmp.length() == 0L) {
-                false to "Screen Recording permission missing or screencapture failed."
-            } else {
-                val image = runCatching { ImageIO.read(tmp) }.getOrNull()
-                if (image == null) {
-                    false to "Screen Recording permission could not be verified."
-                } else {
-                    true to "Screen Recording appears available."
-                }
-            }
-        } catch (error: Throwable) {
-            false to (error.message ?: "Screen Recording probe failed.")
-        } finally {
-            tmp.delete()
-        }
     }
 
     private fun osascript(script: String): String? =

@@ -24,9 +24,9 @@ class DhuLiveUiFixtureTest {
     }
 
     @Test
-    fun errorFixtureSurfacesOpenDhuWindow() {
+    fun errorFixtureSurfacesRetryGuidance() {
         composeRule.setContent { DhuErrorFixture() }
-        composeRule.onNodeWithText("Open DHU window", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Use Retry or toggle Android Auto again", substring = true).assertIsDisplayed()
     }
 
     @Test

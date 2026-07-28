@@ -295,7 +295,7 @@ internal class DesktopDhuService(
         val readiness = readinessState.value
         val serial = current?.serial ?: readiness.serial
             ?: return CommandResult.failure("No device serial for DHU")
-        // Prefer focusing the already-running window; otherwise launch a visible copy.
+        // Prefer focusing the already-running window.
         current?.let { session ->
             val window = session.window ?: host.findWindow(session.process.pid())
             if (window != null) {
@@ -304,33 +304,27 @@ internal class DesktopDhuService(
                     return CommandResult.success("Focused the Desktop Head Unit window")
                 }
             }
-        }
-        val executable = current?.executable ?: readiness.executablePath
-            ?: return CommandResult.failure("DHU executable not found")
-        val workingDir = current?.workingDir ?: readiness.autoDir?.let(::File)
-            ?: return CommandResult.failure("DHU auto directory not found")
-        val configPath = current?.configPath ?: DhuDiscovery.writeConfigFile(configDir).absolutePath
-        val link = current?.link
-            ?: readiness.checks.firstOrNull { it.id == "link" }?.let { check ->
-                if (check.detail.startsWith("USB")) DhuLinkTransport.Usb else DhuLinkTransport.Adb
+            // Process is still owned by Andy — launch a visible copy only when we still have a
+            // valid USB link or an allocated ADB forward (do not invent --adb=5277).
+            if (session.link == DhuLinkTransport.Adb && session.localPort <= 0) {
+                return CommandResult.failure("No ADB forward for DHU. Use Retry or toggle Android Auto again.")
             }
-            ?: DhuCommandFactory.preferredLinkTransport(
-                classifyDeviceTransport(serial),
-                classifyDeviceKind(serial),
-            )
-        val port = current?.localPort ?: DhuFixedConfig.DevicePort
-        val args = DhuCommandFactory.buildLaunchCommand(
-            executable = executable,
-            configPath = configPath,
-            link = link,
-            serial = serial,
-            localAdbPort = if (port > 0) port else DhuFixedConfig.DevicePort,
-        ).drop(1)
-        return if (host.launchExternal(executable, args, workingDir)) {
-            CommandResult.success("Launched Desktop Head Unit window")
-        } else {
-            CommandResult.failure("Could not launch Desktop Head Unit")
+            val args = DhuCommandFactory.buildLaunchCommand(
+                executable = session.executable,
+                configPath = session.configPath,
+                link = session.link,
+                serial = serial,
+                localAdbPort = session.localPort,
+            ).drop(1)
+            return if (host.launchExternal(session.executable, args, session.workingDir)) {
+                CommandResult.success("Launched Desktop Head Unit window")
+            } else {
+                CommandResult.failure("Could not launch Desktop Head Unit")
+            }
         }
+        return CommandResult.failure(
+            "DHU is not running. Use Retry or toggle Android Auto on to start a managed session.",
+        )
     }
 
     override fun copyDiagnostics(): String = buildString {
@@ -357,9 +351,14 @@ internal class DesktopDhuService(
         return host.focus(window)
     }
 
-    private suspend fun tearDownLocked(clearConsole: Boolean) {
-        captureJob?.cancel()
-        captureJob = null
+    private suspend fun tearDownLocked(clearConsole: Boolean, cancelWatcher: Boolean = true) {
+        if (cancelWatcher) {
+            captureJob?.cancel()
+            captureJob = null
+        } else {
+            // Called from the watcher itself — just drop the handle.
+            captureJob = null
+        }
         outputJob?.cancel()
         outputJob = null
         val current = active.getAndSet(null) ?: run {
@@ -480,10 +479,18 @@ internal class DesktopDhuService(
         while (scope.isActive && active.get() === session && session.process.isAlive) {
             delay(250L)
         }
-        if (active.get() === session) {
-            sessionState.value = session.asSession(
-                DhuSessionPhase.Failed,
-                interpretDhuExit(consoleState.value.lines, fallback = "DHU process exited"),
+        if (active.get() !== session) return
+        val message = interpretDhuExit(consoleState.value.lines, fallback = "DHU process exited")
+        mutex.withLock {
+            if (active.get() !== session) return@withLock
+            // Tear down forwards / USB accessory mode even when DHU exits on its own.
+            tearDownLocked(clearConsole = false, cancelWatcher = false)
+            sessionState.value = DhuSession(
+                serial = session.serial,
+                localPort = session.localPort,
+                phase = DhuSessionPhase.Failed,
+                message = message,
+                captureAvailable = false,
                 processAlive = false,
             )
         }
@@ -559,7 +566,7 @@ internal class DesktopDhuService(
     companion object {
         internal const val FramingErrorRemediation =
             "Unlock the phone, accept any Android Auto prompts, unplug/replug USB, close any other " +
-                "desktop-head-unit, then Retry. Andy waits for the Automotive Link handshake before hiding the DHU window."
+                "desktop-head-unit, then Retry. Andy waits for the Automotive Link handshake before marking DHU ready."
 
         internal fun isLinkReady(lines: List<String>): Boolean {
             val blob = lines.takeLast(60).joinToString("\n")

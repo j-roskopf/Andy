@@ -322,7 +322,7 @@ object UnavailableDhuService : DhuService {
                 label = "Desktop host",
                 status = DhuCheckStatus.Unsupported,
                 detail = BrowserUnavailable,
-                remediation = "Use Andy Desktop on macOS, Windows, or Linux X11.",
+                remediation = "Use Andy Desktop on macOS, Windows, or Linux.",
             ),
         ),
     )

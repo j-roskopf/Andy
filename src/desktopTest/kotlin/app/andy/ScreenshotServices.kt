@@ -77,7 +77,51 @@ internal object ScreenshotServices {
             actionRuns = ScreenshotActionRuns,
             agentRuns = ScreenshotAgentRuns,
             projectWorkflows = ScreenshotProjectWorkflows,
+            dhu = ScreenshotDhu,
         )
+    }
+
+    private object ScreenshotDhu : DhuService {
+        private val ready = DhuReadiness(
+            hostKind = DhuHostKind.MacOs,
+            checks = listOf(
+                DhuReadinessCheck("host", "Desktop host", DhuCheckStatus.Ok, "MacOs"),
+                DhuReadinessCheck("sdk", "Android SDK", DhuCheckStatus.Ok, "/Android/sdk"),
+                DhuReadinessCheck(
+                    "auto_extra",
+                    "SDK extras/google/auto",
+                    DhuCheckStatus.Ok,
+                    "/Android/sdk/extras/google/auto",
+                ),
+                DhuReadinessCheck(
+                    "executable",
+                    "DHU executable",
+                    DhuCheckStatus.Ok,
+                    "/Android/sdk/extras/google/auto/desktop-head-unit",
+                ),
+                DhuReadinessCheck(
+                    "device",
+                    "Selected device",
+                    DhuCheckStatus.Ok,
+                    ScreenshotFixture.serial,
+                ),
+            ),
+            autoDir = "/Android/sdk/extras/google/auto",
+            executablePath = "/Android/sdk/extras/google/auto/desktop-head-unit",
+            adbPath = "/Android/sdk/platform-tools/adb",
+            serial = ScreenshotFixture.serial,
+        )
+        override val readiness = MutableStateFlow(ready)
+        override val session = MutableStateFlow<DhuSession?>(null)
+        override val console = MutableStateFlow(DhuConsoleState())
+        override val captureFrame = MutableStateFlow<DhuCaptureFrame?>(null)
+        override suspend fun refreshReadiness(serial: String?) = ready
+        override suspend fun start(serial: String) = CommandResult.success("screenshot stub")
+        override suspend fun stop() = Unit
+        override suspend fun sendConsoleCommand(command: String) = CommandResult.success()
+        override fun openHelp() = Unit
+        override fun openExternalTroubleshooting() = CommandResult.success()
+        override fun copyDiagnostics() = ready.diagnosticsText()
     }
 
     private object ScreenshotDevices : DeviceService {
