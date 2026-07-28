@@ -324,6 +324,92 @@ class DesktopDhuServiceTest {
     }
 
     @Test
+    fun spontaneousProcessExitRemovesAdbForward() = runBlocking {
+        val sdk = createTempDirectory(prefix = "andy-sdk-exit-").toFile()
+        val autoDir = File(sdk, "extras/google/auto").also { it.mkdirs() }
+        File(autoDir, "desktop-head-unit").also {
+            it.writeText(
+                """
+                #!/bin/sh
+                echo "SSL negotiation finished successfully 1"
+                echo "Verify returned: ok"
+                sleep 1
+                exit 1
+                """.trimIndent(),
+            )
+            it.setExecutable(true)
+        }
+        File(autoDir, "libusb-1.0.dylib").writeText("stub")
+        val removed = mutableListOf<Int>()
+        val runner = CommandRunner { command, _ ->
+            when {
+                command.contains("shell") && command.any { it.contains("/proc/net/tcp") } -> {
+                    CommandResult.success(
+                        "0: 0100007F:149D 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 0 1",
+                    )
+                }
+                command.contains("forward") && command.contains("--remove") -> {
+                    removed += command.last().removePrefix("tcp:").toInt()
+                    CommandResult.success()
+                }
+                command.contains("forward") -> CommandResult.success()
+                else -> CommandResult.success()
+            }
+        }
+        val host = object : DhuWindowHost by UnsupportedDhuWindowHost(DhuHostKind.MacOs) {
+            override fun environment() = DhuHostEnvironment(
+                hostKind = DhuHostKind.MacOs,
+                isWindows = false,
+                capturePermissionGranted = true,
+                capturePermissionDetail = "ok",
+            )
+            override fun findWindow(processPid: Long?, titleHint: String) =
+                DhuWindowRef(id = "1", pid = processPid, title = titleHint)
+            override fun hideFromUser(window: DhuWindowRef) = true
+            override fun capture(window: DhuWindowRef) =
+                DhuCaptureFrame(2, 2, intArrayOf(0, 0, 0, 0), 1)
+            override fun bounds(window: DhuWindowRef) = DhuWindowBounds(0, 0, 2, 2)
+            override fun resize(window: DhuWindowRef, width: Int, height: Int) = true
+        }
+        val service = DesktopDhuService(
+            devices = FakeDevices(
+                online = true,
+                kind = DeviceKind.Emulator,
+                transport = DeviceTransport.Unknown,
+                sdk = SdkDiscovery(
+                    sdkPath = sdk.absolutePath,
+                    adbPath = "/usr/bin/true",
+                    emulatorPath = null,
+                    sdkManagerPath = null,
+                    avdManagerPath = null,
+                ),
+            ),
+            runner = runner,
+            host = host,
+            configDir = createTempDirectory(prefix = "andy-dhu-exit-").toFile(),
+        )
+        try {
+            val result = service.start("serial-1")
+            assertTrue(result.isSuccess, result.stderr)
+            val port = service.session.value!!.localPort
+            assertTrue(port > 0)
+            // Wait for watchProcess teardown after the script exits.
+            val deadline = System.nanoTime() + 8_000_000_000L
+            while (System.nanoTime() < deadline && service.session.value?.phase != DhuSessionPhase.Failed) {
+                kotlinx.coroutines.delay(100)
+            }
+            assertEquals(DhuSessionPhase.Failed, service.session.value?.phase)
+            assertTrue(removed.contains(port), "expected forward tcp:$port removed, got $removed")
+            val open = service.openExternalTroubleshooting()
+            assertTrue(!open.isSuccess)
+            assertTrue(open.stderr.contains("Retry", ignoreCase = true) || open.stderr.contains("managed", ignoreCase = true))
+        } finally {
+            runCatching { service.stop() }
+            sdk.deleteRecursively()
+        }
+    }
+
+    @Test
     fun commandFactoryPortCleanupMatchesForward() {
         val remove = DhuCommandFactory.buildAdbForwardRemove("/adb", "s", 9)
         assertEquals(listOf("/adb", "-s", "s", "forward", "--remove", "tcp:9"), remove)
