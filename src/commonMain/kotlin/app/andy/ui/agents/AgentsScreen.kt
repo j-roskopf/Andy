@@ -282,7 +282,7 @@ private fun AgentInboxRow(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     when {
-                        isSessionWorking(task) -> ProjectActivityIndicator(8.dp)
+                        isSessionWorking(task) -> ProjectActivityIndicator(16.dp)
                         task.unread -> UnreadDot()
                         task.status != null -> StatusDot(task.status!!)
                     }

@@ -80,6 +80,7 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -471,25 +472,14 @@ private fun AgentEvent.isToolTranscriptEvent(): Boolean =
 
 @Composable
 private fun AgentThinkingIndicator() {
-    // Coarse timer instead of rememberInfiniteTransition: infinite Compose clocks
-    // invalidate Skiko at display refresh and bypass TerminalRepaintThrottle.
-    var bright by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(450)
-            bright = !bright
-        }
-    }
-    val alpha = if (bright) 1f else 0.35f
     Row(
         Modifier
             .fillMaxWidth()
-            .graphicsLayer { this.alpha = alpha }
             .padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("···", color = Cyan, fontFamily = MonoFont, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        ThinkingOrb(size = 18.dp, color = Cyan, contentDescription = "Thinking")
         Text("thinking", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
     }
 }
@@ -627,7 +617,7 @@ private fun ThinkingStep(text: String) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("···", color = Cyan.copy(alpha = 0.75f), fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                ThinkingOrb(size = 14.dp, color = Cyan, animate = false, contentDescription = "Thinking")
                 Text("thinking", color = Cyan.copy(alpha = 0.65f), fontFamily = MonoFont, fontSize = 10.sp)
             }
             ChatMarkdown(
