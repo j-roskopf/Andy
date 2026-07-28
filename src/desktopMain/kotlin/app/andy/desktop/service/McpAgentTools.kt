@@ -309,6 +309,20 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "chat.set_app_focus",
+        description = "Track whether the Andy window is foreground; a chat open behind another " +
+            "app still earns unread badges and notifications",
+        properties = mapOf(
+            "focused" to buildJsonObject { put("type", "boolean") },
+        ),
+        required = listOf("focused"),
+    ) { args ->
+        val focused = args["focused"]?.jsonPrimitive?.booleanOrNull ?: error("focused required")
+        agentRuns.setAppForeground(focused)
+        textResult("""{"ok":true,"focused":$focused}""")
+    }
+
+    register(
         name = "chat.mark_unread",
         description = "Mark a chat unread so list/dock badges show again",
         properties = mapOf(
@@ -677,6 +691,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.stop",
     "chat.mark_read",
     "chat.set_viewing",
+    "chat.set_app_focus",
     "chat.mark_unread",
     "chat.archive",
     "chat.unarchive",

@@ -12,6 +12,8 @@ import java.io.File
 object AndyStatusHookInstaller {
     const val SCRIPT_NAME = "andy-status-hook.sh"
     const val ACTIVE_TASK_FILE = "active-task"
+    const val TASK_ID_ENV = "ANDY_TASK_ID"
+    const val PROJECT_ROOT_ENV = "ANDY_PROJECT_ROOT"
 
     /** Stable shell command prefix used in vendor hook configs (expands `$HOME` at runtime). */
     const val STABLE_HOOK_COMMAND = "\"\$HOME/.andy/bin/$SCRIPT_NAME\""
@@ -29,8 +31,9 @@ object AndyStatusHookInstaller {
         # respond: none (default) | empty | allow | stop
         # gate: none (default) | fully-idle | completed
         #
-        # Resolves the active task via ${'$'}ANDY_PROJECT_ROOT/.andy/active-task (default: ${'$'}PWD).
-        # No-ops when the pointer is missing so user-level / shared hooks are safe.
+        # Resolves the active task via ${'$'}ANDY_TASK_ID when set (per-session), else
+        # ${'$'}ANDY_PROJECT_ROOT/.andy/active-task (default: ${'$'}PWD/.andy/active-task).
+        # No-ops when neither is available so user-level / shared hooks are safe.
         # Always consumes stdin (vendor hooks send JSON payloads).
         status="${'$'}{1:-done}"
         respond="${'$'}{2:-none}"
@@ -58,11 +61,15 @@ object AndyStatusHookInstaller {
         esac
 
         ROOT="${'$'}{ANDY_PROJECT_ROOT:-${'$'}PWD}"
-        ACTIVE="${'$'}ROOT/.andy/active-task"
-        if [ ! -f "${'$'}ACTIVE" ]; then
-          respond_and_exit
+        task_id=""
+        if [ -n "${'$'}{ANDY_TASK_ID:-}" ]; then
+          task_id=${'$'}(printf '%s' "${'$'}ANDY_TASK_ID" | tr -d '[:space:]')
+        else
+          ACTIVE="${'$'}ROOT/.andy/active-task"
+          if [ -f "${'$'}ACTIVE" ]; then
+            task_id=${'$'}(tr -d '[:space:]' < "${'$'}ACTIVE")
+          fi
         fi
-        task_id=${'$'}(tr -d '[:space:]' < "${'$'}ACTIVE")
         if [ -z "${'$'}task_id" ]; then
           respond_and_exit
         fi

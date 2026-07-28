@@ -371,6 +371,11 @@ class AgentTerminalManager(
             File(artifactDir, "status.json").delete()
             File(artifactDir, "question.json").delete()
 
+            val launchEnv = env + mapOf(
+                AndyStatusHookInstaller.TASK_ID_ENV to task.id,
+                AndyStatusHookInstaller.PROJECT_ROOT_ENV to cwdPath,
+            )
+
             val resolvedMode = resolveMode()
             val session = when (resolvedMode) {
                 AgentTerminalMode.TmuxHeadless -> {
@@ -379,7 +384,7 @@ class AgentTerminalManager(
                             sessionId = task.id,
                             argv = argv,
                             cwd = cwdPath,
-                            env = env,
+                            env = launchEnv,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.TmuxAgent,
                             killTmuxOnClose = true,
@@ -392,7 +397,7 @@ class AgentTerminalManager(
                             sessionId = task.id,
                             argv = argv,
                             cwd = cwdPath,
-                            env = env,
+                            env = launchEnv,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.TmuxAttach,
                             killTmuxOnClose = true,
@@ -405,7 +410,7 @@ class AgentTerminalManager(
                             sessionId = task.id,
                             argv = argv,
                             cwd = cwdPath,
-                            env = env,
+                            env = launchEnv,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.DirectPty,
                             agentCli = true,

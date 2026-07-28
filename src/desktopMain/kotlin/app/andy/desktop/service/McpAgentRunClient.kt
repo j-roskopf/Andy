@@ -85,6 +85,10 @@ class McpAgentRunClient(
     private val clientReadTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val clientViewingTaskId = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
+    /** Window visibility/focus. An open chat only counts as watched while the window is up. */
+    @Volatile
+    private var appForeground: Boolean = true
+
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
 
@@ -146,7 +150,8 @@ class McpAgentRunClient(
     fun terminalHost(): DesktopAgentRunService? = localBridge
 
     internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
-        if (!isViewing(taskId)) return
+        // Repair is tied to the chat being mounted, not to window focus.
+        if (clientViewingTaskId.get() != taskId && localBridge?.isChatOpen(taskId) != true) return
         scope.launch {
             runCatching {
                 callTool("chat.reconcile", mapOf("taskId" to JsonPrimitive(taskId)))
@@ -160,8 +165,10 @@ class McpAgentRunClient(
         patchTask(taskId) { it.copy(unread = false) }
     }
 
+    // While the window is away the open chat must keep whatever unread the daemon reports;
+    // merging it as "viewing" would wipe the badge the user is meant to come back to.
     private fun viewingTaskIdsForMerge(): Set<String> =
-        clientViewingTaskId.get()?.let(::setOf).orEmpty()
+        if (appForeground) clientViewingTaskId.get()?.let(::setOf).orEmpty() else emptySet()
 
     private suspend fun refreshTasks() {
         refreshComposerOptions()
@@ -448,7 +455,21 @@ class McpAgentRunClient(
         localBridge?.isTerminalLive(taskId) == true
 
     override fun isViewing(taskId: String): Boolean =
-        clientViewingTaskId.get() == taskId || localBridge?.isViewing(taskId) == true
+        appForeground && (clientViewingTaskId.get() == taskId || localBridge?.isChatOpen(taskId) == true)
+
+    override fun setAppForeground(foreground: Boolean) {
+        if (appForeground == foreground) return
+        appForeground = foreground
+        localBridge?.setAppForeground(foreground)
+        // The daemon owns unread, so it needs the same signal; older andyd builds without
+        // the tool simply keep the previous (always-foreground) behaviour.
+        scope.launch {
+            runCatching {
+                callTool("chat.set_app_focus", mapOf("focused" to JsonPrimitive(foreground)))
+            }
+        }
+        if (foreground) clientViewingTaskId.get()?.let(::markRead)
+    }
 
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         scope.launch {

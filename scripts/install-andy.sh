@@ -217,11 +217,15 @@ case "$gate" in
 esac
 
 ROOT="${ANDY_PROJECT_ROOT:-$PWD}"
-ACTIVE="$ROOT/.andy/active-task"
-if [ ! -f "$ACTIVE" ]; then
-  respond_and_exit
+task_id=""
+if [ -n "${ANDY_TASK_ID:-}" ]; then
+  task_id=$(printf '%s' "$ANDY_TASK_ID" | tr -d '[:space:]')
+else
+  ACTIVE="$ROOT/.andy/active-task"
+  if [ -f "$ACTIVE" ]; then
+    task_id=$(tr -d '[:space:]' < "$ACTIVE")
+  fi
 fi
-task_id=$(tr -d '[:space:]' < "$ACTIVE")
 if [ -z "$task_id" ]; then
   respond_and_exit
 fi
