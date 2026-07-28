@@ -1,10 +1,13 @@
 package app.andy.ui.live
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,8 +46,10 @@ import app.andy.model.IosTargetState
 import app.andy.model.RunningAction
 import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
+import app.andy.service.AndyPlatform
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
+import app.andy.service.DhuSessionPhase
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
@@ -65,16 +71,21 @@ import app.andy.ui.controls.setFoldableHingeAngle
 import app.andy.ui.controls.setFoldablePosture
 import app.andy.ui.controls.sizeForPosture
 import app.andy.ui.logcat.LogcatState
+import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
+import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.snapshotFlow
 
 private fun transferStatusColor(status: String): Color = when {
     status.startsWith("App installed") ||
@@ -215,7 +226,7 @@ internal fun LiveScreen(
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
-    val isWeb = services.capabilities.platform == app.andy.service.AndyPlatform.Web
+    val isWeb = services.capabilities.platform == AndyPlatform.Web
     val acceleratedMirror = services.capabilities.acceleratedMirror
     val preferred = LiveMirrorSettings.config.value
     var maxSize by remember {
@@ -253,6 +264,24 @@ internal fun LiveScreen(
     var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
     var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
+    // Android Auto DHU: off by default; Live-scoped and cleared on device switch.
+    // DHU runs in its own desktop-head-unit window (no Andy embed / pointer forwarding).
+    var androidAutoEnabled by remember(serial) { mutableStateOf(false) }
+    val dhuReadiness by services.dhu.readiness.collectAsState()
+    val dhuSession by services.dhu.session.collectAsState()
+    val dhuConsole by services.dhu.console.collectAsState()
+    val showAndroidAuto = !isIosTarget && !isWeb && serial != null && device != null
+    val androidAutoReadyHint = remember(dhuReadiness, dhuSession) {
+        when {
+            !dhuReadiness.ready && dhuReadiness.checks.isNotEmpty() ->
+                dhuReadiness.blocking.firstOrNull()?.let { "${it.label}: ${it.remediation ?: it.detail}" }
+            dhuSession?.phase == DhuSessionPhase.Running ->
+                "DHU running in its own window — interact there; console below"
+            dhuSession?.phase == DhuSessionPhase.Starting ->
+                "Starting Desktop Head Unit…"
+            else -> null
+        }
+    }
 
     fun selectTerminalTab(runId: String) {
         if (runId !in terminalTabIds) terminalTabIds = terminalTabIds + runId
@@ -393,7 +422,7 @@ internal fun LiveScreen(
             mirrorSession = session?.takeIf { it.serial == serial }
         }
     }
-    LaunchedEffect(serial, device?.state, iosTarget?.udid, mirrorReady, mirroredElsewhere) {
+    LaunchedEffect(serial, device?.state, iosTarget?.udid, mirrorReady, mirroredElsewhere, androidAutoEnabled) {
         recordingState = LiveRecordingState.Idle
         recordingStartedAtMillis = null
         recordingElapsedMillis = 0L
@@ -415,6 +444,10 @@ internal fun LiveScreen(
                 } finally {
                     withContext(NonCancellable) {
                         services.bugs.stopCapture()
+                        // USB AOA prep for DHU briefly drops ADB/mirror; keep DHU if AA stays on.
+                        if (!androidAutoEnabled) {
+                            services.dhu.stop()
+                        }
                     }
                 }
             }
@@ -424,11 +457,59 @@ internal fun LiveScreen(
             // pop-outs of the Live device take over that engine into the pop-out pool instead.
             withContext(NonCancellable) {
                 services.bugs.stopCapture()
+                if (!androidAutoEnabled) {
+                    services.dhu.stop()
+                }
                 when {
                     mirroredElsewhere -> Unit
+                    // Transient offline while AA USB renegotiates — reconnect when mirrorReady returns.
+                    androidAutoEnabled -> Unit
                     else -> services.mirror.disconnect(immediate = false)
                 }
             }
+        }
+    }
+    LaunchedEffect(androidAutoEnabled, serial, mirroredElsewhere) {
+        if (!showAndroidAuto || !androidAutoEnabled || serial == null || mirroredElsewhere) {
+            services.dhu.stop()
+            return@LaunchedEffect
+        }
+        // Wait for mirror without keying on mirrorReady — USB accessory reset drops ADB briefly
+        // and must not cancel/stop an in-flight DHU start.
+        snapshotFlow {
+            Triple(
+                mirrorReady,
+                mirrorSession?.readyForPresentation == true,
+                connectResult,
+            )
+        }.first { (ready, presenting, connect) ->
+            ready && (presenting || connect.isNotBlank())
+        }
+        val phase = services.dhu.session.value?.phase
+        if (phase == DhuSessionPhase.Starting || phase == DhuSessionPhase.Running) {
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable) { services.dhu.stop() }
+            }
+            return@LaunchedEffect
+        }
+        services.dhu.refreshReadiness(serial)
+        val result = services.dhu.start(serial)
+        if (!result.isSuccess && result.stderr.isNotBlank()) {
+            liveActionStatus = "Android Auto: ${result.stderr}"
+        }
+        try {
+            awaitCancellation()
+        } finally {
+            withContext(NonCancellable) {
+                services.dhu.stop()
+            }
+        }
+    }
+    LaunchedEffect(serial, androidAutoEnabled) {
+        if (showAndroidAuto) {
+            services.dhu.refreshReadiness(serial)
         }
     }
     val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
@@ -527,89 +608,114 @@ internal fun LiveScreen(
                 } else {
                     fittedDevicePaneWidth
                 }
-                LiveDevicePane(
-                serial = serial,
-                device = device,
-                displayName = iosTarget?.displayName ?: device?.displayName,
-                frame = frame,
-                frameFlow = frameFlow,
-                mirrorStatus = mirrorStatus,
-                mirrorSession = mirrorSession,
-                connectResult = when {
-                    mirrorSession?.failureReason != null -> mirrorSession?.failureReason.orEmpty()
-                    else -> connectResult
-                },
-                showAndroidNavButtons = !isIosTarget,
-                showHardwareControls = !isIosTarget,
-                showClipTextControl = !isIosTarget || iosInputEnabled,
-                passThroughInput = !isIosTarget || iosInputEnabled,
-                terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
-                onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
-                modifier = Modifier
-                    .then(
-                        if (iosSinglePane) Modifier.fillMaxSize()
-                        else Modifier.width(devicePaneWidthDp).padding(end = 6.dp),
-                    )
-                    .fillMaxHeight()
-                    .onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
-                onPower = { sendHardware(MirrorInput.Power) },
-                onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
-                onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
-                onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
-                onCaptureScreenshot = { runLiveAction("Screenshot") { services.artifacts.saveScreenshot(serial!!, "andy-${serial}.png") } },
-                onBugReport = { bugDialogVisible = true },
-                onRecord = {
-                    when (recordingState) {
-                        LiveRecordingState.Idle -> {
-                            recordingState = LiveRecordingState.Countdown(3)
-                            recordingRequestId++
-                        }
-                        LiveRecordingState.Recording -> {
-                            recordingState = LiveRecordingState.Saving
-                            scope.launch {
-                                runCatching { services.bugs.saveRecording(device) }
-                                    .onSuccess { recording ->
-                                        recordingState = LiveRecordingState.Idle
-                                        recordingStartedAtMillis = null
-                                        recordingElapsedMillis = 0L
-                                        liveActionStatus = "Saved ${recording.title}"
-                                        onRecordingSaved()
+                val dhuActive = showAndroidAuto && androidAutoEnabled
+                val leftWidth = devicePaneWidthDp
+                Column(
+                    Modifier
+                        .then(
+                            if (iosSinglePane) Modifier.fillMaxSize()
+                            else Modifier.width(leftWidth).padding(end = 6.dp),
+                        )
+                        .fillMaxHeight(),
+                ) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        LiveDevicePane(
+                            serial = serial,
+                            device = device,
+                            displayName = iosTarget?.displayName ?: device?.displayName,
+                            frame = frame,
+                            frameFlow = frameFlow,
+                            mirrorStatus = mirrorStatus,
+                            mirrorSession = mirrorSession,
+                            connectResult = when {
+                                mirrorSession?.failureReason != null -> mirrorSession?.failureReason.orEmpty()
+                                else -> connectResult
+                            },
+                            showAndroidNavButtons = !isIosTarget,
+                            showHardwareControls = !isIosTarget,
+                            showClipTextControl = !isIosTarget || iosInputEnabled,
+                            passThroughInput = !isIosTarget || iosInputEnabled,
+                            terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
+                            onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
+                            modifier = Modifier.fillMaxSize().onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
+                            onPower = { sendHardware(MirrorInput.Power) },
+                            onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
+                            onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
+                            onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
+                            onCaptureScreenshot = { runLiveAction("Screenshot") { services.artifacts.saveScreenshot(serial!!, "andy-${serial}.png") } },
+                            onBugReport = { bugDialogVisible = true },
+                            onRecord = {
+                                when (recordingState) {
+                                    LiveRecordingState.Idle -> {
+                                        recordingState = LiveRecordingState.Countdown(3)
+                                        recordingRequestId++
                                     }
-                                    .onFailure { error ->
-                                        recordingState = LiveRecordingState.Recording
-                                        liveActionStatus = error.message ?: "Could not save recording"
+                                    LiveRecordingState.Recording -> {
+                                        recordingState = LiveRecordingState.Saving
+                                        scope.launch {
+                                            runCatching { services.bugs.saveRecording(device) }
+                                                .onSuccess { recording ->
+                                                    recordingState = LiveRecordingState.Idle
+                                                    recordingStartedAtMillis = null
+                                                    recordingElapsedMillis = 0L
+                                                    liveActionStatus = "Saved ${recording.title}"
+                                                    onRecordingSaved()
+                                                }
+                                                .onFailure { error ->
+                                                    recordingState = LiveRecordingState.Recording
+                                                    liveActionStatus = error.message ?: "Could not save recording"
+                                                }
+                                        }
                                     }
-                            }
-                        }
-                        is LiveRecordingState.Countdown, LiveRecordingState.Saving -> Unit
+                                    is LiveRecordingState.Countdown, LiveRecordingState.Saving -> Unit
+                                }
+                            },
+                            recordLabel = when (val state = recordingState) {
+                                LiveRecordingState.Idle -> "Record"
+                                is LiveRecordingState.Countdown -> state.seconds.toString()
+                                LiveRecordingState.Recording -> "Stop"
+                                LiveRecordingState.Saving -> "Saving"
+                            },
+                            recordEnabled = recordingState !is LiveRecordingState.Countdown && recordingState != LiveRecordingState.Saving,
+                            recordingCountdown = (recordingState as? LiveRecordingState.Countdown)?.seconds,
+                            recordingActive = recordingState == LiveRecordingState.Recording || recordingState == LiveRecordingState.Saving,
+                            recordingDuration = recordingElapsedMillis.takeIf { recordingState == LiveRecordingState.Recording }?.let(::formatRecordingDuration),
+                            showRecord = true,
+                            onClipText = { clipDialogVisible = true },
+                            onPopOut = onPopOutMirror,
+                            showPopOut = !isWeb && !mirroredElsewhere,
+                            mirroredElsewhere = mirroredElsewhere,
+                            mirroredInExternalApp = mirroredInExternalApp,
+                            surfaceOccluded = dialogsOpen,
+                            foldableEnabled = foldable,
+                            foldableHingeAngle = foldableHingeAngle,
+                            foldableProfile = foldableProfile,
+                            foldableCaptureHint = foldableCaptureHint,
+                            onInput = sendMirrorInput,
+                            onConnect = {
+                                reconnectMirror(mirrorConfig())
+                            },
+                        )
                     }
-                },
-                recordLabel = when (val state = recordingState) {
-                    LiveRecordingState.Idle -> "Record"
-                    is LiveRecordingState.Countdown -> state.seconds.toString()
-                    LiveRecordingState.Recording -> "Stop"
-                    LiveRecordingState.Saving -> "Saving"
-                },
-                recordEnabled = recordingState !is LiveRecordingState.Countdown && recordingState != LiveRecordingState.Saving,
-                recordingCountdown = (recordingState as? LiveRecordingState.Countdown)?.seconds,
-                recordingActive = recordingState == LiveRecordingState.Recording || recordingState == LiveRecordingState.Saving,
-                recordingDuration = recordingElapsedMillis.takeIf { recordingState == LiveRecordingState.Recording }?.let(::formatRecordingDuration),
-                showRecord = true,
-                onClipText = { clipDialogVisible = true },
-                onPopOut = onPopOutMirror,
-                showPopOut = !isWeb && !mirroredElsewhere,
-                mirroredElsewhere = mirroredElsewhere,
-                mirroredInExternalApp = mirroredInExternalApp,
-                surfaceOccluded = dialogsOpen,
-                foldableEnabled = foldable,
-                foldableHingeAngle = foldableHingeAngle,
-                foldableProfile = foldableProfile,
-                foldableCaptureHint = foldableCaptureHint,
-                onInput = sendMirrorInput,
-                onConnect = {
-                    reconnectMirror(mirrorConfig())
-                },
-            )
+                    if (dhuActive) {
+                        Spacer(Modifier.height(8.dp))
+                        DhuConsolePanel(
+                            dhu = services.dhu,
+                            console = dhuConsole,
+                            session = dhuSession,
+                            readiness = dhuReadiness,
+                            onRetry = {
+                                scope.launch {
+                                    if (serial != null) services.dhu.start(serial)
+                                }
+                            },
+                            onStop = {
+                                androidAutoEnabled = false
+                                scope.launch { services.dhu.stop() }
+                            },
+                        )
+                    }
+                }
             }
         }
         if (!iosSinglePane) {
@@ -628,6 +734,15 @@ internal fun LiveScreen(
             displayName = device?.displayName,
             showLogcat = showLogcat,
             showMirrorStreamControls = showMirrorStreamControls,
+            showAndroidAuto = showAndroidAuto,
+            androidAutoEnabled = androidAutoEnabled,
+            onAndroidAutoEnabledChange = { enabled ->
+                androidAutoEnabled = enabled
+                if (!enabled) {
+                    scope.launch { services.dhu.stop() }
+                }
+            },
+            androidAutoReadyHint = androidAutoReadyHint,
             acceleratedMirror = acceleratedMirror,
             isWeb = isWeb,
             maxSize = maxSize,

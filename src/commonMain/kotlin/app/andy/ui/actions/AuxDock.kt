@@ -52,6 +52,7 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
+import app.andy.ui.shell.ModalDialogRegistry
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -273,10 +274,11 @@ internal fun TerminalDockDrawer(
         if (activeRunId == null) {
             EmptyState("Run an action to open its terminal")
         } else {
-            // Right-docked SwingPanel can cover chrome menus; bottom placement cannot.
-            val suppressForChromeMenus =
-                LocalSuppressHeavyweightSurfaces.current && placement == DockPlacement.Right
-            CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides suppressForChromeMenus) {
+            // Right-docked SwingPanel can cover chrome menus; bottom placement cannot. Centred
+            // modal dialogs overlap either placement, so those suppress both.
+            val suppress = ModalDialogRegistry.anyOpen ||
+                (LocalSuppressHeavyweightSurfaces.current && placement == DockPlacement.Right)
+            CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides suppress) {
                 ProjectTerminalSurface(services, activeRunId, Modifier.fillMaxSize())
             }
         }

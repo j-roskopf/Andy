@@ -41,7 +41,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -76,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.project_new_chat
+import app.andy.ui.components.AndyAlertDialog
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
@@ -1194,7 +1194,7 @@ private fun ProjectDialog(
     var contextDir by remember(project?.id) { mutableStateOf(project?.contextDir.orEmpty()) }
     var envText by remember(project?.id) { mutableStateOf(project?.env?.toEnvText().orEmpty()) }
     val nextId = remember(existingProjects.size, name) { nextActionId("proj", name, existingProjects.map { it.id }.toSet()) }
-    AlertDialog(
+    AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
         title = { Text(if (project == null) "New project" else "Edit project", color = TextPrimary, fontWeight = FontWeight.Bold) },
@@ -1255,7 +1255,7 @@ private fun ActionDialog(projects: List<ActionProject>, initialProjectId: String
     val actionIds = projects.flatMap { it.actions }.map { it.id }.toSet()
     val nextId = remember(actionIds, name) { nextActionId("act", name, actionIds) }
     val iconOptions = listOf("run", "test", "debug", "build", "server", "deploy")
-    AlertDialog(
+    AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
         title = { Text(if (action == null) "New action" else "Edit action", color = TextPrimary, fontWeight = FontWeight.Bold) },

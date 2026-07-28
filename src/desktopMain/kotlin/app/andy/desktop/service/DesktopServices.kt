@@ -18,6 +18,7 @@ import app.andy.desktop.service.mirror.DesktopPopOutMirrorPool
 import app.andy.service.RoutingMirrorEngine
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
+import app.andy.desktop.service.dhu.DesktopDhuService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.model.AgentKind
@@ -111,6 +112,7 @@ fun createDaemonRuntime(
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val dhu = DesktopDhuService(devices = devices, runner = runner)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -162,6 +164,7 @@ fun createDaemonRuntime(
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
+        dhu = dhu,
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         mcp = mcp,
@@ -265,6 +268,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val dhu = DesktopDhuService(devices = devices, runner = runner)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
@@ -340,6 +344,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
+        dhu = dhu,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,
@@ -396,6 +401,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val dhu = DesktopDhuService(devices = devices, runner = runner)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
@@ -476,6 +482,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
+        dhu = dhu,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,

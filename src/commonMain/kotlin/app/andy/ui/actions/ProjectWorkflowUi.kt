@@ -32,9 +32,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import app.andy.ui.components.AndyAlertDialog
 import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -437,7 +437,7 @@ private fun SpecDetail(
         }
     }
     if (refineOpen) {
-        AlertDialog(
+        AndyAlertDialog(
             onDismissRequest = { refineOpen = false },
             containerColor = Panel,
             title = {
@@ -558,7 +558,7 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
     if (build.verificationInstructions.isNotBlank()) DetailBlock("VERIFICATION CRITERIA", build.verificationInstructions)
     build.workspacePath?.let { DetailBlock("WORKSPACE", listOfNotNull(it, build.branchName).joinToString("\n")) }
     if (followUpOpen) {
-        AlertDialog(
+        AndyAlertDialog(
             onDismissRequest = { followUpOpen = false },
             containerColor = Panel,
             title = { Text("Add build follow-up", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
@@ -865,7 +865,7 @@ internal fun SpecTaskDialog(
     val installedSkills by services.agentRuns.skills(profile.agent, project.contextDir).collectAsState()
     val hasPortableGrillSkills = installedSkills.any { isGrillMeSkillName(it.name) }
     var grillMe by remember(existing?.id) { mutableStateOf(existing?.grillMeEnabled == true) }
-    AlertDialog(
+    AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
         title = { Text(if (existing == null) "New spec" else "Edit spec", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
@@ -1008,7 +1008,7 @@ internal fun BuildPairDialog(
     var includeVerifyScratchpad by remember(existing?.id) { mutableStateOf(linkedVerify?.includeScratchpad ?: false) }
     var budgetText by remember(existing?.id) { mutableStateOf(existing?.maxBudgetUsd?.toString().orEmpty()) }
     var planMenu by remember { mutableStateOf(false) }
-    AlertDialog(
+    AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
         title = { Text(if (existing == null) "New build" else "Edit build", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },
@@ -1129,7 +1129,7 @@ internal fun ProjectProfilesDialog(
     var review by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Review] ?: ProjectAgentProfile()) }
     var verify by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Verification] ?: ProjectAgentProfile()) }
     var selectedRole by remember(workflow.projectId) { mutableStateOf(ProjectTaskKind.Spec) }
-    AlertDialog(
+    AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
         title = { Text("Project role profiles", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold) },

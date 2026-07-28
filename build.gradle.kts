@@ -142,6 +142,9 @@ kotlin {
                 // Native tray (StatusNotifier on Linux). Compose AWT tray is broken on
                 // Wayland; dorkbox needs libayatana-appindicator which isn't always present.
                 implementation("io.github.kdroidfilter:composenativetray:1.3.3")
+                // Win32 / shared native bindings for DHU window capture and input forwarding.
+                implementation("net.java.dev.jna:jna:5.18.1")
+                implementation("net.java.dev.jna:jna-platform:5.18.1")
 
                 // SQLDelight agent store (JVM-only module — avoids wasmJs)
                 implementation(project(":agent-store"))

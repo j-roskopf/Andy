@@ -312,3 +312,29 @@ object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
     override suspend fun deleteProject(projectId: String) = Unit
 }
+
+object UnavailableDhuService : DhuService {
+    private val emptyReadiness = DhuReadiness(
+        hostKind = DhuHostKind.Unsupported,
+        checks = listOf(
+            DhuReadinessCheck(
+                id = "platform",
+                label = "Desktop host",
+                status = DhuCheckStatus.Unsupported,
+                detail = BrowserUnavailable,
+                remediation = "Use Andy Desktop on macOS, Windows, or Linux X11.",
+            ),
+        ),
+    )
+    override val readiness = MutableStateFlow(emptyReadiness)
+    override val session = MutableStateFlow<DhuSession?>(null)
+    override val console = MutableStateFlow(DhuConsoleState())
+    override val captureFrame = MutableStateFlow<DhuCaptureFrame?>(null)
+    override suspend fun refreshReadiness(serial: String?) = emptyReadiness
+    override suspend fun start(serial: String) = unavailable()
+    override suspend fun stop() = Unit
+    override suspend fun sendConsoleCommand(command: String) = unavailable()
+    override fun openHelp() = Unit
+    override fun openExternalTroubleshooting() = unavailable()
+    override fun copyDiagnostics() = emptyReadiness.diagnosticsText()
+}
