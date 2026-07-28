@@ -152,6 +152,15 @@ class DesktopAgentRunService(
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Window visibility/focus, pushed by the GUI. Terminal foreground cadence deliberately
+     * ignores this — scraping must stay fast while the user is in another app, otherwise
+     * the finished turn we want to notify about is detected late.
+     */
+    @Volatile
+    private var appForeground: Boolean = true
+
     private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
@@ -237,7 +246,10 @@ class DesktopAgentRunService(
 
     override val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = terminals.interactiveTaskIds
 
-    override fun isViewing(taskId: String): Boolean = taskId in viewingTaskIds
+    override fun isViewing(taskId: String): Boolean = appForeground && taskId in viewingTaskIds
+
+    /** True while the chat is mounted in the UI, focused or not. */
+    internal fun isChatOpen(taskId: String): Boolean = taskId in viewingTaskIds
 
     /** True while the local Swing/PTY viewer attached to tmux is still running. */
     internal fun isViewerAlive(taskId: String): Boolean = terminals.isViewerAlive(taskId)
@@ -3229,6 +3241,14 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun setAppForeground(foreground: Boolean) {
+        if (appForeground == foreground) return
+        appForeground = foreground
+        // Coming back to the window is the moment the open chat is actually seen: clear the
+        // badge that accumulated while it sat behind another app.
+        if (foreground) viewingTaskIds.forEach(::markRead)
+    }
+
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
         val terminalLive = terminals.isAlive(taskId)
@@ -3265,7 +3285,7 @@ class DesktopAgentRunService(
                 task = task,
                 previous = previous,
                 next = snapshot.status,
-                viewing = taskId in viewingTaskIds,
+                viewing = isViewing(taskId),
                 terminalLive = terminalLive,
             )
         ) {
@@ -3323,7 +3343,7 @@ class DesktopAgentRunService(
                     exitCode = exitCode,
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
-                    unread = taskId !in viewingTaskIds,
+                    unread = !isViewing(taskId),
                     completedChanges = completedChanges ?: task.completedChanges,
                 )
             } else {

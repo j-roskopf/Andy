@@ -242,8 +242,7 @@ object TmuxAndy {
         // script path instead — the command line stays tiny no matter how big the
         // agent prompt is.
         val scriptFile = launchScriptFile(name)
-        scriptFile.parentFile?.mkdirs()
-        scriptFile.writeText(launch)
+        writeOwnerOnlyText(scriptFile, launch)
         val cmd = listOf(
             tmuxBinary(), "-L", SERVER, "new-session", "-d", "-s", name,
             "-c", sessionCwd,
@@ -288,6 +287,7 @@ object TmuxAndy {
         run(listOf(tmuxBinary(), "-L", SERVER, "kill-server"), checkExit = false)
         invalidateSessionCache()
         serverConfigured.set(false)
+        launchScriptDir().listFiles()?.forEach { it.delete() }
     }
 
     /** Literal keystrokes into the session's active pane (no automatic Enter). */

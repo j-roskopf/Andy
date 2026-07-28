@@ -92,6 +92,34 @@ class AgentChatReadStateTest {
     }
 
     @Test
+    fun openChatStopsCountingAsViewedWhileWindowIsNotFocused() = withService { service, _, _ ->
+        service.setChatViewing("chat-read", viewing = true)
+        assertTrue(service.isViewing("chat-read"))
+
+        service.setAppForeground(false)
+        // Attention treats it as background, but the chat is still mounted.
+        assertFalse(service.isViewing("chat-read"))
+        assertTrue(service.isChatOpen("chat-read"))
+
+        service.setAppForeground(true)
+        assertTrue(service.isViewing("chat-read"))
+    }
+
+    @Test
+    fun badgeEarnedWhileUnfocusedSurvivesUntilTheWindowComesBack() = withService { service, _, _ ->
+        service.setChatViewing("chat-read", viewing = true)
+        assertFalse(task(service, "chat-read").unread)
+
+        service.setAppForeground(false)
+        // A turn finishing behind another app badges the chat even though it is on screen.
+        service.markUnread("chat-read")
+        assertTrue(task(service, "chat-read").unread)
+
+        service.setAppForeground(true)
+        assertFalse(task(service, "chat-read").unread)
+    }
+
+    @Test
     fun reconcileAppliesAttentionWhenDiscoveringCompletedTurn() {
         val working = AgentTask(
             id = "t",
@@ -172,6 +200,10 @@ class AgentChatReadStateTest {
                 AgentStoreState(
                     tasks = listOf(seededTask),
                     binaryOverrides = AgentKind.entries.associate { it.cliName to shell },
+                    // The one-time legacy-transcript migration runs off-thread during init and
+                    // archives + clears unread on scrollback-less chats. Marking it already done
+                    // keeps read state under the test's control instead of racing startup.
+                    legacyTranscriptChatsArchived = true,
                 ),
             )
         }

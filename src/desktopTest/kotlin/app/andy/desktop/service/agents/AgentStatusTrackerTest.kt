@@ -1263,6 +1263,101 @@ class AgentStatusTrackerTest {
     }
 
     @Test
+    fun installClaudeStatusHooksPreservesMalformedSettingsFile() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val cwd = File(home, "project").also { it.mkdirs() }
+            val settingsDir = File(cwd, ".claude").also { it.mkdirs() }
+            val settings = File(settingsDir, "settings.json")
+            val malformed = """
+                {
+                  // user comment — not valid for strict JSON parsers
+                  "hooks": {
+                    "PreToolUse": [
+                      { "hooks": [ { "type": "command", "command": "echo user-hook" } ] }
+                    ]
+                  }
+                }
+            """.trimIndent()
+            settings.writeText(malformed)
+            val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
+            installClaudeStatusHooks(cwd, artifacts)
+
+            assertEquals(malformed, settings.readText(), "malformed settings must not be overwritten")
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun installClaudeStatusHooksRemovesLegacyAndyHookFromUntouchedEvents() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val cwd = File(home, "project").also { it.mkdirs() }
+            val settingsDir = File(cwd, ".claude").also { it.mkdirs() }
+            File(settingsDir, "settings.json").writeText(
+                """
+                {
+                  "hooks": {
+                    "PostToolUse": [
+                      {
+                        "hooks": [
+                          { "type": "command", "command": "'${'$'}HOME/.andy/bin/andy-status-hook.sh' working" }
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """.trimIndent(),
+            )
+            val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
+            installClaudeStatusHooks(cwd, artifacts)
+
+            val hooks = kotlinx.serialization.json.Json
+                .parseToJsonElement(File(settingsDir, "settings.json").readText())
+                .jsonObject["hooks"]!!
+                .jsonObject
+            assertFalse(hooks.containsKey("PostToolUse"), "legacy Andy PostToolUse hook must be removed")
+            assertTrue(hooks.containsKey("UserPromptSubmit"))
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun statusHookScriptPrefersAndyTaskIdEnvOverActiveTaskPointer() {
+        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val taskA = File(project, ".andy/task-a").also { it.mkdirs() }
+        val taskB = File(project, ".andy/task-b").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val script = AndyStatusHookInstaller.ensureInstalled(home)
+            File(project, ".andy/active-task").writeText("task-b\n")
+
+            runStatusHook(
+                script,
+                project,
+                "working",
+                "empty",
+                env = mapOf(AndyStatusHookInstaller.TASK_ID_ENV to "task-a"),
+            )
+            assertTrue(File(taskA, "status.json").readText().contains("\"status\":\"working\""))
+            assertFalse(File(taskB, "status.json").exists())
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun installStatusSignalsSkipsHomeDirectory() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
@@ -1309,9 +1404,11 @@ private fun runStatusHook(
     project: File,
     vararg args: String,
     stdin: String = "",
+    env: Map<String, String> = emptyMap(),
 ): Pair<Int, String> {
     val proc = ProcessBuilder("sh", script.absolutePath, *args)
         .directory(project)
+        .apply { environment().putAll(env) }
         .redirectErrorStream(true)
         .start()
     proc.outputStream.bufferedWriter().use { writer ->

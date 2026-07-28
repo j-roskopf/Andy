@@ -380,8 +380,18 @@ interface AgentRunService {
     val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
     /** Chats whose embedded terminal widget is currently mounted in the UI. */
     val attachedTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
-    /** True while the embedded chat for [taskId] is currently on screen. */
+    /**
+     * True while the embedded chat for [taskId] is on screen *and* the app window is
+     * foreground. A chat left open behind another app is not being watched, so it still
+     * earns an unread badge and an OS banner when its turn ends.
+     */
     fun isViewing(taskId: String): Boolean = false
+
+    /**
+     * Publishes window visibility/focus. Losing focus makes the open chat behave like a
+     * background one for attention purposes; regaining it marks that chat read again.
+     */
+    fun setAppForeground(foreground: Boolean) = Unit
     /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
     fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
     /** Holds a follow-up until the active run completes successfully. */

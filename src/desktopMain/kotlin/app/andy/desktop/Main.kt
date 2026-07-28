@@ -323,17 +323,21 @@ fun main() {
             }
             LaunchedEffect(visible) {
                 appFocus.visible = visible
+                // Hidden to the tray counts as background: chats keep badging and notifying.
+                services.agentRuns.setAppForeground(appFocus.isForeground())
                 if (visible) consumePendingOpen()
             }
             DisposableEffect(window) {
                 val listener = object : java.awt.event.WindowAdapter() {
                     override fun windowActivated(event: java.awt.event.WindowEvent) {
                         appFocus.focused = true
+                        services.agentRuns.setAppForeground(appFocus.isForeground())
                         consumePendingOpen()
                     }
 
                     override fun windowDeactivated(event: java.awt.event.WindowEvent) {
                         appFocus.focused = false
+                        services.agentRuns.setAppForeground(false)
                     }
                 }
                 window.addWindowListener(listener)

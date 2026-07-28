@@ -383,4 +383,44 @@ class TmuxAndyTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun launchScriptIsOwnerOnlyWhileSessionRuns() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        if (!supportsPosixPermissions()) {
+            println("SKIP: POSIX permissions unavailable")
+            return
+        }
+
+        val taskId = "launch-script-" + UUID.randomUUID().toString().take(8)
+        val script = File(System.getProperty("user.home"), ".andy/tmux-launch/${TmuxAndy.sessionName(taskId)}.sh")
+        try {
+            TmuxAndy.newSession(
+                taskId = taskId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf("/bin/sh", "-c", "sleep 30"),
+            )
+            assertTrue(script.isFile, "launch script must exist while session is running")
+            val perms = java.nio.file.Files.getPosixFilePermissions(script.toPath())
+            assertEquals(
+                setOf(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                ),
+                perms,
+            )
+        } finally {
+            TmuxAndy.killSession(taskId)
+            assertFalse(script.isFile, "launch script must be deleted when session ends")
+        }
+    }
+
+    private fun supportsPosixPermissions(): Boolean =
+        runCatching {
+            java.nio.file.Files.getPosixFilePermissions(File.createTempFile("posix-probe", null).toPath())
+            true
+        }.getOrDefault(false)
 }

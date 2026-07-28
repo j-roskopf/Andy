@@ -19,7 +19,8 @@ private const val ANTIGRAVITY_HOOK_NAME = "andy-status"
 
 /**
  * Installs vendor lifecycle hooks that append state to `.andy/<taskId>/status.json`
- * via the user-global `~/.andy/bin/andy-status-hook.sh` and `.andy/active-task`.
+ * via the user-global `~/.andy/bin/andy-status-hook.sh`. Each launched agent session
+ * sets `ANDY_TASK_ID` in its environment; `.andy/active-task` remains a fallback.
  *
  * Preferred status mapping (when the vendor emits the event):
  * - working ← prompt submit / pre-invocation
@@ -78,7 +79,8 @@ private fun shouldSkipProjectHooks(worktreeOrCwd: File): Boolean {
     return cwd == home
 }
 
-private fun writeHooksIfChanged(file: File, merged: JsonObject) {
+private fun writeHooksIfChanged(file: File, merged: JsonObject?) {
+    if (merged == null) return
     val encoded = hooksJson.encodeToString(JsonObject.serializer(), merged) + "\n"
     val existing = file.takeIf { it.isFile }?.readText()
     if (existing == encoded) return
@@ -297,18 +299,21 @@ private fun cursorCommandEntry(command: String): JsonObject =
 /**
  * Merge Andy event hooks into a Claude/Codex-style `{ "hooks": { Event: [...] } }` file.
  * Preserves non-Andy entries; replaces prior Andy `andy-status-hook` entries per event.
+ * Returns null when [settingsFile] exists but cannot be parsed — caller must not overwrite.
  */
 internal fun mergeClaudeStyleEventHooks(
     settingsFile: File,
     andyEventHooks: JsonObject,
-): JsonObject {
-    val existingRoot = if (settingsFile.isFile) {
-        runCatching { hooksJson.parseToJsonElement(settingsFile.readText()).jsonObject }.getOrNull()
-    } else {
-        null
+): JsonObject? {
+    val existingRoot = when (val read = readExistingHooksRoot(settingsFile)) {
+        HooksFileRead.Missing -> null
+        HooksFileRead.Invalid -> return null
+        is HooksFileRead.Ok -> read.root
     }
     val root = mutableJsonMap(existingRoot)
     val existingEvents = mutableJsonMap(root["hooks"] as? JsonObject)
+
+    stripAndyHooksFromAllEvents(existingEvents)
 
     for ((event, andyMatchers) in andyEventHooks) {
         val current = (existingEvents[event] as? JsonArray)?.toList().orEmpty()
@@ -317,28 +322,22 @@ internal fun mergeClaudeStyleEventHooks(
         existingEvents[event] = JsonArray(preserved + andyList)
     }
 
-    // Drop legacy Andy SubagentStop→done wiring that falsely marks the parent Done.
-    val subagentStop = existingEvents["SubagentStop"] as? JsonArray
-    if (subagentStop != null) {
-        val preserved = subagentStop.filterNot(::jsonContainsAndyHook)
-        if (preserved.isEmpty()) existingEvents.remove("SubagentStop")
-        else existingEvents["SubagentStop"] = JsonArray(preserved)
-    }
-
     root["hooks"] = JsonObject(existingEvents)
     return JsonObject(root)
 }
 
-internal fun mergeCursorHooks(hooksFile: File, andyEventHooks: JsonObject): JsonObject {
-    val existingRoot = if (hooksFile.isFile) {
-        runCatching { hooksJson.parseToJsonElement(hooksFile.readText()).jsonObject }.getOrNull()
-    } else {
-        null
+internal fun mergeCursorHooks(hooksFile: File, andyEventHooks: JsonObject): JsonObject? {
+    val existingRoot = when (val read = readExistingHooksRoot(hooksFile)) {
+        HooksFileRead.Missing -> null
+        HooksFileRead.Invalid -> return null
+        is HooksFileRead.Ok -> read.root
     }
     val root = mutableJsonMap(existingRoot)
     if (!root.containsKey("version")) root["version"] = JsonPrimitive(1)
     val existingEvents = mutableJsonMap(root["hooks"] as? JsonObject)
 
+    stripAndyHooksFromAllEvents(existingEvents)
+
     for ((event, andyMatchers) in andyEventHooks) {
         val current = (existingEvents[event] as? JsonArray)?.toList().orEmpty()
         val preserved = current.filterNot(::jsonContainsAndyHook)
@@ -349,15 +348,39 @@ internal fun mergeCursorHooks(hooksFile: File, andyEventHooks: JsonObject): Json
     return JsonObject(root)
 }
 
-internal fun mergeAntigravityHooks(hooksFile: File, andyHook: JsonObject): JsonObject {
-    val existingRoot = if (hooksFile.isFile) {
-        runCatching { hooksJson.parseToJsonElement(hooksFile.readText()).jsonObject }.getOrNull()
-    } else {
-        null
+internal fun mergeAntigravityHooks(hooksFile: File, andyHook: JsonObject): JsonObject? {
+    val existingRoot = when (val read = readExistingHooksRoot(hooksFile)) {
+        HooksFileRead.Missing -> null
+        HooksFileRead.Invalid -> return null
+        is HooksFileRead.Ok -> read.root
     }
     val root = mutableJsonMap(existingRoot)
     root[ANTIGRAVITY_HOOK_NAME] = andyHook
     return JsonObject(root)
+}
+
+private sealed interface HooksFileRead {
+    data object Missing : HooksFileRead
+    data object Invalid : HooksFileRead
+    data class Ok(val root: JsonObject) : HooksFileRead
+}
+
+private fun readExistingHooksRoot(file: File): HooksFileRead {
+    if (!file.isFile) return HooksFileRead.Missing
+    return runCatching { hooksJson.parseToJsonElement(file.readText()).jsonObject }
+        .fold(
+            onSuccess = { HooksFileRead.Ok(it) },
+            onFailure = { HooksFileRead.Invalid },
+        )
+}
+
+private fun stripAndyHooksFromAllEvents(existingEvents: MutableMap<String, JsonElement>) {
+    for (event in existingEvents.keys.toList()) {
+        val current = existingEvents[event] as? JsonArray ?: continue
+        val preserved = current.filterNot(::jsonContainsAndyHook)
+        if (preserved.isEmpty()) existingEvents.remove(event)
+        else existingEvents[event] = JsonArray(preserved)
+    }
 }
 
 private fun mutableJsonMap(source: JsonObject?): MutableMap<String, JsonElement> =
