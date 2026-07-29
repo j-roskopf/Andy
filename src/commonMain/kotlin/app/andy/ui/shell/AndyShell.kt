@@ -122,7 +122,7 @@ internal fun AndyShell(
     }
     LaunchedEffect(state.destination, visibleDestinations) {
         if (state.destination !in visibleDestinations) {
-            state.navigateTo(AndyDestination.Devices)
+            state.navigateTo(visibleDestinations.firstOrNull() ?: AndyDestination.Settings)
         }
     }
 
@@ -140,7 +140,7 @@ internal fun AndyShell(
             val target = when {
                 requested == AndyDestination.Tracing -> AndyDestination.Tracing
                 requested in visibleDestinations -> requested
-                else -> AndyDestination.Devices
+                else -> visibleDestinations.firstOrNull() ?: AndyDestination.Settings
             }
             state.navigateTo(target)
             onDestinationConsumed()
