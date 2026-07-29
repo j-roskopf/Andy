@@ -269,15 +269,16 @@ internal fun replayCaptureReadableLines(
 
 /**
  * Feed the *complete* raw PTY tee ([ScrollbackAnsiTee.snapshot]) through a fresh terminal
- * emulator, sampling styled rows after every chunk instead of relying on a live poll.
+ * emulator, sampling styled rows at terminal-aware boundaries instead of relying on a
+ * live poll.
  *
  * Agent CLIs redraw on the alt screen, which has no native scrollback: whatever is not
  * currently visible when a live poll samples the screen is gone forever, and a fast model
  * (or a fast redraw) can blow through several screens' worth of content between two polls
  * of even a tight timer. The raw tee itself never loses a byte, so replaying it and
- * sampling after each [chunkSize] chunk — far finer-grained than any wall-clock polling
- * interval — reconstructs the full transcript deterministically, independent of how fast
- * the original output streamed in.
+ * sampling completed redraws plus bounded complete-line batches reconstructs the full
+ * transcript independently of how fast the original output streamed in. [chunkSize]
+ * bounds only ordinary sequential output; full redraws remain atomic.
  *
  * [cols] must stay fixed across repeated calls on the same growing tee (callers replay
  * from byte 0 every time, to fold newly-arrived output into what was already recorded).
@@ -291,34 +292,132 @@ internal fun replayCaptureStyledRows(
     content: String,
     cols: Int = REPLAY_COLUMNS,
     rows: Int = REPLAY_ROWS,
-    chunkSize: Int = 8_192,
+    chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
 ): List<StyledTerminalRow> {
     if (content.isBlank()) return emptyList()
-    val bytes = content.toByteArray(StandardCharsets.UTF_8)
     val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
     val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
-    val seen = LinkedHashSet<String>()
-    val captured = mutableListOf<StyledTerminalRow>()
+    val captured = ScrollbackAccumulator()
     return try {
         session.start(cols, rows)
-        var offset = 0
-        while (offset < bytes.size) {
-            val length = minOf(chunkSize, bytes.size - offset)
-            session.onBytes(bytes, offset, length)
-            offset += length
-            captured += captureNewStyledRows(session, seen)
+        for (chunk in replayCaptureChunks(content, chunkSize, rows)) {
+            val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
+            session.onBytes(bytes, 0, bytes.size)
+            // Sample only after a complete redraw or complete-line batch. Arbitrary byte
+            // slices expose half-painted screens and make the accumulator preserve each
+            // transient repaint as duplicated, ill-formatted history.
+            captured.merge(session.readStyledScrollbackRows(maxRows = rows))
         }
-        captured
+        captured.snapshot()
     } finally {
         runCatching { session.close() }
     }
 }
 
-/** Replay grid height: taller than any real viewport so one chunk rarely scrolls a whole screen. */
+/** Replay grid height: taller than any real viewport so one sequential batch cannot outrun it. */
 private const val REPLAY_ROWS = 200
+
+/** Maximum ordinary-output batch between replay samples; full TUI redraws stay atomic. */
+private const val REPLAY_CAPTURE_CHUNK_SIZE = 1_024
 
 /** Replay grid width: matches the agent CLI terminal's own default column count. */
 private const val REPLAY_COLUMNS = 120
+
+/**
+ * Split a raw PTY tee at terminal-aware capture points.
+ *
+ * Synchronized updates and clear/home redraws are kept whole so replay never samples a
+ * half-painted TUI frame. Ordinary streaming output is still sampled in bounded batches,
+ * but only after a complete line when possible, so more than one screen cannot disappear
+ * between samples.
+ */
+internal fun replayCaptureChunks(
+    content: String,
+    maxSequentialChunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+    maxAtomicRedrawLines: Int = REPLAY_ROWS,
+): List<String> {
+    require(maxSequentialChunkSize > 0)
+    require(maxAtomicRedrawLines > 0)
+    if (content.isEmpty()) return emptyList()
+    val chunks = mutableListOf<String>()
+
+    fun addSequential(start: Int, end: Int) {
+        var offset = start
+        while (offset < end) {
+            val target = minOf(offset + maxSequentialChunkSize, end)
+            val newline = if (target < end) content.lastIndexOf('\n', target - 1) else -1
+            val split = when {
+                target == end -> end
+                newline >= offset -> newline + 1
+                else -> target
+            }
+            chunks += content.substring(offset, split)
+            offset = split
+        }
+    }
+
+    fun addRedraw(start: Int, end: Int) {
+        var lineBreaks = 0
+        var index = start
+        while (index < end && lineBreaks <= maxAtomicRedrawLines) {
+            if (content[index] == '\n') lineBreaks++
+            index++
+        }
+        if (lineBreaks <= maxAtomicRedrawLines) {
+            chunks += content.substring(start, end)
+        } else {
+            // A cursor-home sequence followed by more than one replay grid is a stream,
+            // not one visible frame. Keep sampling its complete lines so the top cannot
+            // scroll away before the next redraw marker.
+            addSequential(start, end)
+        }
+    }
+
+    fun nextRedrawStart(fromIndex: Int): Pair<Int, Boolean>? {
+        val synchronized = content.indexOf(SYNCHRONIZED_UPDATE_BEGIN, fromIndex)
+            .takeIf { it >= 0 }
+        val repaint = REPLAY_REDRAW_START.find(content, fromIndex)?.range?.first
+        val next = listOfNotNull(synchronized, repaint).minOrNull() ?: return null
+        return next to (synchronized == next)
+    }
+
+    var offset = 0
+    while (offset < content.length) {
+        val boundary = nextRedrawStart(offset)
+        if (boundary == null) {
+            addSequential(offset, content.length)
+            break
+        }
+        val (start, synchronized) = boundary
+        if (start > offset) addSequential(offset, start)
+        if (synchronized) {
+            val endMarker = content.indexOf(
+                SYNCHRONIZED_UPDATE_END,
+                startIndex = start + SYNCHRONIZED_UPDATE_BEGIN.length,
+            )
+            if (endMarker < 0) {
+                addSequential(start, content.length)
+                break
+            }
+            val end = endMarker + SYNCHRONIZED_UPDATE_END.length
+            addRedraw(start, end)
+            offset = end
+        } else {
+            val markerEnd = REPLAY_REDRAW_START.find(content, start)?.range?.last?.plus(1)
+                ?: start + 1
+            val next = nextRedrawStart(markerEnd)?.first ?: content.length
+            addRedraw(start, next)
+            offset = next
+        }
+    }
+    return chunks
+}
+
+private const val SYNCHRONIZED_UPDATE_BEGIN = "\u001B[?2026h"
+private const val SYNCHRONIZED_UPDATE_END = "\u001B[?2026l"
+
+/** Full-screen redraw starts commonly emitted by terminal UI frameworks. */
+private val REPLAY_REDRAW_START = Regex("\u001B\\[(?:2J|3J|H|1;1H)")
 
 /**
  * Widest visible row in [content], the column count a replay needs to reproduce the
@@ -408,7 +507,10 @@ private val scrollbackReplaySessions = WeakHashMap<SwingTerminal, KetraSession>(
 internal fun installScrollbackReplayWheelHandler(terminal: SwingTerminal) {
     terminal.addMouseWheelListener(
         MouseWheelListener { event ->
-            val delta = terminalWheelScrollDelta(event)
+            val delta = terminalWheelScrollDelta(
+                event = event,
+                visibleRows = runCatching { terminal.visibleGridSize().height }.getOrDefault(1),
+            )
             if (delta != 0.0) {
                 terminal.scrollViewportBy(delta)
             }

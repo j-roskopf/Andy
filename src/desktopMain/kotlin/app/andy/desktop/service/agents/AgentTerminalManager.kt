@@ -17,6 +17,7 @@ import app.andy.terminal.ScrollbackAccumulator
 import app.andy.terminal.StyledTerminalRow
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
+import app.andy.terminal.compactRepeatedProviderStartupText
 import app.andy.terminal.createScrollbackReplayTerminal
 import app.andy.terminal.formatLegacyScrollbackForReplay
 import app.andy.terminal.formatScrollbackForDisplay
@@ -228,11 +229,14 @@ class AgentTerminalManager(
         if (!file.isFile || file.length() == 0L) return null
         val content = runCatching { file.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
         if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(content))) return null
-        return when {
+        val replay = when {
             looksLikeRawAnsiTee(content) -> cleanedScrollbackText(content)
             content.contains('\u001B') -> content.trimEnd().takeIf { it.isNotBlank() }
             else -> formatLegacyScrollbackForReplay(content).takeIf { it.isNotBlank() }
         }
+        return replay
+            ?.let(::compactRepeatedProviderStartupText)
+            ?.takeIf { it.isNotBlank() }
     }
 
     private fun cleanedScrollbackText(content: String): String? {
@@ -255,19 +259,6 @@ class AgentTerminalManager(
             content = text,
             appearance = terminalAppearance(),
         )
-    }
-
-    /**
-     * Flush live capture, then build the same read-only replay finished chats get.
-     * Lets a running chat peek its history while the TUI owns the alt screen.
-     */
-    fun flushScrollbackReplay(taskId: String): SwingTerminal? {
-        flushScrollback(taskId)
-        return openScrollbackReplay(taskId)
-    }
-
-    private fun flushScrollback(taskId: String) {
-        handles[taskId]?.let { handle -> runCatching { persistScrollback(handle) } }
     }
 
     /** Push latest Settings appearance into live sessions. */

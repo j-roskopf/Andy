@@ -234,13 +234,6 @@ class DesktopAgentRunService(
     internal fun openScrollbackReplay(taskId: String) =
         terminals.openScrollbackReplay(taskId)
 
-    /**
-     * Flush live capture then build the same read-only replay finished chats get, so a
-     * running chat's history peek is styled identically to the live terminal.
-     */
-    internal fun flushScrollbackReplay(taskId: String) =
-        terminals.flushScrollbackReplay(taskId)
-
     /** True while the embedded PTY or underlying tmux session is still running for [taskId]. */
     override fun isTerminalLive(taskId: String): Boolean = terminals.isAlive(taskId)
 
@@ -3441,4 +3434,3 @@ internal fun agentFailureMessage(
     fallbackText?.takeIf { it.isNotBlank() }?.let { return it.truncateForSummary(240) }
     return "exited with code $exitCode"
 }
-

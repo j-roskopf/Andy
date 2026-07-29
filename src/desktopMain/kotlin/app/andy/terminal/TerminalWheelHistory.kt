@@ -16,8 +16,18 @@ internal fun terminalWheelTowardHistory(event: MouseWheelEvent): Boolean {
     return lines > 0.0
 }
 
-/** Wheel delta in terminal line units for KetraTerm [SwingTerminal.scrollViewportBy]. */
-internal fun terminalWheelScrollDelta(event: MouseWheelEvent): Double = -event.preciseWheelRotation
+/** Wheel delta in terminal line units, matching KetraTerm's own wheel scaling. */
+internal fun terminalWheelScrollDelta(
+    event: MouseWheelEvent,
+    visibleRows: Int = 1,
+): Double {
+    val rowsPerRotation = when (event.scrollType) {
+        MouseWheelEvent.WHEEL_UNIT_SCROLL -> event.scrollAmount.coerceAtLeast(1)
+        MouseWheelEvent.WHEEL_BLOCK_SCROLL -> visibleRows.coerceAtLeast(1)
+        else -> 1
+    }
+    return -event.preciseWheelRotation * rowsPerRotation
+}
 
 /** True when [component] is [ancestor] or nested beneath it. */
 internal fun isComponentWithin(component: Component?, ancestor: Component): Boolean {
@@ -27,6 +37,30 @@ internal fun isComponentWithin(component: Component?, ancestor: Component): Bool
         current = current.parent
     }
     return false
+}
+
+/**
+ * One wheel-up nudge received while a live-history replay is being mounted.
+ *
+ * Replaying the sum of every event after an asynchronous mount makes the terminal look
+ * frozen and then jump several screens at once. Keep only the strongest pending event so
+ * the first rendered history frame moves immediately but stays spatially understandable.
+ */
+internal class PendingHistoryScroll {
+    private var delta: Double = 0.0
+
+    @Synchronized
+    fun add(value: Double) {
+        if (value > delta) delta = value
+    }
+
+    @Synchronized
+    fun drain(): Double = delta.also { delta = 0.0 }
+
+    @Synchronized
+    fun clear() {
+        delta = 0.0
+    }
 }
 
 /** What Andy should do with a wheel gesture over a live / history-peek terminal. */
@@ -84,7 +118,7 @@ internal fun resolveLiveTerminalWheelAction(
  */
 internal class LiveTerminalWheelHandler(
     private val terminal: SwingTerminal,
-    private val onOpenHistoryPeek: (() -> Unit)? = null,
+    private val onOpenHistoryPeek: ((Double) -> Unit)? = null,
     private val onReturnToLive: (() -> Unit)? = null,
 ) : MouseWheelListener {
     private val displaced: Array<MouseWheelListener> = terminal.mouseWheelListeners
@@ -95,7 +129,10 @@ internal class LiveTerminalWheelHandler(
     }
 
     override fun mouseWheelMoved(event: MouseWheelEvent) {
-        val delta = terminalWheelScrollDelta(event)
+        val delta = terminalWheelScrollDelta(
+            event = event,
+            visibleRows = runCatching { terminal.visibleGridSize().height }.getOrDefault(1),
+        )
         val state = runCatching { terminal.viewportState() }.getOrNull()
         when (
             resolveLiveTerminalWheelAction(
@@ -109,7 +146,7 @@ internal class LiveTerminalWheelHandler(
             LiveTerminalWheelAction.ScrollViewport -> {
                 if (delta != 0.0) terminal.scrollViewportBy(delta)
             }
-            LiveTerminalWheelAction.OpenHistoryPeek -> onOpenHistoryPeek?.invoke()
+            LiveTerminalWheelAction.OpenHistoryPeek -> onOpenHistoryPeek?.invoke(delta)
             LiveTerminalWheelAction.ReturnToLive -> onReturnToLive?.invoke()
             LiveTerminalWheelAction.Consume -> Unit
         }

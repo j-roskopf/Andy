@@ -37,21 +37,28 @@ class ScrollbackAccumulator(private val maxRows: Int = MAX_ROWS) {
      */
     fun seed(saved: List<StyledTerminalRow>) {
         rows.clear()
-        rows += saved
+        rows += compactRepeatedProviderStartupFrames(saved)
     }
 
     fun merge(snapshot: List<StyledTerminalRow>) {
-        val incoming = snapshot.dropLastWhile { it.isBlank }
+        val incoming = compactRepeatedProviderStartupFrames(snapshot)
+            .dropLastWhile { it.isBlank }
         if (incoming.isEmpty()) return
-        val overlap = scrollbackSnapshotOverlap(rows, incoming)
-        repeat(overlap) { rows.removeAt(rows.lastIndex) }
-        rows += incoming
+        mergeTerminalRows(rows, incoming)
         if (rows.size > maxRows) {
             repeat(rows.size - maxRows) { rows.removeAt(0) }
         }
     }
 
     fun render(): String = rows.joinToString("\n") { it.ansi }.trimEnd()
+
+    /**
+     * A stable copy for raw-PTY replay while it is still being reconstructed.
+     *
+     * Unlike a set of seen line values, this preserves deliberately repeated text such as
+     * list bullets, code, and a provider redrawing an identical response line.
+     */
+    fun snapshot(): List<StyledTerminalRow> = rows.toList()
 
     private companion object {
         const val MAX_ROWS = 20_000
@@ -82,16 +89,8 @@ internal fun scrollbackSnapshotOverlap(
             val previous = captured[base + offset]
             val current = snapshot[offset]
             when {
-                previous.plain != current.plain -> {
-                    if (isVolatileTerminalChromeLine(previous.plain) &&
-                        isVolatileTerminalChromeLine(current.plain)
-                    ) {
-                        score += MATCH_REWARD
-                    } else {
-                        score -= MISMATCH_PENALTY
-                    }
-                }
-                !current.isBlank -> score += MATCH_REWARD
+                terminalRowsEquivalent(previous.plain, current.plain) -> score += MATCH_REWARD
+                !current.isBlank -> score -= MISMATCH_PENALTY
             }
         }
         if (score > bestScore) {
@@ -104,6 +103,123 @@ internal fun scrollbackSnapshotOverlap(
 
 private const val MATCH_REWARD = 2
 private const val MISMATCH_PENALTY = 1
+
+private fun terminalRowsEquivalent(previous: String, current: String): Boolean {
+    if (previous == current) return current.isNotBlank()
+    if (isVolatileTerminalChromeLine(previous) && isVolatileTerminalChromeLine(current)) {
+        return true
+    }
+    val left = previous.trim()
+    val right = current.trim()
+    val shorter = minOf(left.length, right.length)
+    return shorter >= TRUNCATED_LINE_MATCH_MIN &&
+        (left.startsWith(right) || right.startsWith(left))
+}
+
+private const val TRUNCATED_LINE_MATCH_MIN = 32
+
+/**
+ * Collapse full Codex startup frames that a raw-terminal reconstruction captured more
+ * than once before the answer began.
+ *
+ * A replay snapshot normally behaves like one moving screen, but a provider can repaint
+ * its startup box, prompt, plan-mode notice, and MCP warnings several times inside that
+ * one reconstructed snapshot. Treat each boxed Codex banner as a successive screen frame
+ * and merge the frames with the same overlap logic used for live snapshots. Session rules
+ * split independent provider runs so a real resume/start banner remains visible.
+ */
+internal fun compactRepeatedProviderStartupFrames(
+    input: List<StyledTerminalRow>,
+): List<StyledTerminalRow> {
+    if (input.isEmpty()) return input
+    val output = mutableListOf<StyledTerminalRow>()
+    var segmentStart = 0
+    input.forEachIndexed { index, row ->
+        if (row.plain.trim() == SCROLLBACK_SESSION_SEPARATOR.trim()) {
+            output += compactProviderStartupSegment(input.subList(segmentStart, index))
+            output += row
+            segmentStart = index + 1
+        }
+    }
+    output += compactProviderStartupSegment(input.subList(segmentStart, input.size))
+    return output
+}
+
+/** Repair already-persisted styled history when it is opened read-only. */
+internal fun compactRepeatedProviderStartupText(content: String): String {
+    if (content.isBlank()) return content.trimEnd()
+    return compactRepeatedProviderStartupFrames(styledRowsFromAnsiText(content))
+        .joinToString("\n") { it.ansi }
+        .trimEnd()
+}
+
+private fun compactProviderStartupSegment(
+    rows: List<StyledTerminalRow>,
+): List<StyledTerminalRow> {
+    val frameStarts = rows.indices.filter { index ->
+        index > 0 &&
+            isProviderBootBannerLine(rows[index].plain) &&
+            isTerminalBoxTop(rows[index - 1].plain)
+    }.map { it - 1 }
+    if (frameStarts.size < 2) return rows
+
+    // A partially painted old-width border can precede the first complete frame. Drop
+    // only that terminal chrome; preserve any real text earlier in the session.
+    val prefix = rows.subList(0, frameStarts.first()).dropLastWhile { row ->
+        row.isBlank || isTerminalBoxTop(row.plain)
+    }
+    val mergedFrames = mutableListOf<StyledTerminalRow>()
+    frameStarts.forEachIndexed { index, start ->
+        val end = frameStarts.getOrNull(index + 1) ?: rows.size
+        mergeTerminalRows(
+            mergedFrames,
+            collapseRepeatedStartupChrome(rows.subList(start, end)),
+        )
+    }
+    return collapseRepeatedStartupChrome(prefix + mergedFrames)
+}
+
+/**
+ * Remove only the partial Codex-box repaint proven by the reported capture.
+ *
+ * This intentionally does not use the broader volatile-line classifier: repeated rules,
+ * status text, or ordinary response rows outside a repeated startup remain untouched.
+ */
+private fun collapseRepeatedStartupChrome(
+    rows: List<StyledTerminalRow>,
+): List<StyledTerminalRow> {
+    val result = ArrayList<StyledTerminalRow>(rows.size)
+    var providerBannerSeen = false
+    rows.forEach { row ->
+        val previous = result.lastOrNull()
+        val repeatedProviderBanner = previous?.plain == row.plain &&
+            isProviderBootBannerLine(row.plain)
+        val repeatedLeadingBoxTop = !providerBannerSeen &&
+            previous != null &&
+            isTerminalBoxTop(previous.plain) &&
+            isTerminalBoxTop(row.plain)
+        if (repeatedProviderBanner || repeatedLeadingBoxTop) {
+            return@forEach
+        }
+        result += row
+        if (isProviderBootBannerLine(row.plain)) providerBannerSeen = true
+    }
+    return result
+}
+
+private fun isTerminalBoxTop(line: String): Boolean {
+    val trimmed = line.trim()
+    return trimmed.startsWith('╭') && trimmed.endsWith('╮')
+}
+
+private fun mergeTerminalRows(
+    captured: MutableList<StyledTerminalRow>,
+    incoming: List<StyledTerminalRow>,
+) {
+    val overlap = scrollbackSnapshotOverlap(captured, incoming)
+    repeat(overlap) { captured.removeAt(captured.lastIndex) }
+    captured += incoming
+}
 
 /**
  * True when [content] is a raw PTY tee (cursor motion, alt-screen switches, erases)

@@ -152,6 +152,7 @@ class KetraTermScrollbackTest {
         // read the final screen, everything before the last ~200 lines would be gone —
         // exactly the "fast model outdistances any poll" loss this function exists to fix.
         val raw = buildString {
+            append("\u001b[?1049h\u001b[H")
             for (i in 1..300) append("Step $i: detail line\r\n")
         }
         val rows = replayCaptureStyledRows(raw)
@@ -159,6 +160,79 @@ class KetraTermScrollbackTest {
         for (i in listOf(1, 2, 150, 299, 300)) {
             assertTrue(plain.contains("Step $i:"), "missing Step $i, captured ${rows.size} rows")
         }
+    }
+
+    @Test
+    fun replayCaptureStyledRowsKeepsEverySectionOfALongAlternateScreenAnswer() {
+        AndyKetraTermConfig.ensureInitialized()
+        // Claude/Codex-style TUIs use the alternate screen, so there is no native terminal
+        // history once earlier rows scroll off. This is deliberately much longer than one
+        // screen and includes repeated prose; both are normal in a detailed plan.
+        val raw = buildString {
+            append("\u001b[?1049h")
+            for (step in 1..20) {
+                append("Step $step: Coffee section\r\n")
+                repeat(24) { line ->
+                    // Compact rows deliberately make one old 8 KiB replay batch exceed the
+                    // 200-row alternate-screen grid. That used to discard early sections.
+                    append("S$step-$line: concise plan detail\r\n")
+                }
+            }
+        }
+
+        val rows = replayCaptureStyledRows(raw)
+        val plain = rows.joinToString("\n") { it.plain }
+        for (step in 1..20) {
+            assertTrue(plain.contains("Step $step: Coffee section"), "missing Step $step")
+        }
+        assertEquals(
+            20,
+            Regex("Step \\d+: Coffee section").findAll(plain).count(),
+            "replay must keep every distinct section in order",
+        )
+    }
+
+    @Test
+    fun replayCaptureStyledRowsStitchesRedrawnTuiWindowsIntoOneTranscript() {
+        AndyKetraTermConfig.ensureInitialized()
+        val raw = buildString {
+            append("\u001b[?1049h")
+            for (latestStep in 1..20) {
+                // Model the full-screen repaint used by agent TUIs: only a moving five-step
+                // window survives in the terminal, followed by fixed interactive chrome.
+                append("\u001b[2J\u001b[H")
+                for (step in maxOf(1, latestStep - 4)..latestStep) {
+                    append("Step $step: Coffee section\r\n")
+                    repeat(8) { paragraphLine ->
+                        append("Step $step paragraph $paragraphLine explains the brewing detail in full.\r\n")
+                    }
+                }
+                append("────────────────────────────────\r\n")
+                append("❯ Continue\r\n")
+            }
+        }
+
+        val rows = replayCaptureStyledRows(raw)
+        val plain = rows.joinToString("\n") { it.plain }
+        val headings = Regex("""Step (\d+): Coffee section""")
+            .findAll(plain)
+            .map { it.groupValues[1].toInt() }
+            .toList()
+
+        assertEquals((1..20).toList(), headings)
+        assertEquals(1, Regex("""^❯ Continue$""", RegexOption.MULTILINE).findAll(plain).count())
+    }
+
+    @Test
+    fun replayCaptureStyledRowsDoesNotDropRepeatedText() {
+        AndyKetraTermConfig.ensureInitialized()
+        val raw = "\u001b[?1049h" + buildString {
+            repeat(3) { append("same intentional line\r\n") }
+        }
+
+        val rows = replayCaptureStyledRows(raw)
+
+        assertEquals(3, rows.count { it.plain == "same intentional line" })
     }
 
     @Test
@@ -355,6 +429,49 @@ class KetraTermScrollbackTest {
             assertFalse(widget.isFocusable)
             assertTrue(widget.mouseWheelListeners.isNotEmpty(), "scrollback replay must handle wheel without focus")
             disposeScrollbackReplayTerminal(widget)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun savedReplayRepairsRepeatedCodexStartupFramesWhenOpened() {
+        val dir = File.createTempFile("andy-scrollback-header-repair", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "repeated-startup"
+            val boot = """
+                ╭─────────────────────────────────────────────────╮
+                │ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │
+                │ model:     gpt-5.6-luna high   /model to change │
+                │ directory: ~/Code/Andy/Andy                     │
+                ╰─────────────────────────────────────────────────╯
+            """.trimIndent()
+            val file = File(dir, "$taskId/scrollback.ansi").also {
+                it.parentFile.mkdirs()
+                it.writeText(
+                    "$boot\n› build a detailed plan\n" +
+                        "$boot\n› build a detailed plan\n" +
+                        "$boot\n› build a detailed plan\n• Complete plan body",
+                )
+            }
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+
+            val replay = manager.scrollbackReplayText(taskId)
+
+            assertNotNull(replay)
+            assertEquals(1, Regex("OpenAI Codex").findAll(replay).count(), replay)
+            assertEquals(1, Regex("build a detailed plan").findAll(replay).count(), replay)
+            assertTrue(replay.contains("Complete plan body"), replay)
+            assertTrue(file.isFile)
         } finally {
             scope.cancel()
             dir.deleteRecursively()

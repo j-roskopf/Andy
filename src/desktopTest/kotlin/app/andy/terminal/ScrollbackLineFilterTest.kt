@@ -18,6 +18,15 @@ class ScrollbackLineFilterTest {
     }
 
     @Test
+    fun volatileChromeMatcherIsLimitedToCodexBootRows() {
+        assertTrue(isVolatileTerminalChromeLine("│ >_ OpenAI Codex (v0.146.0-alpha.3.1) │"))
+        assertTrue(isVolatileTerminalChromeLine("│ model: gpt-5.6-luna high /model to change │"))
+        assertTrue(isVolatileTerminalChromeLine("│ directory: ~/Code/Andy/Andy │"))
+        assertFalse(isVolatileTerminalChromeLine("The data model: keep every historical message."))
+        assertFalse(isVolatileTerminalChromeLine("The project directory: choose a stable path."))
+    }
+
+    @Test
     fun displayFormatterMergesDiffBlocksAndDropsToolNoise() {
         val raw = """
             Cursor Agent
