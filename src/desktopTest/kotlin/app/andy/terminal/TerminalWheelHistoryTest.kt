@@ -15,11 +15,31 @@ class TerminalWheelHistoryTest {
         val towardHistory = mouseWheel(preciseRotation = -1.0)
         val towardLive = mouseWheel(preciseRotation = 1.0)
 
-        assertEquals(1.0, terminalWheelScrollDelta(towardHistory))
-        assertEquals(-1.0, terminalWheelScrollDelta(towardLive))
+        assertEquals(3.0, terminalWheelScrollDelta(towardHistory))
+        assertEquals(-3.0, terminalWheelScrollDelta(towardLive))
         assertTrue(terminalWheelTowardHistory(towardHistory))
         assertFalse(terminalWheelTowardHistory(towardLive))
         assertFalse(terminalWheelTowardHistory(mouseWheel(preciseRotation = 0.0)))
+    }
+
+    @Test
+    fun trackpadPrecisionIsScaledByTheEventsLineAmount() {
+        assertEquals(
+            0.75,
+            terminalWheelScrollDelta(mouseWheel(preciseRotation = -0.25)),
+        )
+    }
+
+    @Test
+    fun historyOpeningCoalescesWheelGesturesIntoOneRevealInsteadOfJumping() {
+        val pending = PendingHistoryScroll()
+        pending.add(0.75)
+        pending.add(3.0)
+        pending.add(1.5)
+        pending.add(-3.0)
+
+        assertEquals(3.0, pending.drain())
+        assertEquals(0.0, pending.drain())
     }
 
     @Test
@@ -59,6 +79,20 @@ class TerminalWheelHistoryTest {
                 historySize = 40,
                 atLiveViewport = true,
                 canOpenHistoryPeek = true,
+                canReturnToLive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun completedReplayAlwaysRoutesWheelUpToItsViewport() {
+        assertEquals(
+            LiveTerminalWheelAction.ScrollViewport,
+            resolveLiveTerminalWheelAction(
+                delta = 1.0,
+                historySize = 80,
+                atLiveViewport = true,
+                canOpenHistoryPeek = false,
                 canReturnToLive = false,
             ),
         )
@@ -128,7 +162,10 @@ class TerminalWheelHistoryTest {
         assertTrue(host.mouseWheelListeners.contains(prior))
     }
 
-    private fun mouseWheel(preciseRotation: Double): MouseWheelEvent {
+    private fun mouseWheel(
+        preciseRotation: Double,
+        scrollAmount: Int = 3,
+    ): MouseWheelEvent {
         val source = JPanel()
         return MouseWheelEvent(
             source,
@@ -142,7 +179,7 @@ class TerminalWheelHistoryTest {
             0,
             false,
             MouseWheelEvent.WHEEL_UNIT_SCROLL,
-            1,
+            scrollAmount,
             preciseRotation.toInt(),
             preciseRotation,
         )

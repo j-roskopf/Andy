@@ -108,6 +108,8 @@ class TmuxAttachBackend(
 
     fun scrollbackAnsi(): String = inner.scrollbackAnsi()
 
+    fun scrollbackAnsiSnapshot(): ScrollbackAnsiSnapshot = inner.scrollbackAnsiSnapshot()
+
     fun captureReadableLines(seenKeys: MutableSet<String>): List<String> =
         inner.captureReadableLines(seenKeys)
 

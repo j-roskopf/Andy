@@ -40,6 +40,7 @@ import app.andy.model.toTerminalAppearance
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.terminal.LiveTerminalWheelHandler
+import app.andy.terminal.PendingHistoryScroll
 import app.andy.terminal.disposeScrollbackReplayTerminal
 import app.andy.terminal.onSwingEdt
 import app.andy.terminal.panelBackgroundArgb
@@ -98,9 +99,10 @@ actual fun AgentTerminalSurface(
     var liveTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
     var historyTerminal by remember(taskId) { mutableStateOf<SwingTerminal?>(null) }
     // Live agent TUIs own the alt screen, so wheel events never reveal emulator history.
-    // Peek Andy's flushed scrollback instead, then return with "follow live".
+    // Peek Andy's latest persisted scrollback instead, then return with "follow live".
     var browsingLiveHistory by remember(taskId) { mutableStateOf(false) }
     var openingLiveHistory by remember(taskId) { mutableStateOf(false) }
+    val pendingHistoryScroll = remember(taskId) { PendingHistoryScroll() }
     val releaseViewer = remember(agentRuns) { agentRuns?.let { runs -> runs::releaseTerminalViewer } }
 
     // Re-query the mounted widget when the session set changes. Deliberately separate from
@@ -231,32 +233,51 @@ actual fun AgentTerminalSurface(
         newValue = { active -> Snapshot.withMutableSnapshot { imageDragActive = active } },
     )
 
-    fun openLiveHistoryPeek() {
+    fun openLiveHistoryPeek(scrollDelta: Double) {
         val runs = agentRuns ?: return
-        if (browsingLiveHistory || openingLiveHistory) return
+        if (scrollDelta <= 0.0) return
+        if (browsingLiveHistory) {
+            historyTerminal?.let { replay ->
+                onSwingEdt { replay.scrollViewportBy(scrollDelta) }
+            }
+            return
+        }
+        pendingHistoryScroll.add(scrollDelta)
+        if (openingLiveHistory) return
         openingLiveHistory = true
         scope.launch {
+            var opened = false
             try {
                 val replay = withContext(Dispatchers.IO) {
-                    runs.flushScrollbackReplay(taskId)
+                    // Foreground capture persists every two seconds. Open that completed,
+                    // atomically-written snapshot instead of forcing a full raw-PTY replay
+                    // behind the capture lock; the latter can make wheel input appear frozen
+                    // for several seconds on a long chat.
+                    runs.openScrollbackReplay(taskId)
                 } ?: return@launch
                 if (!isActive) {
                     runCatching { disposeScrollbackReplayTerminal(replay) }
                     return@launch
                 }
-                // Start at the newest edge so continued wheel-up scrolls into older output.
-                onSwingEdt {
-                    runCatching { replay.scrollToLiveViewport() }
-                }
-                historyTerminal?.let { previous ->
-                    runCatching { disposeScrollbackReplayTerminal(previous) }
-                }
+                val previousReplay = historyTerminal
                 Snapshot.withMutableSnapshot {
                     historyTerminal = replay
                     browsingLiveHistory = true
                 }
+                val queuedScroll = pendingHistoryScroll.drain()
+                previousReplay?.let { previous ->
+                    runCatching { disposeScrollbackReplayTerminal(previous) }
+                }
+                // Honor one coalesced gesture after the Swing viewer is ready. Applying the
+                // entire gesture backlog here would jump straight to the oldest row.
+                onSwingEdt {
+                    runCatching { replay.scrollToLiveViewport() }
+                    runCatching { replay.scrollViewportBy(queuedScroll) }
+                }
+                opened = true
             } finally {
                 Snapshot.withMutableSnapshot { openingLiveHistory = false }
+                if (!opened) pendingHistoryScroll.clear()
             }
         }
     }
@@ -267,6 +288,7 @@ actual fun AgentTerminalSurface(
             browsingLiveHistory = false
             historyTerminal = null
         }
+        pendingHistoryScroll.clear()
         peek?.let { widget -> runCatching { disposeScrollbackReplayTerminal(widget) } }
         val terminal = liveTerminal ?: return
         onSwingEdt {
@@ -339,14 +361,22 @@ actual fun AgentTerminalSurface(
                     // wheel-down at the bottom returns to the live PTY.
                     val wheelOverLive =
                         liveTerminal != null && effectiveSessionActive && !browsingLiveHistory
+                    // A finished chat is always a read-only replay. Route its wheel input
+                    // through the same explicit viewport controller as a live-history peek:
+                    // the live→completed widget swap can otherwise leave KetraTerm's passive
+                    // replay listener displaced, making the completed transcript feel stuck.
+                    val wheelOverReplay = historyTerminal != null && displayTerminal === historyTerminal
                     val wheelOverHistoryPeek =
-                        browsingLiveHistory && liveTerminal != null
-                    val openHistoryPeek = rememberUpdatedState(newValue = { openLiveHistoryPeek() })
+                        wheelOverReplay && browsingLiveHistory && liveTerminal != null
+                    val openHistoryPeek = rememberUpdatedState<(Double) -> Unit>(
+                        newValue = { delta -> openLiveHistoryPeek(delta) },
+                    )
                     val followLive = rememberUpdatedState(newValue = { returnToLiveTerminal() })
                     DisposableEffect(
                         taskId,
                         displayTerminal,
                         wheelOverLive,
+                        wheelOverReplay,
                         wheelOverHistoryPeek,
                     ) {
                         val terminal = displayTerminal
@@ -355,12 +385,13 @@ actual fun AgentTerminalSurface(
                                 terminal == null -> null
                                 wheelOverLive -> LiveTerminalWheelHandler(
                                     terminal = terminal,
-                                    onOpenHistoryPeek = { openHistoryPeek.value.invoke() },
+                                    onOpenHistoryPeek = { delta -> openHistoryPeek.value.invoke(delta) },
                                 )
                                 wheelOverHistoryPeek -> LiveTerminalWheelHandler(
                                     terminal = terminal,
                                     onReturnToLive = { followLive.value.invoke() },
                                 )
+                                wheelOverReplay -> LiveTerminalWheelHandler(terminal = terminal)
                                 else -> null
                             }
                         }
@@ -478,7 +509,7 @@ actual fun AgentTerminalSurface(
                     .padding(top = 10.dp, end = 12.dp),
             ) {
                 Button(
-                    onClick = ::openLiveHistoryPeek,
+                    onClick = { openLiveHistoryPeek(3.0) },
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(AndyRadius.Pill),
                 ) {

@@ -25,6 +25,7 @@ internal fun DeviceLivePanel(
     modifier: Modifier = Modifier,
     showChromeControls: Boolean = true,
     showDeviceHeader: Boolean = true,
+    showPopOut: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -73,6 +74,7 @@ internal fun DeviceLivePanel(
             modifier = modifier,
             showChromeControls = showChromeControls,
             showDeviceHeader = showDeviceHeader,
+            showPopOut = showPopOut,
             onInput = sendMirrorInput,
             onConnect = ::connect,
         )

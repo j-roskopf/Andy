@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import app.andy.ui.components.AndyHorizontalDivider
@@ -80,6 +81,8 @@ internal fun Sidebar(
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
     hasActiveProjectAgentTasks: Boolean,
+    hasBlockedAgentTasks: Boolean,
+    hasBlockedProjectAgentTasks: Boolean,
     logcatLive: Boolean,
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
@@ -228,7 +231,10 @@ internal fun Sidebar(
                             )
                         }
                     }
+                    val blocked = (item == AndyDestination.Agents && hasBlockedAgentTasks) ||
+                        (item == AndyDestination.Actions && hasBlockedProjectAgentTasks)
                     if (
+                        blocked ||
                         (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
                         (item == AndyDestination.Actions && (
                             hasUnreadProjectAgentTasks || hasActiveProjectAgentTasks
@@ -239,7 +245,9 @@ internal fun Sidebar(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                         ) {
-                            if (
+                            if (blocked) {
+                                Box(Modifier.size(6.dp).background(Red, CircleShape))
+                            } else if (
                                 (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
                                 (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
                             ) UnreadDot()

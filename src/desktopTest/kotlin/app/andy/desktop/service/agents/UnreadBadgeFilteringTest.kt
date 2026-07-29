@@ -14,13 +14,14 @@ class UnreadBadgeFilteringTest {
         projectId: String? = null,
         unread: Boolean = true,
         archived: Boolean = false,
+        status: AgentStatus = AgentStatus.Done,
         workflowTaskId: String? = null,
     ) = AgentTask(
         id = id,
         title = "Task $id",
         prompt = "Prompt $id",
         agent = AgentKind.Codex,
-        status = AgentStatus.Done,
+        status = status,
         createdAtMillis = 1000L,
         unread = unread,
         archived = archived,
@@ -62,5 +63,18 @@ class UnreadBadgeFilteringTest {
         assertTrue(isUnreadStandaloneTask(createTask("1", projectId = null)))
         assertFalse(isUnreadStandaloneTask(createTask("2", projectId = null, archived = true)))
         assertFalse(isUnreadStandaloneTask(createTask("3", projectId = "proj-1")))
+    }
+
+    @Test
+    fun testArchivedBlockedTasksDoNotContributeAttentionBadges() {
+        fun isBlockedStandaloneTask(task: AgentTask): Boolean =
+            !task.archived && task.projectId == null && task.status == AgentStatus.Blocked
+        fun isBlockedProjectTask(task: AgentTask): Boolean =
+            !task.archived && task.projectId != null && task.status == AgentStatus.Blocked
+
+        assertFalse(isBlockedStandaloneTask(createTask("1", status = AgentStatus.Blocked, archived = true)))
+        assertFalse(isBlockedProjectTask(createTask("2", projectId = "proj-1", status = AgentStatus.Blocked, archived = true)))
+        assertTrue(isBlockedStandaloneTask(createTask("3", status = AgentStatus.Blocked)))
+        assertTrue(isBlockedProjectTask(createTask("4", projectId = "proj-1", status = AgentStatus.Blocked)))
     }
 }

@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.desktop.service.LoginShellEnvironment
 import app.andy.model.AgentKind
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaAccess
@@ -41,6 +42,7 @@ internal class ProviderQuotaProbe {
         val process = ProcessBuilder(binary, "app-server", "--stdio")
             .directory(File(System.getProperty("user.home")))
             .redirectErrorStream(true)
+            .also { it.environment().putAll(LoginShellEnvironment.current()) }
             .start()
         try {
             val writer = process.outputStream.bufferedWriter()

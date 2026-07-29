@@ -74,7 +74,8 @@ internal fun ensureJavaHome(
     env: MutableMap<String, String>,
     javaHomeProperty: String? = System.getProperty("java.home"),
     locateJavaHome: () -> String? = {
-        JavaHomeLocator.find(env = env, javaHomeProperty = javaHomeProperty)
+        LoginShellEnvironment.current()["JAVA_HOME"]?.takeIf(JavaHomeLocator::isUsableJavaHome)
+            ?: JavaHomeLocator.find(env = env, javaHomeProperty = javaHomeProperty)
     },
 ) {
     val existing = env.entries.firstOrNull { it.key.equals("JAVA_HOME", ignoreCase = true) }?.value

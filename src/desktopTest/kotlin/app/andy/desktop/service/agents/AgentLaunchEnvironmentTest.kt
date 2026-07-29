@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentEvent
+import app.andy.terminal.buildTerminalLaunchEnvironment
 import app.andy.terminal.resolveTerminalWorkingDirectory
 import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlin.test.Test
@@ -75,6 +76,35 @@ class AgentLaunchEnvironmentTest {
         assertNull(fixed["NODE_OPTIONS"])
         assertNull(fixed["VSCODE_INSPECTOR_OPTIONS"])
         assertEquals("/usr/bin", fixed["PATH"])
+    }
+
+    @Test
+    fun buildTerminalLaunchEnvironmentPrefersLoginShellEnvOverProcessEnvAndOverridesOverBoth() {
+        val uniqueKey = "ANDY_TEST_MERGE_ORDER_${System.nanoTime()}"
+
+        val withOverride = buildTerminalLaunchEnvironment(
+            overrides = mapOf(uniqueKey to "override-value"),
+            loginShellEnv = mapOf(uniqueKey to "shell-value"),
+        )
+        assertEquals("override-value", withOverride[uniqueKey])
+
+        val withoutOverride = buildTerminalLaunchEnvironment(
+            overrides = emptyMap(),
+            loginShellEnv = mapOf(uniqueKey to "shell-value"),
+        )
+        assertEquals("shell-value", withoutOverride[uniqueKey])
+    }
+
+    @Test
+    fun buildTerminalLaunchEnvironmentStillScrubsAfterMergingLoginShellEnv() {
+        val env = buildTerminalLaunchEnvironment(
+            loginShellEnv = mapOf(
+                "NODE_OPTIONS" to "--require /tmp/bootloader.js",
+                "PATH" to "/from/shell",
+            ),
+        )
+        assertNull(env["NODE_OPTIONS"])
+        assertEquals("/from/shell", env["PATH"])
     }
 
     @Test

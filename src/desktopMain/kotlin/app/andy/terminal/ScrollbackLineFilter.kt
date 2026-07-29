@@ -26,6 +26,20 @@ private val BannerModelLine = Regex(
     """^(Gemini|Claude|GPT|Sonnet|Opus|Flash)\b.*\((High|Medium|Low|Auto)\)\s*$""",
     RegexOption.IGNORE_CASE,
 )
+private val ProviderBootBannerLine = Regex(
+    """^(?:│\s*)?>_\s*OpenAI Codex\b.*(?:│)?$""",
+    RegexOption.IGNORE_CASE,
+)
+private val ProviderBootMetadataLine = Regex(
+    """^(?:│\s*)?(?:model:\s+.*?/model to change|directory:\s+\S+)\s*(?:│)?$""",
+    RegexOption.IGNORE_CASE,
+)
+private val ProviderBootHintLine = Regex(
+    """^(?:Use /skills to list available skills|Tip: Try the Desktop app\.?)\s*$""",
+    RegexOption.IGNORE_CASE,
+)
+private val BoxBorderLine = Regex("""^[╭╮╰╯─━═\-\s]+$""")
+private val EmptyBoxLine = Regex("""^│\s*│$""")
 
 /** Cursor model / progress footer (`Cursor Grok … · 54.6% · 12 files edited`). */
 private val CursorAgentStatusFooter = Regex("""(?i)cursor .+ · \d""")
@@ -49,8 +63,16 @@ internal fun isVolatileTerminalChromeLine(line: String): Boolean {
     if (trimmed.isEmpty()) return true
     if (isScrollbackNoiseLine(trimmed)) return true
     if (CursorAgentStatusFooter.containsMatchIn(trimmed) && trimmed.length < 120) return true
+    if (BoxBorderLine.matches(trimmed) || EmptyBoxLine.matches(trimmed)) return true
+    if (ProviderBootBannerLine.matches(trimmed)) return true
+    if (ProviderBootMetadataLine.matches(trimmed)) return true
+    if (ProviderBootHintLine.matches(trimmed)) return true
     return false
 }
+
+/** Exact provider banner used to identify repeated Codex startup repaint frames. */
+internal fun isProviderBootBannerLine(line: String): Boolean =
+    ProviderBootBannerLine.matches(line.trim())
 
 /** Drop TUI chrome and spinner redraw lines that make replay unreadable. */
 internal fun isScrollbackNoiseLine(line: String): Boolean {

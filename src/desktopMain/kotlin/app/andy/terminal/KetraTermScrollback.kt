@@ -59,6 +59,14 @@ class ScrollbackAnsiTee(
     @Volatile
     private var bytesSeen: Long = 0L
 
+    /** Absolute character offsets of the retained raw-PTY window. */
+    private var retainedStartOffset: Long = 0L
+
+    private var retainedEndOffset: Long = 0L
+
+    /** Changes only when [clear] discards the stream altogether. */
+    private var epoch: Long = 0L
+
     /** Monotonic counter of bytes read from the host. See [bytesSeen]. */
     fun outputGeneration(): Long = bytesSeen
 
@@ -68,6 +76,7 @@ class ScrollbackAnsiTee(
             val decoded = decodeUtf8CarryingIncomplete(bytes, offset, length)
             if (decoded.isNotEmpty()) {
                 buffer.append(decoded)
+                retainedEndOffset += decoded.length
                 trimToCap()
             }
             bytesSeen += length
@@ -75,6 +84,22 @@ class ScrollbackAnsiTee(
     }
 
     fun snapshot(): String = synchronized(lock) { buffer.toString() }
+
+    /**
+     * The retained raw-PTY window with its position in the complete output stream.
+     *
+     * Consumers can feed only bytes appended since their last snapshot even after this tee
+     * trims old content; if they fall behind the retained window, they can safely replay the
+     * complete current window instead.
+     */
+    fun snapshotWithOffsets(): ScrollbackAnsiSnapshot = synchronized(lock) {
+        ScrollbackAnsiSnapshot(
+            content = buffer.toString(),
+            startOffset = retainedStartOffset,
+            endOffset = retainedEndOffset,
+            epoch = epoch,
+        )
+    }
 
     /** Latest OSC 0/2 title seen on the stream, or empty. */
     fun latestOscTitle(): String = synchronized(lock) {
@@ -95,6 +120,9 @@ class ScrollbackAnsiTee(
             latestTitle = ""
             latestProgress = ""
             pendingUtf8 = ByteArray(0)
+            retainedStartOffset = 0L
+            retainedEndOffset = 0L
+            epoch++
         }
     }
 
@@ -137,6 +165,7 @@ class ScrollbackAnsiTee(
         while (cut < buffer.length && buffer[cut] != '\n' && buffer[cut] != '\r') cut++
         if (cut < buffer.length) cut++
         buffer.delete(0, cut)
+        retainedStartOffset += cut
         scanPos = (scanPos - cut).coerceAtLeast(0)
     }
 
@@ -268,6 +297,241 @@ internal fun replayCaptureReadableLines(
 }
 
 /**
+ * Feed the *complete* raw PTY tee ([ScrollbackAnsiTee.snapshot]) through a fresh terminal
+ * emulator, sampling styled rows at terminal-aware boundaries instead of relying on a
+ * live poll.
+ *
+ * Agent CLIs redraw on the alt screen, which has no native scrollback: whatever is not
+ * currently visible when a live poll samples the screen is gone forever, and a fast model
+ * (or a fast redraw) can blow through several screens' worth of content between two polls
+ * of even a tight timer. The raw tee itself never loses a byte, so replaying it and
+ * sampling completed redraws plus bounded complete-line batches reconstructs the full
+ * transcript independently of how fast the original output streamed in. [chunkSize]
+ * bounds only ordinary sequential output; full redraws remain atomic.
+ *
+ * [cols] must stay fixed across repeated calls on the same growing tee (callers replay
+ * from byte 0 every time, to fold newly-arrived output into what was already recorded).
+ * Sizing it dynamically per call — e.g. from [scrollbackReplayColumns], which measures
+ * the widest line *seen so far* — would pick a different width as the tee grows, so two
+ * calls could reflow the same earlier content differently and reintroduce the exact
+ * duplication a live-width capture already has (see [app.andy.terminal.ScrollbackAccumulator]).
+ * A plain fixed default sidesteps that instead of trying to detect it after the fact.
+ */
+internal fun replayCaptureStyledRows(
+    content: String,
+    cols: Int = REPLAY_COLUMNS,
+    rows: Int = REPLAY_ROWS,
+    chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+): List<StyledTerminalRow> = ScrollbackReplayCapture(cols, rows, chunkSize).use { replay ->
+    replay.capture(
+        ScrollbackAnsiSnapshot(
+            content = content,
+            startOffset = 0L,
+            endOffset = content.length.toLong(),
+            epoch = 0L,
+        ),
+    )
+}
+
+/** A retained window of raw PTY output positioned within its full stream. */
+data class ScrollbackAnsiSnapshot(
+    val content: String,
+    val startOffset: Long,
+    val endOffset: Long,
+    val epoch: Long,
+)
+
+/**
+ * Incrementally reconstructs styled history from a growing [ScrollbackAnsiTee].
+ *
+ * The timer-driven persistence path retains one instance per live terminal, avoiding a
+ * complete replay of the tee on every flush. If a consumer misses more than the tee retains
+ * (or the tee is cleared), rebuilding from the retained window still produces a safe capture.
+ */
+class ScrollbackReplayCapture(
+    private val cols: Int = REPLAY_COLUMNS,
+    private val rows: Int = REPLAY_ROWS,
+    private val chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+) : AutoCloseable {
+    private var session = newSession()
+    private var captured = ScrollbackAccumulator()
+    private var lastOffset = 0L
+    private var lastEpoch = 0L
+
+    init {
+        session.start(cols, rows)
+    }
+
+    fun capture(snapshot: ScrollbackAnsiSnapshot): List<StyledTerminalRow> {
+        val mustReset = snapshot.epoch != lastEpoch ||
+            lastOffset < snapshot.startOffset ||
+            lastOffset > snapshot.endOffset
+        if (mustReset) {
+            reset(snapshot.epoch, snapshot.startOffset)
+        }
+        val start = (lastOffset - snapshot.startOffset).toInt()
+        captureDelta(snapshot.content.substring(start))
+        lastOffset = snapshot.endOffset
+        lastEpoch = snapshot.epoch
+        return captured.snapshot()
+    }
+
+    private fun captureDelta(content: String) {
+        if (content.isEmpty()) return
+        for (chunk in replayCaptureChunks(content, chunkSize, rows)) {
+            val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
+            session.onBytes(bytes, 0, bytes.size)
+            // Sample only after a complete redraw or complete-line batch. Arbitrary byte
+            // slices expose half-painted screens and make the accumulator preserve each
+            // transient repaint as duplicated, ill-formatted history.
+            captured.merge(session.readStyledScrollbackRows(maxRows = rows))
+        }
+    }
+
+    private fun reset(epoch: Long, offset: Long) {
+        runCatching { session.close() }
+        session = newSession()
+        session.start(cols, rows)
+        captured = ScrollbackAccumulator()
+        lastEpoch = epoch
+        lastOffset = offset
+    }
+
+    private fun newSession(): KetraSession = KetraSession.create(
+        terminal = TerminalBuffers.create(
+            width = cols,
+            height = rows,
+            maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
+        ),
+        connector = ParkedTerminalConnector(),
+    )
+
+    override fun close() {
+        runCatching { session.close() }
+    }
+}
+
+/** Replay grid height: taller than any real viewport so one sequential batch cannot outrun it. */
+private const val REPLAY_ROWS = 200
+
+/** Maximum ordinary-output batch between replay samples; full TUI redraws stay atomic. */
+private const val REPLAY_CAPTURE_CHUNK_SIZE = 1_024
+
+/** Replay grid width: matches the agent CLI terminal's own default column count. */
+private const val REPLAY_COLUMNS = 120
+
+/**
+ * Split a raw PTY tee at terminal-aware capture points.
+ *
+ * Synchronized updates and clear/home redraws are kept whole so replay never samples a
+ * half-painted TUI frame. Ordinary streaming output is still sampled in bounded batches,
+ * but only after a complete line when possible, so more than one screen cannot disappear
+ * between samples.
+ */
+internal fun replayCaptureChunks(
+    content: String,
+    maxSequentialChunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+    maxAtomicRedrawLines: Int = REPLAY_ROWS,
+): List<String> {
+    require(maxSequentialChunkSize > 0)
+    require(maxAtomicRedrawLines > 0)
+    if (content.isEmpty()) return emptyList()
+    val chunks = mutableListOf<String>()
+
+    fun addSequential(start: Int, end: Int) {
+        var offset = start
+        // A terminal keeps the cursor on the next row after a newline, so filling all N rows
+        // before sampling can already evict the first visible row. Leave that cursor row free.
+        val sequentialRowLimit = (maxAtomicRedrawLines - 1).coerceAtLeast(1)
+        while (offset < end) {
+            var index = offset
+            var lineBreaks = 0
+            var lastNewline = -1
+            val byteLimit = minOf(offset + maxSequentialChunkSize, end)
+            while (index < end) {
+                if (content[index] == '\n') {
+                    lineBreaks++
+                    lastNewline = index
+                    if (lineBreaks >= sequentialRowLimit) break
+                }
+                index++
+                if (index >= byteLimit) break
+            }
+            val split = when {
+                index == end -> end
+                lineBreaks >= sequentialRowLimit -> index + 1
+                lastNewline >= offset -> lastNewline + 1
+                else -> index
+            }
+            chunks += content.substring(offset, split)
+            offset = split
+        }
+    }
+
+    fun addRedraw(start: Int, end: Int) {
+        var lineBreaks = 0
+        var index = start
+        while (index < end && lineBreaks <= maxAtomicRedrawLines) {
+            if (content[index] == '\n') lineBreaks++
+            index++
+        }
+        if (lineBreaks <= maxAtomicRedrawLines) {
+            chunks += content.substring(start, end)
+        } else {
+            // A cursor-home sequence followed by more than one replay grid is a stream,
+            // not one visible frame. Keep sampling its complete lines so the top cannot
+            // scroll away before the next redraw marker.
+            addSequential(start, end)
+        }
+    }
+
+    fun nextRedrawStart(fromIndex: Int): Pair<Int, Boolean>? {
+        val synchronized = content.indexOf(SYNCHRONIZED_UPDATE_BEGIN, fromIndex)
+            .takeIf { it >= 0 }
+        val repaint = REPLAY_REDRAW_START.find(content, fromIndex)?.range?.first
+        val next = listOfNotNull(synchronized, repaint).minOrNull() ?: return null
+        return next to (synchronized == next)
+    }
+
+    var offset = 0
+    while (offset < content.length) {
+        val boundary = nextRedrawStart(offset)
+        if (boundary == null) {
+            addSequential(offset, content.length)
+            break
+        }
+        val (start, synchronized) = boundary
+        if (start > offset) addSequential(offset, start)
+        if (synchronized) {
+            val endMarker = content.indexOf(
+                SYNCHRONIZED_UPDATE_END,
+                startIndex = start + SYNCHRONIZED_UPDATE_BEGIN.length,
+            )
+            if (endMarker < 0) {
+                addSequential(start, content.length)
+                break
+            }
+            val end = endMarker + SYNCHRONIZED_UPDATE_END.length
+            addRedraw(start, end)
+            offset = end
+        } else {
+            val markerEnd = REPLAY_REDRAW_START.find(content, start)?.range?.last?.plus(1)
+                ?: start + 1
+            val next = nextRedrawStart(markerEnd)?.first ?: content.length
+            addRedraw(start, next)
+            offset = next
+        }
+    }
+    return chunks
+}
+
+private const val SYNCHRONIZED_UPDATE_BEGIN = "\u001B[?2026h"
+private const val SYNCHRONIZED_UPDATE_END = "\u001B[?2026l"
+
+/** Full-screen redraw starts commonly emitted by terminal UI frameworks. */
+private val REPLAY_REDRAW_START = Regex("\u001B\\[(?:2J|3J|H|1;1H)")
+
+/**
  * Widest visible row in [content], the column count a replay needs to reproduce the
  * original layout instead of hard-wrapping every boxed TUI line.
  */
@@ -355,7 +619,10 @@ private val scrollbackReplaySessions = WeakHashMap<SwingTerminal, KetraSession>(
 internal fun installScrollbackReplayWheelHandler(terminal: SwingTerminal) {
     terminal.addMouseWheelListener(
         MouseWheelListener { event ->
-            val delta = terminalWheelScrollDelta(event)
+            val delta = terminalWheelScrollDelta(
+                event = event,
+                visibleRows = runCatching { terminal.visibleGridSize().height }.getOrDefault(1),
+            )
             if (delta != 0.0) {
                 terminal.scrollViewportBy(delta)
             }
@@ -400,9 +667,8 @@ internal class AgentCliTeeTerminalConnector(
         delegate.start(
             object : TerminalConnectorListener {
                 override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
-                    val (sanitized, off, len) = sanitizeAgentCliPtyChunk(bytes, offset, length)
-                    tee.append(sanitized, off, len)
-                    listener.onBytes(sanitized, off, len)
+                    tee.append(bytes, offset, length)
+                    listener.onBytes(bytes, offset, length)
                 }
 
                 override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)

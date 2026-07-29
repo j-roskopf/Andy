@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.desktop.service.LoginShellEnvironment
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelOption
 import app.andy.model.parseAntigravityModels
@@ -26,6 +27,7 @@ internal class ProviderModelProbe {
         val process = ProcessBuilder(listOf(binary) + args)
             .directory(File(System.getProperty("user.home")))
             .redirectErrorStream(true)
+            .also { it.environment().putAll(LoginShellEnvironment.current()) }
             .start()
         process.outputStream.close()
         val output = StringBuffer()

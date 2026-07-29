@@ -58,6 +58,229 @@ class ScrollbackAccumulatorTest {
     }
 
     @Test
+    fun codexStartupRedrawsReplaceBootChromeAndPromptInsteadOfDuplicatingThem() {
+        val accumulator = ScrollbackAccumulator()
+        accumulator.merge(
+            screen(
+                "╭───────────────────────────────────────╮",
+                "│ >_ OpenAI Codex (v0.146.0-alpha.3.1)  │",
+                "│                                       │",
+                "│ model:     loading   /model to change │",
+                "│ directory: ~/Code/Andy/Andy           │",
+                "╰───────────────────────────────────────╯",
+            ),
+        )
+        accumulator.merge(
+            screen(
+                "╭─────────────────────────────────────────────────╮",
+                "│ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │",
+                "│                                                 │",
+                "│ model:     gpt-5.6-luna high   /model to change │",
+                "│ directory: ~/Code/Andy/Andy                     │",
+                "╰─────────────────────────────────────────────────╯",
+                "",
+                "Tip: Try the Desktop app.",
+                "",
+                "› create a very long 20 step plan",
+                "",
+                "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan.",
+                "",
+                "• Starting MCP servers (2/4)",
+            ),
+        )
+        accumulator.merge(
+            screen(
+                "│ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │",
+                "│                                                 │",
+                "│ model:     gpt-5.6-luna high   /model to change │",
+                "│ directory: ~/Code/Andy/Andy                     │",
+                "╰─────────────────────────────────────────────────╯",
+                "",
+                "Tip: Try the Desktop app.",
+                "",
+                "› create a very long 20 step plan",
+                "",
+                "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan.",
+                "",
+                "• Working (6s)",
+            ),
+        )
+
+        val rendered = accumulator.render()
+        assertEquals(1, Regex("OpenAI Codex").findAll(rendered).count(), rendered)
+        assertEquals(1, Regex("create a very long 20 step plan").findAll(rendered).count(), rendered)
+        assertEquals(1, Regex("Plan mode is active").findAll(rendered).count(), rendered)
+    }
+
+    @Test
+    fun codexStartupRedrawsTolerateInsertedRowsAndChangingWrapsFromRealCapture() {
+        val boot = listOf(
+            "╭─────────────────────────────────────────────────╮",
+            "│ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │",
+            "│                                                 │",
+            "│ model:     gpt-5.6-luna high   /model to change │",
+            "│ directory: ~/Code/Andy/Andy                     │",
+            "╰─────────────────────────────────────────────────╯",
+            "",
+            "  Tip: New Use /fast to enable our fastest inference with increased plan usage.",
+            "",
+            "› create a very long 20 step plan on how to be a better software engineer",
+            "",
+        )
+        val warning = listOf(
+            "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token",
+            "  (https://github.com/settings/personal-access-tokens) to your environment and",
+            "  config.toml:",
+            "  [mcp_servers.github]",
+            "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+        )
+        val accumulator = ScrollbackAccumulator()
+        accumulator.merge(
+            screen(
+                *(boot + listOf(
+                    "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan.",
+                    "  Do not edit files, apply patches, or run commands that modify the workspace.",
+                    "",
+                ) + warning).toTypedArray(),
+            ),
+        )
+        accumulator.merge(
+            screen(
+                *(listOf(
+                    boot[0],
+                    boot[1],
+                    // Captured from the reported task: a partial banner repaint inserted
+                    // one identical row and shifted every later row down by one.
+                    boot[1],
+                ) + boot.drop(2) + listOf(
+                    "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, appl",
+                    "",
+                    "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-acce",
+                    "ss-tokens) to your environment and",
+                    "  config.toml:",
+                    "  [mcp_servers.github]",
+                    "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "",
+                    "⚠ MCP startup incomplete (failed: github)",
+                )).toTypedArray(),
+            ),
+        )
+        accumulator.merge(
+            screen(
+                *(boot + listOf(
+                    "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, appl",
+                    "",
+                    "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-acce",
+                    "  config.toml:",
+                    "  [mcp_servers.github]",
+                    "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+                    "",
+                    "⚠ MCP startup incomplete (failed: github)",
+                    "",
+                    "• # 20-Step Plan to Become a Better Software Engineer",
+                )).toTypedArray(),
+            ),
+        )
+
+        val rendered = accumulator.render()
+        assertEquals(1, Regex("OpenAI Codex").findAll(rendered).count(), rendered)
+        assertEquals(
+            1,
+            Regex("create a very long 20 step plan on how to be a better software engineer")
+                .findAll(rendered)
+                .count(),
+            rendered,
+        )
+        assertEquals(1, Regex("Plan mode is active").findAll(rendered).count(), rendered)
+        assertEquals(1, Regex("MCP startup incomplete").findAll(rendered).count(), rendered)
+    }
+
+    @Test
+    fun oneReconstructedSnapshotCompactsRepeatedCodexStartupFramesFromRealCapture() {
+        val boot = listOf(
+            "╭─────────────────────────────────────────────────╮",
+            "│ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │",
+            "│                                                 │",
+            "│ model:     gpt-5.6-luna high   /model to change │",
+            "│ directory: ~/Code/Andy/Andy                     │",
+            "╰─────────────────────────────────────────────────╯",
+            "",
+            "  Tip: New Use /fast to enable our fastest inference with increased plan usage.",
+            "",
+            "› create a very long 20 step plan on how to be a better software engineer",
+            "",
+        )
+        val firstFrame = boot + listOf(
+            "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan.",
+            "  Do not edit files, apply patches, or run commands that modify the workspace.",
+            "",
+            "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token",
+            "  (https://github.com/settings/personal-access-tokens) to your environment and",
+            "  config.toml:",
+            "  [mcp_servers.github]",
+            "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+        )
+        val middleFrame = listOf(boot[0], boot[1], boot[1]) + boot.drop(2) + listOf(
+            "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, appl",
+            "",
+            "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-acce",
+            "ss-tokens) to your environment and",
+            "  config.toml:",
+            "  [mcp_servers.github]",
+            "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+            "",
+            "⚠ MCP startup incomplete (failed: github)",
+        )
+        val finalFrame = boot + listOf(
+            "  Plan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, appl",
+            "",
+            "⚠ GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-acce",
+            "  config.toml:",
+            "  [mcp_servers.github]",
+            "  bearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN",
+            "",
+            "⚠ MCP startup incomplete (failed: github)",
+            "",
+            "• # 20-Step Plan to Become a Better Software Engineer",
+        )
+        val accumulator = ScrollbackAccumulator()
+
+        accumulator.merge(screen(*(firstFrame + middleFrame + finalFrame).toTypedArray()))
+
+        val rendered = accumulator.render()
+        assertEquals(1, Regex("OpenAI Codex").findAll(rendered).count(), rendered)
+        assertEquals(
+            1,
+            Regex("create a very long 20 step plan on how to be a better software engineer")
+                .findAll(rendered)
+                .count(),
+            rendered,
+        )
+        assertEquals(1, Regex("Plan mode is active").findAll(rendered).count(), rendered)
+        assertEquals(1, Regex("MCP startup incomplete").findAll(rendered).count(), rendered)
+        assertTrue(rendered.contains("# 20-Step Plan to Become a Better Software Engineer"), rendered)
+    }
+
+    @Test
+    fun providerStartupCompactionKeepsOneHeaderPerRealSession() {
+        val boot = """
+            ╭─────────────────────────────────────────────────╮
+            │ >_ OpenAI Codex (v0.146.0-alpha.3.1)            │
+            │ model:     gpt-5.6-luna high   /model to change │
+            │ directory: ~/Code/Andy/Andy                     │
+            ╰─────────────────────────────────────────────────╯
+        """.trimIndent()
+        val twoSessions = "$boot\n› first prompt$SCROLLBACK_SESSION_SEPARATOR$boot\n› resumed prompt"
+
+        val compacted = compactRepeatedProviderStartupText(twoSessions)
+
+        assertEquals(2, Regex("OpenAI Codex").findAll(compacted).count(), compacted)
+        assertTrue(compacted.contains("› first prompt"), compacted)
+        assertTrue(compacted.contains("› resumed prompt"), compacted)
+        assertTrue(compacted.contains(SCROLLBACK_SESSION_SEPARATOR.trim()), compacted)
+    }
+
+    @Test
     fun scrolledRowsAreFrozenIntoHistory() {
         val accumulator = ScrollbackAccumulator()
         accumulator.merge(screen("line 1", "line 2", "line 3", "line 4"))
@@ -142,4 +365,5 @@ class ScrollbackAccumulatorTest {
         val incoming = screen("a", "b")
         assertEquals(2, scrollbackSnapshotOverlap(captured, incoming))
     }
+
 }

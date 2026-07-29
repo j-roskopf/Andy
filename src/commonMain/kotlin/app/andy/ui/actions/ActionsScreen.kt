@@ -109,12 +109,14 @@ import app.andy.ui.components.WorkspaceRailHeader
 import app.andy.ui.components.WorkspaceSectionLabel
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
+import app.andy.model.AgentStatus
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ProjectActivityIndicator
 import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
+import app.andy.ui.components.StatusTag
 import app.andy.ui.shell.RetainedDestination
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
@@ -150,9 +152,7 @@ private data class EditingAction(val projectId: String, val action: ProjectActio
 private data class ProjectChatLists(val active: List<AgentTask>, val archived: List<AgentTask>)
 
 private val ProjectChatSort =
-    compareByDescending<AgentTask> { it.isActive }
-        .thenByDescending { it.unread }
-        .thenByDescending { it.createdAtMillis }
+    compareByDescending<AgentTask> { it.createdAtMillis }
 
 private enum class ProjectCanvas(val label: String) { Chat("chat"), Tasks("tasks"), Runbook("runbook"), Scratchpad("scratchpad") }
 
@@ -347,7 +347,7 @@ private fun ProjectCockpit(
     val projectTasks = project?.let { item ->
         agentTasks
             .filter { it.projectId == item.id && !it.archived }
-            .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
+            .sortedByDescending { it.createdAtMillis }
     }.orEmpty()
     val selectedProjectTask = project?.let { item ->
         agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
@@ -435,7 +435,6 @@ private fun ProjectCockpit(
                                     } else {
                                         collapsedProjectIds = collapsedProjectIds - item.id
                                         selectProject(item.id)
-                                        selectedTaskId = sessions.firstOrNull()?.id
                                         selectedWorkflowTaskId = null
                                         canvas = ProjectCanvas.Chat
                                     }
@@ -598,6 +597,7 @@ private fun ProjectCockpit(
                         }
                         }
                     }
+                    Spacer(Modifier.width(12.dp))
                     docks.right?.let { rightKind ->
                         ProjectAuxDock(
                             kind = rightKind,
@@ -930,6 +930,7 @@ private fun ProjectSessionRow(
             leading = {
                 when {
                     isSessionWorking(task) -> ProjectActivityIndicator(12.dp)
+                    task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
                     task.unread -> UnreadDot()
                 }
             },
