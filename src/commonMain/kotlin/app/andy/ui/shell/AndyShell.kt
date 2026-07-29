@@ -238,9 +238,11 @@ internal fun AndyShell(
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
                     task.projectId != null && isSessionWorking(task)
                 },
-                hasBlockedAgentTasks = agentTasks.any { it.projectId == null && it.status == AgentStatus.Blocked },
+                hasBlockedAgentTasks = agentTasks.any {
+                    !it.archived && it.projectId == null && it.status == AgentStatus.Blocked
+                },
                 hasBlockedProjectAgentTasks = agentTasks.any { task ->
-                    task.projectId != null && task.status == AgentStatus.Blocked
+                    !task.archived && task.projectId != null && task.status == AgentStatus.Blocked
                 },
                 logcatLive = state.logcatState.live,
                 onSelect = state::navigateTo,

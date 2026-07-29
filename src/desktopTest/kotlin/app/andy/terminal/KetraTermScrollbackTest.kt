@@ -163,6 +163,44 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun replayCaptureStyledRowsSamplesShortLinesBeforeTheyOutrunTheReplayGrid() {
+        AndyKetraTermConfig.ensureInitialized()
+        // This stays well below the byte limit but exceeds the 200-row replay grid.
+        val raw = buildString {
+            append("\u001b[?1049h\u001b[H")
+            for (i in 1..250) append("$i\r\n")
+        }
+
+        val rows = replayCaptureStyledRows(raw)
+        val plain = rows.joinToString("\\n") { it.plain }
+
+        assertTrue(rows.any { it.plain == "1" }, "first short row was lost: $plain")
+        assertTrue(rows.any { it.plain == "250" }, "last short row was lost: $plain")
+    }
+
+    @Test
+    fun scrollbackReplayCaptureProcessesOnlyNewTeeContent() {
+        AndyKetraTermConfig.ensureInitialized()
+        val replay = ScrollbackReplayCapture()
+        try {
+            val first = "first line\\r\\n"
+            val second = "second line\\r\\n"
+            assertTrue(
+                replay.capture(ScrollbackAnsiSnapshot(first, 0L, first.length.toLong(), 0L))
+                    .any { it.plain.contains("first line") },
+            )
+            val combined = first + second
+            val rows = replay.capture(
+                ScrollbackAnsiSnapshot(combined, 0L, combined.length.toLong(), 0L),
+            )
+            assertTrue(rows.any { it.plain.contains("first line") })
+            assertTrue(rows.any { it.plain.contains("second line") })
+        } finally {
+            replay.close()
+        }
+    }
+
+    @Test
     fun replayCaptureStyledRowsKeepsEverySectionOfALongAlternateScreenAnswer() {
         AndyKetraTermConfig.ensureInitialized()
         // Claude/Codex-style TUIs use the alternate screen, so there is no native terminal

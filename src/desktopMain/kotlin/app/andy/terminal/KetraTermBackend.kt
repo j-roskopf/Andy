@@ -99,6 +99,9 @@ class KetraTermBackend(
     /** Raw teed PTY stdout (includes in-place TUI redraws). */
     fun scrollbackAnsi(): String = scrollbackTee.snapshot()
 
+    /** Raw tee positioned within its complete stream for incremental replay. */
+    fun scrollbackAnsiSnapshot(): ScrollbackAnsiSnapshot = scrollbackTee.snapshotWithOffsets()
+
     /** Resolved readable scrollback suitable for durable replay after restart. */
     fun scrollbackExport(seenKeys: MutableSet<String>): String {
         val session = ketraSession ?: return ""

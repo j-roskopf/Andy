@@ -14,6 +14,7 @@ import app.andy.terminal.TmuxAndy
 import app.andy.terminal.TmuxAgentBackend
 import app.andy.terminal.TmuxAttachBackend
 import app.andy.terminal.ScrollbackAccumulator
+import app.andy.terminal.ScrollbackReplayCapture
 import app.andy.terminal.StyledTerminalRow
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
@@ -23,7 +24,6 @@ import app.andy.terminal.formatLegacyScrollbackForReplay
 import app.andy.terminal.formatScrollbackForDisplay
 import app.andy.terminal.isScrollbackDisplayNoise
 import app.andy.terminal.looksLikeRawAnsiTee
-import app.andy.terminal.replayCaptureStyledRows
 import app.andy.terminal.resolveScrollbackForReplay
 import app.andy.terminal.stripAnsi
 import app.andy.terminal.styledRowsFromAnsiText
@@ -86,6 +86,8 @@ class AgentTerminalManager(
         @Volatile var stopRequested: Boolean = false,
         @Volatile var waitJob: Job? = null,
         @Volatile var scrollbackJob: Job? = null,
+        /** Retains terminal state between flushes so a raw PTY tee is replayed only once. */
+        var scrollbackReplay: ScrollbackReplayCapture? = null,
         /** Serializes [persistScrollback]: the timer loop and on-demand flush callers can race. */
         val scrollbackLock: Any = Any(),
     )
@@ -530,6 +532,7 @@ class AgentTerminalManager(
                 stale.statusTracker.close()
                 stale.artifacts.close()
                 stale.waitJob?.cancel()
+                stale.scrollbackReplay?.close()
                 releaseSessionViewer(stale.session)
                 handles.remove(taskId)
             }
@@ -759,6 +762,7 @@ class AgentTerminalManager(
             runCatching { handle.session.close() }
             // Direct PTY output can land in the buffer just after process exit.
             runCatching { persistScrollback(handle) }
+            runCatching { handle.scrollbackReplay?.close() }
         }
         // stop() always means terminate, unlike session.close() which a reattached
         // TmuxAttachBackend honors with killTmuxOnClose = false. Force it here so a
@@ -788,6 +792,7 @@ class AgentTerminalManager(
             }
             else -> releaseSessionViewer(session)
         }
+        runCatching { handle.scrollbackReplay?.close() }
         bumpSessionsRevision()
     }
 
@@ -880,7 +885,7 @@ class AgentTerminalManager(
                     // screen: the alt screen has no scrollback, so a live poll can never see
                     // more than one screen's worth, and a fast model can scroll several
                     // screens' worth past between two polls. See replayCaptureStyledRows.
-                    replayCaptureStyledRows(session.scrollbackAnsi()).ifEmpty {
+                    replayCapture(handle, session.scrollbackAnsiSnapshot()).ifEmpty {
                         session.captureStyledRows(captureRows).ifEmpty {
                             captureTmuxRows(handle.taskId, captureRows)
                         }
@@ -891,7 +896,7 @@ class AgentTerminalManager(
                     }
                 }
             is KetraTermBackend ->
-                replayCaptureStyledRows(session.scrollbackAnsi()).ifEmpty {
+                replayCapture(handle, session.scrollbackAnsiSnapshot()).ifEmpty {
                     session.captureStyledRows(captureRows)
                 }
             else -> captureTmuxRows(handle.taskId, captureRows)
@@ -902,6 +907,13 @@ class AgentTerminalManager(
         if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(export))) return@synchronized
         atomicWriteText(handle.scrollbackPath, capScrollbackSize(export))
     }
+
+    private fun replayCapture(
+        handle: Handle,
+        snapshot: app.andy.terminal.ScrollbackAnsiSnapshot,
+    ): List<StyledTerminalRow> = (handle.scrollbackReplay ?: ScrollbackReplayCapture().also {
+        handle.scrollbackReplay = it
+    }).capture(snapshot)
 
     private fun captureTmuxRows(taskId: String, historyLines: Int): List<StyledTerminalRow> {
         // capture-pane's exit code covers the dead-session case, so skip the extra has-session fork.

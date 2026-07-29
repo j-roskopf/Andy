@@ -59,6 +59,14 @@ class ScrollbackAnsiTee(
     @Volatile
     private var bytesSeen: Long = 0L
 
+    /** Absolute character offsets of the retained raw-PTY window. */
+    private var retainedStartOffset: Long = 0L
+
+    private var retainedEndOffset: Long = 0L
+
+    /** Changes only when [clear] discards the stream altogether. */
+    private var epoch: Long = 0L
+
     /** Monotonic counter of bytes read from the host. See [bytesSeen]. */
     fun outputGeneration(): Long = bytesSeen
 
@@ -68,6 +76,7 @@ class ScrollbackAnsiTee(
             val decoded = decodeUtf8CarryingIncomplete(bytes, offset, length)
             if (decoded.isNotEmpty()) {
                 buffer.append(decoded)
+                retainedEndOffset += decoded.length
                 trimToCap()
             }
             bytesSeen += length
@@ -75,6 +84,22 @@ class ScrollbackAnsiTee(
     }
 
     fun snapshot(): String = synchronized(lock) { buffer.toString() }
+
+    /**
+     * The retained raw-PTY window with its position in the complete output stream.
+     *
+     * Consumers can feed only bytes appended since their last snapshot even after this tee
+     * trims old content; if they fall behind the retained window, they can safely replay the
+     * complete current window instead.
+     */
+    fun snapshotWithOffsets(): ScrollbackAnsiSnapshot = synchronized(lock) {
+        ScrollbackAnsiSnapshot(
+            content = buffer.toString(),
+            startOffset = retainedStartOffset,
+            endOffset = retainedEndOffset,
+            epoch = epoch,
+        )
+    }
 
     /** Latest OSC 0/2 title seen on the stream, or empty. */
     fun latestOscTitle(): String = synchronized(lock) {
@@ -95,6 +120,9 @@ class ScrollbackAnsiTee(
             latestTitle = ""
             latestProgress = ""
             pendingUtf8 = ByteArray(0)
+            retainedStartOffset = 0L
+            retainedEndOffset = 0L
+            epoch++
         }
     }
 
@@ -137,6 +165,7 @@ class ScrollbackAnsiTee(
         while (cut < buffer.length && buffer[cut] != '\n' && buffer[cut] != '\r') cut++
         if (cut < buffer.length) cut++
         buffer.delete(0, cut)
+        retainedStartOffset += cut
         scanPos = (scanPos - cut).coerceAtLeast(0)
     }
 
@@ -293,13 +322,62 @@ internal fun replayCaptureStyledRows(
     cols: Int = REPLAY_COLUMNS,
     rows: Int = REPLAY_ROWS,
     chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
-): List<StyledTerminalRow> {
-    if (content.isBlank()) return emptyList()
-    val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
-    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
-    val captured = ScrollbackAccumulator()
-    return try {
+): List<StyledTerminalRow> = ScrollbackReplayCapture(cols, rows, chunkSize).use { replay ->
+    replay.capture(
+        ScrollbackAnsiSnapshot(
+            content = content,
+            startOffset = 0L,
+            endOffset = content.length.toLong(),
+            epoch = 0L,
+        ),
+    )
+}
+
+/** A retained window of raw PTY output positioned within its full stream. */
+data class ScrollbackAnsiSnapshot(
+    val content: String,
+    val startOffset: Long,
+    val endOffset: Long,
+    val epoch: Long,
+)
+
+/**
+ * Incrementally reconstructs styled history from a growing [ScrollbackAnsiTee].
+ *
+ * The timer-driven persistence path retains one instance per live terminal, avoiding a
+ * complete replay of the tee on every flush. If a consumer misses more than the tee retains
+ * (or the tee is cleared), rebuilding from the retained window still produces a safe capture.
+ */
+class ScrollbackReplayCapture(
+    private val cols: Int = REPLAY_COLUMNS,
+    private val rows: Int = REPLAY_ROWS,
+    private val chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+) : AutoCloseable {
+    private var session = newSession()
+    private var captured = ScrollbackAccumulator()
+    private var lastOffset = 0L
+    private var lastEpoch = 0L
+
+    init {
         session.start(cols, rows)
+    }
+
+    fun capture(snapshot: ScrollbackAnsiSnapshot): List<StyledTerminalRow> {
+        val mustReset = snapshot.epoch != lastEpoch ||
+            lastOffset < snapshot.startOffset ||
+            lastOffset > snapshot.endOffset
+        if (mustReset) {
+            reset(snapshot.epoch, snapshot.startOffset)
+        }
+        val start = (lastOffset - snapshot.startOffset).toInt()
+        captureDelta(snapshot.content.substring(start))
+        lastOffset = snapshot.endOffset
+        lastEpoch = snapshot.epoch
+        return captured.snapshot()
+    }
+
+    private fun captureDelta(content: String) {
+        if (content.isEmpty()) return
         for (chunk in replayCaptureChunks(content, chunkSize, rows)) {
             val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
             session.onBytes(bytes, 0, bytes.size)
@@ -308,8 +386,27 @@ internal fun replayCaptureStyledRows(
             // transient repaint as duplicated, ill-formatted history.
             captured.merge(session.readStyledScrollbackRows(maxRows = rows))
         }
-        captured.snapshot()
-    } finally {
+    }
+
+    private fun reset(epoch: Long, offset: Long) {
+        runCatching { session.close() }
+        session = newSession()
+        session.start(cols, rows)
+        captured = ScrollbackAccumulator()
+        lastEpoch = epoch
+        lastOffset = offset
+    }
+
+    private fun newSession(): KetraSession = KetraSession.create(
+        terminal = TerminalBuffers.create(
+            width = cols,
+            height = rows,
+            maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
+        ),
+        connector = ParkedTerminalConnector(),
+    )
+
+    override fun close() {
         runCatching { session.close() }
     }
 }
@@ -343,13 +440,28 @@ internal fun replayCaptureChunks(
 
     fun addSequential(start: Int, end: Int) {
         var offset = start
+        // A terminal keeps the cursor on the next row after a newline, so filling all N rows
+        // before sampling can already evict the first visible row. Leave that cursor row free.
+        val sequentialRowLimit = (maxAtomicRedrawLines - 1).coerceAtLeast(1)
         while (offset < end) {
-            val target = minOf(offset + maxSequentialChunkSize, end)
-            val newline = if (target < end) content.lastIndexOf('\n', target - 1) else -1
+            var index = offset
+            var lineBreaks = 0
+            var lastNewline = -1
+            val byteLimit = minOf(offset + maxSequentialChunkSize, end)
+            while (index < end) {
+                if (content[index] == '\n') {
+                    lineBreaks++
+                    lastNewline = index
+                    if (lineBreaks >= sequentialRowLimit) break
+                }
+                index++
+                if (index >= byteLimit) break
+            }
             val split = when {
-                target == end -> end
-                newline >= offset -> newline + 1
-                else -> target
+                index == end -> end
+                lineBreaks >= sequentialRowLimit -> index + 1
+                lastNewline >= offset -> lastNewline + 1
+                else -> index
             }
             chunks += content.substring(offset, split)
             offset = split
