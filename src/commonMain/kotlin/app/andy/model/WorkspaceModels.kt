@@ -93,4 +93,6 @@ data class WorkspaceState(
     val agentIconBadgeEnabled: Boolean = true,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
+    /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
+    val disabledDestinations: Set<String> = emptySet(),
 )

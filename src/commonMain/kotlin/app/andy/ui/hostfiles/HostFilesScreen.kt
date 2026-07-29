@@ -412,8 +412,8 @@ internal fun HostFilesScreen(
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Go") }
-                        OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) { Text("Up") }
+                        Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Go") }
+                        OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Up") }
                         Spacer(Modifier.weight(1f))
                         OutlinedButton(onClick = {
                             selectedRoot?.let { root ->
@@ -426,7 +426,7 @@ internal fun HostFilesScreen(
                                     }
                                 }
                             }
-                        }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+                        }, contentPadding = PaddingValues(horizontal = 10.dp)) {
                             Text("Refresh index")
                         }
                     }

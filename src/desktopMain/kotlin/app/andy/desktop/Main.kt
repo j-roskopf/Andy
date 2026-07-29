@@ -24,6 +24,7 @@ import kotlinx.coroutines.Job
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.AndyDestination
+import app.andy.isToggleableInSidebar
 import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import androidx.compose.runtime.rememberCoroutineScope
@@ -282,9 +283,12 @@ fun main() {
             }
             Divider()
             SubMenu(label = "Go") {
-                services.capabilities.destinations.filter { it != AndyDestination.Bugs }.forEach { destination ->
-                    Item(label = destination.label) { open(destination) }
-                }
+                services.capabilities.destinations
+                    .filter { it != AndyDestination.Bugs }
+                    .filter { !it.isToggleableInSidebar() || it.name !in workspaceState.disabledDestinations }
+                    .forEach { destination ->
+                        Item(label = destination.label) { open(destination) }
+                    }
                 Item(label = "Tracing") { open(AndyDestination.Tracing) }
             }
         }
@@ -348,13 +352,15 @@ fun main() {
             )
             MenuBar {
                 Menu("Go") {
-                    services.capabilities.destinations.forEach { destination ->
-                        Item(
-                            destination.label,
-                            shortcut = destination.menuShortcut(),
-                            onClick = { open(destination) },
-                        )
-                    }
+                    services.capabilities.destinations
+                        .filter { !it.isToggleableInSidebar() || it.name !in workspaceState.disabledDestinations }
+                        .forEach { destination ->
+                            Item(
+                                destination.label,
+                                shortcut = destination.menuShortcut(),
+                                onClick = { open(destination) },
+                            )
+                        }
                     Item(
                         "Tracing",
                         shortcut = AndyDestination.Tracing.menuShortcut(),

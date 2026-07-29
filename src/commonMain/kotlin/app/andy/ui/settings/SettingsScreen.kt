@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
@@ -54,7 +55,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
+import app.andy.isToggleableInSidebar
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
@@ -92,6 +95,7 @@ private enum class DesktopSettingsCategory(
     val subtitle: String,
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
+    Navigation("Navigation", "Show or hide sidebar pages"),
     Agents("Agents", "Transcript and notification preferences"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
@@ -103,6 +107,7 @@ private enum class WebSettingsCategory(
     val subtitle: String,
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
+    Navigation("Navigation", "Show or hide sidebar pages"),
     Connection("Connection", "ADB WebSocket and WebUSB"),
     Data("Data", "Browser storage and authorization"),
     About("About", "Origins and platform support"),
@@ -115,7 +120,7 @@ internal fun SettingsScreen(
     services: AndyServices
 ) {
     services.web?.let { web ->
-        WebSettingsScreen(web, workspaceState, onUpdateWorkspace)
+        WebSettingsScreen(web, workspaceState, onUpdateWorkspace, services.capabilities.destinations)
         return
     }
     var category by remember { mutableStateOf(DesktopSettingsCategory.Appearance) }
@@ -136,6 +141,11 @@ internal fun SettingsScreen(
     ) {
         when (category) {
             DesktopSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
+            DesktopSettingsCategory.Navigation -> NavigationPanel(
+                workspace = workspaceState,
+                update = onUpdateWorkspace,
+                destinations = services.capabilities.destinations,
+            )
             DesktopSettingsCategory.Agents -> {
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
@@ -510,6 +520,47 @@ private fun TerminalAppearancePanel(
             fontSize = workspace.terminalFontSize,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+@Composable
+private fun NavigationPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    destinations: List<AndyDestination>,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Sidebar pages",
+            description = "Choose which pages appear in the sidebar. Settings is always available.",
+        )
+        destinations.filter { it.isToggleableInSidebar() }.forEach { destination ->
+            val enabled = destination.name !in workspace.disabledDestinations
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .toggleable(
+                        value = enabled,
+                        role = Role.Checkbox,
+                        onValueChange = { checked ->
+                            update { state ->
+                                val disabled = if (checked) {
+                                    state.disabledDestinations - destination.name
+                                } else {
+                                    state.disabledDestinations + destination.name
+                                }
+                                state.copy(disabledDestinations = disabled)
+                            }
+                        },
+                    )
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(checked = enabled, onCheckedChange = null)
+                Text(destination.label, color = TextPrimary, fontSize = 13.sp)
+            }
+        }
     }
 }
 
@@ -912,6 +963,7 @@ private fun WebSettingsScreen(
     web: WebServices,
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    destinations: List<AndyDestination>,
 ) {
     val scope = rememberCoroutineScope()
     val connection by web.connection.state.collectAsState()
@@ -932,6 +984,11 @@ private fun WebSettingsScreen(
     ) {
         when (category) {
             WebSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
+            WebSettingsCategory.Navigation -> NavigationPanel(
+                workspace = workspaceState,
+                update = onUpdateWorkspace,
+                destinations = destinations,
+            )
             WebSettingsCategory.Connection -> {
                 PanelCard {
                     SettingsSectionHeader(
