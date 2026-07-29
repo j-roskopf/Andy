@@ -142,4 +142,5 @@ class ScrollbackAccumulatorTest {
         val incoming = screen("a", "b")
         assertEquals(2, scrollbackSnapshotOverlap(captured, incoming))
     }
+
 }

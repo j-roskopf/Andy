@@ -60,6 +60,26 @@ fun TerminalRenderFrameReader.readStyledScrollbackRows(maxRows: Int = 0): List<S
     return rows
 }
 
+/**
+ * Styled rows not yet present in [seenKeys] (matched on trimmed [StyledTerminalRow.plain]).
+ *
+ * Used by [replayCaptureStyledRows] to sample a replay buffer after every chunk fed to
+ * it: on the alt screen a row that scrolls off between two samples is gone for good, so
+ * capturing new rows as they appear — rather than only reading the final screen — is what
+ * keeps a fast replay (or a fast-talking model) from losing whatever scrolled past.
+ */
+internal fun captureNewStyledRows(
+    reader: TerminalRenderFrameReader,
+    seenKeys: MutableSet<String>,
+): List<StyledTerminalRow> = buildList {
+    for (row in reader.readStyledScrollbackRows()) {
+        val key = row.plain.trim()
+        if (key.isEmpty() || key in seenKeys) continue
+        seenKeys += key
+        add(row)
+    }
+}
+
 private fun renderLineAsStyledRow(
     frame: TerminalRenderFrame,
     row: Int,

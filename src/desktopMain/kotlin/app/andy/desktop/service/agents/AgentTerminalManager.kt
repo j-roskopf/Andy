@@ -22,6 +22,7 @@ import app.andy.terminal.formatLegacyScrollbackForReplay
 import app.andy.terminal.formatScrollbackForDisplay
 import app.andy.terminal.isScrollbackDisplayNoise
 import app.andy.terminal.looksLikeRawAnsiTee
+import app.andy.terminal.replayCaptureStyledRows
 import app.andy.terminal.resolveScrollbackForReplay
 import app.andy.terminal.stripAnsi
 import app.andy.terminal.styledRowsFromAnsiText
@@ -84,6 +85,8 @@ class AgentTerminalManager(
         @Volatile var stopRequested: Boolean = false,
         @Volatile var waitJob: Job? = null,
         @Volatile var scrollbackJob: Job? = null,
+        /** Serializes [persistScrollback]: the timer loop and on-demand flush callers can race. */
+        val scrollbackLock: Any = Any(),
     )
 
     private val handles = ConcurrentHashMap<String, Handle>()
@@ -466,12 +469,7 @@ class AgentTerminalManager(
             // Synchronous so a caller awaiting start() sees accurate interactivity right away;
             // StateFlow conflates the identical value the Main-dispatched bump below recomputes.
             _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
-            handle.scrollbackJob = scope.launch(Dispatchers.IO) {
-                while (isActive && handles[task.id] === handle) {
-                    persistScrollback(handle)
-                    delay(scrollbackFlushDelay(handle))
-                }
-            }
+            handle.scrollbackJob = launchScrollbackJob(handle)
             // Publish once on Main after the EDT widget exists so Compose collectors see it
             // without a second IO-thread bump (that forced an extra terminal recomposition).
             scope.launch(Dispatchers.Main.immediate) {
@@ -606,12 +604,7 @@ class AgentTerminalManager(
                 handles[taskId] = handle
                 registered = true
                 ownedTaskIds += taskId
-                handle.scrollbackJob = scope.launch(Dispatchers.IO) {
-                    while (isActive && handles[taskId] === handle) {
-                        persistScrollback(handle)
-                        delay(scrollbackFlushDelay(handle))
-                    }
-                }
+                handle.scrollbackJob = launchScrollbackJob(handle)
                 handle.waitJob = scope.launch {
                     tracker.status.collect { snapshot -> onStatusSnapshot(snapshot) }
                 }
@@ -852,12 +845,24 @@ class AgentTerminalManager(
         handle.statusTracker.resume()
         handle.artifacts.resume()
         if (handle.scrollbackJob?.isActive == true) return
-        val taskId = handle.taskId
-        handle.scrollbackJob = scope.launch(Dispatchers.IO) {
-            while (isActive && handles[taskId] === handle) {
-                persistScrollback(handle)
-                delay(scrollbackFlushDelay(handle))
-            }
+        handle.scrollbackJob = launchScrollbackJob(handle)
+    }
+
+    /**
+     * Flush the terminal into [Handle.scrollback] on a timer.
+     *
+     * A live poll of the current screen would lose anything that scrolled past between
+     * two ticks — agent TUIs redraw on the alternate screen, which has no native
+     * scrollback (see [app.andy.terminal.resolveLiveTerminalWheelAction]) — so no polling
+     * cadence can be trusted against an arbitrarily fast model. [persistScrollback]
+     * sidesteps that by replaying the complete raw PTY tee instead of polling the current
+     * screen (see [app.andy.terminal.replayCaptureStyledRows]), so the timer here only
+     * governs how promptly the on-disk transcript catches up, not what it can capture.
+     */
+    private fun launchScrollbackJob(handle: Handle): Job = scope.launch(Dispatchers.IO) {
+        while (isActive && handles[handle.taskId] === handle) {
+            persistScrollback(handle)
+            delay(scrollbackFlushDelay(handle))
         }
     }
 
@@ -871,7 +876,7 @@ class AgentTerminalManager(
      * viewer has no scrollback for output produced while Andy was detached — and every
      * capture for a chat with no viewer at all.
      */
-    private fun persistScrollback(handle: Handle) {
+    private fun persistScrollback(handle: Handle): Unit = synchronized(handle.scrollbackLock) {
         val captureRows = if (handle.foreground.get()) {
             KetraTermBackend.SCROLLBACK_CAPTURE_ROWS
         } else {
@@ -880,8 +885,14 @@ class AgentTerminalManager(
         val snapshot = when (val session = handle.session) {
             is TmuxAttachBackend ->
                 if (session.isViewerAlive && !session.consumeHistoryBridge()) {
-                    session.captureStyledRows(captureRows).ifEmpty {
-                        captureTmuxRows(handle.taskId, captureRows)
+                    // Replay the viewer's complete raw tee rather than polling its current
+                    // screen: the alt screen has no scrollback, so a live poll can never see
+                    // more than one screen's worth, and a fast model can scroll several
+                    // screens' worth past between two polls. See replayCaptureStyledRows.
+                    replayCaptureStyledRows(session.scrollbackAnsi()).ifEmpty {
+                        session.captureStyledRows(captureRows).ifEmpty {
+                            captureTmuxRows(handle.taskId, captureRows)
+                        }
                     }
                 } else {
                     captureTmuxRows(handle.taskId, captureRows).ifEmpty {
@@ -889,15 +900,15 @@ class AgentTerminalManager(
                     }
                 }
             is KetraTermBackend ->
-                session.captureStyledRows(captureRows).ifEmpty {
-                    styledRowsFromAnsiText(resolveScrollbackForReplay(session.scrollbackAnsi()))
+                replayCaptureStyledRows(session.scrollbackAnsi()).ifEmpty {
+                    session.captureStyledRows(captureRows)
                 }
             else -> captureTmuxRows(handle.taskId, captureRows)
         }
         if (snapshot.isNotEmpty()) handle.scrollback.merge(snapshot)
         val export = handle.scrollback.render()
-        if (export.isBlank()) return
-        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(export))) return
+        if (export.isBlank()) return@synchronized
+        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(export))) return@synchronized
         atomicWriteText(handle.scrollbackPath, capScrollbackSize(export))
     }
 

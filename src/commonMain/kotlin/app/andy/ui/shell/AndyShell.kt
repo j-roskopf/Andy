@@ -45,6 +45,7 @@ import app.andy.ui.network.NetworkScreen
 import app.andy.model.FilesTab
 import app.andy.model.PerformanceTab
 import app.andy.model.ProxyStartOptions
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.RunningAction
 import app.andy.ui.agents.isSessionWorking
@@ -236,6 +237,10 @@ internal fun AndyShell(
                 },
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
                     task.projectId != null && isSessionWorking(task)
+                },
+                hasBlockedAgentTasks = agentTasks.any { it.projectId == null && it.status == AgentStatus.Blocked },
+                hasBlockedProjectAgentTasks = agentTasks.any { task ->
+                    task.projectId != null && task.status == AgentStatus.Blocked
                 },
                 logcatLive = state.logcatState.live,
                 onSelect = state::navigateTo,

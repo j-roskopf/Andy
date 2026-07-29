@@ -1,5 +1,7 @@
 package app.andy.terminal
 
+import app.andy.desktop.service.LoginShellEnvironment
+
 private val DROP_ENV_KEYS = setOf(
     "ANTHROPIC_BASE_URL",
     "NODE_OPTIONS",
@@ -58,9 +60,17 @@ fun resolveTerminalWorkingDirectory(cwd: String?): String {
     return java.io.File(System.getProperty("user.home")).absolutePath
 }
 
-/** Full launch environment: process env + overrides, with IDE/proxy vars stripped. */
-fun buildTerminalLaunchEnvironment(overrides: Map<String, String> = emptyMap()): Map<String, String> {
+/**
+ * Full launch environment: process env, overridden by the user's real login-shell
+ * environment (PATH/JAVA_HOME/etc. that a GUI-launched JVM never inherits), overridden by
+ * per-launch [overrides], with IDE/proxy vars stripped.
+ */
+fun buildTerminalLaunchEnvironment(
+    overrides: Map<String, String> = emptyMap(),
+    loginShellEnv: Map<String, String> = LoginShellEnvironment.current(),
+): Map<String, String> {
     val env = HashMap(System.getenv())
+    env.putAll(loginShellEnv)
     env.putAll(overrides)
     scrubInheritedTerminalEnvironment(env)
     return env

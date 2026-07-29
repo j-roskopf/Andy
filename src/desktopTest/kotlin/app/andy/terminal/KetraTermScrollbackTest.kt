@@ -146,6 +146,31 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun replayCaptureStyledRowsKeepsContentLongerThanTheReplayGrid() {
+        AndyKetraTermConfig.ensureInitialized()
+        // More lines than the replay buffer is tall (REPLAY_ROWS = 200): if capture only
+        // read the final screen, everything before the last ~200 lines would be gone —
+        // exactly the "fast model outdistances any poll" loss this function exists to fix.
+        val raw = buildString {
+            for (i in 1..300) append("Step $i: detail line\r\n")
+        }
+        val rows = replayCaptureStyledRows(raw)
+        val plain = rows.joinToString("\n") { it.plain }
+        for (i in listOf(1, 2, 150, 299, 300)) {
+            assertTrue(plain.contains("Step $i:"), "missing Step $i, captured ${rows.size} rows")
+        }
+    }
+
+    @Test
+    fun replayCaptureStyledRowsPreservesStyling() {
+        AndyKetraTermConfig.ensureInitialized()
+        val raw = "[31mred line[0m\r\n"
+        val rows = replayCaptureStyledRows(raw)
+        assertTrue(rows.any { it.plain.contains("red line") })
+        assertTrue(rows.any { it.ansi.contains("[") }, "expected styling kept in the ansi field")
+    }
+
+    @Test
     fun agentTerminalManagerPersistsResolvedScrollbackNotRawTee() = runBlocking {
         val dir = File.createTempFile("andy-scrollback", null).also {
             it.delete()

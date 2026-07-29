@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.modelConfigurationLabel
 import app.andy.service.AndyServices
@@ -38,6 +39,7 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.PendingConfirmation
+import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceItemRow
@@ -48,6 +50,7 @@ import app.andy.ui.shell.RetainedDestination
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.PanelSoft
+import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Cyan
@@ -283,20 +286,24 @@ private fun AgentInboxRow(
                 ) {
                     when {
                         isSessionWorking(task) -> ProjectActivityIndicator(16.dp)
+                        task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
                         task.unread -> UnreadDot()
                         task.status != null -> StatusDot(task.status!!)
                     }
                 }
             },
             trailing = {
-                Text(
-                    agentStatusLabel(task),
-                    color = agentStatusColor(task.status).copy(alpha = 0.85f),
-                    fontFamily = MonoFont,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                // The blocked pill already carries the status label; avoid showing it twice.
+                if (task.status != AgentStatus.Blocked) {
+                    Text(
+                        agentStatusLabel(task),
+                        color = agentStatusColor(task.status).copy(alpha = 0.85f),
+                        fontFamily = MonoFont,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             },
             modifier = Modifier.pointerInput(task.id) {
                 awaitPointerEventScope {

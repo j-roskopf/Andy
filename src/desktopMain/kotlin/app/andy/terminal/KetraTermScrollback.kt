@@ -268,6 +268,59 @@ internal fun replayCaptureReadableLines(
 }
 
 /**
+ * Feed the *complete* raw PTY tee ([ScrollbackAnsiTee.snapshot]) through a fresh terminal
+ * emulator, sampling styled rows after every chunk instead of relying on a live poll.
+ *
+ * Agent CLIs redraw on the alt screen, which has no native scrollback: whatever is not
+ * currently visible when a live poll samples the screen is gone forever, and a fast model
+ * (or a fast redraw) can blow through several screens' worth of content between two polls
+ * of even a tight timer. The raw tee itself never loses a byte, so replaying it and
+ * sampling after each [chunkSize] chunk — far finer-grained than any wall-clock polling
+ * interval — reconstructs the full transcript deterministically, independent of how fast
+ * the original output streamed in.
+ *
+ * [cols] must stay fixed across repeated calls on the same growing tee (callers replay
+ * from byte 0 every time, to fold newly-arrived output into what was already recorded).
+ * Sizing it dynamically per call — e.g. from [scrollbackReplayColumns], which measures
+ * the widest line *seen so far* — would pick a different width as the tee grows, so two
+ * calls could reflow the same earlier content differently and reintroduce the exact
+ * duplication a live-width capture already has (see [app.andy.terminal.ScrollbackAccumulator]).
+ * A plain fixed default sidesteps that instead of trying to detect it after the fact.
+ */
+internal fun replayCaptureStyledRows(
+    content: String,
+    cols: Int = REPLAY_COLUMNS,
+    rows: Int = REPLAY_ROWS,
+    chunkSize: Int = 8_192,
+): List<StyledTerminalRow> {
+    if (content.isBlank()) return emptyList()
+    val bytes = content.toByteArray(StandardCharsets.UTF_8)
+    val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
+    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
+    val seen = LinkedHashSet<String>()
+    val captured = mutableListOf<StyledTerminalRow>()
+    return try {
+        session.start(cols, rows)
+        var offset = 0
+        while (offset < bytes.size) {
+            val length = minOf(chunkSize, bytes.size - offset)
+            session.onBytes(bytes, offset, length)
+            offset += length
+            captured += captureNewStyledRows(session, seen)
+        }
+        captured
+    } finally {
+        runCatching { session.close() }
+    }
+}
+
+/** Replay grid height: taller than any real viewport so one chunk rarely scrolls a whole screen. */
+private const val REPLAY_ROWS = 200
+
+/** Replay grid width: matches the agent CLI terminal's own default column count. */
+private const val REPLAY_COLUMNS = 120
+
+/**
  * Widest visible row in [content], the column count a replay needs to reproduce the
  * original layout instead of hard-wrapping every boxed TUI line.
  */
@@ -400,9 +453,8 @@ internal class AgentCliTeeTerminalConnector(
         delegate.start(
             object : TerminalConnectorListener {
                 override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
-                    val (sanitized, off, len) = sanitizeAgentCliPtyChunk(bytes, offset, length)
-                    tee.append(sanitized, off, len)
-                    listener.onBytes(sanitized, off, len)
+                    tee.append(bytes, offset, length)
+                    listener.onBytes(bytes, offset, length)
                 }
 
                 override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)

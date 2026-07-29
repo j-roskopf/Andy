@@ -328,6 +328,7 @@ internal fun LiveDockDrawer(
             modifier = Modifier.fillMaxSize(),
             showChromeControls = false,
             showDeviceHeader = false,
+            showPopOut = false,
         )
     }
 }
