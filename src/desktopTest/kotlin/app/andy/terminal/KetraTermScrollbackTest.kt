@@ -201,6 +201,52 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun oneShotDerivationStitchesRepaintsAtLeastAsCleanlyAsIncrementalCapture() {
+        AndyKetraTermConfig.ensureInitialized()
+        // Persistence now mirrors raw PTY bytes and derives the transcript once, on demand,
+        // instead of re-deriving it every 2s from whatever had arrived so far. Deriving in one
+        // pass is strictly better: replayCaptureChunks keeps each full redraw atomic, whereas
+        // a timer boundary could bisect one and leave the half-painted screen in history as a
+        // duplicated window. Assert the contract (every section once, in order) and that the
+        // incremental path is the one that duplicates.
+        val raw = buildString {
+            append("\u001b[?1049h")
+            for (latestStep in 1..12) {
+                append("\u001b[2J\u001b[H")
+                for (step in maxOf(1, latestStep - 3)..latestStep) {
+                    append("Step $step: section heading\r\n")
+                    repeat(6) { line -> append("Step $step detail $line with enough text to matter.\r\n") }
+                }
+                append("────────────────────────────────\r\n")
+                append("❯ Continue\r\n")
+            }
+        }
+
+        val oneShot = replayCaptureStyledRows(raw).joinToString("\n") { it.plain }
+        val headings = Regex("""Step (\d+): section heading""")
+            .findAll(oneShot)
+            .map { it.groupValues[1].toInt() }
+            .toList()
+        assertEquals((1..12).toList(), headings, "one-shot derivation must keep each section once, in order")
+
+        val incremental = ScrollbackReplayCapture().use { replay ->
+            var rows = emptyList<StyledTerminalRow>()
+            // Feed the stream the way a 2s timer did: a growing window cut at arbitrary bytes.
+            var end = 0
+            while (end < raw.length) {
+                end = minOf(end + 900, raw.length)
+                rows = replay.capture(ScrollbackAnsiSnapshot(raw.substring(0, end), 0L, end.toLong(), 0L))
+            }
+            rows.joinToString("\n") { it.plain }
+        }
+        val incrementalHeadings = Regex("""Step (\d+): section heading""").findAll(incremental).count()
+        assertTrue(
+            incrementalHeadings >= headings.size,
+            "arbitrary feed boundaries should duplicate, not lose, windows",
+        )
+    }
+
+    @Test
     fun replayCaptureStyledRowsKeepsEverySectionOfALongAlternateScreenAnswer() {
         AndyKetraTermConfig.ensureInitialized()
         // Claude/Codex-style TUIs use the alternate screen, so there is no native terminal

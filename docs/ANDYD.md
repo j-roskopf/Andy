@@ -101,6 +101,82 @@ andy chat resume <taskId> "…"  # when quiet reattach isn't possible
 andy --remote user@mac.local chat list   # SSH tunnel the socket
 ```
 
+### Remote access from mobile (SSH + Tailscale)
+
+Andy's CLI only runs on macOS/Linux, so to drive chats from a phone you SSH
+into a Mac or Linux box that already has `andy`/`andyd` installed, then run
+`andy` commands inside that SSH session. The phone itself doesn't need the
+CLI installed.
+
+**1. Keep `andyd` running on the host, even when the GUI is closed.**
+
+The embedded daemon (default GUI mode) only binds the socket while the
+Andy.app window is open — see [GUI modes](#gui-modes). For phone access you
+want a standalone daemon that survives GUI closes/logouts: set up
+[launchd](#launchd-macos) on macOS, a systemd/user service on Linux, or leave
+`./gradlew runAndyd` running in a terminal.
+
+**2. Enable SSH on the host.**
+
+- macOS: System Settings → General → Sharing → turn on **Remote Login**. It
+  shows the username/address to connect to (`ssh user@host-address`).
+- Linux: install/enable `sshd` (e.g. `sudo systemctl enable --now ssh`).
+
+Verify from another machine on the same LAN (`ssh user@host`) before dealing
+with remote networking.
+
+**3. Put the phone and host on the same network with Tailscale** (skip this
+if they're already reachable — same LAN, existing VPN, port-forwarded SSH,
+etc.). Mobile networks and most home NATs block inbound SSH, so an overlay
+network is the easiest fix:
+
+- Install [Tailscale](https://tailscale.com/download) on the host (macOS/Linux)
+  and sign in to your tailnet.
+- Install the Tailscale app on the phone (App Store / Play Store), sign in
+  with the same account, and turn the VPN toggle on before connecting.
+- On the host, run `tailscale ip -4` (or check the Tailscale menu-bar item)
+  for its `100.x.y.z` tailnet IP, or use its MagicDNS name
+  (`hostname.tailnet-name.ts.net`).
+
+**4. SSH in from the phone.**
+
+Any SSH client app works:
+
+- iOS: [Termius](https://termius.com/), [Blink Shell](https://blink.sh), or
+  [Prompt](https://apps.apple.com/app/prompt-3/id1594420480).
+- Android: [Termius](https://termius.com/), [JuiceSSH](https://juicessh.com/),
+  or [Termux](https://termux.dev/) (`pkg install openssh && ssh user@host`).
+
+Connect to `user@<tailscale-ip-or-magicdns-name>`. Save the connection with
+key-based auth if the app supports it — typing a passphrase on a phone
+keyboard every time gets old fast. Since chats live in tmux, pick an app with
+an extra key row for **Ctrl**, **Esc**, and arrow keys (Termius and Blink both
+have one) — you'll need them for tmux detach and TUI navigation.
+
+**5. Run the CLI once connected.** You're in a normal shell on the host now —
+use `andy` exactly as documented above:
+
+```sh
+andy chat list
+andy chat start --agent ClaudeCode --directory ~/project "…"
+andy tui
+```
+
+**6. Attach to an existing chat.**
+
+```sh
+andy attach <taskId>
+```
+
+This live-attaches to the chat's tmux pane (or quietly reattaches an ended
+provider session first, same as GUI reattach). `andy tui` lists chats grouped
+by project — press **Enter** / **a** to attach without remembering a task id.
+
+**7. Detach without stopping the agent.** Press **F12**, **Alt+d**, or the
+usual tmux **Ctrl-b** then **d**. The agent keeps running on the host;
+reconnect later — even from a different phone or SSH session — with
+`andy attach <taskId>`.
+
 ### Device / network scripting
 
 The CLI also wraps every device-side MCP tool as noun-verb commands (plus a

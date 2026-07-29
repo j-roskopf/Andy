@@ -658,7 +658,9 @@ internal fun LiveScreen(
                                                     recordingState = LiveRecordingState.Idle
                                                     recordingStartedAtMillis = null
                                                     recordingElapsedMillis = 0L
-                                                    liveActionStatus = "Saved ${recording.title}"
+                                                    liveActionStatus = recording.videoCaptureWarning
+                                                        ?.let { "Saved ${recording.title} — $it" }
+                                                        ?: "Saved ${recording.title}"
                                                     onRecordingSaved()
                                                 }
                                                 .onFailure { error ->
@@ -831,7 +833,9 @@ internal fun LiveScreen(
                 scope.launch {
                     runCatching { services.bugs.saveBug(draft, device) }
                         .onSuccess { report ->
-                            bugSaveStatus = "Saved ${report.title}"
+                            bugSaveStatus = report.videoCaptureWarning
+                                ?.let { "Saved ${report.title} — $it" }
+                                ?: "Saved ${report.title}"
                             bugDialogVisible = false
                             onBugSaved()
                         }

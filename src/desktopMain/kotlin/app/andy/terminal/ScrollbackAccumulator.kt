@@ -83,15 +83,26 @@ internal fun scrollbackSnapshotOverlap(
     var bestOverlap = 0
     var bestScore = 0
     for (overlap in longest downTo 1) {
+        // An alignment of this length can score at most overlap * MATCH_REWARD, and every
+        // shorter one scores strictly less, so an incumbent already at that ceiling can no
+        // longer be beaten. Ties still favour the longest overlap: the scan runs descending
+        // and replacement below stays a strict `>`.
+        if (bestScore >= overlap * MATCH_REWARD) break
         val base = captured.size - overlap
         var score = 0
+        var remaining = overlap
         for (offset in 0 until overlap) {
             val previous = captured[base + offset]
             val current = snapshot[offset]
             when {
-                terminalRowsEquivalent(previous.plain, current.plain) -> score += MATCH_REWARD
+                terminalRowsEquivalent(previous, current) -> score += MATCH_REWARD
                 !current.isBlank -> score -= MISMATCH_PENALTY
             }
+            remaining--
+            // Abandon an alignment whose best remaining outcome cannot pass the incumbent.
+            // Safe to leave `score` partial: it is bounded by the same ceiling, so the
+            // update below cannot fire.
+            if (score + remaining * MATCH_REWARD <= bestScore) break
         }
         if (score > bestScore) {
             bestScore = score
@@ -104,13 +115,14 @@ internal fun scrollbackSnapshotOverlap(
 private const val MATCH_REWARD = 2
 private const val MISMATCH_PENALTY = 1
 
-private fun terminalRowsEquivalent(previous: String, current: String): Boolean {
-    if (previous == current) return current.isNotBlank()
-    if (isVolatileTerminalChromeLine(previous) && isVolatileTerminalChromeLine(current)) {
-        return true
-    }
-    val left = previous.trim()
-    val right = current.trim()
+private fun terminalRowsEquivalent(
+    previous: StyledTerminalRow,
+    current: StyledTerminalRow,
+): Boolean {
+    if (previous.plain == current.plain) return !current.isBlank
+    if (previous.isVolatileChrome && current.isVolatileChrome) return true
+    val left = previous.trimmedPlain
+    val right = current.trimmedPlain
     val shorter = minOf(left.length, right.length)
     return shorter >= TRUNCATED_LINE_MATCH_MIN &&
         (left.startsWith(right) || right.startsWith(left))

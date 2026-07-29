@@ -320,6 +320,13 @@ class DesktopBugService(
         logFile.writeText(snapshot.logs.joinToString("\n") { it.line } + if (snapshot.logs.isNotEmpty()) "\n" else "")
         actionsFile.writeText(BugJson.writeActions(snapshot.actions))
         val videoMeta = encodeCaptureVideo(snapshot, captureFile)
+        if (videoMeta.warning != null) {
+            logCaptureIssue(
+                "saveCapture($reportId) saved without playable video: ${videoMeta.warning} " +
+                    "[h264Units=${snapshot.h264Units.size}, argbFrames=${snapshot.frames.size}, " +
+                    "fileBytes=${captureFile.length()}]",
+            )
+        }
 
         val artifacts = listOf(
             BugArtifact("actions.json", "actions.json", "actions", actionsFile.length()),
@@ -350,6 +357,7 @@ class DesktopBugService(
             videoEndedAtMillis = videoMeta.endedAtMillis,
             videoFrameRate = videoMeta.frameRate,
             videoFrameTimestampsMillis = videoMeta.timestampsMillis,
+            videoCaptureWarning = videoMeta.warning,
         )
         metadataFile.writeText(BugJson.writeReport(report.copy(artifacts = artifacts.map {
             if (it.name == "metadata.json") it.copy(sizeBytes = metadataFile.length()) else it
@@ -425,10 +433,11 @@ class DesktopBugService(
                 val image = converter.convert(grabbed) ?: continue
                 emit(image.toMirrorFrame(frameNumber))
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
             // Older captures may have been written by the packet-copy path as a header-only MP4.
             // Preserve their logs/actions and leave the replay surface empty instead of failing a
             // Compose collector on the AWT event thread.
+            logCaptureIssue("playbackFrames($id) failed to decode capture.mp4", error)
             return@flow
         } finally {
             runCatching { grabber.stop() }
@@ -444,7 +453,8 @@ class DesktopBugService(
         try {
             grabber.start()
             grabber.lengthInVideoFrames.takeIf { it > 0 } ?: grabber.lengthInFrames.coerceAtLeast(0)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("bugVideoFrameCount($id) failed to read capture.mp4", error)
             0
         } finally {
             runCatching { grabber.stop() }
@@ -462,7 +472,8 @@ class DesktopBugService(
             grabber.setVideoFrameNumber(frameIndex.coerceAtLeast(0))
             val image = generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert)
             image?.toMirrorFrame(frameIndex.toLong() + 1)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("loadBugVideoFrame($id, $frameIndex) failed to decode capture.mp4", error)
             null
         } finally {
             runCatching { grabber.stop() }
@@ -475,6 +486,12 @@ class DesktopBugService(
         val metadata = File(reportDir, "metadata.json")
         if (!metadata.isFile) return null
         return runCatching { BugJson.readReport(metadata.readText()) }.getOrNull()
+    }
+
+    private fun logCaptureIssue(message: String, error: Throwable? = null) {
+        val suffix = error?.let { " (${it::class.simpleName}: ${it.message})" }.orEmpty()
+        System.err.println("andy-bug: $message$suffix")
+        error?.printStackTrace()
     }
 
     private fun encodeCaptureVideo(snapshot: BugSnapshot, captureFile: File): VideoEncodeMeta {
@@ -495,11 +512,19 @@ class DesktopBugService(
         } else {
             ARGB_FALLBACK_FRAME_RATE
         }
+        val warning = if (isPlayableCapture(captureFile)) {
+            null
+        } else if (snapshot.h264Units.isEmpty() && snapshot.frames.isEmpty()) {
+            "No video frames were captured for this device."
+        } else {
+            "Video failed to encode; report saved without playable video."
+        }
         return VideoEncodeMeta(
             frameRate = frameRate,
             startedAtMillis = snapshot.frames.firstOrNull()?.timestampMillis,
             endedAtMillis = snapshot.frames.lastOrNull()?.timestampMillis,
             timestampsMillis = snapshot.frames.map { it.timestampMillis },
+            warning = warning,
         )
     }
 
@@ -541,7 +566,8 @@ class DesktopBugService(
                 if (sample.frame.width != width || sample.frame.height != height) return@forEach
                 recorder.record(converter.convert(sample.frame.toBufferedImage()))
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("encodeArgbMp4 failed for ${usable.size} frames at ${width}x$height", error)
             file.writeBytes(ByteArray(0))
         } finally {
             runCatching { recorder.stop() }
@@ -602,7 +628,8 @@ class DesktopBugService(
                 file.delete()
                 transcodeH264(raw, file, width, height, estimatedFps)
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("remuxH264Mp4 failed for ${units.size} units at ${width}x$height", error)
             file.writeBytes(ByteArray(0))
         } finally {
             raw.delete()
@@ -617,7 +644,8 @@ class DesktopBugService(
         return try {
             grabber.start()
             generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert) != null
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("isPlayableCapture(${file.name}, ${file.length()} bytes) failed to decode", error)
             false
         } finally {
             runCatching { grabber.stop() }
@@ -653,13 +681,15 @@ class DesktopBugService(
                     }
                 }
                 if (copied == 0) {
+                    logCaptureIssue("packetCopyH264 copied 0 packets from ${raw.length()}-byte raw stream")
                     file.writeBytes(ByteArray(0))
                 }
             } finally {
                 runCatching { recorder.stop() }
                 runCatching { recorder.release() }
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("packetCopyH264 failed at ${width}x$height", error)
             runCatching { if (file.isFile) file.writeBytes(ByteArray(0)) }
         } finally {
             runCatching { grabber.stop() }
@@ -689,13 +719,15 @@ class DesktopBugService(
                     recorded++
                 }
                 if (recorded == 0) {
+                    logCaptureIssue("transcodeH264 recorded 0 frames from ${raw.length()}-byte raw stream")
                     file.writeBytes(ByteArray(0))
                 }
             } finally {
                 runCatching { recorder.stop() }
                 runCatching { recorder.release() }
             }
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            logCaptureIssue("transcodeH264 failed at ${width}x$height", error)
             file.writeBytes(ByteArray(0))
         } finally {
             runCatching { grabber.stop() }
@@ -814,6 +846,7 @@ class DesktopBugService(
         val startedAtMillis: Long?,
         val endedAtMillis: Long?,
         val timestampsMillis: List<Long>,
+        val warning: String? = null,
     )
     private data class ForegroundScreen(
         val packageName: String,

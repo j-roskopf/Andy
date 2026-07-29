@@ -255,6 +255,97 @@ internal fun atomicWriteText(file: File, content: String) {
 }
 
 /**
+ * Soft cap for `scrollback.raw`. Raw PTY output carries every repaint the emulator later
+ * collapses, so it needs more headroom than the transcript derived from it.
+ */
+const val RAW_SCROLLBACK_MAX_BYTES: Int = 16 * 1024 * 1024
+
+/**
+ * Append-only mirror of a session's raw PTY tee.
+ *
+ * The transcript Andy displays is *derived* from these bytes by replaying them through a
+ * terminal emulator and stitching the repaints back together. That derivation is far too
+ * expensive to run on a timer — it measured 74% of the whole process — but writing the bytes
+ * is nearly free. Persisting raw and deriving on demand keeps the live path to one sequential
+ * append per flush, and pays for the reconstruction once, when a reader actually asks.
+ *
+ * Durability improves as a side effect: the bytes reach disk continuously, so a hard kill
+ * leaves a transcript that can still be derived afterwards.
+ */
+class RawScrollbackFile(
+    private val file: File,
+    private val maxBytes: Int = RAW_SCROLLBACK_MAX_BYTES,
+) {
+    private var lastOffset = 0L
+    private var lastEpoch = 0L
+    private var started = false
+
+    /** True once this run has contributed bytes, so callers can tell empty runs apart. */
+    var wroteAnything: Boolean = false
+        private set
+
+    /**
+     * Scope this file to a single run by discarding any earlier run's bytes.
+     *
+     * Earlier runs are already committed to `scrollback.ansi` when their session ended, so
+     * keeping their raw bytes here too would derive them a second time and duplicate the
+     * transcript. One run per file keeps "committed history + current run" unambiguous.
+     */
+    fun startNewRun() {
+        runCatching { if (file.isFile) file.delete() }
+        lastOffset = 0L
+        lastEpoch = 0L
+        started = false
+        wroteAnything = false
+    }
+
+    /**
+     * Append whatever [snapshot] holds beyond the last write. Returns characters appended.
+     *
+     * The tee retains only a window of the stream, so [ScrollbackAnsiSnapshot.startOffset]
+     * can overtake [lastOffset] under sustained output. That is a real gap in history, not a
+     * corruption: resume from the oldest retained byte rather than replaying content twice.
+     */
+    fun append(snapshot: ScrollbackAnsiSnapshot): Int {
+        if (!started || snapshot.epoch != lastEpoch) {
+            // A cleared tee restarts its offsets; anything it still holds is new to us.
+            lastEpoch = snapshot.epoch
+            lastOffset = snapshot.startOffset
+            started = true
+        }
+        if (lastOffset < snapshot.startOffset) lastOffset = snapshot.startOffset
+        if (lastOffset >= snapshot.endOffset) return 0
+        val delta = snapshot.content.substring((lastOffset - snapshot.startOffset).toInt())
+        if (delta.isEmpty()) return 0
+        appendText(delta)
+        lastOffset = snapshot.endOffset
+        return delta.length
+    }
+
+    private fun appendText(text: String) {
+        file.parentFile?.mkdirs()
+        file.appendBytes(text.toByteArray(StandardCharsets.UTF_8))
+        wroteAnything = true
+        capIfNeeded()
+    }
+
+    /**
+     * Drop oldest complete lines once past the cap. Rare enough (16 MB of raw PTY) that a
+     * rewrite is acceptable; the steady state stays append-only.
+     */
+    private fun capIfNeeded() {
+        if (file.length() <= maxBytes + RAW_TRIM_SLACK) return
+        val trimmed = runCatching { capScrollbackSize(file.readText(), maxBytes) }.getOrNull() ?: return
+        atomicWriteText(file, trimmed)
+    }
+
+    private companion object {
+        /** Rewrite in batches instead of on every append once the cap is reached. */
+        const val RAW_TRIM_SLACK = 1 shl 20
+    }
+}
+
+/**
  * Collapse legacy raw ANSI tee streams into readable plain text. New scrollback files
  * are already resolved on write; this mainly repairs pre-fix `scrollback.ansi` blobs.
  */

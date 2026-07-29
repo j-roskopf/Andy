@@ -16,7 +16,40 @@ import io.github.ketraterm.session.TerminalSession as KetraSession
  * [ansi] carries the styling replay needs to look like the live terminal.
  */
 data class StyledTerminalRow(val plain: String, val ansi: String) {
-    val isBlank: Boolean get() = plain.isBlank()
+    val isBlank: Boolean = plain.isBlank()
+
+    /** [plain] without surrounding whitespace, shared by every alignment comparison. */
+    internal val trimmedPlain: String = plain.trim()
+
+    /**
+     * Cached [isVolatileTerminalChromeLine] verdict.
+     *
+     * Alignment scores one row against every candidate overlap, so recomputing the
+     * ~24-regex classifier per pair dominated scrollback derivation. The verdict is a pure
+     * function of [plain], so compute it at most once per row and reuse it thereafter.
+     */
+    internal val isVolatileChrome: Boolean
+        get() = when (volatileChrome) {
+            VOLATILE_TRUE -> true
+            VOLATILE_FALSE -> false
+            else -> isVolatileTerminalChromeLine(plain).also {
+                volatileChrome = if (it) VOLATILE_TRUE else VOLATILE_FALSE
+            }
+        }
+
+    /**
+     * Tri-state cache for [isVolatileChrome]. Races are harmless — the classifier is pure,
+     * so concurrent computers agree — which buys a plain field over a `lazy` allocation on
+     * every one of a transcript's rows.
+     */
+    @Volatile
+    private var volatileChrome: Byte = VOLATILE_UNKNOWN
+
+    private companion object {
+        const val VOLATILE_UNKNOWN: Byte = 0
+        const val VOLATILE_TRUE: Byte = 1
+        const val VOLATILE_FALSE: Byte = 2
+    }
 }
 
 /**

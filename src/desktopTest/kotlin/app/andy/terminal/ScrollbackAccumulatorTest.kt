@@ -366,4 +366,74 @@ class ScrollbackAccumulatorTest {
         assertEquals(2, scrollbackSnapshotOverlap(captured, incoming))
     }
 
+    @Test
+    fun prunedOverlapScanAgreesWithExhaustiveScoring() {
+        // scrollbackSnapshotOverlap prunes alignments it can prove cannot win, which took the
+        // scan off the O(n²) path that dominated CPU. The pruning must not change *which*
+        // alignment wins, so score every candidate exhaustively and compare.
+        val vocabulary = listOf(
+            "",
+            "   ",
+            "> ask the model something",
+            "⠙ Working 2.4k tokens",
+            "────────────────────────────────",
+            "│  │",
+            "ordinary prose that carries real content",
+            "a fairly long response line that another snapshot may truncate part way through",
+            "a fairly long response line that another snapshot may trun",
+            "repeated bullet",
+            "exit 0",
+        )
+        val random = kotlin.random.Random(seed = 20260729)
+        repeat(400) { case ->
+            val captured = List(random.nextInt(0, 14)) { vocabulary.random(random) }
+            val incoming = List(random.nextInt(0, 14)) { vocabulary.random(random) }
+            val capturedRows = screen(*captured.toTypedArray())
+            val incomingRows = screen(*incoming.toTypedArray())
+            assertEquals(
+                referenceOverlap(capturedRows, incomingRows),
+                scrollbackSnapshotOverlap(capturedRows, incomingRows),
+                "case $case disagreed\ncaptured=$captured\nincoming=$incoming",
+            )
+        }
+    }
+
+    /** The scan as it read before pruning: score every alignment, longest wins ties. */
+    private fun referenceOverlap(
+        captured: List<StyledTerminalRow>,
+        snapshot: List<StyledTerminalRow>,
+    ): Int {
+        val longest = minOf(captured.size, snapshot.size)
+        if (longest == 0) return 0
+        var bestOverlap = 0
+        var bestScore = 0
+        for (overlap in longest downTo 1) {
+            val base = captured.size - overlap
+            var score = 0
+            for (offset in 0 until overlap) {
+                val previous = captured[base + offset].plain
+                val current = snapshot[offset].plain
+                when {
+                    referenceEquivalent(previous, current) -> score += 2
+                    current.isNotBlank() -> score -= 1
+                }
+            }
+            if (score > bestScore) {
+                bestScore = score
+                bestOverlap = overlap
+            }
+        }
+        return bestOverlap
+    }
+
+    private fun referenceEquivalent(previous: String, current: String): Boolean {
+        if (previous == current) return current.isNotBlank()
+        if (isVolatileTerminalChromeLine(previous) && isVolatileTerminalChromeLine(current)) {
+            return true
+        }
+        val left = previous.trim()
+        val right = current.trim()
+        val shorter = minOf(left.length, right.length)
+        return shorter >= 32 && (left.startsWith(right) || right.startsWith(left))
+    }
 }

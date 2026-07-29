@@ -21,6 +21,8 @@ data class BugReport(
     val videoEndedAtMillis: Long? = null,
     val videoFrameRate: Double? = null,
     val videoFrameTimestampsMillis: List<Long> = emptyList(),
+    /** Non-null when capture.mp4 has no playable video (e.g. no frames captured, encode failure). */
+    val videoCaptureWarning: String? = null,
 )
 
 @Serializable

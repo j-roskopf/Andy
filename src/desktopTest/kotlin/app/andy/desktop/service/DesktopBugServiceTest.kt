@@ -51,10 +51,16 @@ class DesktopBugServiceTest {
         )
 
         service.startCapture(device.serial, device)
-        mirror.frames.value = MirrorFrame(16, 16, IntArray(16 * 16) { -1 }, frameNumber = 1)
+        // Width/height below ~64px hit a JavaCV/FFmpeg row-alignment quirk where the decoded
+        // frame's computed channel count is wrong (see isPlayableCapture); real device mirrors
+        // are always far larger than that, so size this fixture well above the threshold.
+        mirror.frames.value = MirrorFrame(96, 96, IntArray(96 * 96) { -1 }, frameNumber = 1)
         logcat.batches.emit(listOf(LogcatEntry("07-07 09:36:39.683", "1234", "1234", LogLevel.Error, "Example", "boom")))
         service.recordAction("input", "Tap 44,55")
-        delay(700)
+        // Poll for the ARGB fallback sampler instead of a fixed delay — a fixed sleep here is
+        // exactly the kind of assert that flakes on slower CI runners.
+        val sampleDeadline = System.currentTimeMillis() + 15_000
+        while (service.status.value.videoFrameCount < 1 && System.currentTimeMillis() < sampleDeadline) delay(20)
 
         val report = service.saveBug(BugCaptureDraft("Broken thing", "Tap then boom"), device)
         val reportDir = home.resolve(".andy/bugs/${report.id}")
@@ -62,7 +68,11 @@ class DesktopBugServiceTest {
         assertTrue(reportDir.resolve("metadata.json").isFile)
         assertTrue(reportDir.resolve("actions.json").isFile)
         assertTrue(reportDir.resolve("logcat.txt").readText().contains("Example: boom"))
-        assertTrue(reportDir.resolve("capture.mp4").exists())
+        // A regression here (e.g. a silent encode failure) must not slip through as an
+        // existence-only check — assert the video actually contains playable frames.
+        assertTrue(reportDir.resolve("capture.mp4").length() > 0L, "capture.mp4 should not be empty")
+        assertTrue(service.bugVideoFrameCount(report.id) > 0, "capture.mp4 should have at least one playable frame")
+        assertEquals(null, report.videoCaptureWarning)
         assertEquals(listOf(report.id), service.listBugs().map { it.id })
         assertEquals("Broken thing", service.loadBug(report.id)?.title)
 
@@ -94,6 +104,7 @@ class DesktopBugServiceTest {
             videoEndedAtMillis = 9,
             videoFrameRate = 15.0,
             videoFrameTimestampsMillis = listOf(1, 4, 9),
+            videoCaptureWarning = "No video frames were captured for this device.",
         )
 
         val decoded = BugJson.readReport(BugJson.writeReport(report))
@@ -102,6 +113,32 @@ class DesktopBugServiceTest {
         assertEquals(report.actions.single().label, decoded.actions.single().label)
         assertEquals(report.artifacts.single().sizeBytes, decoded.artifacts.single().sizeBytes)
         assertEquals(report.videoFrameTimestampsMillis, decoded.videoFrameTimestampsMillis)
+        assertEquals(report.videoCaptureWarning, decoded.videoCaptureWarning)
+    }
+
+    @Test
+    fun missingVideoFramesSurfaceWarningAndLogDiagnostics() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-novideo-test").toFile()
+        // Default FakeMirrorEngine exposes only a 1x1 frame and no H.264 units, so no source of
+        // video is ever available to the capture buffers below.
+        val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home)
+
+        val originalErr = System.err
+        val captured = java.io.ByteArrayOutputStream()
+        System.setErr(java.io.PrintStream(captured))
+        val report = try {
+            service.startCapture("emulator-5554", null)
+            service.saveBug(BugCaptureDraft("No video available"), null)
+        } finally {
+            System.setErr(originalErr)
+        }
+
+        val captureFile = home.resolve(".andy/bugs/${report.id}/capture.mp4")
+        assertEquals(0L, captureFile.length())
+        assertNotNull(report.videoCaptureWarning)
+        // A save that produces no playable video must never fail silently — it should always be
+        // logged so it is diagnosable, which is exactly what went missing before this fix.
+        assertTrue(captured.toString().contains("andy-bug:"), "expected a diagnostic log for the missing video")
     }
 
     @Test
