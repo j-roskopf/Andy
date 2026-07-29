@@ -98,6 +98,12 @@ class DesktopWorkspaceStoreTest {
             },
         )
         assertEquals("Files", DesktopWorkspaceStore(file).load().filesTab)
+
+        DesktopWorkspaceStore(file).save(saved.copy(disabledDestinations = setOf("Logcat", "Network")))
+        assertEquals(setOf("Logcat", "Network"), DesktopWorkspaceStore(file).load().disabledDestinations)
+
+        DesktopWorkspaceStore(file).save(saved.copy(disabledDestinations = emptySet()))
+        assertEquals(emptySet(), DesktopWorkspaceStore(file).load().disabledDestinations)
     }
 
     @Test

@@ -124,18 +124,18 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
 /**
  * Sidebar / session-row activity marker.
  *
- * Intentionally not animated. `TerminalRepaintThrottle` only caps repaints of
- * terminal widgets; a Compose recomposition here still forces a normal
- * full-window Skiko redraw no matter how coarse the tick is, and reads as
- * terminal flicker while a chat is working. A static dotted orb still marks
- * live work without that cost.
+ * Was static (`animate = false`) because a Compose recomposition here forces
+ * a full-window Skiko redraw no matter how coarse the tick is, which read as
+ * terminal flicker while a chat was working. Re-enabled at the orb's coarse
+ * ~12fps wall-clock cadence; revert to `animate = false` if that flicker
+ * turns out to be noticeable in practice.
  */
 @Composable
 internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
     ThinkingOrb(
         size = size,
         color = Cyan,
-        animate = false,
+        animate = true,
         contentDescription = "Working",
     )
 }

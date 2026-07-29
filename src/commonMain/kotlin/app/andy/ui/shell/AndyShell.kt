@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
 import app.andy.availableWithIosTarget
+import app.andy.isToggleableInSidebar
 import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.IosTargetRegistry
@@ -114,6 +115,17 @@ internal fun AndyShell(
         }
     }
 
+    val visibleDestinations = remember(capabilities.destinations, state.workspaceState.disabledDestinations) {
+        capabilities.destinations.filter {
+            !it.isToggleableInSidebar() || it.name !in state.workspaceState.disabledDestinations
+        }
+    }
+    LaunchedEffect(state.destination, visibleDestinations) {
+        if (state.destination !in visibleDestinations) {
+            state.navigateTo(AndyDestination.Devices)
+        }
+    }
+
     LaunchedEffect(Unit) {
         state.initialize()
     }
@@ -127,7 +139,7 @@ internal fun AndyShell(
         requestedDestination?.let { requested ->
             val target = when {
                 requested == AndyDestination.Tracing -> AndyDestination.Tracing
-                requested in capabilities.destinations -> requested
+                requested in visibleDestinations -> requested
                 else -> AndyDestination.Devices
             }
             state.navigateTo(target)
@@ -212,7 +224,7 @@ internal fun AndyShell(
         Row(Modifier.fillMaxSize().padding(top = contentTopPadding)) {
             Sidebar(
                 current = state.destination,
-                destinations = capabilities.destinations,
+                destinations = visibleDestinations,
                 deviceCount = state.devices.size + state.iosTargets.size,
                 iosSelectionActive = state.isIosSelection,
                 // Project chats are owned by Actions. Keep their unread state out of
@@ -225,6 +237,7 @@ internal fun AndyShell(
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
                     task.projectId != null && isSessionWorking(task)
                 },
+                logcatLive = state.logcatState.live,
                 onSelect = state::navigateTo,
                 expanded = state.workspaceState.workspaceSidebarExpanded,
                 onExpandedChange = { expanded -> state.updateWorkspace { it.copy(workspaceSidebarExpanded = expanded) } },

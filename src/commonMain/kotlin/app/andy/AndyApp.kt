@@ -70,6 +70,9 @@ fun AndyDestination.availableWithIosTarget(): Boolean = when (this) {
     else -> false
 }
 
+/** Settings is always reachable and never appears in the "customize sidebar" list. */
+fun AndyDestination.isToggleableInSidebar(): Boolean = this != AndyDestination.Settings
+
 @Composable
 fun AndyApp(
     services: AndyServices,

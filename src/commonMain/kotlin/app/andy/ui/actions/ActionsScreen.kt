@@ -929,7 +929,7 @@ private fun ProjectSessionRow(
             onClick = onOpen,
             leading = {
                 when {
-                    isSessionWorking(task) -> ProjectActivityIndicator(8.dp)
+                    isSessionWorking(task) -> ProjectActivityIndicator(12.dp)
                     task.unread -> UnreadDot()
                 }
             },

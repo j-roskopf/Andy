@@ -80,6 +80,7 @@ internal fun Sidebar(
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
     hasActiveProjectAgentTasks: Boolean,
+    logcatLive: Boolean,
     onSelect: (AndyDestination) -> Unit,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -220,7 +221,7 @@ internal fun Sidebar(
                         }
                         if (item == AndyDestination.Logcat) {
                             Text(
-                                "Live",
+                                if (logcatLive) "Live" else "Paused",
                                 color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
                                 fontFamily = DisplayFont,
                                 fontSize = 11.sp,
@@ -243,7 +244,7 @@ internal fun Sidebar(
                                 (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
                             ) UnreadDot()
                             if (item == AndyDestination.Actions && hasActiveProjectAgentTasks) {
-                                ProjectActivityIndicator(16.dp)
+                                ProjectActivityIndicator(20.dp)
                             }
                         }
                     }
