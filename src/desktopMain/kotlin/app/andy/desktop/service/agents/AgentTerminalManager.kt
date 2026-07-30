@@ -14,8 +14,11 @@ import app.andy.terminal.TmuxAndy
 import app.andy.terminal.TmuxAgentBackend
 import app.andy.terminal.TmuxAttachBackend
 import app.andy.terminal.RawScrollbackFile
+import app.andy.terminal.ScrollbackAnsiCursor
+import app.andy.terminal.ScrollbackAnsiSnapshot
 import app.andy.terminal.ScrollbackAccumulator
 import app.andy.terminal.ScrollbackReplayCapture
+import app.andy.terminal.inferScrollbackGridSize
 import app.andy.terminal.replayCaptureStyledRows
 import app.andy.terminal.StyledTerminalRow
 import app.andy.terminal.atomicWriteText
@@ -92,6 +95,10 @@ class AgentTerminalManager(
         @Volatile var scrollbackJob: Job? = null,
         /** Retains terminal state between flushes so a raw PTY tee is replayed only once. */
         var scrollbackReplay: ScrollbackReplayCapture? = null,
+        /** On-demand raw replay retained so later history peeks process only the new suffix. */
+        var rawHistoryReplay: ScrollbackReplayCapture? = null,
+        /** Last raw position folded into `scrollback.ansi`; avoids repeated final derivation. */
+        var committedRawCursor: ScrollbackAnsiCursor? = null,
         /** Serializes scrollback writes: the timer loop and end-of-session callers can race. */
         val scrollbackLock: Any = Any(),
     )
@@ -102,6 +109,12 @@ class AgentTerminalManager(
     private data class DerivedRawTranscript(val size: Long, val modified: Long, val text: String) {
         fun matches(file: File): Boolean = size == file.length() && modified == file.lastModified()
     }
+
+    private data class DerivedRawRows(
+        val size: Long,
+        val modified: Long,
+        val rows: List<StyledTerminalRow>,
+    )
 
     /** Memoizes [derivedRawReplayText] so reopening unchanged history costs nothing. */
     private val derivedRawCache = ConcurrentHashMap<String, DerivedRawTranscript>()
@@ -251,6 +264,9 @@ class AgentTerminalManager(
      * rows that no amount of replay can turn back into a terminal.
      */
     fun scrollbackReplayText(taskId: String): String? {
+        // A wheel-up history peek runs on Dispatchers.IO. Flush here so it includes bytes
+        // received since the timer's last tick; the append is delta-only and normally tiny.
+        handles[taskId]?.let { handle -> runCatching { flushScrollback(handle) } }
         derivedRawReplayText(taskId)?.let { return it }
         val file = scrollbackFile(taskId)
         if (!file.isFile || file.length() == 0L) return null
@@ -282,19 +298,28 @@ class AgentTerminalManager(
         val raw = rawScrollbackFile(taskId)
         if (!raw.isFile || raw.length() == 0L) return null
         val committedFile = scrollbackFile(taskId)
-        val committedFresh = committedFile.isFile && committedFile.lastModified() >= raw.lastModified()
+        val handle = handles[taskId]
+        val committedFresh = if (handle != null) {
+            synchronized(handle.scrollbackLock) {
+                if (!handle.rawScrollback.wroteAnything) {
+                    committedFile.isFile && committedFile.lastModified() >= raw.lastModified()
+                } else {
+                    handle.rawScrollback.cursor()?.let { it == handle.committedRawCursor } == true
+                }
+            }
+        } else {
+            committedFile.isFile && committedFile.lastModified() >= raw.lastModified()
+        }
         if (committedFresh) return null
 
         derivedRawCache[taskId]?.let { cached ->
             if (cached.matches(raw)) return cached.text
         }
-        val content = runCatching { raw.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
-        // Unlike the legacy raw-tee branch in scrollbackReplayText, derive styled rows rather
-        // than stripping escapes: that branch repairs old blobs replayed straight into a
-        // widget, whereas these bytes still carry the styling the live terminal showed.
-        val derived = runCatching {
-            replayCaptureStyledRows(content).joinToString("\n") { it.ansi }.trimEnd()
-        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        val rawRows = deriveRawRows(raw, handle) ?: return null
+        val derived = rawRows.rows.joinToString("\n") { it.ansi }
+            .trimEnd()
+            .takeIf { it.isNotBlank() }
+            ?: return null
 
         // Earlier runs of this chat were committed when their sessions ended; raw holds only
         // the current run, so put the committed transcript back in front of it.
@@ -303,8 +328,53 @@ class AgentTerminalManager(
         }.getOrDefault("")
         val combined = if (committed.isBlank()) derived else committed + SCROLLBACK_SESSION_SEPARATOR + derived
         val replay = compactRepeatedProviderStartupText(combined).takeIf { it.isNotBlank() } ?: return null
-        derivedRawCache[taskId] = DerivedRawTranscript(raw.length(), raw.lastModified(), replay)
+        derivedRawCache[taskId] = DerivedRawTranscript(rawRows.size, rawRows.modified, replay)
         return replay
+    }
+
+    /**
+     * Derive the active raw file under the same lock used by its appender.
+     *
+     * The first history peek reconstructs the retained file. Later peeks hand the same
+     * growing snapshot to [ScrollbackReplayCapture], which starts at its previous character
+     * offset and emulates only newly appended output. No replay session is retained for a
+     * finished chat with no live handle.
+     */
+    private fun deriveRawRows(raw: File, handle: Handle?): DerivedRawRows? {
+        fun derive(): DerivedRawRows? {
+            val content = runCatching { raw.readText() }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: return null
+            val rows = runCatching {
+                if (handle == null) {
+                    replayCaptureStyledRows(content)
+                } else {
+                    replayRawHistory(handle, content)
+                }
+            }.getOrNull() ?: return null
+            return DerivedRawRows(
+                size = raw.length(),
+                modified = raw.lastModified(),
+                rows = rows,
+            )
+        }
+        return if (handle == null) derive() else synchronized(handle.scrollbackLock) { derive() }
+    }
+
+    private fun replayRawHistory(handle: Handle, content: String): List<StyledTerminalRow> {
+        val replay = handle.rawHistoryReplay ?: inferScrollbackGridSize(content).let { grid ->
+            ScrollbackReplayCapture(cols = grid.columns, rows = grid.rows).also {
+                handle.rawHistoryReplay = it
+            }
+        }
+        return replay.capture(
+            ScrollbackAnsiSnapshot(
+                content = content,
+                startOffset = 0L,
+                endOffset = content.length.toLong(),
+                epoch = RAW_FILE_REPLAY_EPOCH,
+            ),
+        )
     }
 
     private fun cleanedScrollbackText(content: String): String? {
@@ -512,6 +582,7 @@ class AgentTerminalManager(
             artifacts.start()
             tracker.start()
             val scrollbackPath = scrollbackFile(task.id)
+            derivedRawCache.remove(task.id)
             val handle = Handle(
                 taskId = task.id,
                 session = session,
@@ -600,6 +671,7 @@ class AgentTerminalManager(
                 stale.artifacts.close()
                 stale.waitJob?.cancel()
                 stale.scrollbackReplay?.close()
+                stale.rawHistoryReplay?.close()
                 releaseSessionViewer(stale.session)
                 handles.remove(taskId)
             }
@@ -832,6 +904,7 @@ class AgentTerminalManager(
             // Direct PTY output can land in the buffer just after process exit.
             finalizeScrollback(handle)
             runCatching { handle.scrollbackReplay?.close() }
+            runCatching { handle.rawHistoryReplay?.close() }
         }
         // stop() always means terminate, unlike session.close() which a reattached
         // TmuxAttachBackend honors with killTmuxOnClose = false. Force it here so a
@@ -862,6 +935,7 @@ class AgentTerminalManager(
             else -> releaseSessionViewer(session)
         }
         runCatching { handle.scrollbackReplay?.close() }
+        runCatching { handle.rawHistoryReplay?.close() }
         bumpSessionsRevision()
     }
 
@@ -941,34 +1015,62 @@ class AgentTerminalManager(
      * [finalizeScrollback] and on-demand derivation instead.
      */
     private fun flushScrollback(handle: Handle) {
-        val snapshot = teeSnapshot(handle.session)
-        if (snapshot == null) {
+        if (!appendTeeDelta(handle)) {
             // No raw tee to mirror (headless tmux with no local viewer). Such sessions are
             // captured a bounded screen at a time, which was never the expensive path.
             runCatching { persistScrollback(handle) }
-            return
-        }
-        synchronized(handle.scrollbackLock) {
-            runCatching { handle.rawScrollback.append(snapshot) }
         }
     }
 
     /** Flush the remaining bytes and derive `scrollback.ansi` once, at end of session. */
     private fun finalizeScrollback(handle: Handle) {
-        teeSnapshot(handle.session)?.let { snapshot ->
-            synchronized(handle.scrollbackLock) {
-                runCatching { handle.rawScrollback.append(snapshot) }
-            }
+        if (appendTeeDelta(handle)) {
+            runCatching { persistRawScrollback(handle) }
+        } else {
+            runCatching { persistScrollback(handle) }
         }
-        runCatching { persistScrollback(handle) }
     }
 
-    private fun teeSnapshot(session: TerminalSession): app.andy.terminal.ScrollbackAnsiSnapshot? =
+    /**
+     * Copy and append only the tee suffix that is not already on disk.
+     *
+     * Resolve the cursor and append under one lock so concurrent timer/final flushes cannot
+     * request the same range. This also bounds the timer allocation by bytes produced since
+     * its last tick instead of by the full retained raw stream.
+     */
+    private fun appendTeeDelta(handle: Handle): Boolean = synchronized(handle.scrollbackLock) {
+        val snapshot = teeSnapshot(handle.session, handle.rawScrollback.cursor())
+            ?: return@synchronized false
+        runCatching { handle.rawScrollback.append(snapshot) }.isSuccess
+    }
+
+    private fun teeSnapshot(
+        session: TerminalSession,
+        cursor: ScrollbackAnsiCursor? = null,
+    ): app.andy.terminal.ScrollbackAnsiSnapshot? =
         when (session) {
-            is TmuxAttachBackend -> session.scrollbackAnsiSnapshot()
-            is KetraTermBackend -> session.scrollbackAnsiSnapshot()
+            is TmuxAttachBackend -> session.scrollbackAnsiSnapshot(cursor)
+            is KetraTermBackend -> session.scrollbackAnsiSnapshot(cursor)
             else -> null
         }
+
+    /**
+     * Reconstruct this run once from its durable raw mirror, including recorded grid changes.
+     *
+     * This is intentionally an end-of-session/on-demand cost. The steady timer performs no
+     * terminal emulation and no transcript alignment.
+     */
+    private fun persistRawScrollback(handle: Handle): Unit = synchronized(handle.scrollbackLock) {
+        val cursor = handle.rawScrollback.cursor() ?: return@synchronized
+        if (cursor == handle.committedRawCursor) return@synchronized
+        val raw = rawScrollbackFile(handle.taskId)
+        val content = runCatching { raw.readText() }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: return@synchronized
+        val snapshot = replayRawHistory(handle, content)
+        commitScrollback(handle, snapshot)
+        handle.committedRawCursor = cursor
+    }
 
     /**
      * Snapshot the terminal and fold it into this run's transcript.
@@ -1009,10 +1111,15 @@ class AgentTerminalManager(
                 }
             else -> captureTmuxRows(handle.taskId, captureRows)
         }
+        commitScrollback(handle, snapshot)
+    }
+
+    /** Fold [snapshot] into this chat and atomically publish its replay transcript. */
+    private fun commitScrollback(handle: Handle, snapshot: List<StyledTerminalRow>) {
         if (snapshot.isNotEmpty()) handle.scrollback.merge(snapshot)
         val export = handle.scrollback.render()
-        if (export.isBlank()) return@synchronized
-        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(export))) return@synchronized
+        if (export.isBlank()) return
+        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(export))) return
         atomicWriteText(handle.scrollbackPath, capScrollbackSize(export))
     }
 
@@ -1082,6 +1189,8 @@ class AgentTerminalManager(
 
         /** Raw PTY mirror written on the live path; `scrollback.ansi` is derived from it. */
         private const val RAW_SCROLLBACK_NAME = "scrollback.raw"
+        /** Stable identity for a growing raw file; a shorter/replaced file triggers reset. */
+        private const val RAW_FILE_REPLAY_EPOCH = 1L
         /** Max wait after DirectPty exit for trailing buffer bytes when scrollback is still empty. */
         private const val DIRECT_PTY_SCROLLBACK_GRACE_ATTEMPTS = 5
         private const val DIRECT_PTY_SCROLLBACK_GRACE_MS = 20L

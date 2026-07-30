@@ -68,6 +68,17 @@ fun TerminalBuffer.exportScrollbackAnsi(): String {
 fun KetraSession.exportScrollbackAnsi(): String =
     readStyledScrollbackRows().joinToString("\r\n") { it.ansi }
 
+/** Grid currently rendered by a live terminal session. */
+fun TerminalRenderFrameReader.readTerminalGridSize(): ScrollbackGridSize {
+    var columns = 0
+    var rows = 0
+    readRenderFrame { frame ->
+        columns = frame.columns
+        rows = frame.rows
+    }
+    return ScrollbackGridSize(columns = columns, rows = rows)
+}
+
 /**
  * Read history + screen as styled rows, newest [maxRows] only when positive.
  *
@@ -91,6 +102,75 @@ fun TerminalRenderFrameReader.readStyledScrollbackRows(maxRows: Int = 0): List<S
         }
     }
     return rows
+}
+
+/**
+ * Reuses rendered rows whose KetraTerm line identity/generation did not change.
+ *
+ * Raw replay samples the same alternate-screen grid after many small updates (spinner,
+ * cursor, one streaming line). Copying and ANSI-encoding every cell of every unchanged row
+ * made opening a long live history scale with `frames × rows × columns`. KetraTerm already
+ * exposes per-line generations, so only dirty lines need that work.
+ */
+internal class StyledTerminalFrameCache {
+    private var lineIds = LongArray(0)
+    private var generations = LongArray(0)
+    private var styledRows = arrayOfNulls<StyledTerminalRow>(0)
+
+    fun read(
+        reader: TerminalRenderFrameReader,
+        maxRows: Int,
+    ): List<StyledTerminalRow> {
+        var historySize = 0
+        var screenRows = 0
+        reader.readRenderFrame { frame ->
+            historySize = frame.historySize
+            screenRows = frame.rows
+        }
+        val total = historySize + screenRows
+        if (total <= 0) return emptyList()
+        val wanted = if (maxRows in 1 until total) maxRows else total
+        val rows = ArrayList<StyledTerminalRow>(wanted)
+        reader.readRenderFrame(
+            scrollbackOffset = historySize - (total - wanted),
+            viewportRows = wanted,
+        ) { frame ->
+            ensureCapacity(frame.rows)
+            for (row in 0 until frame.rows) {
+                val lineId = frame.lineId(row)
+                val generation = frame.lineGeneration(row)
+                val cached = styledRows[row]
+                val styled = if (
+                    cached != null &&
+                    lineIds[row] == lineId &&
+                    generations[row] == generation
+                ) {
+                    cached
+                } else {
+                    renderLineAsStyledRow(frame, row).also {
+                        lineIds[row] = lineId
+                        generations[row] = generation
+                        styledRows[row] = it
+                    }
+                }
+                rows += styled
+            }
+        }
+        return rows
+    }
+
+    fun clear() {
+        lineIds = LongArray(0)
+        generations = LongArray(0)
+        styledRows = arrayOfNulls(0)
+    }
+
+    private fun ensureCapacity(rows: Int) {
+        if (lineIds.size == rows) return
+        lineIds = LongArray(rows) { Long.MIN_VALUE }
+        generations = LongArray(rows) { Long.MIN_VALUE }
+        styledRows = arrayOfNulls(rows)
+    }
 }
 
 /**

@@ -46,6 +46,22 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun scrollbackTeeCopiesOnlyContentAfterConsumerCursor() {
+        val tee = ScrollbackAnsiTee(maxBytes = 1024)
+        "first".encodeToByteArray().let { tee.append(it, 0, it.size) }
+        val first = tee.snapshotWithOffsets()
+
+        "-second".encodeToByteArray().let { tee.append(it, 0, it.size) }
+        val delta = tee.snapshotWithOffsets(
+            ScrollbackAnsiCursor(offset = first.endOffset, epoch = first.epoch),
+        )
+
+        assertEquals("-second", delta.content)
+        assertEquals(first.endOffset, delta.startOffset)
+        assertEquals(first.epoch, delta.epoch)
+    }
+
+    @Test
     fun exportScrollbackAnsiContainsEchoOutput() = runBlocking {
         AndyKetraTermConfig.ensureInitialized()
         val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
@@ -176,6 +192,30 @@ class KetraTermScrollbackTest {
 
         assertTrue(rows.any { it.plain == "1" }, "first short row was lost: $plain")
         assertTrue(rows.any { it.plain == "250" }, "last short row was lost: $plain")
+    }
+
+    @Test
+    fun infersLegacyLiveGridFromAbsoluteCursorAddressing() {
+        // The broken history screenshot came from a 164x54 live terminal replayed into the
+        // old 120-column default. Its provider addressed column 163 then painted two cells.
+        val raw = "\u001B[54;1H\u001B[163Gto"
+
+        assertEquals(ScrollbackGridSize(columns = 164, rows = 54), inferScrollbackGridSize(raw))
+    }
+
+    @Test
+    fun replayUsesRecordedLiveGridForRightEdgeContent() {
+        AndyKetraTermConfig.ensureInitialized()
+        val raw = buildString {
+            append(scrollbackLayoutMarker(columns = 164, rows = 54))
+            append("\u001B[2J\u001B[54;163Hok")
+        }
+
+        val rows = replayCaptureStyledRows(raw)
+        val rightEdge = assertNotNull(rows.firstOrNull { it.plain.trim() == "ok" })
+
+        assertEquals(164, rightEdge.plain.length)
+        assertTrue(rightEdge.plain.endsWith("ok"))
     }
 
     @Test
@@ -669,4 +709,5 @@ class KetraTermScrollbackTest {
             }
         }
     }
+
 }

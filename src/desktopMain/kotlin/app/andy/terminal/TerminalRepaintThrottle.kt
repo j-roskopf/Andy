@@ -107,13 +107,32 @@ class TerminalRepaintThrottle(
          * halve the blit work, and the cap is the only lever Andy has over it.
          *
          * 60 was above every rate agent CLIs actually produce (claude sits near 24/s), so it
-         * never coalesced anything and only the worst cases paid. 20 keeps the worst-case
-         * added latency at 50ms — under the threshold where echo reads as lag — while cutting
-         * the blit ceiling from ~120/s to ~80/s.
+         * never coalesced anything and only the worst cases paid.
+         *
+         * The numbers that motivated dropping to 15 came from [TerminalPipelineBenchmark], whose
+         * widget is a plain `JComponent` that dirties one row per tick. That measured the cap
+         * against a synthetic repaint pattern and showed cost scaling cleanly with paints/s
+         * (~2.8 points from 20 -> 15). Re-measured against the *real* KetraTerm widget fed by a
+         * real PTY (`LiveTerminalPipelineBenchmark`, one visible streaming chat, 200x50 grid, a
+         * 24fps full-grid redraw), the cap turns out to matter far less:
+         *
+         *   cap        whole-process CPU     (drift between repeated controls: ~1 point)
+         *   off                  19.6%
+         *   60                   19.5%
+         *   15                   18.8%
+         *
+         * So the cap is worth roughly 1 point, not 3 — KetraTerm coalesces its own damage and
+         * the Metal blit dominates, so limiting repaint *requests* barely changes the work. The
+         * synthetic bench overstated it by isolating exactly the variable the cap controls.
+         *
+         * 15 is kept because it is the measured best of the three and its 67ms worst-case added
+         * latency has not been a complaint. It is a weak lever, though: raising it toward 30
+         * would halve that latency for ~0.3 points, and the real streaming cost lives elsewhere
+         * (paint/composite is ~11 of the ~18 points; see [LiveTerminalPipelineBenchmark]).
          *
          * Override with `-Dandy.terminal.repaint.fps=<n>`; `0` disables.
          */
-        private const val DEFAULT_FPS = 20L
+        private const val DEFAULT_FPS = 15L
 
         private val installed = AtomicBoolean(false)
 

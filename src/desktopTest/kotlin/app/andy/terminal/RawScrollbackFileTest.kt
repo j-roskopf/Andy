@@ -42,6 +42,21 @@ class RawScrollbackFileTest {
     }
 
     @Test
+    fun recordsLayoutInitiallyAndWheneverTheLiveGridChanges() {
+        val file = tempFile()
+        val raw = RawScrollbackFile(file)
+
+        raw.append(snapshot("wide\n").copy(columns = 164, rows = 54))
+        raw.append(snapshot("wide\nmore\n").copy(columns = 164, rows = 54))
+        raw.append(snapshot("wide\nmore\nnarrow\n").copy(columns = 100, rows = 32))
+
+        val text = file.readText()
+        assertEquals(1, Regex("andy-grid=164x54").findAll(text).count())
+        assertEquals(1, Regex("andy-grid=100x32").findAll(text).count())
+        assertTrue(text.endsWith("narrow\n"))
+    }
+
+    @Test
     fun clearedTeeRestartsWithoutDroppingItsContent() {
         val file = tempFile()
         val raw = RawScrollbackFile(file)
