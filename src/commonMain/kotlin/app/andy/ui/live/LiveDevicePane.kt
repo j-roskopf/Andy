@@ -56,6 +56,7 @@ import app.andy.andy.generated.resources.hardware_record
 import app.andy.andy.generated.resources.hardware_rotate
 import app.andy.andy.generated.resources.hardware_volume_down
 import app.andy.andy.generated.resources.hardware_volume_up
+import app.andy.domain.scalePointFromStreamToDisplay
 import app.andy.model.AndroidDevice
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
@@ -164,6 +165,17 @@ internal fun liveMirrorStreamSize(
     foldable = foldableProfile?.let { FoldableStreamContext(it, foldableHingeAngle) },
     allowDeviceScreenFallback = false,
 )
+
+/**
+ * Pixel size of the decoded mirror texture for overlays and hit-testing. Prefer the live
+ * [frame] over scrcpy session metadata — session dimensions can lag or disagree with the
+ * texture after the stream stabilizes, which misaligns inspector bounds overlays.
+ */
+internal fun liveMirrorFrameSize(frame: MirrorFrame?, session: MirrorSession? = null): MirrorSourceSize {
+    frame?.takeIf { it.width > 1 && it.height > 1 }?.let { return MirrorSourceSize(it.width, it.height) }
+    session?.takeIf { it.width > 1 && it.height > 1 }?.let { return MirrorSourceSize(it.width, it.height) }
+    return MirrorSourceSize(1, 1)
+}
 
 private fun resolveLiveMirrorSourceSize(
     device: AndroidDevice?,
@@ -291,6 +303,8 @@ internal fun LiveDevicePane(
     connectResult: String,
     modifier: Modifier = Modifier,
     highlightBounds: String? = null,
+    boundsDisplayWidth: Int? = null,
+    boundsDisplayHeight: Int? = null,
     showRuler: Boolean = false,
     rulerWidth: Float = 0.5f,
     rulerHeight: Float = 0.5f,
@@ -393,7 +407,13 @@ internal fun LiveDevicePane(
             )
         }
 
-        Column(Modifier.fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             if (showDeviceHeader && serial != null) {
                 val streamChips = remember(
                     mirrorSession,
@@ -435,6 +455,7 @@ internal fun LiveDevicePane(
                     foldableProfile = foldableProfile.takeIf { foldableEnabled },
                     foldableHingeAngle = foldableHingeAngle,
                 )
+                val frameSource = liveMirrorFrameSize(frame, mirrorSession)
                 val layoutSource = liveMirrorLayoutSize(
                     device = device,
                     frame = frame,
@@ -443,8 +464,21 @@ internal fun LiveDevicePane(
                     foldableProfile = foldableProfile.takeIf { foldableEnabled },
                     foldableHingeAngle = foldableHingeAngle,
                 )
-                val sourceWidth = streamSource.width
-                val sourceHeight = streamSource.height
+                val sourceWidth = frameSource.width
+                val sourceHeight = frameSource.height
+                val scaledDevicePointClick: (Int, Int) -> Unit = { x, y ->
+                    if (
+                        boundsDisplayWidth != null && boundsDisplayHeight != null &&
+                        sourceWidth > 0 && sourceHeight > 0
+                    ) {
+                        val (displayX, displayY) = scalePointFromStreamToDisplay(
+                            x, y, boundsDisplayWidth, boundsDisplayHeight, sourceWidth, sourceHeight,
+                        )
+                        onDevicePointClick(displayX, displayY)
+                    } else {
+                        onDevicePointClick(x, y)
+                    }
+                }
                 val aspect = layoutSource.width.toFloat() / layoutSource.height.toFloat()
                 val navHeight = if (showChromeControls) 60.dp else 0.dp
                 val viewportHeight = (maxHeight - navHeight).coerceAtLeast(1.dp)
@@ -524,6 +558,8 @@ internal fun LiveDevicePane(
                             } else if (serial != null || frame != null) {
                                 val surfaceOverlay = MirrorOverlay(
                                     highlightBounds = highlightBounds,
+                                    boundsDisplayWidth = boundsDisplayWidth,
+                                    boundsDisplayHeight = boundsDisplayHeight,
                                     sourceWidth = sourceWidth,
                                     sourceHeight = sourceHeight,
                                     showGrid = gridSize != null,
@@ -559,7 +595,7 @@ internal fun LiveDevicePane(
                                         onHoverColor = onHoverColor,
                                         passThroughInput = inputEnabled,
                                         onPickerClick = onPickerClick,
-                                        onDevicePointClick = onDevicePointClick,
+                                        onDevicePointClick = scaledDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         onContentPan = onContentPan,
                                         overlay = surfaceOverlay,
@@ -577,7 +613,7 @@ internal fun LiveDevicePane(
                                         onHoverColor = onHoverColor,
                                         passThroughInput = inputEnabled,
                                         onPickerClick = onPickerClick,
-                                        onDevicePointClick = onDevicePointClick,
+                                        onDevicePointClick = scaledDevicePointClick,
                                         onRulerResize = onRulerResize,
                                         onContentPan = onContentPan,
                                         overlay = surfaceOverlay,

@@ -29,6 +29,7 @@ actual fun HostCodeEditor(
     languageHint: String,
     modifier: Modifier,
     syntaxThemeId: String,
+    initialLine: Int?,
     onTextChange: (String, String) -> Unit,
     onSave: (String, String) -> Unit,
     onClose: () -> Unit,
@@ -47,6 +48,7 @@ actual fun HostCodeEditor(
             panel.updateDocument(path, text)
             panel.updateLanguage(languageHint)
             panel.updateSyntaxTheme(syntaxThemeId)
+            panel.navigateToLineOnce(path, initialLine)
             panel.onTextChange = onTextChange
             panel.onSave = onSave
             panel.onClose = onClose
@@ -68,6 +70,7 @@ private class HostCodeEditorPanel(
     private var programmaticUpdate = false
     private var currentPath = ""
     private var currentSyntaxThemeId = EditorSyntaxTheme.Andy.id
+    private var lastNavigatedKey: Pair<String, Int>? = null
     private val editor = RSyntaxTextArea().apply {
         syntaxEditingStyle = SyntaxConstants.SYNTAX_STYLE_NONE
         isCodeFoldingEnabled = true
@@ -113,6 +116,19 @@ private class HostCodeEditorPanel(
         editor.text = value
         editor.caretPosition = if (pathChanged) 0 else caret.coerceAtMost(value.length)
         programmaticUpdate = false
+    }
+
+    /** Moves the caret to [line] (1-based) once per (path, line) pair, so recomposition doesn't fight manual scrolling. */
+    fun navigateToLineOnce(path: String, line: Int?) {
+        if (line == null) return
+        val key = path to line
+        if (lastNavigatedKey == key) return
+        lastNavigatedKey = key
+        runCatching {
+            val offset = editor.getLineStartOffset((line - 1).coerceAtLeast(0).coerceAtMost(editor.lineCount - 1))
+            editor.caretPosition = offset
+            SwingUtilities.invokeLater { editor.requestFocusInWindow() }
+        }
     }
 
     fun updateLanguage(languageHint: String) {

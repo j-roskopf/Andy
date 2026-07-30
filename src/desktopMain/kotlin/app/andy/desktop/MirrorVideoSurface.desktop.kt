@@ -6,6 +6,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import app.andy.domain.effectiveHighlightBounds
+import app.andy.domain.highlightContentUv
 import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -667,15 +669,23 @@ private class MirrorPanel(
 
     /** Mirrors geometry controls into Metal; the Java paint path still owns CPU fallback/tests. */
     private fun updateNativeOverlay(next: MirrorOverlay) {
-        val sourceWidth = (next.sourceWidth ?: image?.width ?: 1).coerceAtLeast(1)
-        val sourceHeight = (next.sourceHeight ?: image?.height ?: 1).coerceAtLeast(1)
+        val frameWidth = image?.width?.takeIf { it > 1 }
+        val frameHeight = image?.height?.takeIf { it > 1 }
+        val sourceWidth = (frameWidth ?: next.sourceWidth ?: image?.width ?: 1).coerceAtLeast(1)
+        val sourceHeight = (frameHeight ?: next.sourceHeight ?: image?.height ?: 1).coerceAtLeast(1)
         val gridColor = if (next.gridColor == Color.Transparent) {
             Color.White.copy(alpha = .28f)
         } else {
             next.gridColor.copy(alpha = .28f)
         }
         val rulerColor = next.rulerColor.copy(alpha = .95f)
-        val highlight = parseBounds(next.highlightBounds)
+        val highlightUv = highlightContentUv(
+            next.highlightBounds,
+            next.boundsDisplayWidth,
+            next.boundsDisplayHeight,
+            sourceWidth,
+            sourceHeight,
+        )
         val gpu = ensureGpuPresenter()
         if (gpu != null && usesGpuHub()) {
             gpu.updateOverlay(
@@ -696,10 +706,10 @@ private class MirrorPanel(
                 sourceWidth = sourceWidth.toFloat(),
                 sourceHeight = sourceHeight.toFloat(),
                 pickerEnabled = next.pickerColor != null,
-                highlightLeft = highlight?.get(0)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 1f,
-                highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
-                highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
-                highlightBottom = highlight?.get(3)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 0f,
+                highlightLeft = highlightUv?.get(0)?.coerceIn(0f, 1f) ?: 1f,
+                highlightTop = highlightUv?.get(1)?.coerceIn(0f, 1f) ?: 1f,
+                highlightRight = highlightUv?.get(2)?.coerceIn(0f, 1f) ?: 0f,
+                highlightBottom = highlightUv?.get(3)?.coerceIn(0f, 1f) ?: 0f,
                 contentZoom = next.contentZoom.coerceAtLeast(1f),
                 contentPanX = next.contentPanX.coerceIn(0f, 1f),
                 contentPanY = next.contentPanY.coerceIn(0f, 1f),
@@ -724,10 +734,10 @@ private class MirrorPanel(
             sourceWidth = sourceWidth.toFloat(),
             sourceHeight = sourceHeight.toFloat(),
             pickerEnabled = next.pickerColor != null,
-            highlightLeft = highlight?.get(0)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 1f,
-            highlightTop = highlight?.get(1)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 1f,
-            highlightRight = highlight?.get(2)?.toFloat()?.div(sourceWidth)?.coerceIn(0f, 1f) ?: 0f,
-            highlightBottom = highlight?.get(3)?.toFloat()?.div(sourceHeight)?.coerceIn(0f, 1f) ?: 0f,
+            highlightLeft = highlightUv?.get(0)?.coerceIn(0f, 1f) ?: 1f,
+            highlightTop = highlightUv?.get(1)?.coerceIn(0f, 1f) ?: 1f,
+            highlightRight = highlightUv?.get(2)?.coerceIn(0f, 1f) ?: 0f,
+            highlightBottom = highlightUv?.get(3)?.coerceIn(0f, 1f) ?: 0f,
         )
     }
 
@@ -923,7 +933,13 @@ private class MirrorPanel(
             drawPill(g2, rect.x + 8, drawY + 8, yPx.roundToInt().toString())
             drawPill(g2, rect.x + rect.width - 74, (drawY - 24).coerceAtLeast(rect.y + 4), (sourceHeight - yPx).roundToInt().toString())
         }
-        parseBounds(overlay.highlightBounds)?.let { bounds ->
+        effectiveHighlightBounds(
+            overlay.highlightBounds,
+            overlay.boundsDisplayWidth,
+            overlay.boundsDisplayHeight,
+            overlay.sourceWidth ?: frameImage.width,
+            overlay.sourceHeight ?: frameImage.height,
+        )?.let { bounds ->
             val scaleX = rect.width / window.width
             val scaleY = rect.height / window.height
             val x = rect.x + ((bounds[0] - window.x) * scaleX).roundToInt()

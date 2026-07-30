@@ -51,8 +51,11 @@ import app.andy.domain.activeBugActionIndex
 import app.andy.domain.activeBugPointerEvent
 import app.andy.domain.bugPlaybackMillis
 import app.andy.domain.BugPointerEvent
+import app.andy.rememberCopyText
 import app.andy.service.BugService
 import app.andy.service.MirrorFrame
+import app.andy.service.RecordingExportService
+import app.andy.service.UnavailableRecordingExportService
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.DetailRow
@@ -65,6 +68,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.live.RecordingExportSheet
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -80,11 +84,17 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
+internal fun BugsScreen(
+    bugs: BugService,
+    recordings: Boolean = false,
+    recordingExport: RecordingExportService = UnavailableRecordingExportService,
+) {
     val scope = rememberCoroutineScope()
+    val copyText = rememberCopyText()
     val state = remember(bugs) { BugsScreenState(bugs) }
     val stepsListState = rememberLazyListState()
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    var exportSheetVisible by remember { mutableStateOf(false) }
     val pageTitle = if (recordings) "Recordings" else "Bugs"
     val itemLabel = if (recordings) "recording" else "bug report"
 
@@ -99,6 +109,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
 
     LaunchedEffect(Unit) { refreshReports() }
     LaunchedEffect(state.selectedId, state.reports) {
+        exportSheetVisible = false
         val id = state.selectedId
         state.selected = state.reports.firstOrNull { it.id == id } ?: id?.let { state.bugs.loadBug(it) }
         state.logcat = id?.let { state.bugs.loadBugLog(it) }.orEmpty()
@@ -203,11 +214,29 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         shape = RoundedCornerShape(10.dp),
                     ) { Text(if (state.isReplaying) "Pause" else if (recordings) "Play" else "Reproduce") }
                     Spacer(Modifier.width(8.dp))
+                    if (recordings) {
+                        OutlinedButton(onClick = { exportSheetVisible = true }) { Text("Export…") }
+                        Spacer(Modifier.width(8.dp))
+                    }
                     OutlinedButton(onClick = {
                         scope.launch {
                             state.status = state.bugs.exportBug(report.id)?.let { "Exported to $it" } ?: "Export failed"
                         }
-                    }) { Text("Export") }
+                    }) { Text("Duplicate") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { scope.launch { state.bugs.revealBug(report.id) } }) { Text("Reveal") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            val path = state.bugs.bugDirectoryPath(report.id)
+                            state.status = if (path != null) {
+                                copyText(path)
+                                "Copied path to clipboard"
+                            } else {
+                                "Path is not available on this platform"
+                            }
+                        }
+                    }) { Text("Copy path") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
@@ -226,6 +255,9 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
                     ) { Text("Delete") }
+                }
+                report.videoCaptureWarning?.let { warning ->
+                    Text("⚠ $warning", color = Rust, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
@@ -401,6 +433,12 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                             DetailRow("ABI", report.abi)
                             DetailRow("Resolution", report.resolution)
                             DetailRow("Captured", formatMillis(report.capturedAtMillis))
+                            if (recordings) {
+                                DetailSection("VIDEO")
+                                DetailRow("Duration", formatDurationSeconds(report))
+                                DetailRow("Frame rate", report.videoFrameRate?.let { "${app.andy.formatDecimal(it, 1)} fps" })
+                                DetailRow("Frames", report.videoFrameTimestampsMillis.size.takeIf { it > 0 }?.toString())
+                            }
                             DetailSection("ARTIFACT FILES")
                             report.artifacts.forEach { artifact ->
                                 DetailRow(artifact.name, artifact.sizeBytes?.let(::formatBytes) ?: artifact.kind)
@@ -436,6 +474,17 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
             },
         )
     }
+    if (exportSheetVisible) {
+        state.selected?.let { report ->
+            RecordingExportSheet(
+                report = report,
+                bugs = state.bugs,
+                recordingExport = recordingExport,
+                onDismiss = { exportSheetVisible = false },
+                onRenamed = { refreshReports() },
+            )
+        }
+    }
 }
 
 @Composable
@@ -465,6 +514,13 @@ private fun BugStepExpandedRow(label: String, value: String) {
 }
 
 private fun formatMillis(value: Long): String = if (value <= 0L) "-" else value.toString()
+
+private fun formatDurationSeconds(report: app.andy.model.BugReport): String? {
+    val start = report.videoStartedAtMillis ?: return null
+    val end = report.videoEndedAtMillis ?: return null
+    val seconds = (end - start).coerceAtLeast(0L) / 1000.0
+    return "${app.andy.formatDecimal(seconds, 1)}s"
+}
 
 private fun BugPointerEvent.toMirrorGestureOverlay() = MirrorGestureOverlay(
     startX = x,

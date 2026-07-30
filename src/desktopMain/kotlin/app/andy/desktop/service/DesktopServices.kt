@@ -108,11 +108,18 @@ fun createDaemonRuntime(
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
+    val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
     val dhu = DesktopDhuService(devices = devices, runner = runner)
+    val metrics = DesktopMetricsService(runner, devices)
+    val crashInspector = DesktopCrashInspectorService(devices)
+    val heapDump = DesktopHeapDumpService(runner, devices, files)
+
+    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val recordingExportService = DesktopRecordingExportService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -124,7 +131,13 @@ fun createDaemonRuntime(
         files = files,
         proxy = proxy,
         accessibility = accessibility,
+        viewHierarchy = viewHierarchy,
         workspaceStore = store,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
+        bugs = bugService,
+        recordingExport = recordingExportService,
     )
 
     val agentRuns = DesktopAgentRunService(
@@ -156,15 +169,19 @@ fun createDaemonRuntime(
         files = files,
         hostFiles = hostFiles,
         proxy = proxy,
-        metrics = DesktopMetricsService(runner, devices),
+        metrics = metrics,
         accessibility = accessibility,
-        bugs = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility),
+        viewHierarchy = viewHierarchy,
+        bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
         dhu = dhu,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         mcp = mcp,
@@ -264,14 +281,21 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
+    val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
     val dhu = DesktopDhuService(devices = devices, runner = runner)
+    val metrics = DesktopMetricsService(runner, devices)
+    val crashInspector = DesktopCrashInspectorService(devices)
+    val heapDump = DesktopHeapDumpService(runner, devices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
+
+    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val recordingExportService = DesktopRecordingExportService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -283,7 +307,13 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         files = files,
         proxy = proxy,
         accessibility = accessibility,
+        viewHierarchy = viewHierarchy,
         workspaceStore = store,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
+        bugs = bugService,
+        recordingExport = recordingExportService,
     )
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
@@ -336,15 +366,19 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         files = files,
         hostFiles = hostFiles,
         proxy = proxy,
-        metrics = DesktopMetricsService(runner, devices),
+        metrics = metrics,
         accessibility = accessibility,
-        bugs = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility),
+        viewHierarchy = viewHierarchy,
+        bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
         dhu = dhu,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,
@@ -397,14 +431,21 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
+    val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
     val sharedPrefs = DesktopSharedPrefsService(runner, devices)
     val appDatabase = DesktopAppDatabaseService(runner, devices)
     val dhu = DesktopDhuService(devices = devices, runner = runner)
+    val metrics = DesktopMetricsService(runner, devices)
+    val crashInspector = DesktopCrashInspectorService(devices)
+    val heapDump = DesktopHeapDumpService(runner, devices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
+
+    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val recordingExportService = DesktopRecordingExportService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -416,7 +457,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         files = files,
         proxy = proxy,
         accessibility = accessibility,
-        workspaceStore = store
+        viewHierarchy = viewHierarchy,
+        workspaceStore = store,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
+        bugs = bugService,
+        recordingExport = recordingExportService,
     )
 
     val agentRuns = DesktopAgentRunService(
@@ -474,15 +521,19 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         files = files,
         hostFiles = hostFiles,
         proxy = proxy,
-        metrics = DesktopMetricsService(runner, devices),
+        metrics = metrics,
         accessibility = accessibility,
-        bugs = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility),
+        viewHierarchy = viewHierarchy,
+        bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,
         sharedPrefs = sharedPrefs,
         appDatabase = appDatabase,
         dhu = dhu,
+        crashInspector = crashInspector,
+        heapDump = heapDump,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,

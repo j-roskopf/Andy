@@ -22,7 +22,7 @@ import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.transfer.DeviceTransferCoordinator
-import app.andy.ui.accessibility.AccessibilityState
+import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
 import kotlinx.coroutines.CoroutineScope
@@ -49,12 +49,12 @@ internal class ShellState(
     /** Shared Live/Controls hinge angle for foldable emulator previews (degrees, 0–180). */
     var foldableHingeAngle by mutableStateOf(180f)
         private set
-
     val activeTargetId: String?
         get() = selectedIosUdid ?: selectedSerial
 
     val isIosSelection: Boolean
         get() = selectedIosUdid != null
+
     var workspaceState by mutableStateOf(WorkspaceState())
         private set
     var workspaceLoaded by mutableStateOf(false)
@@ -86,7 +86,7 @@ internal class ShellState(
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
-    val accessibilityState = AccessibilityState()
+    val inspectorState = InspectorState()
     val transfer = DeviceTransferCoordinator()
 
     fun navigateTo(value: AndyDestination) {
@@ -115,6 +115,30 @@ internal class ShellState(
 
     fun updateFoldableHingeAngle(angle: Float) {
         foldableHingeAngle = if (angle.coerceIn(0f, 180f) < 90f) 0f else 180f
+    }
+
+    fun setDeviceLabel(targetId: String, label: String) {
+        updateWorkspace { state ->
+            state.copy(
+                deviceLabels = if (label.isBlank()) {
+                    state.deviceLabels - targetId
+                } else {
+                    state.deviceLabels + (targetId to label.trim())
+                },
+            )
+        }
+    }
+
+    fun setDeviceNote(targetId: String, note: String) {
+        updateWorkspace { state ->
+            state.copy(
+                deviceNotes = if (note.isBlank()) {
+                    state.deviceNotes - targetId
+                } else {
+                    state.deviceNotes + (targetId to note)
+                },
+            )
+        }
     }
 
     private fun persistSelectedTarget() {

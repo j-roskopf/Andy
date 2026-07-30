@@ -57,3 +57,35 @@ data class BugCaptureStatus(
     val videoFrameCount: Int = 0,
     val message: String = "Bug capture idle",
 )
+
+/** Export container for a trimmed recording. Gif/WebP favor small, shareable clips over fidelity. */
+@Serializable
+enum class ClipFormat { Mp4, Gif, WebP, PngSequence }
+
+/**
+ * A request to export part (or all) of a saved recording (`BugReport` with a `recording-` id).
+ * Trim is metadata over [BugReport.videoFrameTimestampsMillis] — no re-encode is needed until
+ * export actually runs. [scale] is the target output width in pixels (aspect-preserving); [fps]
+ * is the target output frame rate; [loop] only applies to Gif/WebP.
+ */
+@Serializable
+data class RecordingExportRequest(
+    val id: String,
+    val startMillis: Long,
+    val endMillis: Long,
+    val format: ClipFormat,
+    val scale: Int = 480,
+    val fps: Int = 12,
+    val loop: Boolean = true,
+)
+
+/** Result of a completed export: written to [localPath], ready to reveal/copy/open. */
+@Serializable
+data class ExportedClip(
+    val localPath: String,
+    val format: ClipFormat,
+    val sizeBytes: Long,
+    val frameCount: Int,
+    val widthPx: Int = 0,
+    val heightPx: Int = 0,
+)

@@ -37,6 +37,33 @@ class AccessibilityHitTest {
     }
 
     @Test
+    fun prefersDeeplyNestedOverlappingChildOverAncestorContainers() {
+        val icon = node(
+            id = "icon",
+            className = "android.widget.ImageView",
+            contentDescription = "Delete",
+            bounds = "[500,500][560,560]",
+            clickable = true,
+        )
+        val row = node(id = "row", className = "android.view.ViewGroup", bounds = "[0,480][1080,600]", children = listOf(icon))
+        val list = node(id = "list", className = "android.widget.ListView", bounds = "[0,200][1080,2200]", children = listOf(row))
+        val root = node(id = "root", className = "android.widget.FrameLayout", bounds = "[0,0][1080,2340]", children = listOf(list))
+
+        assertEquals("icon", root.findBestNodeAt(530, 530)?.id)
+    }
+
+    @Test
+    fun prefersLabeledOverlappingSiblingOverLargerUnlabeledOneAtTheSameDepth() {
+        val badge = node(id = "badge", className = "android.widget.TextView", text = "3", bounds = "[900,50][960,110]", clickable = true)
+        val card = node(id = "card", className = "android.view.ViewGroup", bounds = "[800,40][1000,300]", clickable = true)
+        val root = node(id = "root", className = "android.widget.FrameLayout", bounds = "[0,0][1080,2340]", children = listOf(card, badge))
+
+        // Both bounds contain the tap point; the labeled, smaller badge should win over its
+        // larger, unlabeled sibling.
+        assertEquals("badge", root.findBestNodeAt(930, 80)?.id)
+    }
+
+    @Test
     fun returnsNullWhenPointIsFarFromAllNodes() {
         val root = node(
             id = "root",

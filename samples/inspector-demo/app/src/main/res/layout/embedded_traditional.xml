@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/embedded_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#E8EAF6"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/embedded_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Embedded Android View hierarchy"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/embedded_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="4dp"
+        android:text="Visible in unmerged view tree with resource ids"
+        android:textSize="12sp" />
+
+    <Button
+        android:id="@+id/embedded_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Native button" />
+</LinearLayout>

@@ -47,6 +47,9 @@ import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.HeaderCell
 import app.andy.model.LogLevel
 import app.andy.model.LogcatEntry
+import app.andy.model.LogcatTab
+import app.andy.model.WorkspaceState
+import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
@@ -76,23 +79,48 @@ import kotlinx.coroutines.launch
 
 @Composable
 internal fun LogcatScreen(
-    logcat: LogcatService,
-    appsService: AppService,
+    services: AndyServices,
     serial: String?,
     state: LogcatState,
     selectedPackage: String?,
-    onSelectedPackageChange: (String?) -> Unit
+    onSelectedPackageChange: (String?) -> Unit,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
-    LogcatPanel(
-        logcat = logcat,
-        appsService = appsService,
-        serial = serial,
-        selectedPackage = selectedPackage,
-        onSelectedPackageChange = onSelectedPackageChange,
-        modifier = Modifier.fillMaxSize(),
-        compact = false,
-        state = state
-    )
+    val logcatTab = LogcatTab.entries.firstOrNull { it.name == workspaceState.logcatTab } ?: LogcatTab.Stream
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterPill("Stream", logcatTab == LogcatTab.Stream, Rust) {
+                onUpdateWorkspace { it.copy(logcatTab = LogcatTab.Stream.name) }
+            }
+            FilterPill("Crashes", logcatTab == LogcatTab.Crashes, Rust) {
+                onUpdateWorkspace { it.copy(logcatTab = LogcatTab.Crashes.name) }
+            }
+        }
+
+        when (logcatTab) {
+            LogcatTab.Stream -> {
+                LogcatPanel(
+                    logcat = services.logcat,
+                    appsService = services.apps,
+                    serial = serial,
+                    selectedPackage = selectedPackage,
+                    onSelectedPackageChange = onSelectedPackageChange,
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                    compact = false,
+                    state = state,
+                )
+            }
+            LogcatTab.Crashes -> {
+                CrashesPanel(
+                    services = services,
+                    serial = serial,
+                    modifier = Modifier.fillMaxSize().weight(1f),
+                )
+            }
+        }
+    }
 }
 
 @Composable

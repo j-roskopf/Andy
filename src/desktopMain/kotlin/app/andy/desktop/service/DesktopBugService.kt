@@ -14,6 +14,7 @@ import app.andy.model.BugReport
 import app.andy.model.LogLevel
 import app.andy.service.AccessibilityService
 import app.andy.service.BugService
+import app.andy.service.CommandResult
 import app.andy.service.DeviceService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
@@ -195,9 +196,10 @@ class DesktopBugService(
     }
 
     private fun sampleArgbBackup(now: Long, lastCpuFrame: MirrorFrame?) {
-        val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
-            ?: copyDecodedArgbBackup()
-            ?: return
+        val sampled = when {
+            recordingActive -> copyDecodedArgbBackup() ?: lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
+            else -> lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) } ?: copyDecodedArgbBackup()
+        } ?: return
         synchronized(lock) {
             if (captureSerial == null) return
             val minInterval = if (recordingActive) {
@@ -396,6 +398,37 @@ class DesktopBugService(
         if (target.exists()) target.deleteRecursively()
         copyDirectory(source, target)
         target.absolutePath
+    }
+
+    override suspend fun revealBug(id: String): CommandResult = withContext(Dispatchers.IO) {
+        val dir = File(bugsDir, id)
+        if (!dir.isDirectory) return@withContext CommandResult.failure("Report not found: $id")
+        val target = File(dir, "capture.mp4").takeIf { it.isFile } ?: dir
+        runCatching {
+            val desktop = java.awt.Desktop.getDesktop()
+            if (java.awt.Desktop.isDesktopSupported() && desktop.isSupported(java.awt.Desktop.Action.BROWSE_FILE_DIR)) {
+                desktop.browseFileDirectory(target)
+            } else {
+                desktop.open(dir)
+            }
+            CommandResult.success(dir.absolutePath)
+        }.getOrElse { CommandResult.failure(it.message ?: "Reveal failed") }
+    }
+
+    override suspend fun bugDirectoryPath(id: String): String? = withContext(Dispatchers.IO) {
+        File(bugsDir, id).takeIf { it.isDirectory }?.absolutePath
+    }
+
+    override suspend fun renameBug(id: String, title: String): CommandResult = withContext(Dispatchers.IO) {
+        val trimmed = title.trim()
+        if (trimmed.isBlank()) return@withContext CommandResult.failure("Title is required")
+        val reportDir = File(bugsDir, id)
+        val report = readReport(reportDir) ?: return@withContext CommandResult.failure("Report not found: $id")
+        val metadataFile = File(reportDir, "metadata.json")
+        runCatching {
+            metadataFile.writeText(BugJson.writeReport(report.copy(title = trimmed)))
+            CommandResult.success(trimmed)
+        }.getOrElse { CommandResult.failure(it.message ?: "Rename failed") }
     }
 
     override fun playbackFrames(id: String, startFrameIndex: Int): Flow<MirrorFrame> = flow {
@@ -984,8 +1017,8 @@ class DesktopBugService(
         private const val ARGB_POLL_MILLIS = 100L
         /** Sparse ARGB backup when the bitstream tap is missing (~2 fps). */
         private const val ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS = 500L
-        /** Full-rate ARGB backup while an explicit screen recording is active. */
-        private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 66L
+        /** Full-rate ARGB backup while an explicit screen recording is active (~30 fps). */
+        private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 33L
         /** Hard cap so even ARGB-only soft decode cannot retain multi‑GB of pixels. */
         private const val ARGB_MAX_BYTES = 96L * 1024L * 1024L
         private const val SCREEN_POLL_MILLIS = 3_000L

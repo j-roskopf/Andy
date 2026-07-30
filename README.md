@@ -33,6 +33,8 @@ In my own words as the author: I find myself in Android Studio less these days, 
 
 Discover connected Android devices and created emulators in one place. Search and filter by device type or API level, start emulators, jump into a live session, and stop running emulators without leaving Andy.
 
+Opt into multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, emulator start/stop, Controls toggles, and Screenshot across a primary device plus fan-out targets (bounded concurrency). Save device groups, labels, and notes so serials stay readable across many emulators.
+
 On macOS, the Devices screen also lists iOS Simulators for basic management: boot, shut down, open in Simulator.app, and jump into Live.
 
 ### Virtual Device Creation
@@ -49,9 +51,19 @@ Save, restore, and delete emulator snapshots for any created AVD. This makes it 
 
 ### Live Mirror
 
-Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI.
+Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI. Record from the Live toolbar into Andy's Recordings library (trim + GIF/WebP/MP4/PNG-sequence export), and annotate screenshots with redaction, shapes, text, and an optional device frame before saving.
+
+Grid mode mirrors up to four batch targets at once (lower resolution/FPS), with optional synchronized input scaled per device. Bug capture, network proxy, and Perfetto tracing remain single-target.
 
 On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
+
+### Recordings
+
+Browse saved screen recordings independently of bug reports. Reveal in Finder/Explorer, copy the file path, export trimmed clips (GIF/WebP/MP4/PNG sequence) with a size estimate, and surface any capture warnings when remux falls back.
+
+### Android Auto (DHU)
+
+Launch Google's Desktop Head Unit beside Live when the Android Auto DHU toolchain is installed. Andy checks readiness, starts/stops the DHU session, and shows console output — the DHU runs in its own window.
 
 ### Pop-Out Mirror
 
@@ -64,6 +76,8 @@ Inspect installed packages on the selected device. Launch, stop, clear data, res
 ### Logcat
 
 Stream device logs with live pause, clear, search, package filtering, and per-level toggles. The main Logcat screen includes resizable columns, while Live keeps a compact log panel next to the mirror.
+
+Andy can group stack traces and deobfuscate them with a built-in R8/ProGuard `mapping.txt` parser (auto-discovered from the project directory, or pinned in Settings). A Crashes tab lists dropbox crashes and ANRs and can load/export entries for the same retrace path.
 
 ### Intents
 
@@ -101,9 +115,11 @@ Dispatch coding tasks to Claude Code, Codex, Cursor, or Antigravity from Andy. C
 
 Toggle common device state without memorizing `adb shell` commands. Andy includes controls for airplane mode, Wi-Fi, mobile data, Bluetooth, dark mode, font scale, animation scale, show taps, pointer location, layout bounds, and hardware buttons.
 
+On emulators, Controls also injects GPS (including GPX/KML route playback), sensors, GSM calls/SMS/network type, and thermal status. Battery level/charging overrides work on physical devices too (with a prominent Reset). Runtime locale supports `cmd locale`, setprop+restart, per-app locales, and pseudo-locales (`en-XA` / `ar-XB`).
+
 ### Performance
 
-Monitor device performance samples over time. Andy displays CPU, memory, frame rendering, battery, process metrics, and frame timing bars that make slower-than-60-fps frames stand out.
+Monitor device performance samples over time. Andy displays CPU, memory, frame rendering, battery, thermal status, process metrics, and frame timing bars that make slower-than-60-fps frames stand out. The Memory tab captures heap dumps, shows `dumpsys meminfo` breakdowns, and summarizes batterystats wakelocks/alarms/jobs.
 
 ### Tracing
 
@@ -116,6 +132,10 @@ Overlay design tools on top of the live device mirror. Use a grid, ruler, zoom c
 ### Accessibility
 
 Dump and inspect the Android accessibility hierarchy beside the live mirror. Hover or select nodes to highlight bounds, filter to interesting nodes, toggle layout bounds, and review labels, state, geometry, and simple accessibility issues.
+
+### Inspector
+
+Capture the on-screen view hierarchy beside the live mirror: a tree pane, a read-only properties pane (identity, geometry, state, semantics, raw dumpsys attributes), and the mirror with overlay, plus a 2.5D window z-order layer view (tilt/spacing), structural snapshot diffing, and text/id/class search. Andy merges `uiautomator dump` with `dumpsys activity top`'s unmerged view tree by bounds and class, and reads `dumpsys window` for layering — no on-device agent required. Composable names, modifier chains, and recomposition counts are out of scope; those need a JVMTI agent Andy doesn't ship.
 
 ### Bug Capture
 
@@ -191,9 +211,15 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Tracing | Design |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-tracing-perfetto.png" alt="Andy Perfetto tracing" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> |
-| Accessibility | Bug Capture |
+| Accessibility | Inspector |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-hierarchy.png" alt="Andy view hierarchy inspector" width="480"> |
+| Inspector layers | Bug Capture |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-layers.png" alt="Andy view hierarchy 2.5D layer view" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> |
+| Recordings export | |
+| --- | --- |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-recordings-export.png" alt="Andy recordings export" width="480"> | |
 | Settings | Mirror pop-out |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |

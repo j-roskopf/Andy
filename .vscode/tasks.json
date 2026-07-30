@@ -59,6 +59,48 @@
         "cwd": "${workspaceFolder}"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Andy: Install Inspector Demo",
+      "type": "shell",
+      "command": "./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity",
+      "group": "build",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Andy: Install Latency Probe",
+      "type": "shell",
+      "command": "./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity",
+      "group": "build",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Andy: Install Demo Apps",
+      "type": "shell",
+      "command": "./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity && ./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity",
+      "group": "build",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+          "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+        }
+      },
+      "problemMatcher": []
     }
   ]
 }

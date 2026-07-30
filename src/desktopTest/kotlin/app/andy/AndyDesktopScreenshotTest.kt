@@ -54,8 +54,9 @@ class AndyDesktopScreenshotTest {
         AndyScreenshotScenario.PerformanceSamples,
         AndyScreenshotScenario.TracingPerfetto,
         AndyScreenshotScenario.DesignOverlay,
-        AndyScreenshotScenario.AccessibilityHierarchy,
+        AndyScreenshotScenario.InspectorHierarchy,
         AndyScreenshotScenario.BugsReplay,
+        AndyScreenshotScenario.RecordingsExport,
         AndyScreenshotScenario.SettingsMcp,
         AndyScreenshotScenario.MirrorPopOut,
     )
@@ -177,6 +178,13 @@ class AndyDesktopScreenshotTest {
                                 onNodeWithText("Edit").performClick()
                                 waitForIdle()
                             }
+                        }
+                        AndyScreenshotScenario.RecordingsExport -> {
+                            waitUntil(timeoutMillis = 15_000) {
+                                onAllNodesWithText("Export…").fetchSemanticsNodes().isNotEmpty()
+                            }
+                            onNodeWithText("Export…").performClick()
+                            waitForIdle()
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {
                             // Quick-start cards fill the left pane; scroll so the seeded

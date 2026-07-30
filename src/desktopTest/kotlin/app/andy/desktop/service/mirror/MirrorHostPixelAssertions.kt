@@ -26,6 +26,19 @@ internal fun mirrorHostContainsNonBlackPixels(
     }
 }
 
+/**
+ * Polls until [host] shows Metal pixels. Geometry and window ordering are applied on AppKit's main
+ * queue, so a fixed sleep after moving/resizing a host races the compositor on a busy machine.
+ */
+internal fun awaitNonBlackMirrorHost(host: Canvas, timeoutMs: Long = 2_000): Boolean {
+    val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+    while (System.nanoTime() < deadline) {
+        if (mirrorHostContainsNonBlackPixels(host)) return true
+        Thread.sleep(20)
+    }
+    return mirrorHostContainsNonBlackPixels(host)
+}
+
 internal fun awaitGpuMirrorHost(timeoutMs: Long = 5_000): Canvas? {
     val deadline = System.nanoTime() + timeoutMs * 1_000_000L
     var host = GpuMirrorHostRegistry.current()

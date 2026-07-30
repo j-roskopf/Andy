@@ -42,3 +42,30 @@ icon = "test"
 command = "./gradlew recordRoborazziDesktop"
 cwd = ""
 env = { }
+
+[[actions]]
+id = "install-inspector-demo"
+projectId = "andy"
+name = "Install Inspector Demo"
+icon = "run"
+command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity"
+cwd = ""
+env = { }
+
+[[actions]]
+id = "install-latency-probe"
+projectId = "andy"
+name = "Install Latency Probe"
+icon = "run"
+command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity"
+cwd = ""
+env = { }
+
+[[actions]]
+id = "install-demo-apps"
+projectId = "andy"
+name = "Install Demo Apps"
+icon = "run"
+command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"/Applications/scrcpy:$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity && ./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity"
+cwd = ""
+env = { }

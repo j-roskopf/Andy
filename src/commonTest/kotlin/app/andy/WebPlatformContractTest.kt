@@ -22,7 +22,7 @@ class WebPlatformContractTest {
                 AndyDestination.Controls,
                 AndyDestination.Performance,
                 AndyDestination.Design,
-                AndyDestination.Accessibility,
+                AndyDestination.Inspector,
                 AndyDestination.Bugs,
                 AndyDestination.Recordings,
                 AndyDestination.Settings,

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
 import app.andy.model.ActionProject
 import app.andy.model.BugCaptureDraft
+import app.andy.model.BugReport
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
@@ -253,6 +254,8 @@ internal fun LiveScreen(
     var bugSaveStatus by remember { mutableStateOf("") }
     var liveActionStatus by remember { mutableStateOf("") }
     var clipDialogVisible by remember { mutableStateOf(false) }
+    var screenshotEditorBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var completedRecording by remember { mutableStateOf<BugReport?>(null) }
     var recordingState by remember { mutableStateOf<LiveRecordingState>(LiveRecordingState.Idle) }
     var recordingRequestId by remember { mutableStateOf(0) }
     var recordingStartedAtMillis by remember { mutableStateOf<Long?>(null) }
@@ -581,7 +584,7 @@ internal fun LiveScreen(
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Row(Modifier.weight(1f).fillMaxWidth()) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
-            val dialogsOpen = bugDialogVisible || clipDialogVisible
+            val dialogsOpen = bugDialogVisible || clipDialogVisible || completedRecording != null || screenshotEditorBytes != null
             val devicePaneModifier = if (iosSinglePane) {
                 Modifier.weight(1f).fillMaxHeight()
             } else {
@@ -642,7 +645,24 @@ internal fun LiveScreen(
                             onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
                             onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
                             onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
-                            onCaptureScreenshot = { runLiveAction("Screenshot") { services.artifacts.saveScreenshot(serial!!, "andy-${serial}.png") } },
+                            onCaptureScreenshot = {
+                                if (serial == null) {
+                                    liveActionStatus = "Select an online device"
+                                } else {
+                                    scope.launch {
+                                        val bytes = services.artifacts.captureScreenshotForEditing(serial)
+                                        if (bytes != null) {
+                                            screenshotEditorBytes = bytes
+                                        } else {
+                                            liveActionStatus = "Screenshot: " + runCatching {
+                                                services.artifacts.saveScreenshot(serial, "andy-$serial.png")
+                                            }.getOrNull()?.let { result ->
+                                                if (result.isSuccess) result.stdout.ifBlank { "ok" } else result.stderr.ifBlank { result.stdout }
+                                            }.orEmpty()
+                                        }
+                                    }
+                                }
+                            },
                             onBugReport = { bugDialogVisible = true },
                             onRecord = {
                                 when (recordingState) {
@@ -661,7 +681,7 @@ internal fun LiveScreen(
                                                     liveActionStatus = recording.videoCaptureWarning
                                                         ?.let { "Saved ${recording.title} — $it" }
                                                         ?: "Saved ${recording.title}"
-                                                    onRecordingSaved()
+                                                    completedRecording = recording
                                                 }
                                                 .onFailure { error ->
                                                     recordingState = LiveRecordingState.Recording
@@ -815,7 +835,6 @@ internal fun LiveScreen(
             modifier = Modifier.fillMaxWidth().height(280.dp),
         )
     }
-    }
     if (clipDialogVisible) {
         ClipTextDialog(
             onDismiss = { clipDialogVisible = false },
@@ -824,6 +843,26 @@ internal fun LiveScreen(
                 liveActionStatus = "Clip text: sent"
                 clipDialogVisible = false
             },
+        )
+    }
+    screenshotEditorBytes?.let { bytes ->
+        ScreenshotEditorSheet(
+            pngBytes = bytes,
+            artifacts = services.artifacts,
+            suggestedName = "andy-${serial ?: "screenshot"}.png",
+            onDismiss = { screenshotEditorBytes = null },
+        )
+    }
+    completedRecording?.let { recording ->
+        RecordingExportSheet(
+            report = recording,
+            bugs = services.bugs,
+            recordingExport = services.recordingExport,
+            onDismiss = {
+                completedRecording = null
+                onRecordingSaved()
+            },
+            onRenamed = { newTitle -> completedRecording = recording.copy(title = newTitle) },
         )
     }
     if (bugDialogVisible) {
@@ -845,6 +884,7 @@ internal fun LiveScreen(
                 }
             },
         )
+    }
     }
 }
 

@@ -620,8 +620,9 @@ internal fun NetworkScreen(
                                 instruction = "$configText. Sets Android's global http_proxy to $proxyHostDisplay:$currentPort so device traffic routes through Andy.",
                                 modifier = Modifier.widthIn(min = 260.dp).weight(1f),
                             ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedButton(
+                                        modifier = Modifier.fillMaxWidth(),
                                         enabled = serial != null,
                                         onClick = {
                                             if (serial != null) scope.launch {
@@ -635,6 +636,7 @@ internal fun NetworkScreen(
                                         },
                                     ) { Text("Configure device proxy") }
                                     OutlinedButton(
+                                        modifier = Modifier.fillMaxWidth(),
                                         enabled = serial != null,
                                         onClick = {
                                             if (serial != null) scope.launch {

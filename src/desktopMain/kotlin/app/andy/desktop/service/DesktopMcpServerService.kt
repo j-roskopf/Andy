@@ -1,7 +1,23 @@
 package app.andy.desktop.service
 
+import app.andy.domain.parseBounds
 import app.andy.model.*
 import app.andy.service.*
+import app.andy.ui.controls.BatteryHealth
+import app.andy.ui.controls.EmulatorSensor
+import app.andy.ui.controls.GeoFix
+import app.andy.ui.controls.GsmDataType
+import app.andy.ui.controls.resetBattery
+import app.andy.ui.controls.sendGeoFix
+import app.andy.ui.controls.sendSms
+import app.andy.ui.controls.setBatteryCharging
+import app.andy.ui.controls.setBatteryHealth
+import app.andy.ui.controls.setBatteryLevel
+import app.andy.ui.controls.setDeviceLocale
+import app.andy.ui.controls.setNetworkType
+import app.andy.ui.controls.setSensor
+import app.andy.ui.controls.setThermalStatus
+import app.andy.ui.controls.simulateIncomingCall
 import io.ktor.server.netty.Netty
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -33,7 +49,13 @@ class DesktopMcpServerService(
     private val files: FileService,
     private val proxy: ProxyService,
     private val accessibility: AccessibilityService,
+    private val viewHierarchy: ViewHierarchyService = UnavailableViewHierarchyService,
     private val workspaceStore: WorkspaceStore,
+    private val metrics: MetricsService = UnavailableMetricsService,
+    private val crashInspector: CrashInspectorService = UnavailableCrashInspectorService,
+    private val heapDump: HeapDumpService = UnavailableHeapDumpService,
+    private val bugs: BugService = UnavailableBugService,
+    private val recordingExport: RecordingExportService = UnavailableRecordingExportService,
 ) : McpServerService {
     override val status = MutableStateFlow("stopped")
     override val running = MutableStateFlow(false)
@@ -204,6 +226,9 @@ class DesktopMcpServerService(
         "clear_network_requests", "list_network_requests", "get_network_request",
         "configure_device_proxy", "save_snapshot", "load_snapshot", "delete_snapshot",
         "list_snapshots", "logcat_snapshot",
+        "list_crashes", "get_crash",
+        "capture_heap_dump", "get_memory_breakdown", "get_battery_stats",
+        "start_screen_recording", "stop_screen_recording", "export_recording",
     ) + agentProjectToolNames()
 
     private fun createMcpServer(): Server {
@@ -541,6 +566,169 @@ class DesktopMcpServerService(
                     content = listOf(TextContent(text = mapNode(rootNode).toString()))
                 )
             }
+        }
+
+        mcpServer.registerTool(
+            "capture_view_hierarchy",
+            "Captures the view hierarchy: uiautomator dump merged with dumpsys activity top's " +
+                "unmerged view tree (view classes/ids Compose collapses out of the accessibility " +
+                "tree), by bounds + class name. Tiers 1-2 only — no composable names, modifier " +
+                "chains, or recomposition counts; those need an on-device JVMTI agent Andy does " +
+                "not have. Depth/node-capped JSON to avoid blowing up agent context.",
+            mapOf(
+                "serial" to stringProp("Optional target device serial"),
+                "maxDepth" to intProp("Maximum tree depth to return (default 12)"),
+                "maxNodes" to intProp("Maximum number of nodes to return, depth-first (default 400)"),
+                "includeInvisible" to boolProp("Include nodes not visible to the user (default false)"),
+                "unmergedSemantics" to boolProp("Return the raw dumpsys activity top view tree instead of the uiautomator-merged tree (default false)"),
+                "compressed" to boolProp("Use uiautomator dump --compressed: faster, drops non-interesting nodes (default false)"),
+            ),
+        ) { args ->
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val options = HierarchyOptions(
+                includeInvisible = args["includeInvisible"]?.jsonPrimitive?.booleanOrNull ?: false,
+                unmergedSemantics = args["unmergedSemantics"]?.jsonPrimitive?.booleanOrNull ?: false,
+                compressed = args["compressed"]?.jsonPrimitive?.booleanOrNull ?: false,
+            )
+            val maxDepth = args["maxDepth"]?.jsonPrimitive?.intOrNull ?: 12
+            val maxNodes = args["maxNodes"]?.jsonPrimitive?.intOrNull ?: 400
+            viewHierarchy.capture(resolved, options).fold(
+                onSuccess = { snapshot ->
+                    val counter = intArrayOf(0)
+                    val json = buildJsonObject {
+                        put("source", snapshot.source.name)
+                        put("displayWidth", snapshot.displayWidth)
+                        put("displayHeight", snapshot.displayHeight)
+                        put("capturedAtMillis", snapshot.capturedAtMillis)
+                        put("root", mapHierarchyNode(snapshot.root, maxDepth, maxNodes, counter))
+                        if (counter[0] >= maxNodes) put("truncated", true)
+                    }
+                    CallToolResult(content = listOf(TextContent(text = json.toString())))
+                },
+                onFailure = { error ->
+                    CallToolResult(content = listOf(TextContent(text = error.message ?: "Capture failed")), isError = true)
+                },
+            )
+        }
+
+        mcpServer.registerTool(
+            "find_node_by_text",
+            "Finds view-hierarchy nodes whose text, content-description, or resource-id contains " +
+                "a query (case-insensitive). Returns bounds and a tap-center point for the `tap` tool.",
+            mapOf(
+                "query" to stringProp("Text to search for in text, content-description, or resource-id"),
+                "serial" to stringProp("Optional target device serial"),
+                "maxResults" to intProp("Maximum number of matches to return (default 10)"),
+            ),
+            listOf("query"),
+        ) { args ->
+            val query = args["query"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("query is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val maxResults = args["maxResults"]?.jsonPrimitive?.intOrNull ?: 10
+            viewHierarchy.capture(resolved).fold(
+                onSuccess = { snapshot ->
+                    fun search(node: AccessibilityNode): List<AccessibilityNode> {
+                        val haystack = listOfNotNull(node.text, node.contentDescription, node.resourceId).joinToString(" ")
+                        val self = if (haystack.contains(query, ignoreCase = true)) listOf(node) else emptyList()
+                        return self + node.children.flatMap { search(it) }
+                    }
+                    val matches = search(snapshot.root).take(maxResults)
+                    val json = buildJsonArray {
+                        matches.forEach { node ->
+                            add(buildJsonObject {
+                                put("id", node.id)
+                                put("className", node.className)
+                                put("resourceId", node.resourceId)
+                                put("text", node.text)
+                                put("contentDescription", node.contentDescription)
+                                put("bounds", node.bounds)
+                                val bounds = parseBounds(node.bounds)
+                                if (bounds != null) {
+                                    put("centerX", (bounds[0] + bounds[2]) / 2)
+                                    put("centerY", (bounds[1] + bounds[3]) / 2)
+                                }
+                            })
+                        }
+                    }
+                    CallToolResult(content = listOf(TextContent(text = json.toString())), isError = matches.isEmpty())
+                },
+                onFailure = { error ->
+                    CallToolResult(content = listOf(TextContent(text = error.message ?: "Capture failed")), isError = true)
+                },
+            )
+        }
+
+        mcpServer.registerTool(
+            "get_node_properties",
+            "Gets the full read-only property set (identity, geometry, state, semantics, raw " +
+                "view-tree attributes) for the first view-hierarchy node matching a resource id " +
+                "and/or a text/content-description query.",
+            mapOf(
+                "resourceId" to stringProp("Resource id to match, e.g. com.example.app:id/title"),
+                "query" to stringProp("Text or content-description substring to match (case-insensitive) when resourceId is omitted or ambiguous"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+        ) { args ->
+            val resourceId = args["resourceId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val query = args["query"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            if (resourceId == null && query == null) throw IllegalArgumentException("Provide resourceId and/or query")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            viewHierarchy.capture(resolved).fold(
+                onSuccess = { snapshot ->
+                    fun matches(node: AccessibilityNode): Boolean {
+                        val resourceOk = resourceId == null || node.resourceId == resourceId
+                        val queryOk = query == null ||
+                            listOfNotNull(node.text, node.contentDescription).any { it.contains(query, ignoreCase = true) }
+                        return resourceOk && queryOk
+                    }
+                    fun find(node: AccessibilityNode): AccessibilityNode? {
+                        if (matches(node)) return node
+                        for (child in node.children) find(child)?.let { return it }
+                        return null
+                    }
+                    val node = find(snapshot.root)
+                    if (node == null) {
+                        CallToolResult(content = listOf(TextContent(text = "No matching node found")), isError = true)
+                    } else {
+                        val json = buildJsonObject {
+                            put("id", node.id)
+                            putJsonObject("identity") {
+                                put("className", node.className)
+                                put("resourceId", node.resourceId)
+                                put("packageName", node.packageName)
+                            }
+                            putJsonObject("geometry") {
+                                put("bounds", node.bounds)
+                            }
+                            putJsonObject("state") {
+                                put("clickable", node.clickable)
+                                put("longClickable", node.longClickable)
+                                put("focusable", node.focusable)
+                                put("focused", node.focused)
+                                put("enabled", node.enabled)
+                                put("selected", node.selected)
+                                put("checkable", node.checkable)
+                                put("checked", node.checked)
+                                put("scrollable", node.scrollable)
+                                put("password", node.password)
+                                put("visible", node.visible)
+                            }
+                            putJsonObject("semantics") {
+                                put("text", node.text)
+                                put("contentDescription", node.contentDescription)
+                                put("hint", node.hint)
+                            }
+                            if (node.attributes.isNotEmpty()) {
+                                putJsonObject("raw") { node.attributes.forEach { (key, value) -> put(key, value) } }
+                            }
+                        }
+                        CallToolResult(content = listOf(TextContent(text = json.toString())))
+                    }
+                },
+                onFailure = { error ->
+                    CallToolResult(content = listOf(TextContent(text = error.message ?: "Capture failed")), isError = true)
+                },
+            )
         }
 
         mcpServer.registerTool(
@@ -1152,6 +1340,419 @@ class DesktopMcpServerService(
             }
             CallToolResult(content = listOf(TextContent(text = json.toString())))
         }
+
+        mcpServer.registerTool(
+            "set_device_location",
+            "Inject a GPS geo fix on an emulator (adb emu geo fix; longitude first)",
+            mapOf(
+                "latitude" to stringProp("Latitude"),
+                "longitude" to stringProp("Longitude"),
+                "altitude" to stringProp("Optional altitude in meters"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("latitude", "longitude"),
+        ) { args ->
+            val lat = args["latitude"]?.jsonPrimitive?.content?.toDoubleOrNull()
+                ?: throw IllegalArgumentException("latitude is required")
+            val lon = args["longitude"]?.jsonPrimitive?.content?.toDoubleOrNull()
+                ?: throw IllegalArgumentException("longitude is required")
+            val alt = args["altitude"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.sendGeoFix(resolved, GeoFix(lat, lon, alt))
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "set_device_sensor",
+            "Set an emulator sensor value (adb emu sensor set). Multi-axis values are colon-separated.",
+            mapOf(
+                "sensor" to stringProp("Sensor name: acceleration, gyroscope, magnetic-field, orientation, proximity, light, pressure, humidity, temperature"),
+                "values" to stringProp("Colon-separated float values, e.g. 0:9.81:0"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("sensor", "values"),
+        ) { args ->
+            val name = args["sensor"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("sensor is required")
+            val sensor = EmulatorSensor.entries.firstOrNull { it.emuName.equals(name, ignoreCase = true) || it.name.equals(name, ignoreCase = true) }
+                ?: throw IllegalArgumentException("Unknown sensor: $name")
+            val values = args["values"]?.jsonPrimitive?.content?.split(':')?.mapNotNull { it.trim().toFloatOrNull() }
+                ?: throw IllegalArgumentException("values is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.setSensor(resolved, sensor, values)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "set_battery_state",
+            "Override battery level/charging/health via dumpsys battery",
+            mapOf(
+                "level" to intProp("Battery level 0-100"),
+                "charging" to boolProp("Optional charging state"),
+                "health" to stringProp("Optional health: good, overheat, dead, overvoltage, failure, cold, unknown"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+        ) { args ->
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val messages = mutableListOf<String>()
+            var failed = false
+            args["level"]?.jsonPrimitive?.intOrNull?.let { level ->
+                val result = devices.setBatteryLevel(resolved, level)
+                messages += result.stdout.ifBlank { result.stderr }
+                if (!result.isSuccess) failed = true
+            }
+            args["charging"]?.jsonPrimitive?.booleanOrNull?.let { charging ->
+                val result = devices.setBatteryCharging(resolved, charging)
+                messages += result.stdout.ifBlank { result.stderr }
+                if (!result.isSuccess) failed = true
+            }
+            args["health"]?.jsonPrimitive?.contentOrNull?.let { healthName ->
+                val health = BatteryHealth.entries.firstOrNull { it.dumpsysValue.equals(healthName, true) || it.name.equals(healthName, true) }
+                    ?: throw IllegalArgumentException("Unknown health: $healthName")
+                val result = devices.setBatteryHealth(resolved, health)
+                messages += result.stdout.ifBlank { result.stderr }
+                if (!result.isSuccess) failed = true
+            }
+            if (messages.isEmpty()) throw IllegalArgumentException("Provide level, charging, and/or health")
+            CallToolResult(content = listOf(TextContent(text = messages.joinToString("\n"))), isError = failed)
+        }
+
+        mcpServer.registerTool(
+            "reset_battery_state",
+            "Reset dumpsys battery overrides on the device",
+            mapOf("serial" to stringProp("Optional target device serial")),
+        ) { args ->
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.resetBattery(resolved)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "set_thermal_status",
+            "Override thermal status via cmd thermalservice override-status (0-6, API 29+)",
+            mapOf(
+                "status" to intProp("Thermal status code 0-6"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("status"),
+        ) { args ->
+            val statusCode = args["status"]?.jsonPrimitive?.intOrNull
+                ?: throw IllegalArgumentException("status is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.setThermalStatus(resolved, statusCode)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "simulate_incoming_call",
+            "Simulate an incoming GSM call on an emulator",
+            mapOf(
+                "number" to stringProp("Phone number"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("number"),
+        ) { args ->
+            val number = args["number"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("number is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.simulateIncomingCall(resolved, number)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "send_sms",
+            "Send a simulated SMS on an emulator (message may contain spaces)",
+            mapOf(
+                "number" to stringProp("Phone number"),
+                "message" to stringProp("SMS body"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("number", "message"),
+        ) { args ->
+            val number = args["number"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("number is required")
+            val message = args["message"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("message is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.sendSms(resolved, number, message)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "set_network_type",
+            "Set emulator GSM data network type (gprs, edge, umts, lte, nr)",
+            mapOf(
+                "type" to stringProp("Network type: gprs, edge, umts, lte, nr"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("type"),
+        ) { args ->
+            val typeName = args["type"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("type is required")
+            val type = GsmDataType.entries.firstOrNull { it.emuValue.equals(typeName, true) || it.name.equals(typeName, true) }
+                ?: throw IllegalArgumentException("Unknown network type: $typeName")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = devices.setNetworkType(resolved, type)
+            CallToolResult(
+                content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
+                isError = !result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "set_device_locale",
+            "Set device or focused-app locale (cmd locale / setprop / set-app-locales)",
+            mapOf(
+                "tag" to stringProp("BCP-47 locale tag, e.g. en-US or en-XA"),
+                "allowRestart" to boolProp("Allow setprop + am restart fallback"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("tag"),
+        ) { args ->
+            val tag = args["tag"]?.jsonPrimitive?.content
+                ?: throw IllegalArgumentException("tag is required")
+            val allowRestart = args["allowRestart"]?.jsonPrimitive?.booleanOrNull ?: false
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val change = devices.setDeviceLocale(resolved, tag, apps = apps, allowFrameworkRestart = allowRestart)
+            CallToolResult(
+                content = listOf(TextContent(text = "${change.result.stdout.ifBlank { change.result.stderr }} (${change.method.label})")),
+                isError = !change.result.isSuccess,
+            )
+        }
+
+        mcpServer.registerTool(
+            "list_crashes",
+            "List crash/ANR/watchdog records from dumpsys dropbox, /data/anr, and /data/tombstones",
+            mapOf("serial" to stringProp("Optional target device serial")),
+        ) { args ->
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val list = crashInspector.listCrashes(resolved)
+            val json = buildJsonArray {
+                list.forEach { crash ->
+                    add(buildJsonObject {
+                        put("id", crash.id)
+                        put("kind", crash.kind.name)
+                        put("packageName", crash.packageName)
+                        put("timestampMillis", crash.timestampMillis)
+                        put("summary", crash.summary)
+                    })
+                }
+            }
+            CallToolResult(content = listOf(TextContent(text = json.toString())))
+        }
+
+        mcpServer.registerTool(
+            "get_crash",
+            "Load the full text of a crash/ANR record by id (from list_crashes)",
+            mapOf(
+                "id" to stringProp("Crash record id from list_crashes"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("id"),
+        ) { args ->
+            val id = args["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val text = crashInspector.loadCrash(resolved, id)
+            CallToolResult(content = listOf(TextContent(text = text)))
+        }
+
+        mcpServer.registerTool(
+            "capture_heap_dump",
+            "Capture an hprof heap dump for a package (am dumpheap -> pull -> hprof-conv)",
+            mapOf(
+                "packageName" to stringProp("Application package name"),
+                "localPath" to stringProp("Optional local destination path; defaults to Andy's heap dump library"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("packageName"),
+        ) { args ->
+            val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
+            val localPath = args["localPath"]?.jsonPrimitive?.contentOrNull ?: ""
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val result = heapDump.capture(resolved, packageName, localPath)
+            result.fold(
+                onSuccess = { info ->
+                    CallToolResult(content = listOf(TextContent(text = "Captured ${info.localPath} (${info.sizeBytes} bytes)")))
+                },
+                onFailure = { error ->
+                    CallToolResult(content = listOf(TextContent(text = error.message ?: "Heap dump failed")), isError = true)
+                },
+            )
+        }
+
+        mcpServer.registerTool(
+            "get_memory_breakdown",
+            "Get a dumpsys meminfo Java/native/graphics/code/stack breakdown for a package",
+            mapOf(
+                "packageName" to stringProp("Application package name"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+            listOf("packageName"),
+        ) { args ->
+            val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val breakdown = metrics.meminfoBreakdown(resolved, packageName)
+                ?: return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "No meminfo breakdown available for $packageName")),
+                    isError = true,
+                )
+            val json = buildJsonObject {
+                put("packageName", breakdown.packageName)
+                put("javaHeapMb", breakdown.javaHeapMb)
+                put("nativeHeapMb", breakdown.nativeHeapMb)
+                put("codeMb", breakdown.codeMb)
+                put("stackMb", breakdown.stackMb)
+                put("graphicsMb", breakdown.graphicsMb)
+                put("privateOtherMb", breakdown.privateOtherMb)
+                put("systemMb", breakdown.systemMb)
+                put("totalPssMb", breakdown.totalPssMb)
+            }
+            CallToolResult(content = listOf(TextContent(text = json.toString())))
+        }
+
+        mcpServer.registerTool(
+            "get_battery_stats",
+            "Summarize dumpsys batterystats into wakelock/alarm/job tables and estimated drain",
+            mapOf(
+                "packageName" to stringProp("Optional package name to scope the report (dumpsys batterystats --charged <pkg>)"),
+                "serial" to stringProp("Optional target device serial"),
+            ),
+        ) { args ->
+            val packageName = args["packageName"]?.jsonPrimitive?.contentOrNull
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val summary = metrics.batteryStatsSummary(resolved, packageName)
+            val json = buildJsonObject {
+                putJsonArray("wakelocks") {
+                    summary.wakelocks.forEach { w ->
+                        add(buildJsonObject { put("name", w.name); put("packageName", w.packageName); put("heldMillis", w.heldMillis); put("count", w.count) })
+                    }
+                }
+                putJsonArray("alarms") {
+                    summary.alarms.forEach { a ->
+                        add(buildJsonObject { put("name", a.name); put("packageName", a.packageName); put("count", a.count) })
+                    }
+                }
+                putJsonArray("jobs") {
+                    summary.jobs.forEach { j ->
+                        add(buildJsonObject { put("name", j.name); put("packageName", j.packageName); put("durationMillis", j.durationMillis); put("count", j.count) })
+                    }
+                }
+                putJsonArray("drain") {
+                    summary.drain.forEach { d ->
+                        add(buildJsonObject { put("packageName", d.packageName); put("percent", d.percent) })
+                    }
+                }
+            }
+            CallToolResult(content = listOf(TextContent(text = json.toString())))
+        }
+
+        mcpServer.registerTool(
+            "start_screen_recording",
+            "Starts a durable screen recording on the target device via Andy's live capture pipeline " +
+                "(the same path as the Live toolbar record button). Ends any active rolling bug-capture window.",
+            mapOf("serial" to stringProp("Optional target device serial")),
+        ) { args ->
+            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (mirror.session.first()?.serial != resolved) {
+                mirror.connect(resolved)
+            }
+            bugs.startCapture(resolved, device = null)
+            bugs.beginRecording()
+            CallToolResult(content = listOf(TextContent(text = "Recording started for $resolved")))
+        }
+
+        mcpServer.registerTool(
+            "stop_screen_recording",
+            "Stops the active screen recording and saves it to Andy's Recordings library " +
+                "(capture.mp4 + metadata). Returns the recording id for export_recording.",
+        ) { args ->
+            val report = bugs.saveRecording(device = null)
+            val json = buildJsonObject {
+                put("id", report.id)
+                put("title", report.title)
+                put("videoStartedAtMillis", report.videoStartedAtMillis)
+                put("videoEndedAtMillis", report.videoEndedAtMillis)
+                put("frameCount", report.videoFrameTimestampsMillis.size)
+                put("videoCaptureWarning", report.videoCaptureWarning)
+            }
+            CallToolResult(
+                content = listOf(TextContent(text = json.toString())),
+                isError = report.videoCaptureWarning != null,
+            )
+        }
+
+        mcpServer.registerTool(
+            "export_recording",
+            "Exports a saved recording (from stop_screen_recording, or any entry in the Recordings " +
+                "destination) to a GIF, WebP, PNG sequence, or trimmed MP4 for sharing (e.g. in a PR).",
+            mapOf(
+                "id" to stringProp("Recording id, e.g. recording-1730000000000"),
+                "localPath" to stringProp("Destination file path (a directory for pngSequence)"),
+                "format" to stringProp("mp4, gif, webp, or pngSequence (default gif)"),
+                "startMillis" to intProp("Trim start (epoch millis); defaults to the recording start"),
+                "endMillis" to intProp("Trim end (epoch millis); defaults to the recording end"),
+                "scale" to intProp("Output width in pixels, aspect-preserving (default 480)"),
+                "fps" to intProp("Output frame rate (default 12; capped at 30 for non-mp4 formats)"),
+                "loop" to boolProp("Loop forever for gif/webp (default true)"),
+            ),
+            listOf("id", "localPath"),
+        ) { args ->
+            val id = args["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
+            val localPath = args["localPath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("localPath is required")
+            val report = bugs.loadBug(id) ?: throw IllegalArgumentException("Recording not found: $id")
+            val format = when (args["format"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
+                "mp4" -> ClipFormat.Mp4
+                "webp" -> ClipFormat.WebP
+                "pngsequence", "png_sequence", "png" -> ClipFormat.PngSequence
+                else -> ClipFormat.Gif
+            }
+            val request = RecordingExportRequest(
+                id = id,
+                startMillis = args["startMillis"]?.jsonPrimitive?.longOrNull
+                    ?: report.videoStartedAtMillis ?: report.windowStartedAtMillis,
+                endMillis = args["endMillis"]?.jsonPrimitive?.longOrNull
+                    ?: report.videoEndedAtMillis ?: report.windowEndedAtMillis,
+                format = format,
+                scale = args["scale"]?.jsonPrimitive?.intOrNull ?: 480,
+                fps = args["fps"]?.jsonPrimitive?.intOrNull ?: 12,
+                loop = args["loop"]?.jsonPrimitive?.booleanOrNull ?: true,
+            )
+            recordingExport.export(request, localPath).fold(
+                onSuccess = { clip ->
+                    val json = buildJsonObject {
+                        put("localPath", clip.localPath)
+                        put("format", clip.format.name)
+                        put("sizeBytes", clip.sizeBytes)
+                        put("frameCount", clip.frameCount)
+                        put("widthPx", clip.widthPx)
+                        put("heightPx", clip.heightPx)
+                    }
+                    CallToolResult(content = listOf(TextContent(text = json.toString())))
+                },
+                onFailure = { error ->
+                    CallToolResult(content = listOf(TextContent(text = error.message ?: "Export failed")), isError = true)
+                },
+            )
+        }
+
     }
 
     private fun Server.registerTool(
@@ -1313,6 +1914,37 @@ class DesktopMcpServerService(
                 put("children", buildJsonArray {
                     node.children.forEach { add(mapNode(it)) }
                 })
+            }
+        }
+    }
+
+    /** Like [mapNode], but caps depth and total node count for `capture_view_hierarchy` (§D.5). */
+    private fun mapHierarchyNode(node: AccessibilityNode, maxDepth: Int, maxNodes: Int, counter: IntArray, depth: Int = 0): JsonObject {
+        counter[0]++
+        return buildJsonObject {
+            put("id", node.id)
+            put("className", node.className)
+            put("resourceId", node.resourceId)
+            put("text", node.text)
+            put("contentDescription", node.contentDescription)
+            put("bounds", node.bounds)
+            put("clickable", node.clickable)
+            put("focusable", node.focusable)
+            put("enabled", node.enabled)
+            put("visible", node.visible)
+            if (node.attributes.isNotEmpty()) {
+                putJsonObject("attributes") { node.attributes.forEach { (key, value) -> put(key, value) } }
+            }
+            when {
+                node.children.isEmpty() -> Unit
+                depth >= maxDepth -> put("childrenOmittedDepth", node.children.size)
+                counter[0] >= maxNodes -> put("childrenOmittedCap", node.children.size)
+                else -> putJsonArray("children") {
+                    for (child in node.children) {
+                        if (counter[0] >= maxNodes) break
+                        add(mapHierarchyNode(child, maxDepth, maxNodes, counter, depth + 1))
+                    }
+                }
             }
         }
     }

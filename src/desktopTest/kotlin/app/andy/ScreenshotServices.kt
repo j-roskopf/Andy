@@ -64,6 +64,7 @@ internal object ScreenshotServices {
             proxy = ScreenshotProxy,
             metrics = ScreenshotMetrics,
             accessibility = ScreenshotAccessibility,
+            viewHierarchy = ScreenshotViewHierarchy,
             bugs = ScreenshotBugs,
             artifacts = ScreenshotArtifacts,
             tracing = ScreenshotTracing,
@@ -409,6 +410,67 @@ internal object ScreenshotServices {
 
     private object ScreenshotAccessibility : AccessibilityService {
         override suspend fun dump(serial: String) = AccessibilityNode("root", "android.widget.FrameLayout", "com.example.garden", "root", null, null, bounds = "[0,0][1080,2400]", clickable = false, focusable = false, enabled = true, children = listOf(AccessibilityNode("title", "android.widget.TextView", "com.example.garden", "com.example.garden:id/title", "My garden", null, bounds = "[48,120][640,210]", clickable = true, focusable = true, enabled = true), AccessibilityNode("fab", "android.widget.Button", "com.example.garden", "com.example.garden:id/add", null, "Add plant", bounds = "[880,2100][1040,2260]", clickable = true, focusable = true, enabled = true)))
+    }
+
+    /** Same garden tree as [ScreenshotAccessibility], enriched with merged `view-*` attributes
+     * and a small window stack, for the Inspector's tree/properties/layer screenshots. */
+    private object ScreenshotViewHierarchy : ViewHierarchyService {
+        private val root = AccessibilityNode(
+            id = "root",
+            className = "android.widget.FrameLayout",
+            packageName = gardenPackage,
+            resourceId = "root",
+            text = null,
+            contentDescription = null,
+            bounds = "[0,0][1080,2400]",
+            clickable = false,
+            focusable = false,
+            enabled = true,
+            attributes = mapOf("view-hash" to "a1b2c3", "view-flags1" to "V.ED.....", "view-matched" to "true"),
+            children = listOf(
+                AccessibilityNode(
+                    id = "title",
+                    className = "android.widget.TextView",
+                    packageName = gardenPackage,
+                    resourceId = "com.example.garden:id/title",
+                    text = "My garden",
+                    contentDescription = null,
+                    bounds = "[48,120][640,210]",
+                    clickable = true,
+                    focusable = true,
+                    enabled = true,
+                    attributes = mapOf("view-hash" to "d4e5f6", "view-flags1" to "VFED..C..", "view-matched" to "true"),
+                ),
+                AccessibilityNode(
+                    id = "fab",
+                    className = "android.widget.Button",
+                    packageName = gardenPackage,
+                    resourceId = "com.example.garden:id/add",
+                    text = null,
+                    contentDescription = "Add plant",
+                    bounds = "[880,2100][1040,2260]",
+                    clickable = true,
+                    focusable = true,
+                    enabled = true,
+                    attributes = mapOf("view-hash" to "071829", "view-flags1" to "VFED..C..", "view-matched" to "true"),
+                ),
+            ),
+        )
+        private val windows = listOf(
+            WindowLayerInfo(0, "$gardenPackage/$gardenPackage.MainActivity", gardenPackage, 0, "[0,0][1080,2400]", "BASE_APPLICATION", isVisible = true, isOnScreen = true),
+            WindowLayerInfo(1, "InputMethod", null, 0, "[0,1900][1080,2400]", "INPUT_METHOD", isVisible = false, isOnScreen = false),
+            WindowLayerInfo(2, "StatusBar", null, 0, "[0,0][1080,80]", "STATUS_BAR", isVisible = true, isOnScreen = true),
+        )
+        override suspend fun capture(serial: String, options: HierarchyOptions) = Result.success(
+            HierarchySnapshot(
+                root = root,
+                capturedAtMillis = now,
+                displayWidth = 1080,
+                displayHeight = 2400,
+                source = HierarchySource.Merged,
+                windows = windows,
+            ),
+        )
     }
 
     private object ScreenshotBugs : BugService {

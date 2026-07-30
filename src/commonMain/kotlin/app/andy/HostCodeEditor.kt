@@ -11,6 +11,8 @@ expect fun HostCodeEditor(
     languageHint: String,
     modifier: Modifier = Modifier,
     syntaxThemeId: String = EditorSyntaxTheme.Andy.id,
+    /** One-shot caret/scroll target (1-based). Re-applies whenever this value changes, even if [path] doesn't. */
+    initialLine: Int? = null,
     onTextChange: (String, String) -> Unit,
     onSave: (String, String) -> Unit,
     onClose: () -> Unit,

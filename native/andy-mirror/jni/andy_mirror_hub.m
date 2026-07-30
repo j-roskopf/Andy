@@ -980,9 +980,15 @@ void andy_hub_set_presenter_visible(int64_t presenter_id, bool visible) {
     GpuPresenter *presenter = find_presenter(presenter_id);
     if (!presenter) return;
     presenter->visible = visible;
-    run_on_main(^{
-        if (!presenter->window) return;
-        if (visible) {
+    // Never block the caller on the main thread. This runs on the EDT (attach/detach, geometry,
+    // focus), and while AppKit is live-resizing a window the main thread is busy inside AWT
+    // callbacks: a dispatch_sync from the EDT there freezes the whole JVM UI until the drag ends
+    // (or forever, when AppKit is itself waiting on the EDT). Ordering with geometry is preserved
+    // because both land on the serial main queue.
+    void (^apply)(void) = ^{
+        // The slot may have been recycled by the time this runs.
+        if (!presenter->active || presenter->id != presenter_id || !presenter->window) return;
+        if (presenter->visible) {
             // Match the legacy overlay: only orderFront when hidden. Re-ordering an already
             // visible borderless window on every click flashes the black AWT Canvas underneath.
             if (!presenter->window.isVisible) {
@@ -991,7 +997,12 @@ void andy_hub_set_presenter_visible(int64_t presenter_id, bool visible) {
         } else if (presenter->window.isVisible) {
             [presenter->window orderOut:nil];
         }
-    });
+    };
+    if ([NSThread isMainThread]) {
+        apply();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), apply);
+    }
 }
 
 void andy_hub_update_presenter_geometry(int64_t presenter_id, int x, int y, int width, int height,

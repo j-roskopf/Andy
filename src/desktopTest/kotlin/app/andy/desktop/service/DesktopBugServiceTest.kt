@@ -352,7 +352,7 @@ class DesktopBugServiceTest {
     }
 }
 
-private class FakeMirrorEngine : MirrorEngine {
+internal class FakeMirrorEngine : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
@@ -368,7 +368,7 @@ private class FakeMirrorEngine : MirrorEngine {
     override suspend fun screenshot(serial: String): ByteArray? = null
 }
 
-private class FakeLogcatService : LogcatService {
+internal class FakeLogcatService : LogcatService {
     val batches = MutableSharedFlow<List<LogcatEntry>>(replay = 10, extraBufferCapacity = 10)
     override fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>> = batches
     override suspend fun snapshot(serial: String, filter: LogcatFilter, limit: Int): List<LogcatEntry> = emptyList()
