@@ -394,6 +394,26 @@ class DesktopBugServiceTest {
         val actionConfig = FakeActionConfigStore(
             ActionsConfig(projects = listOf(ActionProject(id = "p1", name = "Demo", contextDir = projectDir.absolutePath))),
         )
+        val networkExchange = NetworkExchange(
+            id = "ex1",
+            startedAtMillis = System.currentTimeMillis(),
+            completedAtMillis = System.currentTimeMillis(),
+            method = "GET",
+            url = "https://example.test/api",
+            statusCode = 200,
+            contentType = "application/json",
+            sizeBytes = 12,
+            durationMillis = 5,
+            requestHeaders = mapOf("Accept" to "*/*"),
+            responseHeaders = mapOf("Content-Type" to "application/json"),
+            requestBodyPreview = null,
+            responseBodyPreview = "{}",
+            error = null,
+            tlsStatus = "tls",
+            matchedRuleId = null,
+            flowId = "f1",
+        )
+        proxy.exchangesFlow.value = listOf(networkExchange)
         val service = DesktopBugService(
             FakeMirrorEngine(),
             FakeLogcatService(),
@@ -411,27 +431,6 @@ class DesktopBugServiceTest {
         val activeDeadline = System.currentTimeMillis() + 15_000
         while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
 
-        proxy.exchangesFlow.value = listOf(
-            NetworkExchange(
-                id = "ex1",
-                startedAtMillis = System.currentTimeMillis(),
-                completedAtMillis = System.currentTimeMillis(),
-                method = "GET",
-                url = "https://example.test/api",
-                statusCode = 200,
-                contentType = "application/json",
-                sizeBytes = 12,
-                durationMillis = 5,
-                requestHeaders = mapOf("Accept" to "*/*"),
-                responseHeaders = mapOf("Content-Type" to "application/json"),
-                requestBodyPreview = null,
-                responseBodyPreview = "{}",
-                error = null,
-                tlsStatus = "tls",
-                matchedRuleId = null,
-                flowId = "f1",
-            ),
-        )
         crashInspector.crashes = listOf(
             CrashRecord(
                 id = "c1",
@@ -444,12 +443,17 @@ class DesktopBugServiceTest {
         crashInspector.crashText["c1"] = "full stack trace"
 
         // Wait for the background collectors/pollers to observe the injected data.
-        val ringDeadline = System.currentTimeMillis() + 15_000
+        val ringDeadline = System.currentTimeMillis() + 30_000
         while (System.currentTimeMillis() < ringDeadline) {
             val sizes = service.investigationRingSizesForTest()
             if ((sizes["network"] ?: 0) > 0 && (sizes["crashes"] ?: 0) > 0 && (sizes["hierarchy"] ?: 0) > 0) break
             delay(50)
         }
+        val ringSizes = service.investigationRingSizesForTest()
+        assertTrue(
+            (ringSizes["network"] ?: 0) > 0 && (ringSizes["crashes"] ?: 0) > 0 && (ringSizes["hierarchy"] ?: 0) > 0,
+            "investigation rings not ready before save: $ringSizes",
+        )
 
         val report = service.saveBug(BugCaptureDraft("Investigation save"), null)
         val reportDir = home.resolve(".andy/bugs/${report.id}")
