@@ -583,6 +583,9 @@ class AgentTerminalManager(
             tracker.start()
             val scrollbackPath = scrollbackFile(task.id)
             derivedRawCache.remove(task.id)
+            // Hard-kill durability: a prior run may exist only in scrollback.raw because
+            // finalize never derived scrollback.ansi. Commit it before startNewRun deletes it.
+            commitSurvivingRawScrollback(task.id)
             val handle = Handle(
                 taskId = task.id,
                 session = session,
@@ -1013,13 +1016,68 @@ class AgentTerminalManager(
      * process. Nothing consumes the derived form continuously (see [hasScrollback] and
      * [scrollbackReplayText], both reached only when a viewer opens history), so it moved to
      * [finalizeScrollback] and on-demand derivation instead.
+     *
+     * Exception: the first flush after a tmux viewer attach still runs [flushHistoryBridge]
+     * so output produced while Andy had no viewer is not permanently omitted.
      */
     private fun flushScrollback(handle: Handle) {
+        val session = handle.session
+        if (session is TmuxAttachBackend && session.isHistoryBridgePending()) {
+            flushHistoryBridge(handle)
+            return
+        }
         if (!appendTeeDelta(handle)) {
             // No raw tee to mirror (headless tmux with no local viewer). Such sessions are
             // captured a bounded screen at a time, which was never the expensive path.
             runCatching { persistScrollback(handle) }
         }
+    }
+
+    /**
+     * First flush after a tmux viewer attach.
+     *
+     * The new KetraTerm tee only holds what has painted since attach, while output that
+     * scrolled during [releaseViewerOnly] (or before Andy reattached) lives in tmux.
+     * Commit any pre-attach raw mirror, fold that tmux gap via [persistScrollback], then
+     * start a fresh raw run for this viewer's tee so history derivation does not duplicate
+     * the committed prefix.
+     */
+    private fun flushHistoryBridge(handle: Handle) {
+        runCatching {
+            if (handle.rawScrollback.wroteAnything) {
+                persistRawScrollback(handle)
+            }
+            persistScrollback(handle)
+            handle.rawScrollback.startNewRun()
+            handle.committedRawCursor = null
+            handle.rawHistoryReplay = null
+            derivedRawCache.remove(handle.taskId)
+            appendTeeDelta(handle)
+        }
+    }
+
+    /**
+     * Fold a surviving `scrollback.raw` into `scrollback.ansi` before [RawScrollbackFile.startNewRun]
+     * deletes it. Used when [start] resumes a task after a hard kill where finalize never ran.
+     */
+    private fun commitSurvivingRawScrollback(taskId: String) {
+        val raw = rawScrollbackFile(taskId)
+        val committedFile = scrollbackFile(taskId)
+        if (!raw.isFile || raw.length() == 0L) return
+        if (committedFile.isFile && committedFile.lastModified() >= raw.lastModified()) return
+        val content = runCatching { raw.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return
+        val derived = runCatching { replayCaptureStyledRows(content) }.getOrNull()
+            ?.joinToString("\n") { it.ansi }
+            ?.trimEnd()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(derived))) return
+        val prior = runCatching {
+            if (committedFile.isFile) committedFile.readText().trimEnd() else ""
+        }.getOrDefault("")
+        val combined = if (prior.isBlank()) derived else prior + SCROLLBACK_SESSION_SEPARATOR + derived
+        atomicWriteText(committedFile, capScrollbackSize(combined))
+        derivedRawCache.remove(taskId)
     }
 
     /** Flush the remaining bytes and derive `scrollback.ansi` once, at end of session. */

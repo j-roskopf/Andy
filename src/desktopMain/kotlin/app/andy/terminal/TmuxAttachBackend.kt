@@ -123,6 +123,9 @@ class TmuxAttachBackend(
     fun captureStyledRows(maxRows: Int = KetraTermBackend.SCROLLBACK_CAPTURE_ROWS): List<StyledTerminalRow> =
         inner.captureStyledRows(maxRows)
 
+    /** True until the first post-attach transcript capture consumes the tmux history bridge. */
+    fun isHistoryBridgePending(): Boolean = historyBridgePending.get()
+
     /**
      * True once per viewer attach, for callers that persist the transcript: the first
      * capture after attaching must come from tmux to pick up output produced while Andy

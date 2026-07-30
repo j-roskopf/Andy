@@ -240,12 +240,18 @@ class DesktopBugServiceTest {
                 height = 128,
             ),
         )
-        delay(80)
-        assertEquals(sps.size + pps.size, service.latestH264ConfigSizeForTest())
+        val mergedSize = sps.size + pps.size
+        val mergeDeadline = System.currentTimeMillis() + 15_000
+        while (service.latestH264ConfigSizeForTest() < mergedSize &&
+            System.currentTimeMillis() < mergeDeadline
+        ) {
+            delay(20)
+        }
+        assertEquals(mergedSize, service.latestH264ConfigSizeForTest())
 
         service.beginRecording()
         assertEquals(
-            sps.size + pps.size,
+            mergedSize,
             service.latestH264ConfigSizeForTest(),
             "merged SPS+PPS must survive beginRecording",
         )
@@ -269,7 +275,12 @@ class DesktopBugServiceTest {
                 height = 128,
             ),
         )
-        delay(100)
+        val configDeadline = System.currentTimeMillis() + 15_000
+        while (service.latestH264ConfigSizeForTest() < sps.size &&
+            System.currentTimeMillis() < configDeadline
+        ) {
+            delay(20)
+        }
         assertEquals(sps.size, service.latestH264ConfigSizeForTest())
 
         service.beginRecording()
