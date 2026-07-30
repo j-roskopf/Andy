@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.domain.BugReplayFps
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
+import app.andy.desktop.service.mirror.GpuMirrorSessions
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.model.AndroidDevice
 import app.andy.model.AccessibilityNode
@@ -69,7 +70,6 @@ class DesktopBugService(
     private var logJob: Job? = null
     private var screenJob: Job? = null
     @Volatile private var lastFrameSampledAtMillis: Long = 0L
-    @Volatile private var lastH264PictureAtMillis: Long = 0L
 
     private val bugsDir: File get() = File(homeDir, ".andy/bugs")
     private val exportsDir: File get() = File(homeDir, ".andy/exports")
@@ -84,11 +84,11 @@ class DesktopBugService(
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = false
             lastFrameSampledAtMillis = 0L
-            lastH264PictureAtMillis = 0L
         }
         status.value = BugCaptureStatus(active = true, deviceSerial = serial, message = "Recording last 30s for $serial")
-        // Prefer the live Annex-B H.264 bitstream (full stream FPS). Sample ARGB only when
-        // H.264 is unavailable — parallel full-rate ARGB copies multi‑GB at 1080p.
+        // Prefer the live Annex-B H.264 bitstream (full stream FPS). Keep a sparse, byte-capped
+        // ARGB safety net even when H.264 looks healthy — remux still fails when SPS/PPS are
+        // missing from the rolling window (scrcpy often sends them as separate AUs).
         encodedJob = scope.launch {
             val encoded = (mirror as? DesktopMirrorEngine)?.encodedVideo ?: mirror.encodedVideo
             encoded.collect { unit ->
@@ -96,13 +96,8 @@ class DesktopBugService(
                 synchronized(lock) {
                     if (captureSerial == null) return@synchronized
                     if (isH264ConfigAccessUnit(unit.bytes)) {
-                        latestH264Config = unit.bytes.copyOf()
-                    }
-                    if (isH264PictureAccessUnit(unit.bytes)) {
-                        lastH264PictureAtMillis = now
-                        // Keep ARGB samples while explicitly recording — wireless AU drops can
-                        // leave a playable but truncated H.264 remux; ARGB is the safety net.
-                        if (!recordingActive && frames.isNotEmpty()) frames.clear()
+                        // Scrcpy may send SPS and PPS as separate AUs; replacing would drop one.
+                        latestH264Config = mergeH264Config(latestH264Config, unit.bytes)
                     }
                     h264Units += TimestampedH264(now, unit.bytes.copyOf(), unit.width, unit.height)
                     trimLocked(now)
@@ -131,9 +126,8 @@ class DesktopBugService(
                         }
                         continue
                     }
-                    if (hasFreshH264(now)) continue
                     if (now - lastFrameSampledAtMillis < ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS) continue
-                    // Remux can fail without a bitstream tap; keep a sparse, byte-capped ARGB backup.
+                    // Sparse ARGB backup for bug capture when remux fails (missing SPS/PPS, etc.).
                     sampleArgbBackup(now, lastCpuFrame)
                 }
             } finally {
@@ -184,7 +178,9 @@ class DesktopBugService(
     override suspend fun beginRecording() {
         val serial = synchronized(lock) {
             checkNotNull(captureSerial) { "Connect to a device before recording." }
-            clearCaptureLocked()
+            // Keep SPS/PPS across the reset — scrcpy usually sends them once at stream start,
+            // and wiping them here leaves picture AUs that FFmpeg cannot remux ("non-existing PPS").
+            clearCaptureLocked(preserveH264Config = true)
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = true
             captureSerial
@@ -200,14 +196,10 @@ class DesktopBugService(
 
     private fun sampleArgbBackup(now: Long, lastCpuFrame: MirrorFrame?) {
         val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
-            ?: NativeMirrorJni.copyLatestFrameArgb()
+            ?: copyDecodedArgbBackup()
             ?: return
         synchronized(lock) {
             if (captureSerial == null) return
-            if (!recordingActive && hasFreshH264Locked(now)) {
-                if (frames.isNotEmpty()) frames.clear()
-                return
-            }
             val minInterval = if (recordingActive) {
                 RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS
             } else {
@@ -222,6 +214,18 @@ class DesktopBugService(
                 if (recordingActive) "Recording screen and inputs for $serial" else "Recording last 30s for $serial",
             )
         }
+    }
+
+    /**
+     * Prefer the active GPU-hub decoder's latest pixels (Live's default macOS path). Fall back to
+     * the legacy singleton renderer used by older CPU / inline Metal presentation.
+     */
+    private fun copyDecodedArgbBackup(): MirrorFrame? {
+        val serial = captureSerial
+        if (serial != null) {
+            GpuMirrorSessions.get(serial)?.copyLatestFrameArgb()?.let { return it }
+        }
+        return NativeMirrorJni.copyLatestFrameArgb()
     }
 
     private fun appendAction(kind: String, label: String, detail: String? = null, timestampMillis: Long = System.currentTimeMillis()) {
@@ -281,7 +285,8 @@ class DesktopBugService(
             idPrefix = "recording-",
         )
         synchronized(lock) {
-            clearCaptureLocked()
+            // Resume the rolling bug window with the live stream's parameter sets intact.
+            clearCaptureLocked(preserveH264Config = true)
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = false
             publishStatusLocked("Bug capture ready")
@@ -401,14 +406,12 @@ class DesktopBugService(
         val converter = Java2DFrameConverter()
         try {
             grabber.start()
-            val fps = grabber.frameRate.takeIf { it.isFinite() && it > 1.0 }
-                ?: report?.videoFrameRate?.takeIf { it > 0.0 }
+            val fps = saneFrameRate(grabber.frameRate)
+                ?: report?.videoFrameRate?.let(::saneFrameRate)
                 ?: BugReplayFps
             val frameBudgetMillis = (1000.0 / fps).toLong().coerceIn(8L, 100L)
             val startIndex = startFrameIndex.coerceAtLeast(0)
-            if (startIndex > 0) {
-                grabber.setVideoFrameNumber(startIndex)
-            }
+            if (!seekToVideoFrame(grabber, file, startIndex)) return@flow
             val timestamps = report?.videoFrameTimestampsMillis.orEmpty()
             val originMillis = timestamps.getOrNull(startIndex)
                 ?: report?.videoStartedAtMillis
@@ -447,15 +450,27 @@ class DesktopBugService(
     }.flowOn(Dispatchers.IO)
 
     override suspend fun bugVideoFrameCount(id: String): Int = withContext(Dispatchers.IO) {
-        val file = File(File(bugsDir, id), "capture.mp4")
+        val reportDir = File(bugsDir, id)
+        val file = File(reportDir, "capture.mp4")
         if (!file.isFile || file.length() == 0L) return@withContext 0
+        val metaCount = readReport(reportDir)?.videoFrameTimestampsMillis?.size?.takeIf { it > 0 }
         val grabber = FFmpegFrameGrabber(file)
         try {
             grabber.start()
-            grabber.lengthInVideoFrames.takeIf { it > 0 } ?: grabber.lengthInFrames.coerceAtLeast(0)
+            val fps = saneFrameRate(grabber.frameRate)
+            if (fps != null) {
+                metaCount
+                    ?: grabber.lengthInVideoFrames.takeIf { it > 0 }
+                    ?: grabber.lengthInFrames.coerceAtLeast(0)
+            } else {
+                // Absurd container fps (e.g. 1001k from broken packet-copy): count by decoding.
+                var count = 0
+                while (grabber.grabImage() != null) count++
+                count.takeIf { it > 0 } ?: metaCount ?: 0
+            }
         } catch (error: Throwable) {
             logCaptureIssue("bugVideoFrameCount($id) failed to read capture.mp4", error)
-            0
+            metaCount ?: 0
         } finally {
             runCatching { grabber.stop() }
             runCatching { grabber.release() }
@@ -469,9 +484,10 @@ class DesktopBugService(
         val converter = Java2DFrameConverter()
         try {
             grabber.start()
-            grabber.setVideoFrameNumber(frameIndex.coerceAtLeast(0))
-            val image = generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert)
-            image?.toMirrorFrame(frameIndex.toLong() + 1)
+            val target = frameIndex.coerceAtLeast(0)
+            if (!seekToVideoFrame(grabber, file, target)) return@withContext null
+            val image = grabber.grabImage()?.let(converter::convert)
+            image?.toMirrorFrame(target.toLong() + 1)
         } catch (error: Throwable) {
             logCaptureIssue("loadBugVideoFrame($id, $frameIndex) failed to decode capture.mp4", error)
             null
@@ -481,6 +497,37 @@ class DesktopBugService(
             converter.close()
         }
     }
+
+    /**
+     * Packet-copy remuxes often advertise a nonsense timebase (~1001k fps). Seeking by frame then
+     * fails with avformat_seek_file; walk forward from the start instead.
+     */
+    private fun seekToVideoFrame(grabber: FFmpegFrameGrabber, file: File, frameIndex: Int): Boolean {
+        if (frameIndex <= 0) return true
+        val sought = runCatching {
+            grabber.setVideoFrameNumber(frameIndex)
+            true
+        }.getOrDefault(false)
+        if (sought) return true
+        runCatching { grabber.stop() }
+        return try {
+            grabber.start()
+            repeat(frameIndex) {
+                if (grabber.grabImage() == null) return false
+            }
+            true
+        } catch (error: Throwable) {
+            logCaptureIssue(
+                "seekToVideoFrame(${file.name}, $frameIndex) sequential scan failed",
+                error,
+            )
+            false
+        }
+    }
+
+    /** Container fps usable for pacing / validation; rejects packet-copy 1001k-style garbage. */
+    private fun saneFrameRate(fps: Double?): Double? =
+        fps?.takeIf { it.isFinite() && it in MIN_SANE_FRAME_RATE..MAX_SANE_FRAME_RATE }
 
     private fun readReport(reportDir: File): BugReport? {
         val metadata = File(reportDir, "metadata.json")
@@ -591,11 +638,14 @@ class DesktopBugService(
             file.writeBytes(ByteArray(0))
             return VideoEncodeMeta(ARGB_FALLBACK_FRAME_RATE, null, null, emptyList())
         }
-        val width = units.last().width.coerceAtLeast(2)
-        val height = units.last().height.coerceAtLeast(2)
-        val pictureUnits = units.filter { isH264PictureAccessUnit(it.bytes) }
-        val started = (pictureUnits.firstOrNull() ?: units.first()).timestampMillis
-        val ended = (pictureUnits.lastOrNull() ?: units.last()).timestampMillis
+        // Drop leading non-IDR pictures so the MP4 starts on a keyframe (Record often begins
+        // mid-GOP after we cleared the rolling window but kept SPS/PPS).
+        val alignedUnits = unitsStartingAtIdr(units)
+        val width = alignedUnits.last().width.coerceAtLeast(2)
+        val height = alignedUnits.last().height.coerceAtLeast(2)
+        val pictureUnits = alignedUnits.filter { isH264PictureAccessUnit(it.bytes) }
+        val started = (pictureUnits.firstOrNull() ?: alignedUnits.first()).timestampMillis
+        val ended = (pictureUnits.lastOrNull() ?: alignedUnits.last()).timestampMillis
         val durationMillis = (ended - started).coerceAtLeast(1L)
         val pictureCount = pictureUnits.size.coerceAtLeast(1)
         val estimatedFps = (pictureCount * 1000.0 / durationMillis).coerceIn(15.0, 120.0)
@@ -605,31 +655,41 @@ class DesktopBugService(
             startedAtMillis = started,
             endedAtMillis = ended,
             // Prefer picture timestamps so replay pacing matches decoded frames, not SPS/PPS AUs.
-            timestampsMillis = (pictureUnits.ifEmpty { units }).map { it.timestampMillis },
+            timestampsMillis = (pictureUnits.ifEmpty { alignedUnits }).map { it.timestampMillis },
         )
         try {
+            val resolvedConfig = resolveH264Config(alignedUnits, config)
             raw.outputStream().use { out ->
-                val firstIsConfig = isH264ConfigAccessUnit(units.first().bytes)
-                if (!firstIsConfig && config != null) {
-                    out.write(config)
+                // Always lead with merged SPS/PPS. Rolling bug windows often trim the original
+                // config AUs, and unitsStartingAtIdr drops everything before the keyframe.
+                if (resolvedConfig != null) {
+                    out.write(resolvedConfig)
                 }
-                units.forEach { out.write(it.bytes) }
+                alignedUnits
+                    .dropWhile { isH264ConfigAccessUnit(it.bytes) && !isH264PictureAccessUnit(it.bytes) }
+                    .forEach { out.write(it.bytes) }
             }
             if (raw.length() == 0L) {
                 file.writeBytes(ByteArray(0))
                 return meta
             }
+            if (resolvedConfig == null) {
+                logCaptureIssue(
+                    "remuxH264Mp4 has ${alignedUnits.size} units but no SPS/PPS — " +
+                        "packet/transcode will likely fail; ARGB backup should cover",
+                )
+            }
             // Prefer bitstream copy (full live FPS/quality). OpenH264 re-encode is fallback only —
             // the bundled FFmpeg has no libx264, and VT H.264 encode races the live decoder.
             packetCopyH264(raw, file, width, height, estimatedFps)
-            // Packet copy can leave a tiny MP4 with a `moov` box but no video track. Validate by
-            // decoding a frame instead of trusting its size before accepting that fast path.
-            if (!isPlayableCapture(file)) {
+            // Packet copy can leave a tiny MP4 with a `moov` box but no video track, or an MP4
+            // that decodes frame 0 but advertises ~1001k fps / ~0 duration (unseekable).
+            if (!isSeekableCapture(file, estimatedFps)) {
                 file.delete()
                 transcodeH264(raw, file, width, height, estimatedFps)
             }
         } catch (error: Throwable) {
-            logCaptureIssue("remuxH264Mp4 failed for ${units.size} units at ${width}x$height", error)
+            logCaptureIssue("remuxH264Mp4 failed for ${alignedUnits.size} units at ${width}x$height", error)
             file.writeBytes(ByteArray(0))
         } finally {
             raw.delete()
@@ -637,15 +697,60 @@ class DesktopBugService(
         return meta
     }
 
-    private fun isPlayableCapture(file: File): Boolean {
+    /** Merge retained config with any SPS/PPS still present in the capture window. */
+    private fun resolveH264Config(units: List<TimestampedH264>, config: ByteArray?): ByteArray? {
+        var merged = config
+        units.forEach { unit ->
+            if (isH264ConfigAccessUnit(unit.bytes)) {
+                merged = mergeH264Config(merged, unit.bytes)
+            }
+        }
+        return merged?.takeIf { isH264ConfigAccessUnit(it) }
+    }
+
+    /** Drop units before the first IDR so remux/transcode start on a clean keyframe. */
+    private fun unitsStartingAtIdr(units: List<TimestampedH264>): List<TimestampedH264> {
+        val idrIndex = units.indexOfFirst { isH264IdrAccessUnit(it.bytes) }
+        return if (idrIndex <= 0) units else units.drop(idrIndex)
+    }
+
+    private fun isPlayableCapture(file: File): Boolean = isSeekableCapture(file, expectedFps = null)
+
+    /**
+     * Decodes frame 0 and rejects packet-copy containers with nonsense timing that break scrubbing
+     * (`setVideoFrameNumber` → avformat_seek_file fails).
+     */
+    private fun isSeekableCapture(file: File, expectedFps: Double?): Boolean {
         if (!file.isFile || file.length() == 0L) return false
         val grabber = FFmpegFrameGrabber(file)
         val converter = Java2DFrameConverter()
         return try {
             grabber.start()
-            generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert) != null
+            val first = generateSequence { grabber.grabImage() }.firstOrNull()?.let(converter::convert)
+            if (first == null) return false
+            val fps = grabber.frameRate
+            if (saneFrameRate(fps) == null) {
+                logCaptureIssue(
+                    "isSeekableCapture(${file.name}) rejected absurd frameRate=$fps " +
+                        "(expected≈${expectedFps ?: "?"})",
+                )
+                return false
+            }
+            val frameCount = grabber.lengthInVideoFrames.takeIf { it > 0 } ?: grabber.lengthInFrames
+            if (frameCount <= 2) return true
+            val mid = (frameCount / 2).coerceAtLeast(1)
+            runCatching {
+                grabber.setVideoFrameNumber(mid)
+                grabber.grabImage() != null
+            }.getOrElse { error ->
+                logCaptureIssue(
+                    "isSeekableCapture(${file.name}) mid-seek to frame $mid failed",
+                    error,
+                )
+                false
+            }
         } catch (error: Throwable) {
-            logCaptureIssue("isPlayableCapture(${file.name}, ${file.length()} bytes) failed to decode", error)
+            logCaptureIssue("isSeekableCapture(${file.name}, ${file.length()} bytes) failed to decode", error)
             false
         } finally {
             runCatching { grabber.stop() }
@@ -767,22 +872,19 @@ class DesktopBugService(
         }
     }
 
-    private fun hasFreshH264(now: Long): Boolean {
-        val last = lastH264PictureAtMillis
-        return last > 0L && now - last < H264_FRESH_MILLIS
-    }
-
-    private fun hasFreshH264Locked(now: Long): Boolean = hasFreshH264(now)
-
-    private fun clearCaptureLocked() {
+    private fun clearCaptureLocked(preserveH264Config: Boolean = false) {
         actions.clear()
         logs.clear()
         frames.clear()
         h264Units.clear()
-        latestH264Config = null
+        if (!preserveH264Config) {
+            latestH264Config = null
+        }
         lastFrameSampledAtMillis = 0L
-        lastH264PictureAtMillis = 0L
     }
+
+    /** Test hook: SPS/PPS retained for remux after [beginRecording] clears picture AUs. */
+    internal fun latestH264ConfigSizeForTest(): Int = synchronized(lock) { latestH264Config?.size ?: 0 }
 
     private fun listReports(idPrefix: String): List<BugReport> = bugsDir.listFiles()
         ?.asSequence()
@@ -886,9 +988,9 @@ class DesktopBugService(
         private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 66L
         /** Hard cap so even ARGB-only soft decode cannot retain multi‑GB of pixels. */
         private const val ARGB_MAX_BYTES = 96L * 1024L * 1024L
-        /** Treat picture AUs newer than this as a healthy bitstream (skip ARGB). */
-        private const val H264_FRESH_MILLIS = 2_000L
         private const val SCREEN_POLL_MILLIS = 3_000L
+        private const val MIN_SANE_FRAME_RATE = 1.0
+        private const val MAX_SANE_FRAME_RATE = 120.0
 
         private fun isH264ConfigAccessUnit(bytes: ByteArray): Boolean {
             return h264NalTypes(bytes).any { it == 7 || it == 8 }
@@ -896,6 +998,66 @@ class DesktopBugService(
 
         private fun isH264PictureAccessUnit(bytes: ByteArray): Boolean {
             return h264NalTypes(bytes).any { it == 1 || it == 5 }
+        }
+
+        private fun isH264IdrAccessUnit(bytes: ByteArray): Boolean {
+            return h264NalTypes(bytes).any { it == 5 }
+        }
+
+        /**
+         * Scrcpy often emits SPS (7) and PPS (8) as separate access units. Keep both — replacing
+         * the previous config AU drops whichever arrived first and remux then fails with
+         * "non-existing PPS".
+         */
+        internal fun mergeH264Config(existing: ByteArray?, incoming: ByteArray): ByteArray {
+            val sps = lastAnnexBNal(incoming, nalType = 7) ?: lastAnnexBNal(existing, nalType = 7)
+            val pps = lastAnnexBNal(incoming, nalType = 8) ?: lastAnnexBNal(existing, nalType = 8)
+            if (sps == null && pps == null) return incoming.copyOf()
+            val out = java.io.ByteArrayOutputStream((sps?.size ?: 0) + (pps?.size ?: 0))
+            sps?.let(out::write)
+            pps?.let(out::write)
+            return out.toByteArray()
+        }
+
+        private fun lastAnnexBNal(bytes: ByteArray?, nalType: Int): ByteArray? {
+            if (bytes == null || bytes.isEmpty()) return null
+            var last: ByteArray? = null
+            var i = 0
+            while (i + 3 < bytes.size) {
+                val startLen = when {
+                    i + 4 <= bytes.size &&
+                        bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
+                        bytes[i + 2] == 0.toByte() && bytes[i + 3] == 1.toByte() -> 4
+                    bytes[i] == 0.toByte() && bytes[i + 1] == 0.toByte() &&
+                        bytes[i + 2] == 1.toByte() -> 3
+                    else -> {
+                        i++
+                        continue
+                    }
+                }
+                val nalStart = i
+                val typeIndex = i + startLen
+                if (typeIndex >= bytes.size) break
+                var next = typeIndex + 1
+                while (next + 3 < bytes.size) {
+                    val nextStart = when {
+                        next + 4 <= bytes.size &&
+                            bytes[next] == 0.toByte() && bytes[next + 1] == 0.toByte() &&
+                            bytes[next + 2] == 0.toByte() && bytes[next + 3] == 1.toByte() -> true
+                        bytes[next] == 0.toByte() && bytes[next + 1] == 0.toByte() &&
+                            bytes[next + 2] == 1.toByte() -> true
+                        else -> false
+                    }
+                    if (nextStart) break
+                    next++
+                }
+                if (next + 3 >= bytes.size) next = bytes.size
+                if ((bytes[typeIndex].toInt() and 0x1F) == nalType) {
+                    last = bytes.copyOfRange(nalStart, next)
+                }
+                i = next
+            }
+            return last
         }
 
         private fun h264NalTypes(bytes: ByteArray): Sequence<Int> = sequence {

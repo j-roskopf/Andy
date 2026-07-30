@@ -1,5 +1,6 @@
 package app.andy.desktop.service.mirror
 
+import app.andy.service.MirrorFrame
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -114,6 +115,19 @@ internal object GpuMirrorJni {
     fun isHardwareReady(decoderId: Long): Boolean =
         loadResult.isSuccess && decoderId != 0L &&
             runCatching { nativeIsHardwareReady(decoderId) }.getOrDefault(false)
+
+    /** Copies the hub decoder's latest VideoToolbox frame as packed ARGB for bug capture. */
+    fun copyLatestFrameArgb(decoderId: Long): MirrorFrame? {
+        if (!loadResult.isSuccess || decoderId == 0L) return null
+        return runCatching {
+            val size = IntArray(2)
+            val pixels = nativeCopyLatestFrameArgb(decoderId, size) ?: return@runCatching null
+            val width = size[0]
+            val height = size[1]
+            if (width <= 0 || height <= 0 || pixels.size < width * height) return@runCatching null
+            MirrorFrame(width, height, pixels)
+        }.getOrNull()
+    }
 
     fun bindIosDecoder(decoderId: Long) {
         if (!loadResult.isSuccess || decoderId == 0L) return
@@ -234,6 +248,7 @@ internal object GpuMirrorJni {
     private external fun nativeFramesPresented(decoderId: Long): Long
     private external fun nativeHasDecodedFrame(decoderId: Long): Boolean
     private external fun nativeIsHardwareReady(decoderId: Long): Boolean
+    private external fun nativeCopyLatestFrameArgb(decoderId: Long, outSize: IntArray): IntArray?
     private external fun nativeSetIosDecoder(decoderId: Long)
     private external fun nativeClearIosDecoder(decoderId: Long)
     private external fun nativeIosDecoder(): Long

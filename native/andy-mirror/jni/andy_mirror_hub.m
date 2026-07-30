@@ -1402,6 +1402,125 @@ int andy_hub_inspect_pixel(int64_t decoder_id, float normalized_x, float normali
     return (int) (0xff000000u | ((unsigned) rgb[0] << 16) | ((unsigned) rgb[1] << 8) | (unsigned) rgb[2]);
 }
 
+int32_t *andy_hub_copy_latest_frame_argb(int64_t decoder_id, int32_t *out_width, int32_t *out_height) {
+    if (!out_width || !out_height) return NULL;
+    *out_width = 0;
+    *out_height = 0;
+    GpuDecoder *decoder = find_decoder(decoder_id);
+    if (!decoder) return NULL;
+    pthread_mutex_lock(&decoder->latest_pixels_lock);
+    CVPixelBufferRef pixels = decoder->latest_pixels;
+    if (pixels) {
+        CVPixelBufferRetain(pixels);
+    }
+    pthread_mutex_unlock(&decoder->latest_pixels_lock);
+    if (!pixels) return NULL;
+
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
+    if (!width || !height || width > 8192 || height > 8192 ||
+        CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        CVPixelBufferRelease(pixels);
+        return NULL;
+    }
+
+    const size_t count = width * height;
+    int32_t *dest = (int32_t *) malloc(count * sizeof(int32_t));
+    if (!dest) {
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(pixels);
+        return NULL;
+    }
+
+    if (pixel_buffer_is_bgra(pixels)) {
+        const uint8_t *base = NULL;
+        size_t stride = 0;
+        if (CVPixelBufferGetPlaneCount(pixels) == 0) {
+            base = (const uint8_t *) CVPixelBufferGetBaseAddress(pixels);
+            stride = CVPixelBufferGetBytesPerRow(pixels);
+        } else {
+            base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+            stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        }
+        if (!base || !stride) {
+            free(dest);
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return NULL;
+        }
+        OSType format = CVPixelBufferGetPixelFormatType(pixels);
+        for (size_t y = 0; y < height; ++y) {
+            int32_t *out_row = dest + y * width;
+            for (size_t x = 0; x < width; ++x) {
+                const uint8_t *pixel = base + y * stride + x * 4;
+                uint8_t r = 0, g = 0, b = 0;
+                if (format == kCVPixelFormatType_32RGBA) {
+                    r = pixel[0]; g = pixel[1]; b = pixel[2];
+                } else if (format == kCVPixelFormatType_32ARGB) {
+                    r = pixel[1]; g = pixel[2]; b = pixel[3];
+                } else {
+                    r = pixel[2]; g = pixel[1]; b = pixel[0];
+                }
+                out_row[x] = (int32_t) (0xff000000u | ((unsigned) r << 16) | ((unsigned) g << 8) | (unsigned) b);
+            }
+        }
+    } else {
+        const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+        const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 1);
+        const uint8_t *y_base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
+        const uint8_t *uv_base = (const uint8_t *) CVPixelBufferGetBaseAddressOfPlane(pixels, 1);
+        uint8_t *y_copy = (uint8_t *) malloc(height * width);
+        uint8_t *uv_copy = (uint8_t *) malloc((height / 2) * width);
+        if (!y_copy || !uv_copy || !y_base || !uv_base) {
+            free(y_copy);
+            free(uv_copy);
+            free(dest);
+            CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+            CVPixelBufferRelease(pixels);
+            return NULL;
+        }
+        for (size_t y = 0; y < height; ++y) {
+            memcpy(y_copy + y * width, y_base + y * y_stride, width);
+        }
+        for (size_t y = 0; y < height / 2; ++y) {
+            memcpy(uv_copy + y * width, uv_base + y * uv_stride, width);
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(pixels);
+        pixels = NULL;
+
+        for (size_t y = 0; y < height; ++y) {
+            const uint8_t *y_row = y_copy + y * width;
+            const uint8_t *uv_row = uv_copy + (y / 2) * width;
+            int32_t *out_row = dest + y * width;
+            for (size_t x = 0; x < width; ++x) {
+                const int yy = y_row[x] - 16;
+                const size_t uv_x = (x / 2) * 2;
+                const int uu = uv_row[uv_x] - 128;
+                const int vv = uv_row[uv_x + 1] - 128;
+                int red = (298 * yy + 409 * vv + 128) >> 8;
+                int green = (298 * yy - 100 * uu - 208 * vv + 128) >> 8;
+                int blue = (298 * yy + 516 * uu + 128) >> 8;
+                if (red < 0) red = 0; else if (red > 255) red = 255;
+                if (green < 0) green = 0; else if (green > 255) green = 255;
+                if (blue < 0) blue = 0; else if (blue > 255) blue = 255;
+                out_row[x] = (int32_t) (0xff000000u | ((unsigned) red << 16) | ((unsigned) green << 8) | (unsigned) blue);
+            }
+        }
+        free(y_copy);
+        free(uv_copy);
+    }
+
+    if (pixels) {
+        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(pixels);
+    }
+    *out_width = (int32_t) width;
+    *out_height = (int32_t) height;
+    return dest;
+}
+
 static float p95_from_samples(double *samples, size_t count) {
     if (!count) return -1.0f;
     double sorted[120];
@@ -1636,4 +1755,30 @@ JNIEXPORT jint JNICALL GPU_JNI_METHOD(nativeInspectPixel)(
     (void) env;
     (void) clazz;
     return (jint) andy_hub_inspect_pixel((int64_t) decoder_id, normalized_x, normalized_y);
+}
+
+JNIEXPORT jintArray JNICALL GPU_JNI_METHOD(nativeCopyLatestFrameArgb)(
+        JNIEnv *env, jclass clazz, jlong decoder_id, jintArray out_size) {
+    (void) clazz;
+    if (!out_size || (*env)->GetArrayLength(env, out_size) < 2) {
+        return NULL;
+    }
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t *pixels = andy_hub_copy_latest_frame_argb((int64_t) decoder_id, &width, &height);
+    if (!pixels || width <= 0 || height <= 0) {
+        free(pixels);
+        return NULL;
+    }
+    const jsize count = (jsize) width * (jsize) height;
+    jintArray result = (*env)->NewIntArray(env, count);
+    if (!result) {
+        free(pixels);
+        return NULL;
+    }
+    (*env)->SetIntArrayRegion(env, result, 0, count, (const jint *) pixels);
+    free(pixels);
+    jint size_values[2] = { (jint) width, (jint) height };
+    (*env)->SetIntArrayRegion(env, out_size, 0, 2, size_values);
+    return result;
 }

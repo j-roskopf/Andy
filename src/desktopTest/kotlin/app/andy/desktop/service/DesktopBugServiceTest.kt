@@ -73,6 +73,10 @@ class DesktopBugServiceTest {
         assertTrue(reportDir.resolve("capture.mp4").length() > 0L, "capture.mp4 should not be empty")
         assertTrue(service.bugVideoFrameCount(report.id) > 0, "capture.mp4 should have at least one playable frame")
         assertEquals(null, report.videoCaptureWarning)
+        assertNotNull(service.loadBugVideoFrame(report.id, 0), "frame 0 should decode")
+        // Scrubbing mid-capture must not depend on a fragile packet-copy timebase.
+        val lastIndex = (service.bugVideoFrameCount(report.id) - 1).coerceAtLeast(0)
+        assertNotNull(service.loadBugVideoFrame(report.id, lastIndex), "last frame should decode via seek or scan")
         assertEquals(listOf(report.id), service.listBugs().map { it.id })
         assertEquals("Broken thing", service.loadBug(report.id)?.title)
 
@@ -162,7 +166,25 @@ class DesktopBugServiceTest {
     }
 
     @Test
-    fun healthyH264BitstreamSkipsArgbFrameRing() = runBlocking {
+    fun mergeH264ConfigKeepsSeparateSpsAndPps() {
+        val sps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a)
+        val pps = byteArrayOf(0, 0, 0, 1, 0x68.toByte(), 0xce.toByte(), 0x06, 0xe2.toByte())
+        val merged = DesktopBugService.mergeH264Config(
+            DesktopBugService.mergeH264Config(null, sps),
+            pps,
+        )
+        assertTrue(merged.size >= sps.size + pps.size)
+        // SPS (type 7) then PPS (type 8) must both survive — overwriting dropped PPS before.
+        assertEquals(0x67.toByte(), merged[4])
+        assertTrue(
+            merged.asList().windowed(5).any {
+                it == listOf(0.toByte(), 0.toByte(), 0.toByte(), 1.toByte(), 0x68.toByte())
+            },
+        )
+    }
+
+    @Test
+    fun healthyH264StillKeepsSparseArgbSafetyNet() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-h264-test").toFile()
         val mirror = FakeMirrorEngine()
         val service = DesktopBugService(mirror, FakeLogcatService(), home)
@@ -182,11 +204,96 @@ class DesktopBugServiceTest {
             )
             delay(50)
         }
-        delay(400)
+        val sampleDeadline = System.currentTimeMillis() + 15_000
+        while (service.status.value.videoFrameCount < 1 && System.currentTimeMillis() < sampleDeadline) delay(20)
 
-        assertEquals(0, service.status.value.videoFrameCount)
+        assertTrue(
+            service.status.value.videoFrameCount >= 1,
+            "bug capture must keep a sparse ARGB safety net even when H.264 units are flowing",
+        )
         service.stopCapture()
-        assertEquals(0, service.status.value.videoFrameCount)
+    }
+
+    @Test
+    fun separateSpsAndPpsSurviveBeginRecording() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-sps-pps-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        service.startCapture("emulator-5554", null)
+        val sps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a)
+        val pps = byteArrayOf(0, 0, 0, 1, 0x68.toByte(), 0xce.toByte(), 0x06, 0xe2.toByte())
+        mirror.encodedUnits.emit(
+            EncodedVideoAccessUnit(
+                timestampMillis = System.currentTimeMillis(),
+                bytes = sps,
+                width = 64,
+                height = 128,
+            ),
+        )
+        delay(40)
+        mirror.encodedUnits.emit(
+            EncodedVideoAccessUnit(
+                timestampMillis = System.currentTimeMillis(),
+                bytes = pps,
+                width = 64,
+                height = 128,
+            ),
+        )
+        delay(80)
+        assertEquals(sps.size + pps.size, service.latestH264ConfigSizeForTest())
+
+        service.beginRecording()
+        assertEquals(
+            sps.size + pps.size,
+            service.latestH264ConfigSizeForTest(),
+            "merged SPS+PPS must survive beginRecording",
+        )
+        service.stopCapture()
+    }
+
+    @Test
+    fun beginRecordingPreservesH264ConfigForRemux() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-config-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        service.startCapture("emulator-5554", null)
+        // Annex-B SPS (NAL type 7) — retained as latestH264Config for remux.
+        val sps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a)
+        mirror.encodedUnits.emit(
+            EncodedVideoAccessUnit(
+                timestampMillis = System.currentTimeMillis(),
+                bytes = sps,
+                width = 64,
+                height = 128,
+            ),
+        )
+        delay(100)
+        assertEquals(sps.size, service.latestH264ConfigSizeForTest())
+
+        service.beginRecording()
+        assertEquals(
+            sps.size,
+            service.latestH264ConfigSizeForTest(),
+            "beginRecording must keep SPS/PPS so later picture AUs remux without 'non-existing PPS'",
+        )
+
+        // Picture-only AUs after the reset — mirrors real scrcpy after Record is pressed.
+        val idr = byteArrayOf(0, 0, 0, 1, 0x65, 0)
+        repeat(3) {
+            mirror.encodedUnits.emit(
+                EncodedVideoAccessUnit(
+                    timestampMillis = System.currentTimeMillis(),
+                    bytes = idr,
+                    width = 64,
+                    height = 128,
+                ),
+            )
+            delay(30)
+        }
+        assertEquals(sps.size, service.latestH264ConfigSizeForTest())
+        service.stopCapture()
     }
 
     @Test
