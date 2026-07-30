@@ -1,5 +1,6 @@
 package app.andy.ui.inspector
 
+import app.andy.currentTimeMillis
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -168,7 +169,7 @@ internal fun InspectorScreen(
         return Result.success(
             HierarchySnapshot(
                 root = fallbackRoot,
-                capturedAtMillis = System.currentTimeMillis(),
+                capturedAtMillis = currentTimeMillis(),
                 displayWidth = screenSizeParts?.getOrNull(0) ?: 0,
                 displayHeight = screenSizeParts?.getOrNull(1) ?: 0,
                 source = HierarchySource.Uiautomator,
