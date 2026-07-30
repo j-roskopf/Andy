@@ -23,12 +23,12 @@ data class TaskEvidenceBundle(
 object AgentEvidenceMaterializer {
     private const val ManifestFileName = "manifest.json"
     private const val MaxKeyFilesInPrompt = 8
+    private val SafeBundleIdPattern = Regex("^[A-Za-z0-9._-]+$")
 
-    /** Copies [bundleId] from [managedRootDir] into [taskEvidenceDir]/<bundleId>, if it exists. */
+  /** Copies [bundleId] from [managedRootDir] into [taskEvidenceDir]/<bundleId>, if it exists. */
     fun copyBundle(managedRootDir: File, bundleId: String, taskEvidenceDir: File): TaskEvidenceBundle? {
-        val sourceDir = File(managedRootDir, bundleId)
-        if (!sourceDir.isDirectory) return null
-        val destinationDir = File(taskEvidenceDir, bundleId)
+        val sourceDir = resolveManagedBundleDir(managedRootDir, bundleId) ?: return null
+        val destinationDir = resolveTaskBundleDir(taskEvidenceDir, bundleId) ?: return null
         destinationDir.deleteRecursively()
         sourceDir.copyRecursively(destinationDir, overwrite = true)
         val manifestFile = File(destinationDir, ManifestFileName).takeIf { it.isFile }
@@ -60,5 +60,28 @@ object AgentEvidenceMaterializer {
                 if (remaining > 0) append("  - …and $remaining more file(s)\n")
             }
         }.trimEnd()
+    }
+
+    private fun resolveManagedBundleDir(root: File, bundleId: String): File? {
+        if (!SafeBundleIdPattern.matches(bundleId)) return null
+        val rootCanonical = root.canonicalFile
+        val bundleDir = File(rootCanonical, bundleId).canonicalFile
+        if (!isDescendant(bundleDir, rootCanonical) || !bundleDir.isDirectory) return null
+        return bundleDir
+    }
+
+    private fun resolveTaskBundleDir(taskEvidenceDir: File, bundleId: String): File? {
+        if (!SafeBundleIdPattern.matches(bundleId)) return null
+        val rootCanonical = taskEvidenceDir.canonicalFile
+        taskEvidenceDir.mkdirs()
+        val bundleDir = File(rootCanonical, bundleId).canonicalFile
+        if (!isDescendant(bundleDir, rootCanonical)) return null
+        return bundleDir
+    }
+
+    private fun isDescendant(child: File, parent: File): Boolean {
+        val childPath = child.path
+        val parentPath = parent.path
+        return childPath == parentPath || childPath.startsWith(parentPath + File.separator)
     }
 }

@@ -63,12 +63,14 @@ internal fun sampleFrameIndicesAtRate(
     fps: Int,
 ): List<Int> {
     if (timestampsMillis.isEmpty() || fps <= 0 || endMillis < startMillis) return emptyList()
+    val allowedIndices = trimFrameIndices(timestampsMillis, startMillis, endMillis)
+    if (allowedIndices.isEmpty()) return emptyList()
     val stepMillis = (1000.0 / fps).coerceAtLeast(1.0)
     val indices = mutableListOf<Int>()
     var lastIndex = -1
     var t = startMillis.toDouble()
     while (t <= endMillis) {
-        val index = nearestFrameIndex(timestampsMillis, t.toLong())
+        val index = nearestFrameIndexWithin(timestampsMillis, allowedIndices, t.toLong())
         if (index != lastIndex) {
             indices += index
             lastIndex = index
@@ -76,9 +78,26 @@ internal fun sampleFrameIndicesAtRate(
         t += stepMillis
     }
     // Always include the final in-range frame so a trimmed clip doesn't end early.
-    val lastInRange = trimFrameIndices(timestampsMillis, startMillis, endMillis).lastOrNull()
+    val lastInRange = allowedIndices.lastOrNull()
     if (lastInRange != null && indices.lastOrNull() != lastInRange) indices += lastInRange
     return indices
+}
+
+private fun nearestFrameIndexWithin(
+    timestampsMillis: List<Long>,
+    allowedIndices: List<Int>,
+    targetMillis: Long,
+): Int {
+    var best = allowedIndices.first()
+    var bestDiff = Long.MAX_VALUE
+    for (index in allowedIndices) {
+        val diff = kotlin.math.abs(timestampsMillis[index] - targetMillis)
+        if (diff < bestDiff) {
+            bestDiff = diff
+            best = index
+        }
+    }
+    return best
 }
 
 private fun nearestFrameIndex(timestampsMillis: List<Long>, targetMillis: Long): Int {

@@ -13,9 +13,13 @@ import app.andy.model.InvestigationTimelineSchemaVersion
  * Lazy v1 → investigation adapter. Never rewrites on-disk reports; builds an
  * in-memory timeline from legacy actions (and optionally approximate log lines).
  */
-fun investigationTimelineFor(report: BugReport, loadedTimeline: InvestigationTimeline?): InvestigationTimeline {
+fun investigationTimelineFor(
+    report: BugReport,
+    loadedTimeline: InvestigationTimeline?,
+    logcatText: String = "",
+): InvestigationTimeline {
     if (loadedTimeline != null) return loadedTimeline
-    return migrateV1BugReportToTimeline(report)
+    return migrateV1BugReportToTimeline(report, logcatText.lines().filter { it.isNotBlank() })
 }
 
 fun migrateV1BugReportToTimeline(

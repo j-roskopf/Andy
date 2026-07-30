@@ -215,7 +215,9 @@ internal fun BugsScreen(
                 Text(if (recordings) "Start a recording from Live to see its replay here." else "Save a bug from Live to see its replay here.", color = TextSecondary)
             }
         } else {
-            val effectiveTimeline = remember(report.id, state.timeline) { investigationTimelineFor(report, state.timeline) }
+            val effectiveTimeline = remember(report.id, state.timeline, state.logcat) {
+                investigationTimelineFor(report, state.timeline, state.logcat)
+            }
             val overlayActions = remember(effectiveTimeline) { effectiveTimeline.actionEventsForOverlay() }
             val filteredEvents = remember(effectiveTimeline, state.timelineFilters) { effectiveTimeline.filtered(state.timelineFilters) }
             val playbackMillis = bugPlaybackMillis(report, state.playbackFrameIndex, state.playbackFrameCount)

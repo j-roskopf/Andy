@@ -1,6 +1,8 @@
 package app.andy.domain
 
 import app.andy.model.EvidenceArtifactManifestEntry
+import app.andy.model.InvestigationEvent
+import app.andy.model.InvestigationEventKind
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -97,6 +99,36 @@ fun redactHierarchyJson(treeJson: String): HierarchyRedactionResult {
         HierarchyRedactionJson.encodeToString(JsonElement.serializer(), redacted)
     }.getOrNull() ?: treeJson
     return HierarchyRedactionResult(json, count)
+}
+
+/** Redacts inline timeline payloads before they are written into evidence bundles. */
+fun redactInvestigationEventsForBundle(events: List<InvestigationEvent>): List<InvestigationEvent> =
+    events.map(::redactInvestigationEventForBundle)
+
+fun redactInvestigationEventForBundle(event: InvestigationEvent): InvestigationEvent {
+    val inline = event.inline?.let { payload ->
+        payload.copy(
+            text = payload.text?.let { capText(it, EvidenceBudgets.MaxLogChars) },
+            url = payload.url?.let(::redactUrlQueryForBundle),
+            error = payload.error?.let { capText(it, EvidenceBudgets.MaxLogChars) },
+        )
+    }
+    return event.copy(
+        detail = event.detail?.let { capText(it, EvidenceBudgets.MaxLogChars) },
+        summary = if (event.kind == InvestigationEventKind.LogLine) {
+            capText(event.summary, 160)
+        } else {
+            event.summary
+        },
+        inline = inline,
+    )
+}
+
+/** Strips query strings from URLs copied into evidence bundles. */
+fun redactUrlQueryForBundle(url: String): String {
+    val queryIndex = url.indexOf('?')
+    if (queryIndex < 0) return url
+    return url.take(queryIndex) + "?[redacted-query]"
 }
 
 private fun redactHierarchyElement(element: JsonElement): Pair<JsonElement, Int> {

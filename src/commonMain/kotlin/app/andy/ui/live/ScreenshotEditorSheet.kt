@@ -113,7 +113,8 @@ internal fun ScreenshotEditorSheet(
         val end = dragCurrent
         when {
             tool == ScreenshotTool.Freehand && freehandPoints.size > 1 -> {
-                annotations += ScreenshotAnnotation.Freehand(freehandPoints.flatMap { listOf(it.x, it.y) })
+                val normalizedPoints = freehandPoints.map { normalized(it, rect) }
+                annotations += ScreenshotAnnotation.Freehand(normalizedPoints.flatMap { listOf(it.x, it.y) })
             }
             start != null && end != null && (start - end).getDistance() > 4f -> {
                 val a = normalized(start, rect)

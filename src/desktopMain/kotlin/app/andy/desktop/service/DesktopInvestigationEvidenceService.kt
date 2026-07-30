@@ -5,6 +5,7 @@ import app.andy.domain.applyBudget
 import app.andy.domain.capText
 import app.andy.domain.redactHeaders
 import app.andy.domain.redactHierarchyJson
+import app.andy.domain.redactInvestigationEventsForBundle
 import app.andy.domain.selectEvidenceWindow
 import app.andy.model.AgentEvidencePreview
 import app.andy.model.BugReport
@@ -144,7 +145,7 @@ class DesktopInvestigationEvidenceService(
                 schemaVersion = selection.timeline.schemaVersion,
                 originMillis = selection.windowStart,
                 endedAtMillis = selection.windowEnd,
-                events = selection.events,
+                events = redactInvestigationEventsForBundle(selection.events),
             ),
         )
         results += ArtifactResult(
