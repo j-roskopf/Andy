@@ -306,7 +306,7 @@ private fun AppIconCell(serial: String, packageName: String, apps: AppService, c
         bitmap = bytes?.let { withContext(Dispatchers.Default) { loadImageBitmap(it) } }
     }
     Box(
-        Modifier.padding(vertical = 4.dp).size(48.dp).clip(RoundedCornerShape(AndyRadius.R4)).background(AndyColors.Neutral750),
+        Modifier.padding(vertical = 4.dp).size(48.dp).clip(RoundedCornerShape(AndyRadius.Row)).background(AndyColors.Neutral750),
         contentAlignment = Alignment.Center,
     ) {
         val image = bitmap

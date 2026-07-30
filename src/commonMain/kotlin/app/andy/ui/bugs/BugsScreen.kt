@@ -194,8 +194,8 @@ internal fun BugsScreen(
                         val active = report.id == state.selectedId
                         Column(
                             Modifier.fillMaxWidth()
-                                .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.R3))
-                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.Control))
                                 .clickable { state.selectedId = report.id }
                                 .padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -335,7 +335,7 @@ internal fun BugsScreen(
                 }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-                    val paneGuttersWidth = AndySpace.S3 * 2 + AndyStroke.PaneHandleHitWidth * 2
+                    val paneGuttersWidth = AndySpace.Space4 * 2 + AndyStroke.PaneHandleHitWidth * 2
                     val minimumVideoWidth = 260.dp
                     val minimumStepsWidth = 220.dp
                     val minimumDetailsWidth = 220.dp
@@ -390,8 +390,8 @@ internal fun BugsScreen(
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(
                                 Modifier.weight(1f).fillMaxWidth()
-                                    .background(Color.Black, RoundedCornerShape(AndyRadius.R3))
-                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                    .background(Color.Black, RoundedCornerShape(AndyRadius.Control))
+                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                                     .clickable(enabled = state.playbackFrameCount > 0) { toggleBugReplay() },
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -508,7 +508,7 @@ internal fun BugsScreen(
                             }
                             DetailSection("NOTES")
                             SelectionContainer {
-                                Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))
+                                Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.Control)).padding(10.dp))
                             }
                         } else {
                             BugLogcatView(state.logcat, Modifier.fillMaxSize())
@@ -546,7 +546,7 @@ internal fun BugsScreen(
 
 @Composable
 private fun BugLogcatView(logcat: String, modifier: Modifier = Modifier) {
-    BugLogcatTextSurface(logcat, modifier.background(Color.Black, RoundedCornerShape(AndyRadius.R3)))
+    BugLogcatTextSurface(logcat, modifier.background(Color.Black, RoundedCornerShape(AndyRadius.Control)))
 }
 
 private fun formatMillis(value: Long): String = if (value <= 0L) "-" else value.toString()

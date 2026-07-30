@@ -148,7 +148,7 @@ internal fun RecordingExportSheet(
         Column(
             Modifier
                 .widthIn(max = 640.dp)
-                .background(Panel, RoundedCornerShape(AndyRadius.R4))
+                .background(Panel, RoundedCornerShape(AndyRadius.Row))
                 .padding(20.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -183,7 +183,7 @@ internal fun RecordingExportSheet(
 
             Box(
                 Modifier.fillMaxWidth().height(220.dp)
-                    .background(Color.Black, RoundedCornerShape(AndyRadius.R3)),
+                    .background(Color.Black, RoundedCornerShape(AndyRadius.Control)),
                 contentAlignment = Alignment.Center,
             ) {
                 val frame = previewFrame
@@ -269,7 +269,7 @@ internal fun RecordingExportSheet(
             exportResult?.let { clip ->
                 Column(
                     Modifier.fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
+                        .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Control))
                         .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {

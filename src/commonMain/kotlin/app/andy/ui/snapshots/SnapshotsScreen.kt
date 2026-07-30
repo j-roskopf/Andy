@@ -1,15 +1,14 @@
 package app.andy.ui.snapshots
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
@@ -35,11 +33,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -57,12 +53,13 @@ import app.andy.service.AvdService
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyLayout
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -247,12 +244,12 @@ private fun SnapshotCard(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(AndyRadius.R3))
-            .background(Panel, RoundedCornerShape(AndyRadius.R3))
-            .clip(RoundedCornerShape(AndyRadius.R3))
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = Panel,
+        borderColor = Color.White.copy(alpha = 0.08f),
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
     ) {
         Box(
             modifier = Modifier
@@ -389,43 +386,43 @@ private fun SaveStateCard(
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    Box(
+    PanelCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(262.dp)
-            .border(
-                BorderStroke(1.dp, SolidColor(Color.White.copy(alpha = 0.08f))),
-                shape = RoundedCornerShape(AndyRadius.R3)
-            )
-            .background(if (enabled) Panel else Panel.copy(alpha = 0.5f), RoundedCornerShape(AndyRadius.R3))
             .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center
+        background = if (enabled) Panel else Panel.copy(alpha = 0.5f),
+        borderColor = Color.White.copy(alpha = 0.08f),
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Canvas(modifier = Modifier.size(24.dp)) {
-                val sizePx = size.width
-                val strokePx = 2.dp.toPx()
-                drawLine(
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)
+            ) {
+                Canvas(modifier = Modifier.size(24.dp)) {
+                    val sizePx = size.width
+                    val strokePx = 2.dp.toPx()
+                    drawLine(
+                        color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                        start = Offset(0f, sizePx / 2f),
+                        end = Offset(sizePx, sizePx / 2f),
+                        strokeWidth = strokePx
+                    )
+                    drawLine(
+                        color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                        start = Offset(sizePx / 2f, 0f),
+                        end = Offset(sizePx / 2f, sizePx),
+                        strokeWidth = strokePx
+                    )
+                }
+                Text(
+                    text = "Save current state",
                     color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
-                    start = Offset(0f, sizePx / 2f),
-                    end = Offset(sizePx, sizePx / 2f),
-                    strokeWidth = strokePx
-                )
-                drawLine(
-                    color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
-                    start = Offset(sizePx / 2f, 0f),
-                    end = Offset(sizePx / 2f, sizePx),
-                    strokeWidth = strokePx
+                    fontSize = 13.sp
                 )
             }
-            Text(
-                text = "Save current state",
-                color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
-                fontSize = 13.sp
-            )
         }
     }
 }

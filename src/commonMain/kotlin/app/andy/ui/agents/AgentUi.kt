@@ -27,6 +27,7 @@ import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -81,8 +82,8 @@ internal fun StatusDot(status: AgentStatus, modifier: Modifier = Modifier) {
 internal fun AgentBadge(kind: AgentKind, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, agentColor(kind).copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.R2))
+            .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium), RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, agentColor(kind).copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.Control))
             .padding(5.dp),
         contentAlignment = Alignment.Center,
     ) {

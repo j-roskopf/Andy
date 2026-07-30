@@ -357,8 +357,8 @@ internal fun HostFilesScreen(
                     val status = state.statuses[root]
                     Column(
                         Modifier.fillMaxWidth()
-                            .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.R2))
-                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.R2))
+                            .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.Control))
+                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.Control))
                             .clickable {
                                 selectedRoot = root
                                 selectedPath = root
@@ -556,8 +556,8 @@ private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boole
     Row(
         Modifier.fillMaxWidth()
             .heightIn(min = 24.dp)
-            .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-            .then(if (selected) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.R2)) else Modifier)
+            .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.Control))
+            .then(if (selected) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.Control)) else Modifier)
             .clickable(onClick = onClick)
             .padding(start = (row.depth * 16).dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,

@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -157,16 +158,21 @@ internal fun Toolbar(
 @Composable
 internal fun PanelCard(
     modifier: Modifier = Modifier,
+    background: Color = AndyColors.PaneBg,
     accent: Color? = null,
+    borderColor: Color? = null,
+    contentPadding: PaddingValues = PaddingValues(AndySpace.Space5),
+    verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AndySpace.Space3),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(AndyRadius.Row)
     Column(
         modifier
-            .background(AndyColors.PaneBg, shape)
-            .border(1.dp, accent?.copy(alpha = 0.40f) ?: Border, shape)
-            .padding(AndySpace.Space5),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+            .background(background, shape)
+            .clip(shape)
+            .border(1.dp, borderColor ?: accent?.copy(alpha = 0.40f) ?: Border, shape)
+            .padding(contentPadding),
+        verticalArrangement = verticalArrangement,
         content = content,
     )
 }

@@ -23,6 +23,7 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.TextField
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -51,8 +52,8 @@ internal fun AgentUserInputCard(
     Column(
         modifier
             .fillMaxWidth()
-            .background(AndyColors.Neutral850.copy(alpha = 0.9f), RoundedCornerShape(AndyRadius.R4))
-            .border(1.dp, Rust.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.R4))
+            .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Row))
+            .border(1.dp, Rust.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.Row))
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -117,8 +118,8 @@ private fun ChoiceRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (selected) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral900.copy(alpha = 0.64f), RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, if (selected) Cyan.copy(alpha = 0.75f) else Border, RoundedCornerShape(AndyRadius.R2))
+            .background(if (selected) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium), RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, if (selected) Cyan.copy(alpha = 0.75f) else Border, RoundedCornerShape(AndyRadius.Control))
             .selectable(selected = selected, onClick = onSelect)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

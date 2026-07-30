@@ -275,8 +275,8 @@ internal fun liveDevicePaneFittedWidth(
         foldableHingeAngle = foldableHingeAngle,
     )
     val aspect = source.width.toFloat() / source.height.toFloat()
-    val horizontalChrome = if (showContainerChrome) AndySpace.S4 * 2 else 0.dp
-    val verticalChrome = if (showContainerChrome) AndySpace.S4 * 2 else 0.dp
+    val horizontalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
+    val verticalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
     val toolbarWidth = if (showHardwareControls) 68.dp else 0.dp
     val toolbarGap = if (showHardwareControls) 10.dp else 0.dp
     val headerBlock = if (showDeviceHeader) 42.dp else 0.dp
@@ -366,13 +366,13 @@ internal fun LiveDevicePane(
     onConnect: () -> Unit,
 ) {
     val windowResizing = LocalWindowResizing.current
-    val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.R3 else 0.dp)
+    val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.Control else 0.dp)
     val containerModifier = if (showContainerChrome) {
         modifier
             .background(AndyColors.Neutral800.copy(alpha = 0.82f), containerShape)
             .border(1.dp, Border, containerShape)
             .noiseGridOverlay(0.025f)
-            .padding(AndySpace.S4)
+            .padding(AndySpace.Space5)
     } else {
         modifier.background(Color.Black)
     }
@@ -988,7 +988,7 @@ private fun LiveStreamChipView(chip: LiveStreamChip) {
         LiveStreamChipTone.Active -> Green
         LiveStreamChipTone.Warning -> Rust
     }
-    val shape = RoundedCornerShape(AndyRadius.R2)
+    val shape = RoundedCornerShape(AndyRadius.Control)
     Text(
         chip.label,
         color = if (chip.tone == LiveStreamChipTone.Neutral) TextSecondary else TextPrimary,

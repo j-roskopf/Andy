@@ -306,7 +306,7 @@ actual fun AgentTerminalSurface(
     }
 
     val dragBorderModifier = if (imageDragActive) {
-        Modifier.border(2.dp, Cyan, RoundedCornerShape(AndyRadius.R3))
+        Modifier.border(2.dp, Cyan, RoundedCornerShape(AndyRadius.Control))
     } else {
         Modifier
     }

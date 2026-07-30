@@ -95,8 +95,8 @@ internal fun InvestigationTimelinePane(
                     Column(
                         Modifier.fillMaxWidth()
                             .animateContentSize()
-                            .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                            .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
+                            .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.Control))
+                            .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.Control))
                             .clickable { onToggleEvent(event) }
                             .padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -143,7 +143,7 @@ internal fun InvestigationTimelinePane(
                         AnimatedVisibility(visible = expanded) {
                             Column(
                                 Modifier.fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
+                                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Control))
                                     .padding(horizontal = 8.dp, vertical = 7.dp),
                                 verticalArrangement = Arrangement.spacedBy(5.dp),
                             ) {

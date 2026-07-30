@@ -1,7 +1,6 @@
 package app.andy.ui.controls
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LocalTextStyle
@@ -54,6 +52,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
@@ -442,15 +441,13 @@ private fun ValueCommandTile(
 }
 
 @Composable
-private fun ControlTile(label: String, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.R3)
-    Column(
-        modifier = Modifier
-            .widthIn(min = 260.dp, max = 300.dp)
-            .heightIn(min = 72.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.44f), shape)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+internal fun ControlTile(label: String, content: @Composable () -> Unit) {
+    PanelCard(
+        modifier = Modifier.widthIn(min = 260.dp, max = 300.dp).heightIn(min = 72.dp),
+        background = AndyColors.Neutral900.copy(alpha = 0.44f),
+        borderColor = Color.Transparent,
+        contentPadding = PaddingValues(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Text(label, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         content()

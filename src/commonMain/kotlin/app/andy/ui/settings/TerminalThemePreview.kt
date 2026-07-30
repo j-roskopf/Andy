@@ -124,8 +124,8 @@ internal fun TerminalThemePreview(
 
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
             .background(themeColors.background),
     ) {
         Row(

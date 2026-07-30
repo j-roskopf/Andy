@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -76,6 +77,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -186,7 +188,7 @@ private fun SettingsShell(
 ) {
     Column(
         Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
     ) {
         Toolbar(title, subtitle)
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -194,7 +196,7 @@ private fun SettingsShell(
             if (wide) {
                 Row(
                     Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.S4),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5),
                 ) {
                     SettingsCategoryRail(
                         categories = categories,
@@ -211,7 +213,7 @@ private fun SettingsShell(
             } else {
                 Column(
                     Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
                 ) {
                     SettingsCategoryPills(
                         categories = categories,
@@ -236,12 +238,11 @@ private fun SettingsCategoryRail(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier
-            .background(AndyColors.Neutral800.copy(alpha = 0.82f), RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(AndySpace.S2),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    PanelCard(
+        modifier = modifier,
+        background = AndyColors.Neutral800.copy(alpha = AndyOverlay.Strong),
+        contentPadding = PaddingValues(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
     ) {
         Text(
             "categories",
@@ -256,12 +257,12 @@ private fun SettingsCategoryRail(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(AndyRadius.R2))
+                    .clip(RoundedCornerShape(AndyRadius.Control))
                     .background(if (selected) AndyColors.OrangeSubtle else AndyColors.Neutral800.copy(alpha = 0f))
                     .border(
                         1.dp,
                         if (selected) AndyColors.OrangeBorder else AndyColors.Neutral800.copy(alpha = 0f),
-                        RoundedCornerShape(AndyRadius.R2),
+                        RoundedCornerShape(AndyRadius.Control),
                     )
                     .clickable { onSelect(index) }
                     .semantics { contentDescription = "$label settings" }
@@ -308,12 +309,12 @@ private fun SettingsCategoryPills(
                 modifier = Modifier
                     .background(
                         if (selected) AndyColors.OrangeSubtle else PanelSoft,
-                        RoundedCornerShape(AndyRadius.R3),
+                        RoundedCornerShape(AndyRadius.Control),
                     )
                     .border(
                         1.dp,
                         if (selected) AndyColors.OrangeBorder else Border,
-                        RoundedCornerShape(AndyRadius.R3),
+                        RoundedCornerShape(AndyRadius.Control),
                     )
                     .semantics { contentDescription = "$label settings" },
             ) {
@@ -334,10 +335,10 @@ private fun SettingsCategoryBody(
             modifier
                 .verticalScroll(rememberScrollState())
                 .padding(end = 2.dp),
-            verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
         ) {
             content()
-            Spacer(Modifier.height(AndySpace.S4))
+            Spacer(Modifier.height(AndySpace.Space5))
         }
     }
 }
@@ -935,12 +936,12 @@ private fun McpClientsPanel(
         operationStatus?.let { status ->
             Text(status, color = Rust, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
         }
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R3))
-                .padding(12.dp),
+        PanelCard(
+            modifier = Modifier.fillMaxWidth(),
+            background = AndyColors.Neutral850,
+            borderColor = AndyColors.OrangeBorder.copy(alpha = 0.45f),
+            contentPadding = PaddingValues(AndySpace.Space4),
+            verticalArrangement = Arrangement.Top,
         ) {
             Text("Configuration snippet ($selectedClientLabel)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
             Spacer(Modifier.height(6.dp))
@@ -1015,18 +1016,21 @@ private fun WebSettingsScreen(
                         Text(connection.status, color = if (connection.connected) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont)
                     }
                     connection.error?.let { error ->
-                        SelectionContainer {
-                            Text(
-                                error,
-                                color = TextSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp,
-                                modifier = Modifier.fillMaxWidth()
-                                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                                    .padding(12.dp),
-                            )
+                        PanelCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            background = AndyColors.Neutral850,
+                            contentPadding = PaddingValues(AndySpace.Space4),
+                            verticalArrangement = Arrangement.Top,
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    error,
+                                    color = TextSecondary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                )
+                            }
                         }
                     }
                 }

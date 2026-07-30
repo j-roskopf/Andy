@@ -184,8 +184,8 @@ internal fun DockToggle(
     Box(
         Modifier
             .size(28.dp)
-            .background(if (selected) selectedFill else AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, if (selected) selectedBorder else Border, RoundedCornerShape(AndyRadius.R2))
+            .background(if (selected) selectedFill else AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, if (selected) selectedBorder else Border, RoundedCornerShape(AndyRadius.Control))
             .semantics { contentDescription = label; role = Role.Button }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -342,7 +342,7 @@ private fun TerminalTabPill(
     onClick: () -> Unit,
     onClose: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
+    val shape = RoundedCornerShape(AndyRadius.Control)
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Row(

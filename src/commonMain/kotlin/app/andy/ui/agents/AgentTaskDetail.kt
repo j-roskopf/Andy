@@ -84,13 +84,16 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.shell.LocalOpenInvestigation
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -354,11 +357,11 @@ internal fun AgentTaskDetail(
         }
 
         if (task.queuedFollowUps.isNotEmpty()) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
-                    .border(1.dp, Cyan.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.R4))
-                    .padding(10.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.Neutral850,
+                borderColor = Cyan.copy(alpha = 0.6f),
+                contentPadding = PaddingValues(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -399,11 +402,11 @@ internal fun AgentTaskDetail(
             task.workflowTaskId == null &&
             !terminalSessionActive
         ) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
-                    .border(1.dp, Cyan.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.R4))
-                    .padding(10.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.Neutral850,
+                borderColor = Cyan.copy(alpha = 0.6f),
+                contentPadding = PaddingValues(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text("PLAN COMPLETE", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
@@ -431,11 +434,11 @@ internal fun AgentTaskDetail(
         }
 
         if (showFollowUpComposer) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-                    .padding(8.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.Neutral850,
+                borderColor = Border,
+                contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -454,11 +457,11 @@ internal fun AgentTaskDetail(
                                 }
                             }
                             if (goalEditorOpen) {
-                                Column(
-                                    Modifier.fillMaxWidth()
-                                        .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
-                                        .border(1.dp, Green.copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.R3))
-                                        .padding(8.dp),
+                                PanelCard(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    background = AndyColors.Neutral900,
+                                    borderColor = Green.copy(alpha = 0.4f),
+                                    contentPadding = PaddingValues(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     Text("persistent task goal", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
@@ -520,7 +523,7 @@ internal fun AgentTaskDetail(
                                     .border(
                                         if (followUpImageDragActive) 2.dp else 1.dp,
                                         if (followUpImageDragActive) Cyan else Border,
-                                        RoundedCornerShape(AndyRadius.R3),
+                                        RoundedCornerShape(AndyRadius.Control),
                                     ),
                                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
                                 colors = fieldColors(),
@@ -629,13 +632,11 @@ internal fun AgentTaskDetail(
 
         // Same rule as change-summary: never steal height from a live SwingPanel.
         if (task.worktreePath != null && !terminalSessionActive) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .heightIn(min = 72.dp, max = 160.dp)
-                    .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 160.dp),
+                background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium),
+                contentPadding = PaddingValues(AndySpace.Space3),
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("worktree ${task.branchName.orEmpty()}", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -698,11 +699,11 @@ private fun AgentTaskHeader(
             delay(1_000)
         }
     }
-    Column(
-        Modifier.fillMaxWidth()
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R4))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
-            .padding(12.dp),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = AndyColors.Neutral850,
+        borderColor = Border,
+        contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         Row(
@@ -803,11 +804,11 @@ private fun AgentTaskHeader(
                 )
 
                 task.goal?.let { goal ->
-                    Column(
-                        Modifier.fillMaxWidth()
-                            .background(Green.copy(alpha = 0.12f), RoundedCornerShape(AndyRadius.R3))
-                            .border(1.dp, Green.copy(alpha = 0.38f), RoundedCornerShape(AndyRadius.R3))
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                    PanelCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        background = Green.copy(alpha = 0.12f),
+                        borderColor = Green.copy(alpha = 0.38f),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
@@ -952,17 +953,17 @@ private fun AgentChangeSummaryCard(
 ) {
     val displayedFiles = if (showAllFiles) summary.files else summary.files.take(3)
     val remaining = summary.files.size - displayedFiles.size
-    Column(
-        Modifier.fillMaxWidth()
-            .background(if (embedded) AndyColors.Neutral900.copy(alpha = 0.74f) else AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, if (embedded) Green.copy(alpha = 0.22f) else Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = if (embedded) AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium) else AndyColors.Neutral850,
+        borderColor = if (embedded) Green.copy(alpha = 0.22f) else Border,
+        contentPadding = PaddingValues(vertical = AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = AndySpace.Space4),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         ) {
             Text("▣", color = Cyan, fontFamily = MonoFont, fontSize = 15.sp)
             Column(Modifier.weight(1f)) {
@@ -972,7 +973,7 @@ private fun AgentChangeSummaryCard(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                     Text("+${summary.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
                     Text("-${summary.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
                 }
@@ -1079,10 +1080,11 @@ private fun AgentFileDiffViewer(
     val verticalScroll = rememberScrollState()
     val horizontalScroll = rememberScrollState()
 
-    Column(
-        Modifier.fillMaxWidth()
-            .background(AndyColors.Neutral900.copy(alpha = 0.85f), RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R2)),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong),
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
     ) {
         Row(
             Modifier.fillMaxWidth()
@@ -1187,7 +1189,7 @@ private fun CollapsedContextBar(count: Int, onToggle: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .background(AndyColors.Neutral850.copy(alpha = 0.9f))
+            .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong))
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),

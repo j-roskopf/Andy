@@ -72,8 +72,8 @@ internal fun WorkspaceRail(
     Column(
         modifier
             .rightBorder(Border.copy(alpha = 0.28f))
-            .padding(end = AndySpace.S3),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+            .padding(end = AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
         content = content,
     )
 }
@@ -88,7 +88,7 @@ internal fun WorkspaceRailHeader(
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AndySpace.S2),
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -122,7 +122,7 @@ internal fun WorkspaceCanvas(
 ) {
     Box(
         modifier
-            .padding(start = AndySpace.S4),
+            .padding(start = AndySpace.Space5),
         content = content,
     )
 }
@@ -143,7 +143,7 @@ internal fun WorkspaceEmptyCanvas(
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = AndySpace.S6),
+            modifier = Modifier.padding(horizontal = AndySpace.Space8),
         )
     }
 }

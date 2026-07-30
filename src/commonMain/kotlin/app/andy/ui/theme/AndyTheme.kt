@@ -308,7 +308,14 @@ internal object AndyColors {
     val Error = Color(0xFFE46A6A)
 }
 
-/** DNA spacing scale. Legacy S1–S6 aliases preserve prior call-site density. */
+/** Translucency scale for surfaces stacked over other content (raised panels, popovers). */
+internal object AndyOverlay {
+    val Subtle = 0.55f
+    val Medium = 0.72f
+    val Strong = 0.90f
+}
+
+/** DNA spacing scale. */
 internal object AndySpace {
     val Space1 = 4.dp
     val Space2 = 6.dp
@@ -318,13 +325,6 @@ internal object AndySpace {
     val Space6 = 20.dp
     val Space7 = 24.dp
     val Space8 = 32.dp
-
-    val S1 = Space1
-    val S2 = Space3
-    val S3 = Space4
-    val S4 = Space5
-    val S5 = Space7
-    val S6 = Space8
 }
 
 /** DNA radius system — rounding communicates object type. */
@@ -334,11 +334,6 @@ internal object AndyRadius {
     val Menu = 10.dp
     val Sheet = 12.dp
     val Window = 14.dp
-
-    val R2 = Control
-    val R3 = Control
-    val R4 = Row
-    val R5 = Menu
     val Pill = 999.dp
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,6 +91,7 @@ import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -682,14 +684,13 @@ internal fun NetworkScreen(
                                 }
                             }
                         }
+                        PanelCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+                        ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
                         ) {
                             GlowingDot(routeOk, Modifier.padding(top = 2.dp))
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -732,6 +733,7 @@ internal fun NetworkScreen(
                                     }
                                 },
                             ) { Text("Open VPN settings") }
+                        }
                         }
                         CorporateUpstreamSettings(
                             sslInsecure = state.sslInsecure,
@@ -1073,13 +1075,13 @@ private fun FocusChipsBar(
     onRemove: (String) -> Unit,
     onClear: () -> Unit,
 ) {
+    PanelCard(
+        modifier = Modifier.fillMaxWidth().padding(bottom = AndySpace.Space3),
+        background = AndyColors.OrangeSubtle,
+        borderColor = AndyColors.OrangeBorder,
+        contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+    ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp)
-            .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, AndyColors.OrangeBorder, RoundedCornerShape(AndyRadius.R3))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1107,6 +1109,7 @@ private fun FocusChipsBar(
                 .padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
+    }
 }
 
 @Composable
@@ -1123,13 +1126,12 @@ private fun NetworkDiagnosisStrip(
                 NetworkDiagnosisSeverity.Amber -> Triple(Yellow.copy(alpha = 0.10f), Yellow.copy(alpha = 0.55f), Yellow)
                 NetworkDiagnosisSeverity.Green -> Triple(Green.copy(alpha = 0.10f), Green.copy(alpha = 0.45f), Green)
             }
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(bg, RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, border, RoundedCornerShape(AndyRadius.R3))
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = bg,
+                borderColor = border,
+                contentPadding = PaddingValues(AndySpace.Space4),
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(Modifier.size(8.dp).background(accent, CircleShape))
@@ -1160,13 +1162,10 @@ private fun CorporateUpstreamSettings(
     onUpstreamTrustedCaPathChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text("Corporate TLS / upstream trust", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         Text(
@@ -1202,13 +1201,12 @@ private fun CorporateUpstreamSettings(
 @Composable
 private fun NetworkRouteWarningCard(diagnostics: NetworkRouteDiagnostics?, modifier: Modifier = Modifier) {
     val issues = diagnostics?.issues.orEmpty()
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(Yellow.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Yellow.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = Yellow.copy(alpha = 0.10f),
+        borderColor = Yellow.copy(alpha = 0.55f),
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text("Traffic may be bypassing Andy", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         issues.take(3).forEach { issue ->
@@ -1225,17 +1223,16 @@ private fun NetworkRouteWarningCard(diagnostics: NetworkRouteDiagnostics?, modif
 
 @Composable
 private fun ManualCertificateSetupCard(steps: List<String>, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = AndyColors.Neutral850,
+        borderColor = AndyColors.OrangeBorder.copy(alpha = 0.45f),
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text("Physical device manual CA", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         steps.forEachIndexed { index, step ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+            Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3), verticalAlignment = Alignment.Top) {
                 Text("${index + 1}.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Text(step, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
             }
@@ -1245,17 +1242,15 @@ private fun ManualCertificateSetupCard(steps: List<String>, modifier: Modifier =
 
 @Composable
 private fun InstallStepsCard(title: String, steps: List<String>, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = AndyColors.Neutral850,
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text(title, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         steps.forEachIndexed { index, step ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+            Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3), verticalAlignment = Alignment.Top) {
                 Text("${index + 1}.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 Text(step, color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.weight(1f))
             }
@@ -1272,16 +1267,15 @@ private fun SetupStepCard(
     modifier: Modifier = Modifier,
     action: @Composable () -> Unit,
 ) {
-    Column(
-        modifier
-            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    PanelCard(
+        modifier = modifier,
+        background = AndyColors.Neutral850,
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("$step.", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1357,7 +1351,7 @@ private fun RulesPaneContent(
         itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
             val isBeingEdited = editingRuleId == rule.id
             PanelCard(
-                modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.R3)) else Modifier
+                modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.Control)) else Modifier
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Checkbox(rule.enabled, { checked ->

@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -93,12 +94,14 @@ import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.MarkdownPreview
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -155,7 +158,7 @@ internal fun ProjectWorkflowList(
                     val childBuilds = builds.filter { it.linkedSpecTaskId == spec.id }.sortedByDescending { it.updatedAtMillis }
                     val open = expanded[spec.id] ?: true
                     Column(
-                        Modifier.fillMaxWidth().border(1.dp, if (selectedTaskId == spec.id) AndyColors.OrangeBorder else Border, RoundedCornerShape(AndyRadius.R3))
+                        Modifier.fillMaxWidth().border(1.dp, if (selectedTaskId == spec.id) AndyColors.OrangeBorder else Border, RoundedCornerShape(AndyRadius.Control))
                             .animateContentSize(tween(180)),
                     ) {
                         WorkflowRow(
@@ -186,7 +189,7 @@ internal fun ProjectWorkflowList(
                         Text("STANDALONE BUILDS", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                     }
                     items(standaloneBuilds, key = { "standalone-build-${it.id}" }) { build ->
-                        Column(Modifier.fillMaxWidth().border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))) {
+                        Column(Modifier.fillMaxWidth().border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))) {
                             WorkflowBuildPairRows(workflow, build, selectedTaskId, onSelectTask)
                         }
                     }
@@ -355,7 +358,7 @@ internal fun ProjectWorkflowDetail(
             task.attempts.sortedByDescending { it.createdAtMillis }.forEach { attempt ->
                 val run = agentTasks.firstOrNull { it.id == attempt.runId }
                 Row(
-                    Modifier.fillMaxWidth().background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3)).clickable { onOpenRun(attempt.runId) }.padding(10.dp),
+                    Modifier.fillMaxWidth().background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.Control)).clickable { onOpenRun(attempt.runId) }.padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -586,7 +589,7 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                             .border(
                                 if (followUpImageDragActive) 2.dp else 1.dp,
                                 if (followUpImageDragActive) Cyan else Border.copy(alpha = 0.35f),
-                                RoundedCornerShape(AndyRadius.R2),
+                                RoundedCornerShape(AndyRadius.Control),
                             ),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                         colors = fieldColors(),
@@ -688,7 +691,12 @@ private fun VerificationDetail(task: ProjectTask) {
 
 @Composable
 private fun DetailBlock(label: String, value: String, selectable: Boolean = false) {
-    Column(Modifier.fillMaxWidth().background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900,
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
         Text(label, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
         if (selectable) SelectionContainer { Text(value, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 17.sp) }
         else Text(value, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 17.sp)
@@ -706,11 +714,11 @@ private fun CollapsibleDetailBlock(
     val preview = remember(value, collapsedPreviewLines) {
         if (collapsedPreviewLines <= 0) "" else collapsedPlanPreview(value, collapsedPreviewLines)
     }
-    Column(
-        Modifier.fillMaxWidth()
-            .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .animateContentSize(tween(180)),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth().animateContentSize(tween(180)),
+        background = AndyColors.Neutral900,
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
     ) {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(12.dp),
@@ -763,9 +771,16 @@ private fun collapsedPlanPreview(value: String, maxLines: Int): String {
 
 @Composable
 private fun WorkflowNotice(text: String, color: Color) {
-    Row(Modifier.fillMaxWidth().background(color.copy(alpha = 0.09f), RoundedCornerShape(AndyRadius.R3)).border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R3)).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.width(3.dp).height(28.dp).background(color, RoundedCornerShape(2.dp)))
-        Text(text, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, modifier = Modifier.weight(1f))
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = color.copy(alpha = 0.09f),
+        borderColor = color.copy(alpha = 0.35f),
+        contentPadding = PaddingValues(AndySpace.Space3),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
+            Box(Modifier.width(3.dp).height(28.dp).background(color, RoundedCornerShape(2.dp)))
+            Text(text, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, modifier = Modifier.weight(1f))
+        }
     }
 }
 
@@ -890,7 +905,7 @@ internal fun SpecTaskDialog(
                             .border(
                                 if (imageDragActive) 2.dp else 1.dp,
                                 if (imageDragActive) Cyan else Border.copy(alpha = 0.35f),
-                                RoundedCornerShape(AndyRadius.R2),
+                                RoundedCornerShape(AndyRadius.Control),
                             ),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                         colors = fieldColors(),
@@ -952,11 +967,11 @@ internal fun SpecTaskDialog(
 
 @Composable
 private fun GrillMeInstallHint(agent: AgentKind, onRefresh: () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Rust.copy(alpha = 0.09f), RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Rust.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.R3))
-            .padding(10.dp),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = Rust.copy(alpha = 0.09f),
+        borderColor = Rust.copy(alpha = 0.35f),
+        contentPadding = PaddingValues(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Text("Optional: install portable grill-me skills for ${agent.label}.", color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp)
@@ -1175,7 +1190,12 @@ internal fun ProjectAgentProfileEditor(
     providerModels: Map<AgentKind, List<app.andy.model.AgentModelOption>>,
     role: ProjectTaskKind,
 ) {
-    Column(Modifier.fillMaxWidth().background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.R3)).border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900,
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+    ) {
         Text(label, color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
         AgentProviderModelProfileControls(
             profile = profile,

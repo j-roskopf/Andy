@@ -121,9 +121,9 @@ internal fun ProjectsIntroduction(onComplete: () -> Unit, modifier: Modifier = M
     Box(
         modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(AndyRadius.R4))
+            .clip(RoundedCornerShape(AndyRadius.Row))
             .background(AndyColors.Neutral850)
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4)),
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row)),
     ) {
         Box(
             Modifier
@@ -204,8 +204,8 @@ private fun IntroductionChapter(page: IntroductionPage) {
 private fun IntroductionDiagram(page: IntroductionPage, modifier: Modifier = Modifier) {
     Column(
         modifier
-            .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R5))
-            .border(1.dp, page.accent.copy(alpha = 0.32f), RoundedCornerShape(AndyRadius.R5))
+            .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Menu))
+            .border(1.dp, page.accent.copy(alpha = 0.32f), RoundedCornerShape(AndyRadius.Menu))
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -214,7 +214,7 @@ private fun IntroductionDiagram(page: IntroductionPage, modifier: Modifier = Mod
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .background(if (index == 1) page.accent.copy(alpha = 0.13f) else Color.Transparent, RoundedCornerShape(AndyRadius.R3))
+                    .background(if (index == 1) page.accent.copy(alpha = 0.13f) else Color.Transparent, RoundedCornerShape(AndyRadius.Control))
                     .padding(14.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically,

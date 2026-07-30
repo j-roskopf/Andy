@@ -179,7 +179,7 @@ internal fun AgentContextualActionSheet(
             Modifier
                 .widthIn(max = 640.dp)
                 .heightIn(max = 720.dp)
-                .background(Panel, RoundedCornerShape(AndyRadius.R4))
+                .background(Panel, RoundedCornerShape(AndyRadius.Row))
                 .padding(20.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -260,7 +260,7 @@ private fun EvidenceSummary(
 ) {
     Column(
         Modifier.fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
+            .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Control))
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {

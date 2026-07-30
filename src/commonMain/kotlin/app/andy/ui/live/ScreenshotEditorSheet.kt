@@ -152,7 +152,7 @@ internal fun ScreenshotEditorSheet(
         Column(
             Modifier
                 .widthIn(max = 720.dp)
-                .background(Panel, RoundedCornerShape(AndyRadius.R4))
+                .background(Panel, RoundedCornerShape(AndyRadius.Row))
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -173,7 +173,7 @@ internal fun ScreenshotEditorSheet(
                 BoxWithConstraints(
                     Modifier.fillMaxWidth().heightIn(max = 460.dp)
                         .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat())
-                        .background(Color.Black, RoundedCornerShape(AndyRadius.R3)),
+                        .background(Color.Black, RoundedCornerShape(AndyRadius.Control)),
                 ) {
                     val rect = remember(maxWidth, maxHeight, bitmap.width, bitmap.height, density) {
                         val widthPx = with(density) { maxWidth.toPx() }

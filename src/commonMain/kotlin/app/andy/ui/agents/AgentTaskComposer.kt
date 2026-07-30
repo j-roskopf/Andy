@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -81,6 +82,7 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
@@ -168,11 +170,11 @@ private fun AgentCliIssueNotices(
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         statuses.mapNotNull { status -> status.issue?.let { status to it } }.forEach { (status, issue) ->
-            Column(
-                Modifier.fillMaxWidth()
-                    .background(AndyColors.OrangeSubtle, RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.R3))
-                    .padding(10.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.OrangeSubtle,
+                borderColor = AndyColors.OrangeBorder.copy(alpha = 0.65f),
+                contentPadding = PaddingValues(10.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
@@ -505,11 +507,11 @@ private fun AgentChatComposer(
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
 
-    Column(
-        Modifier.fillMaxWidth()
-            .background(Panel, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, if (state.imageDragActive) Cyan else Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(12.dp),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth(),
+        background = Panel,
+        borderColor = if (state.imageDragActive) Cyan else Border,
+        contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(Modifier.fillMaxWidth()) {
@@ -843,11 +845,11 @@ private fun AgentTaskComposerFields(
                         .border(
                             if (state.imageDragActive) 2.dp else 1.dp,
                             if (state.imageDragActive) Cyan else Border,
-                            RoundedCornerShape(AndyRadius.R3),
+                            RoundedCornerShape(AndyRadius.Control),
                         )
                         .background(
                             if (state.imageDragActive) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral900.copy(alpha = 0.2f),
-                            RoundedCornerShape(AndyRadius.R3),
+                            RoundedCornerShape(AndyRadius.Control),
                         ),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     colors = fieldColors(),

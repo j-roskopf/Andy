@@ -51,6 +51,7 @@ import app.andy.service.AvdService
 import app.andy.ui.components.Button
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
@@ -146,16 +147,15 @@ internal fun CatalogScreen(avd: AvdService) {
         )
         if (status.isNotBlank()) Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (showInitialLoading) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Panel, RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3)),
-                contentAlignment = Alignment.Center,
+            PanelCard(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(0.dp),
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
-                    Text("Loading system image catalog…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                        Text("Loading system image catalog…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                    }
                 }
             }
         } else {
@@ -277,8 +277,8 @@ private fun CatalogFilterSidebar(
 ) {
     Column(
         Modifier.width(240.dp).fillMaxHeight()
-            .background(Panel, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+            .background(Panel, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
             .padding(12.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),

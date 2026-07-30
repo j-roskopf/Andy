@@ -1,6 +1,5 @@
 package app.andy.ui.controls
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -678,7 +676,7 @@ private fun StateCommandTile(
     secondaryLabel: String,
     onSecondary: () -> Unit,
 ) {
-    StateTile(label) {
+    ControlTile(label) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
                 onClick = onPrimary,
@@ -706,7 +704,7 @@ private fun StateValueTile(
     actionLabel: String,
     onApply: () -> Unit,
 ) {
-    StateTile(label) {
+    ControlTile(label) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             TextField(
                 value = value,
@@ -726,18 +724,3 @@ private fun StateValueTile(
     }
 }
 
-@Composable
-private fun StateTile(label: String, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(AndyRadius.R3)
-    Column(
-        modifier = Modifier
-            .widthIn(min = 260.dp, max = 300.dp)
-            .heightIn(min = 72.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.44f), shape)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(label, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        content()
-    }
-}

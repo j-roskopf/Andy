@@ -86,6 +86,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -442,7 +443,7 @@ private fun AndroidDevicesTab(
         }
         items(filteredDevices, key = { it.serial }) { device ->
             val online = device.state == DeviceConnectionState.Online
-            val rowShape = RoundedCornerShape(AndyRadius.R4)
+            val rowShape = RoundedCornerShape(AndyRadius.Row)
             var labelDialogOpen by remember(device.serial) { mutableStateOf(false) }
             Row(
                 Modifier.fillMaxWidth()
@@ -453,7 +454,7 @@ private fun AndroidDevicesTab(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
+                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)))
                 Spacer(Modifier.width(18.dp))
                 Column(Modifier.width(260.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -564,8 +565,8 @@ private fun AndroidDevicesTab(
                 Row(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -694,8 +695,8 @@ private fun AndroidDevicesTab(
                 Row(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -859,7 +860,7 @@ private fun IosTargetRow(
         target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
         else -> TextSecondary
     }
-    val rowShape = RoundedCornerShape(AndyRadius.R4)
+    val rowShape = RoundedCornerShape(AndyRadius.Row)
     Row(
         Modifier.fillMaxWidth()
             .height(IntrinsicSize.Min)
@@ -878,7 +879,7 @@ private fun IosTargetRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (liveReady) {
-            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.R2)))
+            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.Control)))
             Spacer(Modifier.width(18.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -1024,13 +1025,10 @@ private fun CreateVirtualDeviceDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Column(
-            Modifier
-                .width(820.dp)
-                .background(Panel, RoundedCornerShape(AndyRadius.R3))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+        PanelCard(
+            modifier = Modifier.width(820.dp),
+            contentPadding = PaddingValues(AndySpace.Space7),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space5),
         ) {
             Text("Create virtual device", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Column(Modifier.heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
