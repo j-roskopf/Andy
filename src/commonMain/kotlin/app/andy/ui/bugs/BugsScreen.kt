@@ -405,6 +405,14 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                             report.artifacts.forEach { artifact ->
                                 DetailRow(artifact.name, artifact.sizeBytes?.let(::formatBytes) ?: artifact.kind)
                             }
+                            report.videoCaptureWarning?.let { warning ->
+                                Text(
+                                    "⚠ $warning",
+                                    color = Rust,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                )
+                            }
                             DetailSection("NOTES")
                             SelectionContainer {
                                 Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))

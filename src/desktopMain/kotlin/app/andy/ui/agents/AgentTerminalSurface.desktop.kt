@@ -249,10 +249,9 @@ actual fun AgentTerminalSurface(
             var opened = false
             try {
                 val replay = withContext(Dispatchers.IO) {
-                    // Foreground capture persists every two seconds. Open that completed,
-                    // atomically-written snapshot instead of forcing a full raw-PTY replay
-                    // behind the capture lock; the latter can make wheel input appear frozen
-                    // for several seconds on a long chat.
+                    // The manager flushes the latest raw suffix, then reuses its on-demand
+                    // replay state. Repeat peeks therefore emulate only output added since
+                    // the previous peek instead of rebuilding the whole chat.
                     runs.openScrollbackReplay(taskId)
                 } ?: return@launch
                 if (!isActive) {

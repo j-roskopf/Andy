@@ -11,6 +11,7 @@ import java.awt.event.MouseWheelListener
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.WeakHashMap
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
 
 /** Soft cap for cumulative `scrollback.ansi` files (~5 MB). */
@@ -64,8 +65,15 @@ class ScrollbackAnsiTee(
 
     private var retainedEndOffset: Long = 0L
 
-    /** Changes only when [clear] discards the stream altogether. */
-    private var epoch: Long = 0L
+    /**
+     * Identity of the retained stream.
+     *
+     * A tmux viewer can be released and reattached while its [RawScrollbackFile] survives.
+     * Starting every new tee at epoch zero made the new, shorter stream look like an old
+     * snapshot and caused the raw mirror to ignore it. Give every tee (and every clear) a
+     * process-unique epoch so an incremental reader always recognises a new stream.
+     */
+    private var epoch: Long = nextScrollbackEpoch()
 
     /** Monotonic counter of bytes read from the host. See [bytesSeen]. */
     fun outputGeneration(): Long = bytesSeen
@@ -92,10 +100,18 @@ class ScrollbackAnsiTee(
      * trims old content; if they fall behind the retained window, they can safely replay the
      * complete current window instead.
      */
-    fun snapshotWithOffsets(): ScrollbackAnsiSnapshot = synchronized(lock) {
+    fun snapshotWithOffsets(cursor: ScrollbackAnsiCursor? = null): ScrollbackAnsiSnapshot = synchronized(lock) {
+        val requestedStart = cursor
+            ?.takeIf { it.epoch == epoch && it.offset in retainedStartOffset..retainedEndOffset }
+            ?.offset
+            ?: retainedStartOffset
+        val contentStart = requestedStart.coerceAtLeast(retainedStartOffset)
+        val contentOffset = (contentStart - retainedStartOffset).toInt()
         ScrollbackAnsiSnapshot(
-            content = buffer.toString(),
-            startOffset = retainedStartOffset,
+            // The persistence timer normally asks from its last committed offset, so copy
+            // only newly arrived characters instead of cloning the entire retained tee.
+            content = buffer.substring(contentOffset),
+            startOffset = contentStart,
             endOffset = retainedEndOffset,
             epoch = epoch,
         )
@@ -122,7 +138,7 @@ class ScrollbackAnsiTee(
             pendingUtf8 = ByteArray(0)
             retainedStartOffset = 0L
             retainedEndOffset = 0L
-            epoch++
+            epoch = nextScrollbackEpoch()
         }
     }
 
@@ -193,6 +209,10 @@ class ScrollbackAnsiTee(
 
         /** Longest partial OSC sequence carried between chunks. Titles are far shorter. */
         private const val OSC_CARRY_MAX = 4096
+
+        private val NextEpoch = AtomicLong()
+
+        private fun nextScrollbackEpoch(): Long = NextEpoch.incrementAndGet()
     }
 }
 
@@ -255,6 +275,132 @@ internal fun atomicWriteText(file: File, content: String) {
 }
 
 /**
+ * Soft cap for `scrollback.raw`. Raw PTY output carries every repaint the emulator later
+ * collapses, so it needs more headroom than the transcript derived from it.
+ */
+const val RAW_SCROLLBACK_MAX_BYTES: Int = 16 * 1024 * 1024
+
+/**
+ * Append-only mirror of a session's raw PTY tee.
+ *
+ * The transcript Andy displays is *derived* from these bytes by replaying them through a
+ * terminal emulator and stitching the repaints back together. That derivation is far too
+ * expensive to run on a timer — it measured 74% of the whole process — but writing the bytes
+ * is nearly free. Persisting raw and deriving on demand keeps the live path to one sequential
+ * append per flush, and pays for the reconstruction once, when a reader actually asks.
+ *
+ * Durability improves as a side effect: the bytes reach disk continuously, so a hard kill
+ * leaves a transcript that can still be derived afterwards.
+ */
+class RawScrollbackFile(
+    private val file: File,
+    private val maxBytes: Int = RAW_SCROLLBACK_MAX_BYTES,
+) {
+    private var lastOffset = 0L
+    private var lastEpoch = 0L
+    private var lastColumns = 0
+    private var lastRows = 0
+    private var started = false
+
+    /** True once this run has contributed bytes, so callers can tell empty runs apart. */
+    var wroteAnything: Boolean = false
+        private set
+
+    /**
+     * Scope this file to a single run by discarding any earlier run's bytes.
+     *
+     * Earlier runs are already committed to `scrollback.ansi` when their session ended, so
+     * keeping their raw bytes here too would derive them a second time and duplicate the
+     * transcript. One run per file keeps "committed history + current run" unambiguous.
+     */
+    fun startNewRun() {
+        runCatching { if (file.isFile) file.delete() }
+        lastOffset = 0L
+        lastEpoch = 0L
+        lastColumns = 0
+        lastRows = 0
+        started = false
+        wroteAnything = false
+    }
+
+    /**
+     * Position already mirrored to disk.
+     *
+     * Passing this back to [ScrollbackAnsiTee.snapshotWithOffsets] turns the steady-state
+     * flush into a delta copy. The previous no-argument snapshot cloned up to 5 MB every
+     * two seconds per live chat even when only a spinner glyph had changed.
+     */
+    fun cursor(): ScrollbackAnsiCursor? =
+        if (started) ScrollbackAnsiCursor(lastOffset, lastEpoch) else null
+
+    /**
+     * Append whatever [snapshot] holds beyond the last write. Returns characters appended.
+     *
+     * The tee retains only a window of the stream, so [ScrollbackAnsiSnapshot.startOffset]
+     * can overtake [lastOffset] under sustained output. That is a real gap in history, not a
+     * corruption: resume from the oldest retained byte rather than replaying content twice.
+     */
+    fun append(snapshot: ScrollbackAnsiSnapshot): Int {
+        if (!started || snapshot.epoch != lastEpoch) {
+            // A cleared tee restarts its offsets; anything it still holds is new to us.
+            lastEpoch = snapshot.epoch
+            lastOffset = snapshot.startOffset
+            lastColumns = 0
+            lastRows = 0
+            started = true
+        }
+        if (lastOffset < snapshot.startOffset) lastOffset = snapshot.startOffset
+        if (lastOffset >= snapshot.endOffset) return 0
+        val delta = snapshot.content.substring((lastOffset - snapshot.startOffset).toInt())
+        if (delta.isEmpty()) return 0
+        val layoutChanged = snapshot.columns > 0 &&
+            snapshot.rows > 0 &&
+            (snapshot.columns != lastColumns || snapshot.rows != lastRows)
+        val persisted = if (layoutChanged) {
+            scrollbackLayoutMarker(snapshot.columns, snapshot.rows) + delta
+        } else {
+            delta
+        }
+        appendText(persisted)
+        if (snapshot.columns > 0 && snapshot.rows > 0) {
+            lastColumns = snapshot.columns
+            lastRows = snapshot.rows
+        }
+        lastOffset = snapshot.endOffset
+        return delta.length
+    }
+
+    private fun appendText(text: String) {
+        file.parentFile?.mkdirs()
+        file.appendBytes(text.toByteArray(StandardCharsets.UTF_8))
+        wroteAnything = true
+        capIfNeeded()
+    }
+
+    /**
+     * Drop oldest complete lines once past the cap. Rare enough (16 MB of raw PTY) that a
+     * rewrite is acceptable; the steady state stays append-only.
+     */
+    private fun capIfNeeded() {
+        if (file.length() <= maxBytes + RAW_TRIM_SLACK) return
+        val trimmed = runCatching { capScrollbackSize(file.readText(), maxBytes) }.getOrNull() ?: return
+        // A cap can discard the marker that established the active grid. Re-state it at
+        // the new beginning so the retained suffix remains independently replayable.
+        val retained = if (lastColumns > 0 && lastRows > 0) {
+            scrollbackLayoutMarker(lastColumns, lastRows) + trimmed
+        } else {
+            trimmed
+        }
+        atomicWriteText(file, retained)
+    }
+
+    private companion object {
+        /** Rewrite in batches instead of on every append once the cap is reached. */
+        const val RAW_TRIM_SLACK = 1 shl 20
+    }
+}
+
+/**
  * Collapse legacy raw ANSI tee streams into readable plain text. New scrollback files
  * are already resolved on write; this mainly repairs pre-fix `scrollback.ansi` blobs.
  */
@@ -297,6 +443,100 @@ internal fun replayCaptureReadableLines(
 }
 
 /**
+ * In-band layout record for `scrollback.raw`.
+ *
+ * PTY output contains absolute cursor addressing but not the terminal dimensions that give
+ * those coordinates meaning. This private OSC is written only to Andy's raw mirror (never
+ * to the live terminal), then consumed before emulator replay. OSC keeps the file backwards
+ * compatible with older builds and terminal tools, which safely ignore unknown commands.
+ */
+private const val SCROLLBACK_LAYOUT_OSC = "777;andy-grid="
+private val ScrollbackLayoutMarker = Regex(
+    "\u001B]${Regex.escape(SCROLLBACK_LAYOUT_OSC)}(\\d+)x(\\d+)\u0007",
+)
+
+internal fun scrollbackLayoutMarker(columns: Int, rows: Int): String {
+    require(columns > 0)
+    require(rows > 0)
+    return "\u001B]$SCROLLBACK_LAYOUT_OSC${columns}x${rows}\u0007"
+}
+
+private fun layoutMarkerGrid(match: MatchResult): ScrollbackGridSize? {
+    val columns = match.groupValues[1].toIntOrNull() ?: return null
+    val rows = match.groupValues[2].toIntOrNull() ?: return null
+    if (columns <= 0 || rows <= 0) return null
+    return ScrollbackGridSize(columns, rows)
+}
+
+/**
+ * Recover a plausible grid for pre-layout-marker raw captures.
+ *
+ * Agent TUIs regularly address the bottom row and rightmost columns. CUP/HVP (`H`/`f`)
+ * supplies the row count, while CHA (`G`) plus the following visible payload supplies the
+ * width (for example `CSI 163 G` followed by two characters means at least 164 columns).
+ * If a capture has no such evidence, retain the historical replay defaults.
+ */
+internal fun inferScrollbackGridSize(
+    content: String,
+    fallbackColumns: Int = REPLAY_COLUMNS,
+    fallbackRows: Int = REPLAY_ROWS,
+): ScrollbackGridSize {
+    ScrollbackLayoutMarker.find(content)?.let { marker ->
+        layoutMarkerGrid(marker)?.let { return it }
+    }
+
+    var maxColumn = 0
+    var maxRow = 0
+    CursorPosition.findAll(content).forEach { match ->
+        val row = match.groupValues[1].toIntOrNull() ?: 1
+        val column = match.groupValues[2].toIntOrNull() ?: 1
+        maxRow = maxOf(maxRow, row)
+        val payloadWidth = visiblePayloadWidth(content, match.range.last + 1)
+        maxColumn = maxOf(maxColumn, column + (payloadWidth - 1).coerceAtLeast(0))
+    }
+    CursorHorizontalAbsolute.findAll(content).forEach { match ->
+        val column = match.groupValues[1].toIntOrNull() ?: return@forEach
+        val payloadWidth = visiblePayloadWidth(content, match.range.last + 1)
+        maxColumn = maxOf(maxColumn, column + (payloadWidth - 1).coerceAtLeast(0))
+    }
+    return ScrollbackGridSize(
+        columns = maxColumn.takeIf { it >= MIN_INFERRED_COLUMNS } ?: fallbackColumns,
+        rows = maxRow.takeIf { it >= MIN_INFERRED_ROWS } ?: fallbackRows,
+    )
+}
+
+/**
+ * Visible cells immediately following an absolute cursor command.
+ *
+ * This intentionally stops at the next control sequence or line movement. The payloads used
+ * for width evidence are ASCII terminal chrome, so code-point count is the correct cell count
+ * without paying for a second terminal emulator.
+ */
+private fun visiblePayloadWidth(content: String, start: Int): Int {
+    var index = start
+    var width = 0
+    while (index < content.length) {
+        val char = content[index]
+        if (char == '\u001B' || char == '\r' || char == '\n' || char.code < 0x20) break
+        if (Character.isHighSurrogate(char) &&
+            index + 1 < content.length &&
+            Character.isLowSurrogate(content[index + 1])
+        ) {
+            index += 2
+        } else {
+            index++
+        }
+        width++
+    }
+    return width
+}
+
+private val CursorPosition = Regex("\u001B\\[(\\d*);?(\\d*)[Hf]")
+private val CursorHorizontalAbsolute = Regex("\u001B\\[(\\d+)G")
+private const val MIN_INFERRED_COLUMNS = 40
+private const val MIN_INFERRED_ROWS = 10
+
+/**
  * Feed the *complete* raw PTY tee ([ScrollbackAnsiTee.snapshot]) through a fresh terminal
  * emulator, sampling styled rows at terminal-aware boundaries instead of relying on a
  * live poll.
@@ -309,28 +549,32 @@ internal fun replayCaptureReadableLines(
  * transcript independently of how fast the original output streamed in. [chunkSize]
  * bounds only ordinary sequential output; full redraws remain atomic.
  *
- * [cols] must stay fixed across repeated calls on the same growing tee (callers replay
- * from byte 0 every time, to fold newly-arrived output into what was already recorded).
- * Sizing it dynamically per call — e.g. from [scrollbackReplayColumns], which measures
- * the widest line *seen so far* — would pick a different width as the tee grows, so two
- * calls could reflow the same earlier content differently and reintroduce the exact
- * duplication a live-width capture already has (see [app.andy.terminal.ScrollbackAccumulator]).
- * A plain fixed default sidesteps that instead of trying to detect it after the fact.
+ * New raw mirrors carry in-band layout records, so every redraw is replayed at the same
+ * dimensions as the live terminal. For captures made before those records existed,
+ * [inferScrollbackGridSize] recovers the grid from absolute cursor addressing. Explicit
+ * [cols]/[rows] remain available as legacy fallbacks.
  */
 internal fun replayCaptureStyledRows(
     content: String,
-    cols: Int = REPLAY_COLUMNS,
-    rows: Int = REPLAY_ROWS,
+    cols: Int = 0,
+    rows: Int = 0,
     chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
-): List<StyledTerminalRow> = ScrollbackReplayCapture(cols, rows, chunkSize).use { replay ->
-    replay.capture(
-        ScrollbackAnsiSnapshot(
-            content = content,
-            startOffset = 0L,
-            endOffset = content.length.toLong(),
-            epoch = 0L,
-        ),
-    )
+): List<StyledTerminalRow> {
+    val inferred = inferScrollbackGridSize(content)
+    val initialColumns = cols.takeIf { it > 0 } ?: inferred.columns
+    val initialRows = rows.takeIf { it > 0 } ?: inferred.rows
+    return ScrollbackReplayCapture(initialColumns, initialRows, chunkSize).use { replay ->
+        replay.capture(
+            ScrollbackAnsiSnapshot(
+                content = content,
+                startOffset = 0L,
+                endOffset = content.length.toLong(),
+                epoch = 0L,
+                columns = initialColumns,
+                rows = initialRows,
+            ),
+        )
+    }
 }
 
 /** A retained window of raw PTY output positioned within its full stream. */
@@ -339,27 +583,47 @@ data class ScrollbackAnsiSnapshot(
     val startOffset: Long,
     val endOffset: Long,
     val epoch: Long,
+    /** Grid active at [endOffset], when known. */
+    val columns: Int = 0,
+    /** Grid active at [endOffset], when known. */
+    val rows: Int = 0,
+)
+
+/** Consumer position used to request only the unpersisted suffix of a tee. */
+data class ScrollbackAnsiCursor(
+    val offset: Long,
+    val epoch: Long,
+)
+
+/** Terminal layout required to replay absolute cursor addressing faithfully. */
+data class ScrollbackGridSize(
+    val columns: Int,
+    val rows: Int,
 )
 
 /**
- * Incrementally reconstructs styled history from a growing [ScrollbackAnsiTee].
+ * Incrementally reconstructs styled history from a raw PTY stream.
  *
- * The timer-driven persistence path retains one instance per live terminal, avoiding a
- * complete replay of the tee on every flush. If a consumer misses more than the tee retains
- * (or the tee is cleared), rebuilding from the retained window still produces a safe capture.
+ * Layout markers split the stream at resize boundaries. They are consumed here instead of
+ * being sent to the emulator, and each output segment is painted on the grid that was live
+ * when it arrived. If a consumer misses more than the tee retains (or the tee is cleared),
+ * rebuilding from the retained window still produces a safe capture.
  */
 class ScrollbackReplayCapture(
-    private val cols: Int = REPLAY_COLUMNS,
-    private val rows: Int = REPLAY_ROWS,
+    cols: Int = REPLAY_COLUMNS,
+    rows: Int = REPLAY_ROWS,
     private val chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
 ) : AutoCloseable {
+    private var currentColumns = cols.coerceAtLeast(1)
+    private var currentRows = rows.coerceAtLeast(1)
     private var session = newSession()
     private var captured = ScrollbackAccumulator()
+    private val frameCache = StyledTerminalFrameCache()
     private var lastOffset = 0L
     private var lastEpoch = 0L
 
     init {
-        session.start(cols, rows)
+        session.start(currentColumns, currentRows)
     }
 
     fun capture(snapshot: ScrollbackAnsiSnapshot): List<StyledTerminalRow> {
@@ -367,40 +631,73 @@ class ScrollbackReplayCapture(
             lastOffset < snapshot.startOffset ||
             lastOffset > snapshot.endOffset
         if (mustReset) {
-            reset(snapshot.epoch, snapshot.startOffset)
+            reset(
+                epoch = snapshot.epoch,
+                offset = snapshot.startOffset,
+                columns = snapshot.columns.takeIf { it > 0 } ?: currentColumns,
+                rows = snapshot.rows.takeIf { it > 0 } ?: currentRows,
+            )
         }
         val start = (lastOffset - snapshot.startOffset).toInt()
-        captureDelta(snapshot.content.substring(start))
+        val delta = snapshot.content.substring(start)
+        val layoutMarkers = ScrollbackLayoutMarker.findAll(delta).toList()
+        if (layoutMarkers.isEmpty()) {
+            resizeGrid(snapshot.columns, snapshot.rows)
+        }
+        captureDelta(delta, layoutMarkers)
         lastOffset = snapshot.endOffset
         lastEpoch = snapshot.epoch
         return captured.snapshot()
     }
 
-    private fun captureDelta(content: String) {
+    private fun captureDelta(content: String, layoutMarkers: List<MatchResult>) {
         if (content.isEmpty()) return
-        for (chunk in replayCaptureChunks(content, chunkSize, rows)) {
+        var offset = 0
+        for (marker in layoutMarkers) {
+            captureTerminalBytes(content.substring(offset, marker.range.first))
+            layoutMarkerGrid(marker)?.let { resizeGrid(it.columns, it.rows) }
+            offset = marker.range.last + 1
+        }
+        captureTerminalBytes(content.substring(offset))
+    }
+
+    private fun captureTerminalBytes(content: String) {
+        if (content.isEmpty()) return
+        for (chunk in replayCaptureChunks(content, chunkSize, currentRows)) {
             val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
             session.onBytes(bytes, 0, bytes.size)
             // Sample only after a complete redraw or complete-line batch. Arbitrary byte
             // slices expose half-painted screens and make the accumulator preserve each
             // transient repaint as duplicated, ill-formatted history.
-            captured.merge(session.readStyledScrollbackRows(maxRows = rows))
+            captured.merge(frameCache.read(session, maxRows = currentRows))
         }
     }
 
-    private fun reset(epoch: Long, offset: Long) {
+    private fun resizeGrid(columns: Int, rows: Int) {
+        if (columns <= 0 || rows <= 0) return
+        if (columns == currentColumns && rows == currentRows) return
+        currentColumns = columns
+        currentRows = rows
+        session.resize(columns, rows)
+        frameCache.clear()
+    }
+
+    private fun reset(epoch: Long, offset: Long, columns: Int, rows: Int) {
         runCatching { session.close() }
+        currentColumns = columns.coerceAtLeast(1)
+        currentRows = rows.coerceAtLeast(1)
         session = newSession()
-        session.start(cols, rows)
+        session.start(currentColumns, currentRows)
         captured = ScrollbackAccumulator()
+        frameCache.clear()
         lastEpoch = epoch
         lastOffset = offset
     }
 
     private fun newSession(): KetraSession = KetraSession.create(
         terminal = TerminalBuffers.create(
-            width = cols,
-            height = rows,
+            width = currentColumns,
+            height = currentRows,
             maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
         ),
         connector = ParkedTerminalConnector(),
@@ -485,12 +782,24 @@ internal fun replayCaptureChunks(
         }
     }
 
-    fun nextRedrawStart(fromIndex: Int): Pair<Int, Boolean>? {
-        val synchronized = content.indexOf(SYNCHRONIZED_UPDATE_BEGIN, fromIndex)
-            .takeIf { it >= 0 }
-        val repaint = REPLAY_REDRAW_START.find(content, fromIndex)?.range?.first
-        val next = listOfNotNull(synchronized, repaint).minOrNull() ?: return null
-        return next to (synchronized == next)
+    fun nextRedrawStart(fromIndex: Int): ReplayRedrawBoundary? {
+        var index = content.indexOf('\u001B', fromIndex)
+        while (index >= 0) {
+            when {
+                content.startsWith(SYNCHRONIZED_UPDATE_BEGIN, index) ->
+                    return ReplayRedrawBoundary(index, synchronized = true, SYNCHRONIZED_UPDATE_BEGIN.length)
+                content.startsWith(CLEAR_SCREEN, index) ->
+                    return ReplayRedrawBoundary(index, synchronized = false, CLEAR_SCREEN.length)
+                content.startsWith(CLEAR_SCROLLBACK, index) ->
+                    return ReplayRedrawBoundary(index, synchronized = false, CLEAR_SCROLLBACK.length)
+                content.startsWith(CURSOR_HOME, index) ->
+                    return ReplayRedrawBoundary(index, synchronized = false, CURSOR_HOME.length)
+                content.startsWith(CURSOR_HOME_EXPLICIT, index) ->
+                    return ReplayRedrawBoundary(index, synchronized = false, CURSOR_HOME_EXPLICIT.length)
+            }
+            index = content.indexOf('\u001B', index + 1)
+        }
+        return null
     }
 
     var offset = 0
@@ -500,7 +809,8 @@ internal fun replayCaptureChunks(
             addSequential(offset, content.length)
             break
         }
-        val (start, synchronized) = boundary
+        val start = boundary.index
+        val synchronized = boundary.synchronized
         if (start > offset) addSequential(offset, start)
         if (synchronized) {
             val endMarker = content.indexOf(
@@ -515,9 +825,8 @@ internal fun replayCaptureChunks(
             addRedraw(start, end)
             offset = end
         } else {
-            val markerEnd = REPLAY_REDRAW_START.find(content, start)?.range?.last?.plus(1)
-                ?: start + 1
-            val next = nextRedrawStart(markerEnd)?.first ?: content.length
+            val markerEnd = start + boundary.markerLength
+            val next = nextRedrawStart(markerEnd)?.index ?: content.length
             addRedraw(start, next)
             offset = next
         }
@@ -529,7 +838,16 @@ private const val SYNCHRONIZED_UPDATE_BEGIN = "\u001B[?2026h"
 private const val SYNCHRONIZED_UPDATE_END = "\u001B[?2026l"
 
 /** Full-screen redraw starts commonly emitted by terminal UI frameworks. */
-private val REPLAY_REDRAW_START = Regex("\u001B\\[(?:2J|3J|H|1;1H)")
+private const val CLEAR_SCREEN = "\u001B[2J"
+private const val CLEAR_SCROLLBACK = "\u001B[3J"
+private const val CURSOR_HOME = "\u001B[H"
+private const val CURSOR_HOME_EXPLICIT = "\u001B[1;1H"
+
+private data class ReplayRedrawBoundary(
+    val index: Int,
+    val synchronized: Boolean,
+    val markerLength: Int,
+)
 
 /**
  * Widest visible row in [content], the column count a replay needs to reproduce the
@@ -658,7 +976,18 @@ internal class TeeTerminalConnector(
     override fun close() = delegate.close()
 }
 
-/** [TeeTerminalConnector] that strips agent-CLI redraw noise before the emulator sees it. */
+/**
+ * Tee for agent-CLI sessions. Currently identical to [TeeTerminalConnector].
+ *
+ * This used to strip show-cursor (`ESC [ ? 2 5 h`) so KetraTerm stayed cursorless while an
+ * agent TUI drew its own prompt block; that was removed in 4234932. It is kept as a distinct
+ * type because `agentCliMode` is the seam where PTY bytes can be filtered before either the tee
+ * or the emulator sees them, and only agent sessions may be filtered that way.
+ *
+ * Restoring a filter here is a rendering decision, not a performance one: feeding those bytes
+ * through costs nothing measurable (`LiveTerminalPipelineBenchmark`'s `cursor-25h` variant is
+ * within noise of its control).
+ */
 internal class AgentCliTeeTerminalConnector(
     private val delegate: TerminalConnector,
     private val tee: ScrollbackAnsiTee,

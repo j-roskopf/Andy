@@ -30,6 +30,7 @@ internal data class BugReportDto(
     val videoEndedAtMillis: Long? = null,
     val videoFrameRate: Double? = null,
     val videoFrameTimestampsMillis: List<Long> = emptyList(),
+    val videoCaptureWarning: String? = null,
     val actions: List<BugActionDto> = emptyList(),
     val artifacts: List<BugArtifactDto> = emptyList(),
 ) {
@@ -51,6 +52,7 @@ internal data class BugReportDto(
         videoEndedAtMillis = videoEndedAtMillis,
         videoFrameRate = videoFrameRate,
         videoFrameTimestampsMillis = videoFrameTimestampsMillis,
+        videoCaptureWarning = videoCaptureWarning,
     )
 
     companion object {
@@ -70,6 +72,7 @@ internal data class BugReportDto(
             videoEndedAtMillis = report.videoEndedAtMillis,
             videoFrameRate = report.videoFrameRate,
             videoFrameTimestampsMillis = report.videoFrameTimestampsMillis,
+            videoCaptureWarning = report.videoCaptureWarning,
             actions = report.actions.map { BugActionDto.fromModel(it) },
             artifacts = report.artifacts.map { BugArtifactDto.fromModel(it) },
         )

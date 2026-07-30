@@ -415,6 +415,8 @@ val andyRetryTests =
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
+    // TEMPORARY (perf investigation): forward -Dandy.bench to the test JVM.
+    System.getProperty("andy.bench")?.let { systemProperty("andy.bench", it) }
     // Keep desktopTest off the live `tmux -L andy` socket. Tests that recycle a poisoned
     // server call kill-server; sharing production would print `[server exited]` in every
     // attached agent chat.

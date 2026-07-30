@@ -10,7 +10,7 @@
 
 
 Andy is a desktop helper for Android, Kotlin, and Compose Multiplatform
-developers. Use it to manage devices and emulators, mirror screens, inspect
+developers. Use it to manage devices and emulators, manage projects with AI, mirror screens, inspect
 apps, and drive day-to-day mobile workflows from one place. The desktop app is
 the recommended experience and includes the full feature set. A smaller subset
 of Andy is also available on the web at
@@ -238,9 +238,9 @@ From source: `./gradlew installAndyCli installAndyd`
 ### Quick start
 
 ```sh
+andy tui # Main entry point into the CLI for chatting with Agents
 andy chat list
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
-andy tui
 andy attach <taskId>
 
 # Device / network scripting (same MCP socket)

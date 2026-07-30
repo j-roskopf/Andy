@@ -99,8 +99,19 @@ class KetraTermBackend(
     /** Raw teed PTY stdout (includes in-place TUI redraws). */
     fun scrollbackAnsi(): String = scrollbackTee.snapshot()
 
-    /** Raw tee positioned within its complete stream for incremental replay. */
-    fun scrollbackAnsiSnapshot(): ScrollbackAnsiSnapshot = scrollbackTee.snapshotWithOffsets()
+    /**
+     * Raw tee positioned within its complete stream for incremental persistence.
+     *
+     * The live grid accompanies each delta because absolute cursor movement is meaningful
+     * only at the dimensions where the provider painted it.
+     */
+    fun scrollbackAnsiSnapshot(cursor: ScrollbackAnsiCursor? = null): ScrollbackAnsiSnapshot {
+        val grid = runCatching { ketraSession?.readTerminalGridSize() }.getOrNull()
+        return scrollbackTee.snapshotWithOffsets(cursor).copy(
+            columns = grid?.columns?.takeIf { it > 0 } ?: cols,
+            rows = grid?.rows?.takeIf { it > 0 } ?: rows,
+        )
+    }
 
     /** Resolved readable scrollback suitable for durable replay after restart. */
     fun scrollbackExport(seenKeys: MutableSet<String>): String {

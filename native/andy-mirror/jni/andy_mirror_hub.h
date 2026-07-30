@@ -57,6 +57,11 @@ void andy_hub_update_overlay(int64_t presenter_id, bool grid_enabled, float grid
                              float content_zoom, float content_pan_x, float content_pan_y);
 void andy_hub_update_picker_point(int64_t presenter_id, float normalized_x, float normalized_y, bool visible);
 int andy_hub_inspect_pixel(int64_t decoder_id, float normalized_x, float normalized_y);
+/**
+ * Copies the decoder's latest CVPixelBuffer into a newly allocated ARGB_8888 buffer.
+ * On success returns malloc'd ints (caller frees) and writes width/height; otherwise NULL.
+ */
+int32_t *andy_hub_copy_latest_frame_argb(int64_t decoder_id, int32_t *out_width, int32_t *out_height);
 float andy_hub_p95_input_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_packet_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_transport_to_present_millis(int64_t decoder_id);

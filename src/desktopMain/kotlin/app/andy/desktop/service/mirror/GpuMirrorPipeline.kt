@@ -2,6 +2,7 @@ package app.andy.desktop.service.mirror
 
 import app.andy.desktop.MirrorPresentationGuard
 import app.andy.desktop.nsWindowNumber
+import app.andy.service.MirrorFrame
 import java.awt.Canvas
 import java.awt.Component
 import java.awt.Window
@@ -49,6 +50,10 @@ internal class GpuMirrorPipeline private constructor(
     fun hasDecodedFrame(): Boolean = !closed && GpuMirrorJni.hasDecodedFrame(decoderId)
 
     fun isHardwareReady(): Boolean = !closed && GpuMirrorJni.isHardwareReady(decoderId)
+
+    /** Samples the latest decoded frame as ARGB for bug/recording capture backup. */
+    fun copyLatestFrameArgb(): MirrorFrame? =
+        if (closed) null else GpuMirrorJni.copyLatestFrameArgb(decoderId)
 
     fun bindIosCapture() {
         if (!closed) GpuMirrorJni.bindIosDecoder(decoderId)
