@@ -100,6 +100,7 @@ class MirrorWindowResizeWatchTest {
                 popup.setSize(140, 240)
             }
             flushEdt()
+            awaitSettled()
             assertFalse(
                 MirrorPresentationGuard.suppressingGeometry,
                 "Popup windows opening must not suspend mirror geometry",
