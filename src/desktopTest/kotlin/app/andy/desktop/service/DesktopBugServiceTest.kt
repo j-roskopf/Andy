@@ -215,39 +215,55 @@ class DesktopBugServiceTest {
     }
 
     @Test
+    fun mergeH264ConfigJoinsSeparateSpsAndPpsAccessUnits() {
+        val sps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a)
+        val pps = byteArrayOf(0, 0, 0, 1, 0x68.toByte(), 0xce.toByte(), 0x06, 0xe2.toByte())
+        val merged = DesktopBugService.mergeH264Config(
+            DesktopBugService.mergeH264Config(null, sps),
+            pps,
+        )
+        assertEquals(sps.size + pps.size, merged.size)
+        assertTrue(merged[4].toInt() and 0x1F == 7)
+        assertTrue(merged[sps.size + 4].toInt() and 0x1F == 8)
+    }
+
+    @Test
     fun separateSpsAndPpsSurviveBeginRecording() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-sps-pps-test").toFile()
         val mirror = FakeMirrorEngine()
         val service = DesktopBugService(mirror, FakeLogcatService(), home)
 
         service.startCapture("emulator-5554", null)
+        val activeDeadline = System.currentTimeMillis() + 15_000
+        while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
+        assertTrue(service.status.value.active, "capture must be active before feeding H.264")
+
         val sps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0x00, 0x0a)
         val pps = byteArrayOf(0, 0, 0, 1, 0x68.toByte(), 0xce.toByte(), 0x06, 0xe2.toByte())
-        mirror.encodedUnits.emit(
-            EncodedVideoAccessUnit(
-                timestampMillis = System.currentTimeMillis(),
-                bytes = sps,
-                width = 64,
-                height = 128,
-            ),
-        )
-        delay(40)
-        mirror.encodedUnits.emit(
-            EncodedVideoAccessUnit(
-                timestampMillis = System.currentTimeMillis(),
-                bytes = pps,
-                width = 64,
-                height = 128,
-            ),
-        )
         val mergedSize = sps.size + pps.size
+        // Emit both while the collector is subscribed; replay on FakeMirrorEngine covers the
+        // race where startCapture's IO job has not entered collect yet.
+        assertTrue(
+            mirror.encodedUnits.tryEmit(
+                EncodedVideoAccessUnit(System.currentTimeMillis(), sps, 64, 128),
+            ),
+        )
+        assertTrue(
+            mirror.encodedUnits.tryEmit(
+                EncodedVideoAccessUnit(System.currentTimeMillis(), pps, 64, 128),
+            ),
+        )
         val mergeDeadline = System.currentTimeMillis() + 15_000
         while (service.latestH264ConfigSizeForTest() < mergedSize &&
             System.currentTimeMillis() < mergeDeadline
         ) {
             delay(20)
         }
-        assertEquals(mergedSize, service.latestH264ConfigSizeForTest())
+        assertEquals(
+            mergedSize,
+            service.latestH264ConfigSizeForTest(),
+            "collector must merge separate SPS and PPS access units",
+        )
 
         service.beginRecording()
         assertEquals(
@@ -340,7 +356,11 @@ private class FakeMirrorEngine : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
-    val encodedUnits = MutableSharedFlow<EncodedVideoAccessUnit>(extraBufferCapacity = 16)
+    // Replay covers emits that race startCapture's IO collector subscription on slow CI.
+    val encodedUnits = MutableSharedFlow<EncodedVideoAccessUnit>(
+        replay = 32,
+        extraBufferCapacity = 32,
+    )
     override val encodedVideo: Flow<EncodedVideoAccessUnit> = encodedUnits
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult = CommandResult.success()
     override suspend fun disconnect(immediate: Boolean) = Unit

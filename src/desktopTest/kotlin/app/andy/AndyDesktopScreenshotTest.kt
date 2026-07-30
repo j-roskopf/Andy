@@ -6,6 +6,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -164,9 +165,18 @@ class AndyDesktopScreenshotTest {
                             onNodeWithText("Include scratchpad").performClick()
                             waitForIdle()
                         }
+                        AndyScreenshotScenario.ProjectsScratchpad,
                         AndyScreenshotScenario.ProjectsScratchpadEditor -> {
-                            onNodeWithText("Edit").performClick()
-                            waitForIdle()
+                            // Project detail + markdown preview can lag waitForIdle on busy CI.
+                            waitUntil(timeoutMillis = 15_000) {
+                                onAllNodesWithText("/workspace/sample-app", substring = true)
+                                    .fetchSemanticsNodes()
+                                    .isNotEmpty()
+                            }
+                            if (scenario == AndyScreenshotScenario.ProjectsScratchpadEditor) {
+                                onNodeWithText("Edit").performClick()
+                                waitForIdle()
+                            }
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {
                             // Quick-start cards fill the left pane; scroll so the seeded
