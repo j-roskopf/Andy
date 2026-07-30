@@ -183,10 +183,46 @@ interface ProxyService {
 
 interface MetricsService {
     fun stream(serial: String, packageName: String?): Flow<PerformanceSample>
+    /** `dumpsys meminfo <pkg>` broken into Java/native/graphics/code/stack buckets. */
+    suspend fun meminfoBreakdown(serial: String, packageName: String): MeminfoBreakdown? = null
+    /** `dumpsys batterystats` summarized into wakelocks/alarms/jobs/drain. */
+    suspend fun batteryStatsSummary(serial: String, packageName: String? = null): BatteryStatsSummary = BatteryStatsSummary()
+}
+
+/**
+ * Crash/ANR inspector reading `dumpsys dropbox` and `/data/anr` (§B.2).
+ * Defaults to [UnavailableCrashInspectorService].
+ */
+interface CrashInspectorService {
+    suspend fun listCrashes(serial: String): List<CrashRecord>
+    suspend fun loadCrash(serial: String, id: String): String
+    suspend fun exportCrash(serial: String, id: String, localPath: String): CommandResult
+}
+
+/**
+ * On-device heap dump capture/management (§B.3), shaped like [TracingService]: capture,
+ * list, reveal, delete locally — no built-in analyzer. Defaults to [UnavailableHeapDumpService].
+ */
+interface HeapDumpService {
+    suspend fun capture(serial: String, packageName: String, localPath: String): Result<HeapDumpInfo>
+    suspend fun listCaptures(): List<HeapDumpInfo>
+    suspend fun deleteCapture(id: String): Boolean
+    suspend fun revealCapture(id: String): CommandResult
 }
 
 interface AccessibilityService {
     suspend fun dump(serial: String): AccessibilityNode?
+}
+
+/**
+ * Tier-1/tier-2 view hierarchy inspector (§D): merges `uiautomator dump` with `dumpsys activity
+ * top`'s unmerged view tree (view classes Compose collapses out of the accessibility tree) by
+ * bounds + class name, and reads `dumpsys window` for window z-order. Composable names, modifier
+ * chains, and recomposition counts (tiers 3–4) need an on-device JVMTI agent Andy does not have
+ * and are explicitly out of scope (§D.2). Defaults to [UnavailableViewHierarchyService].
+ */
+interface ViewHierarchyService {
+    suspend fun capture(serial: String, options: HierarchyOptions = HierarchyOptions()): Result<HierarchySnapshot>
 }
 
 interface BugService {
@@ -196,6 +232,10 @@ interface BugService {
     /** Starts a durable screen recording from this instant, replacing the rolling bug window. */
     suspend fun beginRecording()
     fun recordAction(kind: String, label: String, detail: String? = null)
+    /** Records a screenshot into the active investigation timeline (no-op if capture inactive). */
+    fun recordScreenshot(pngBytes: ByteArray, label: String = "Screenshot", detail: String? = null) {}
+    /** Loads timeline.json for a saved report, or null when absent (v1 reports). */
+    suspend fun loadBugTimeline(id: String): InvestigationTimeline? = null
     suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport
     suspend fun saveRecording(device: AndroidDevice?): BugReport
     suspend fun listBugs(): List<BugReport>
@@ -204,14 +244,48 @@ interface BugService {
     suspend fun loadBugLog(id: String): String
     suspend fun deleteBug(id: String): Boolean
     suspend fun exportBug(id: String): String?
+    /**
+     * Exports a portable investigation bundle: `manifest.json`, `summary.md`, `timeline.json`,
+     * and sidecars/media, alongside the plain duplicate produced by [exportBug]. Desktop writes
+     * this as a folder under `exports/` (no zip dependency); platforms without a timeline just
+     * fall back to [exportBug].
+     */
+    suspend fun exportInvestigationBundle(id: String): String? = exportBug(id)
     fun playbackFrames(id: String, startFrameIndex: Int = 0): Flow<MirrorFrame>
     suspend fun bugVideoFrameCount(id: String): Int
     suspend fun loadBugVideoFrame(id: String, frameIndex: Int): MirrorFrame?
+    /** Reveals a bug/recording's directory in Finder/Explorer, when resolvable on this platform. */
+    suspend fun revealBug(id: String): CommandResult = CommandResult.failure("Reveal is not supported on this platform")
+    /** Absolute local directory for a bug/recording (desktop only); used for "copy as path". */
+    suspend fun bugDirectoryPath(id: String): String? = null
+    /** Renames a saved bug/recording's title in place. */
+    suspend fun renameBug(id: String, title: String): CommandResult = CommandResult.failure("Rename is not supported on this platform")
 }
 
 interface ArtifactService {
     suspend fun saveScreenshot(serial: String, suggestedName: String): CommandResult
     suspend fun saveBugReport(serial: String, suggestedName: String): CommandResult
+    /**
+     * Captures raw screenshot bytes (PNG) for the redaction/annotation/device-frame editor
+     * instead of saving directly. Returns null when unsupported or capture failed.
+     */
+    suspend fun captureScreenshotForEditing(serial: String): ByteArray? = null
+    /**
+     * Bakes redaction/annotation/device-frame edits into [basePngBytes] at full resolution.
+     * Returns null when unsupported so the caller can fall back to the unedited capture.
+     */
+    suspend fun renderScreenshotEdits(basePngBytes: ByteArray, edits: ScreenshotEdits): ByteArray? = null
+    /** Persists already-rendered (edited) PNG bytes via the platform's normal save flow. */
+    suspend fun saveEditedScreenshot(pngBytes: ByteArray, suggestedName: String): CommandResult =
+        CommandResult.failure("Screenshot editing is not supported on this platform")
+}
+
+/**
+ * Exports part (or all) of a saved recording to a small, shareable clip (§E.4). Defaults to
+ * [UnavailableRecordingExportService] so web and `andyd` compile untouched.
+ */
+interface RecordingExportService {
+    suspend fun export(request: RecordingExportRequest, localPath: String): Result<ExportedClip>
 }
 
 interface TracingService {
@@ -299,6 +373,16 @@ enum class AgentAttentionKind {
 data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
 data class OpenAgentTaskRequest(val taskId: String, val projectId: String?)
 
+/**
+ * Returns from an agent chat to the investigation a contextual action (§5) was launched from,
+ * optionally re-selecting the exact event and playback position.
+ */
+data class OpenInvestigationRequest(
+    val investigationId: String,
+    val eventId: String? = null,
+    val playbackMillis: Long? = null,
+)
+
 interface OsNotificationService { fun show(event: AgentAttentionEvent) }
 interface NotificationSoundPlayer { fun play(soundId: String) }
 interface AgentAttentionCoordinator {
@@ -366,6 +450,10 @@ interface AgentRunService {
         followUp: String,
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
+        /** Managed evidence bundle ids (§4) to copy into the task's local evidence dir and reference in the prompt. */
+        contextBundleIds: List<String> = emptyList(),
+        /** Where this turn's contextual action came from (§5); recorded on the task when it has none yet. */
+        provenance: AgentContextualProvenance? = null,
     )
     /** Reopens a stored provider session so the live interactive terminal UI comes back. */
     fun reattachSession(taskId: String)
@@ -400,6 +488,10 @@ interface AgentRunService {
         followUp: String,
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
+        /** Managed evidence bundle ids (§4); copied into the task's local evidence dir at queue time so they survive even if the managed bundle is later removed. */
+        contextBundleIds: List<String> = emptyList(),
+        /** Where this follow-up's contextual action came from (§5). */
+        provenance: AgentContextualProvenance? = null,
     )
     /** Removes an unsent follow-up at [queueIndex]. */
     fun removeQueuedFollowUp(taskId: String, queueIndex: Int)
@@ -478,6 +570,12 @@ data class LogcatFilter(
     val levels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
     val packageName: String? = null,
     val buffers: Set<String> = setOf("main", "system", "crash"),
+    /**
+     * When true, the stream skips the device's existing log buffer and only follows new lines
+     * (`adb logcat -T 0`). Used by rolling bug capture so a 30s window isn't flooded with hours
+     * of historical logcat.
+     */
+    val followOnly: Boolean = false,
 )
 
 data class MirrorFrame(
@@ -686,7 +784,7 @@ data class PlatformCapabilities(
                 AndyDestination.Controls,
                 AndyDestination.Performance,
                 AndyDestination.Design,
-                AndyDestination.Accessibility,
+                AndyDestination.Inspector,
                 AndyDestination.Bugs,
                 AndyDestination.Recordings,
                 AndyDestination.Settings,
@@ -722,13 +820,18 @@ data class AndyServices(
     val proxy: ProxyService,
     val metrics: MetricsService,
     val accessibility: AccessibilityService,
+    val viewHierarchy: ViewHierarchyService = UnavailableViewHierarchyService,
     val bugs: BugService,
     val artifacts: ArtifactService,
+    val recordingExport: RecordingExportService = UnavailableRecordingExportService,
     val tracing: TracingService = UnavailableTracingService,
     val traceViewer: TraceViewerService = UnavailableTraceViewerService,
     val sharedPrefs: SharedPrefsService = UnavailableSharedPrefsService,
     val appDatabase: AppDatabaseService = UnavailableAppDatabaseService,
     val dhu: DhuService = UnavailableDhuService,
+    val crashInspector: CrashInspectorService = UnavailableCrashInspectorService,
+    val heapDump: HeapDumpService = UnavailableHeapDumpService,
+    val evidence: InvestigationEvidenceService = UnavailableInvestigationEvidenceService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val mcp: McpServerService,

@@ -5,6 +5,7 @@ import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
+import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
@@ -237,6 +238,18 @@ class McpAgentRunClient(
         )
     }
 
+    /** Serializes provenance for `chat.start`; never includes a local filesystem path. */
+    private fun AgentContextualProvenance.toJsonObject(): JsonObject = buildJsonObject {
+        put("sourceKind", sourceKind.name)
+        investigationId?.let { put("investigationId", it) }
+        eventId?.let { put("eventId", it) }
+        playbackMillis?.let { put("playbackMillis", it) }
+        networkExchangeId?.let { put("networkExchangeId", it) }
+        crashId?.let { put("crashId", it) }
+        hierarchyNodeId?.let { put("hierarchyNodeId", it) }
+        packageName?.let { put("packageName", it) }
+    }
+
     private fun JsonObject.string(key: String): String? =
         this[key]?.jsonPrimitive?.contentOrNull
 
@@ -425,6 +438,11 @@ class McpAgentRunClient(
                 put("title", JsonPrimitive(draft.title))
                 draft.projectId?.let { put("projectId", JsonPrimitive(it)) }
                 draft.directory?.let { put("directory", JsonPrimitive(it)) }
+                // Managed evidence bundle ids only (§4) — never a local filesystem path.
+                if (draft.contextBundleIds.isNotEmpty()) {
+                    put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
+                }
+                draft.provenance?.let { put("provenance", it.toJsonObject()) }
             },
         )
         refreshTasks()
@@ -457,14 +475,20 @@ class McpAgentRunClient(
         followUp: String,
         imagePaths: List<String>,
         skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: app.andy.model.AgentContextualProvenance?,
     ) {
         scope.launch {
             callTool(
                 "chat.resume",
-                mapOf(
-                    "taskId" to JsonPrimitive(taskId),
-                    "followUp" to JsonPrimitive(followUp),
-                ),
+                buildMap {
+                    put("taskId", JsonPrimitive(taskId))
+                    put("followUp", JsonPrimitive(followUp))
+                    // Managed evidence bundle ids only (§4) — never a local filesystem path.
+                    if (contextBundleIds.isNotEmpty()) {
+                        put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
+                    }
+                },
             )
         }
     }
@@ -527,7 +551,9 @@ class McpAgentRunClient(
         followUp: String,
         imagePaths: List<String>,
         skills: List<AgentSkill>,
-    ) = resume(taskId, followUp, imagePaths, skills)
+        contextBundleIds: List<String>,
+        provenance: app.andy.model.AgentContextualProvenance?,
+    ) = resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance)
 
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit

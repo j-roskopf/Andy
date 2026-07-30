@@ -16,11 +16,6 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import app.andy.ui.shell.LocalWindowResizing
-import java.awt.AWTEvent
-import java.awt.Toolkit
-import java.awt.event.AWTEventListener
-import java.awt.event.ComponentEvent
-import kotlinx.coroutines.Job
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.AndyDestination
@@ -102,6 +97,15 @@ fun main() {
         val scope = rememberCoroutineScope()
         var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutWindows by remember { mutableStateOf(mapOf<String, MirrorPopOutWindow>()) }
+        // Mirror geometry must stay frozen while *any* Andy window is being live-resized, pop-outs
+        // included: pushing AppKit geometry/visibility from the EDT while the main thread is inside
+        // a resize drag freezes the whole app (see MirrorPresentationGuard).
+        var windowResizing by remember { mutableStateOf(false) }
+        DisposableEffect(Unit) {
+            val watch = MirrorWindowResizeWatch(onResizingChanged = { windowResizing = it })
+            watch.install(scope)
+            onDispose { watch.uninstall() }
+        }
         // iOS sims handed off to Simulator.app: Andy stops mirroring and defers to that window.
         // Cleared automatically when the Simulator device window closes (see reconcile below).
         var externalSimulatorMirrors by remember {
@@ -301,30 +305,6 @@ fun main() {
             title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
         ) {
-            var windowResizing by remember { mutableStateOf(false) }
-            var resizeSettleJob by remember { mutableStateOf<Job?>(null) }
-            DisposableEffect(window) {
-                val awtListener = AWTEventListener { event ->
-                    if (event.id == ComponentEvent.COMPONENT_RESIZED && event.source === window) {
-                        MirrorPresentationGuard.beginWindowResize()
-                        windowResizing = true
-                        resizeSettleJob?.cancel()
-                        resizeSettleJob = scope.launch {
-                            delay(350)
-                            windowResizing = false
-                            MirrorPresentationGuard.endWindowResize()
-                        }
-                    }
-                }
-                Toolkit.getDefaultToolkit().addAWTEventListener(awtListener, AWTEvent.COMPONENT_EVENT_MASK)
-                onDispose {
-                    Toolkit.getDefaultToolkit().removeAWTEventListener(awtListener)
-                    resizeSettleJob?.cancel()
-                    resizeSettleJob = null
-                    windowResizing = false
-                    MirrorPresentationGuard.endWindowResize()
-                }
-            }
             LaunchedEffect(visible) {
                 appFocus.visible = visible
                 // Hidden to the tray counts as background: chats keep badging and notifying.
@@ -443,6 +423,7 @@ fun main() {
                             )
                         }
                     }
+                    CompositionLocalProvider(LocalWindowResizing provides windowResizing) {
                     AndyMirrorPopOut(
                         services = services,
                         serial = popOut.targetId,
@@ -456,6 +437,7 @@ fun main() {
                         tintId = workspaceState.tintId,
                         surfaceModeId = workspaceState.surfaceModeId,
                     )
+                    }
                 }
             }
         }
@@ -533,7 +515,7 @@ private fun AndyDestination.menuShortcut(): KeyShortcut {
         AndyDestination.Tracing -> KeyShortcut(Key.T, meta = meta, ctrl = ctrl, shift = true)
         // Shift+D is already used by View → Pop Out Mirror / Show controls.
         AndyDestination.Design -> KeyShortcut(Key.E, meta = meta, ctrl = ctrl, shift = true)
-        AndyDestination.Accessibility -> KeyShortcut(Key.A, meta = meta, ctrl = ctrl, shift = true)
+        AndyDestination.Inspector -> KeyShortcut(Key.I, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Bugs -> KeyShortcut(Key.B, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Recordings -> KeyShortcut(Key.R, meta = meta, ctrl = ctrl, shift = true)
         AndyDestination.Settings -> KeyShortcut(Key.Comma, meta = meta, ctrl = ctrl)

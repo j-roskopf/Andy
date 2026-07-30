@@ -80,9 +80,12 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.PanelCard
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -282,9 +285,9 @@ internal fun AgentTranscript(
 
     Box(
         modifier
-            .clip(RoundedCornerShape(AndyRadius.R4))
+            .clip(RoundedCornerShape(AndyRadius.Row))
             .background(AndyColors.Neutral900.copy(alpha = 0.38f))
-            .border(1.dp, Border.copy(alpha = 0.76f), RoundedCornerShape(AndyRadius.R4)),
+            .border(1.dp, Border.copy(alpha = 0.76f), RoundedCornerShape(AndyRadius.Row)),
     ) {
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
             EmptyState("waiting for agent output")
@@ -639,18 +642,15 @@ private fun ChatMessageBubble(
     content: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxWidth()) {
-        Column(
-            Modifier
+        PanelCard(
+            modifier = Modifier
                 .widthIn(max = if (alignEnd) 720.dp else 860.dp)
                 .fillMaxWidth()
-                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart)
-                .background(
-                    if (alignEnd) AndyColors.OrangeSubtle.copy(alpha = 0.72f) else AndyColors.Neutral850.copy(alpha = 0.90f),
-                    RoundedCornerShape(AndyRadius.R4),
-                )
-                .border(1.dp, borderColor, RoundedCornerShape(AndyRadius.R4))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart),
+            background = if (alignEnd) AndyColors.OrangeSubtle.copy(alpha = AndyOverlay.Medium) else AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong),
+            borderColor = borderColor,
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             Text(author, color = authorColor, fontFamily = MonoFont, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             content()
@@ -703,9 +703,9 @@ private fun ChatAttachedImage(
             Modifier
                 .widthIn(max = maxWidth)
                 .heightIn(max = maxHeight)
-                .clip(RoundedCornerShape(AndyRadius.R2))
-                .background(AndyColors.Neutral900.copy(alpha = 0.72f))
-                .border(1.dp, Border.copy(alpha = 0.75f), RoundedCornerShape(AndyRadius.R2))
+                .clip(RoundedCornerShape(AndyRadius.Control))
+                .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium))
+                .border(1.dp, Border.copy(alpha = 0.75f), RoundedCornerShape(AndyRadius.Control))
                 .then(
                     if (image != null) {
                         Modifier
@@ -747,9 +747,9 @@ private fun ChatAttachedImage(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
-                        .clip(RoundedCornerShape(AndyRadius.R2))
-                        .background(AndyColors.Neutral900.copy(alpha = 0.82f))
-                        .border(1.dp, Border.copy(alpha = 0.8f), RoundedCornerShape(AndyRadius.R2))
+                        .clip(RoundedCornerShape(AndyRadius.Control))
+                        .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong))
+                        .border(1.dp, Border.copy(alpha = 0.8f), RoundedCornerShape(AndyRadius.Control))
                         .pointerHoverIcon(PointerIcon.Hand)
                         .clickable(onClick = onRemove)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -786,8 +786,8 @@ private fun ChatImagePreviewDialog(
             modifier = Modifier
                 .widthIn(max = 1100.dp)
                 .heightIn(max = 860.dp)
-                .background(AndyColors.Neutral900.copy(alpha = 0.96f), RoundedCornerShape(AndyRadius.R3))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Control))
+                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                 .clickable(onClick = onDismiss)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
@@ -846,13 +846,12 @@ private fun CompactToolCallsBlock(
     val hasError = events.any { it is AgentEvent.ToolResult && it.isError }
     val color = if (hasError) Red else Cyan
 
-    Column(
-        Modifier.fillMaxWidth()
-            .animateContentSize()
-            .background(AndyColors.Neutral850.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, Border.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.R2))
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    PanelCard(
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        background = AndyColors.Neutral850.copy(alpha = AndyOverlay.Subtle),
+        borderColor = Border.copy(alpha = 0.65f),
+        contentPadding = PaddingValues(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         DisableSelection {
             Row(
@@ -936,8 +935,8 @@ private fun ToolBlock(
             .then(
                 if (expandable) {
                     Modifier
-                        .background(AndyColors.Neutral850.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.R2))
-                        .border(1.dp, Border.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.R2))
+                        .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Subtle), RoundedCornerShape(AndyRadius.Control))
+                        .border(1.dp, Border.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.Control))
                 } else {
                     Modifier
                 },
@@ -976,7 +975,7 @@ private fun ToolBlock(
             Column(
                 Modifier.fillMaxWidth()
                     .heightIn(max = 220.dp)
-                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
+                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Control))
                     .padding(horizontal = 8.dp, vertical = 7.dp)
                     .verticalScroll(rememberScrollState()),
             ) {

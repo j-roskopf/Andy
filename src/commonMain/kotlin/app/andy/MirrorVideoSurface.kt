@@ -48,6 +48,10 @@ expect fun MirrorVideoSurface(
 
 data class MirrorOverlay(
     val highlightBounds: String? = null,
+    /** Display-pixel width of [highlightBounds] when they come from uiautomator/`wm size` (Inspector/Accessibility). */
+    val boundsDisplayWidth: Int? = null,
+    /** Display-pixel height of [highlightBounds] when they come from uiautomator/`wm size`. */
+    val boundsDisplayHeight: Int? = null,
     val sourceWidth: Int? = null,
     val sourceHeight: Int? = null,
     val showGrid: Boolean = false,

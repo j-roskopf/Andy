@@ -1116,8 +1116,8 @@ private fun ProjectRunbook(
                         val expanded = expandedActionId == action.id
                         Column(
                             Modifier.fillMaxWidth()
-                                .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
-                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.Control))
                                 .clickable { onExpandedActionChange(if (expanded) null else action.id) }
                                 .animateContentSize(animationSpec = tween(220))
                                 .padding(12.dp),
@@ -1151,8 +1151,8 @@ private fun ProjectRunbook(
                     project.notes.forEach { note ->
                         Row(
                             Modifier.fillMaxWidth()
-                                .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.R3))
-                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1333,7 +1333,7 @@ private fun nextActionId(prefix: String, label: String, existing: Set<String>): 
 private fun RepoSourceBadge() {
     Surface(
         color = AndyColors.Neutral800,
-        shape = RoundedCornerShape(AndyRadius.R2),
+        shape = RoundedCornerShape(AndyRadius.Control),
         border = BorderStroke(1.dp, AndyColors.Neutral600),
     ) {
         Text(

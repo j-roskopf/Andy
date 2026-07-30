@@ -41,7 +41,7 @@ class GpuMirrorPresenterLifecycleTest {
 
         assertTrue(pipeline.framesPresented() > 0, "Expected hub frames to be presented")
         assertTrue(
-            mirrorHostContainsNonBlackPixels(host),
+            awaitNonBlackMirrorHost(host),
             "Attached GPU presenter must paint non-black pixels into the Live host",
         )
 
@@ -80,7 +80,7 @@ class GpuMirrorPresenterLifecycleTest {
 
         assertTrue(pipeline.framesPresented() > 0, "Late attach must present retained/follow-up pixels")
         assertTrue(
-            mirrorHostContainsNonBlackPixels(host),
+            awaitNonBlackMirrorHost(host),
             "iOS-style late presenter attach left the host black",
         )
 
@@ -107,7 +107,7 @@ class GpuMirrorPresenterLifecycleTest {
         }
         flushEdt()
         Thread.sleep(100)
-        assertTrue(mirrorHostContainsNonBlackPixels(host), "Precondition: colored frame visible")
+        assertTrue(awaitNonBlackMirrorHost(host), "Precondition: colored frame visible")
 
         // Mimic click/focus: visibility nudge + geometry invalidate must not clear to black.
         repeat(12) {
@@ -146,7 +146,7 @@ class GpuMirrorPresenterLifecycleTest {
         }
         flushEdt()
         Thread.sleep(100)
-        assertTrue(mirrorHostContainsNonBlackPixels(host), "Precondition: host must show color before touch")
+        assertTrue(awaitNonBlackMirrorHost(host), "Precondition: host must show color before touch")
 
         // Clicking the Canvas focuses it; parenting must keep Metal above the black peer.
         val loc = host.locationOnScreen
@@ -165,7 +165,7 @@ class GpuMirrorPresenterLifecycleTest {
         Thread.sleep(100)
 
         assertTrue(
-            mirrorHostContainsNonBlackPixels(host),
+            awaitNonBlackMirrorHost(host),
             "GPU presenter must stay non-black after mouse press / focus on the host Canvas",
         )
 
@@ -200,8 +200,8 @@ class GpuMirrorPresenterLifecycleTest {
         flushEdt()
         Thread.sleep(120)
 
-        assertTrue(mirrorHostContainsNonBlackPixels(live), "Live host stayed black with shared decoder")
-        assertTrue(mirrorHostContainsNonBlackPixels(popOut), "Pop-out host stayed black with shared decoder")
+        assertTrue(awaitNonBlackMirrorHost(live), "Live host stayed black with shared decoder")
+        assertTrue(awaitNonBlackMirrorHost(popOut), "Pop-out host stayed black with shared decoder")
 
         // Moving pop-out geometry must not unregister or blank the Live presenter.
         SwingUtilities.invokeAndWait {
@@ -215,11 +215,11 @@ class GpuMirrorPresenterLifecycleTest {
         Thread.sleep(120)
 
         assertTrue(
-            mirrorHostContainsNonBlackPixels(live),
+            awaitNonBlackMirrorHost(live),
             "Live must stay non-black after pop-out window moves",
         )
         assertTrue(
-            mirrorHostContainsNonBlackPixels(popOut),
+            awaitNonBlackMirrorHost(popOut),
             "Pop-out must stay non-black after its own geometry update",
         )
 
@@ -232,7 +232,7 @@ class GpuMirrorPresenterLifecycleTest {
         Thread.sleep(100)
 
         assertTrue(
-            mirrorHostContainsNonBlackPixels(live),
+            awaitNonBlackMirrorHost(live),
             "Closing pop-out must leave Live presenter presenting",
         )
 
@@ -266,8 +266,8 @@ class GpuMirrorPresenterLifecycleTest {
         flushEdt()
         Thread.sleep(120)
 
-        assertTrue(mirrorHostContainsNonBlackPixels(androidHost), "Android pop-out stayed black")
-        assertTrue(mirrorHostContainsNonBlackPixels(iosHost), "iOS pop-out stayed black")
+        assertTrue(awaitNonBlackMirrorHost(androidHost), "Android pop-out stayed black")
+        assertTrue(awaitNonBlackMirrorHost(iosHost), "iOS pop-out stayed black")
 
         SwingUtilities.invokeAndWait {
             GpuMirrorSessions.release("emulator-5554")
@@ -298,7 +298,7 @@ class GpuMirrorPresenterLifecycleTest {
             flushEdt()
             Thread.sleep(120)
             assertTrue(
-                mirrorHostContainsNonBlackPixels(host),
+                awaitNonBlackMirrorHost(host),
                 "$key left the reused Live host black",
             )
             return pipeline

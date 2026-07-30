@@ -112,8 +112,27 @@ object UnavailableMetricsService : MetricsService {
     override fun stream(serial: String, packageName: String?): Flow<PerformanceSample> = emptyFlow()
 }
 
+object UnavailableCrashInspectorService : CrashInspectorService {
+    override suspend fun listCrashes(serial: String) = emptyList<CrashRecord>()
+    override suspend fun loadCrash(serial: String, id: String) = ""
+    override suspend fun exportCrash(serial: String, id: String, localPath: String) = unavailable()
+}
+
+object UnavailableHeapDumpService : HeapDumpService {
+    override suspend fun capture(serial: String, packageName: String, localPath: String) =
+        Result.failure<HeapDumpInfo>(Exception(BrowserUnavailable))
+    override suspend fun listCaptures() = emptyList<HeapDumpInfo>()
+    override suspend fun deleteCapture(id: String) = false
+    override suspend fun revealCapture(id: String) = unavailable()
+}
+
 object UnavailableAccessibilityService : AccessibilityService {
     override suspend fun dump(serial: String): AccessibilityNode? = null
+}
+
+object UnavailableViewHierarchyService : ViewHierarchyService {
+    override suspend fun capture(serial: String, options: HierarchyOptions) =
+        Result.failure<HierarchySnapshot>(Exception(BrowserUnavailable))
 }
 
 object UnavailableBugService : BugService {
@@ -122,6 +141,8 @@ object UnavailableBugService : BugService {
     override suspend fun stopCapture() = Unit
     override suspend fun beginRecording() = Unit
     override fun recordAction(kind: String, label: String, detail: String?) = Unit
+    override fun recordScreenshot(pngBytes: ByteArray, label: String, detail: String?) = Unit
+    override suspend fun loadBugTimeline(id: String): InvestigationTimeline? = null
     override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = error(BrowserUnavailable)
     override suspend fun saveRecording(device: AndroidDevice?): BugReport = error(BrowserUnavailable)
     override suspend fun listBugs() = emptyList<BugReport>()
@@ -138,6 +159,11 @@ object UnavailableBugService : BugService {
 object UnavailableArtifactService : ArtifactService {
     override suspend fun saveScreenshot(serial: String, suggestedName: String) = unavailable()
     override suspend fun saveBugReport(serial: String, suggestedName: String) = unavailable()
+}
+
+object UnavailableRecordingExportService : RecordingExportService {
+    override suspend fun export(request: RecordingExportRequest, localPath: String) =
+        Result.failure<ExportedClip>(Exception(BrowserUnavailable))
 }
 
 object UnavailableTracingService : TracingService {
@@ -263,14 +289,28 @@ object UnavailableAgentRunService : AgentRunService {
     override fun stop(taskId: String) = Unit
     override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
-    override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+    override fun resume(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) = Unit
 
     override fun reattachSession(taskId: String) = Unit
 
     override fun canReattachSession(taskId: String): Boolean = false
     override fun isViewing(taskId: String): Boolean = false
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
-    override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+    override fun queueFollowUp(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
     override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit

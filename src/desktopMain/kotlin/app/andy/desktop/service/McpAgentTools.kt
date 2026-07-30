@@ -5,9 +5,11 @@ import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.appendAgentStatus
 import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTaskDraft
+import app.andy.model.ContextualActionKind
 import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
@@ -17,6 +19,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -25,8 +28,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
+
+/** MCP argument keys that would smuggle a raw filesystem path in place of a managed evidence bundle id. */
+private val DisallowedRawPathKeys = listOf("evidencePath", "evidencePaths", "filePath", "filePaths", "localPath")
 
 private val agentToolsJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
@@ -70,8 +77,46 @@ fun Server.registerAgentProjectTools(
     fun str(args: Map<String, JsonElement>, key: String): String? =
         args[key]?.jsonPrimitive?.contentOrNull
 
+    fun strList(args: Map<String, JsonElement>, key: String): List<String> =
+        (args[key] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            .orEmpty()
+
     fun textResult(value: String) =
         CallToolResult(content = listOf(TextContent(text = value)))
+
+    /**
+     * Managed evidence bundle ids are the only way to attach investigation context over MCP
+     * (§4/§5) — reject any argument that looks like it is trying to smuggle a raw filesystem
+     * path instead, with a clear error pointing the caller at `contextBundleIds`.
+     */
+    fun rejectRawEvidencePaths(args: Map<String, JsonElement>) {
+        val found = DisallowedRawPathKeys.firstOrNull { it in args }
+        if (found != null) {
+            error(
+                "'$found' is not accepted — Andy MCP tools only accept managed evidence bundle ids " +
+                    "(contextBundleIds), never raw filesystem paths",
+            )
+        }
+    }
+
+    fun parseProvenance(args: Map<String, JsonElement>): AgentContextualProvenance? {
+        val obj = args["provenance"] as? JsonObject ?: return null
+        val sourceKindName = obj["sourceKind"]?.jsonPrimitive?.contentOrNull ?: return null
+        val sourceKind = ContextualActionKind.entries.firstOrNull { it.name.equals(sourceKindName, ignoreCase = true) }
+            ?: return null
+        fun field(key: String) = obj[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        return AgentContextualProvenance(
+            sourceKind = sourceKind,
+            investigationId = field("investigationId"),
+            eventId = field("eventId"),
+            playbackMillis = obj["playbackMillis"]?.jsonPrimitive?.longOrNull,
+            networkExchangeId = field("networkExchangeId"),
+            crashId = field("crashId"),
+            hierarchyNodeId = field("hierarchyNodeId"),
+            packageName = field("packageName"),
+        )
+    }
 
     register(
         name = "chat.list",
@@ -226,9 +271,23 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "ReadOnly | Standard | Full")
             },
+            "contextBundleIds" to buildJsonObject {
+                put("type", "array")
+                put("items", buildJsonObject { put("type", "string") })
+                put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
+            },
+            "provenance" to buildJsonObject {
+                put("type", "object")
+                put(
+                    "description",
+                    "Where this contextual action originated: {sourceKind, investigationId?, eventId?, " +
+                        "playbackMillis?, networkExchangeId?, crashId?, hierarchyNodeId?, packageName?}",
+                )
+            },
         ),
         required = listOf("prompt", "agent"),
     ) { args ->
+        rejectRawEvidencePaths(args)
         val prompt = str(args, "prompt") ?: error("prompt required")
         val agentName = str(args, "agent") ?: error("agent required")
         val agent = AgentKind.entries.firstOrNull {
@@ -249,6 +308,8 @@ fun Server.registerAgentProjectTools(
                 directory = str(args, "directory")?.takeIf { it.isNotBlank() },
                 autonomy = autonomy,
                 model = model,
+                contextBundleIds = strList(args, "contextBundleIds"),
+                provenance = parseProvenance(args),
             ),
         )
         textResult(
@@ -409,12 +470,18 @@ fun Server.registerAgentProjectTools(
         properties = mapOf(
             "taskId" to buildJsonObject { put("type", "string") },
             "followUp" to buildJsonObject { put("type", "string") },
+            "contextBundleIds" to buildJsonObject {
+                put("type", "array")
+                put("items", buildJsonObject { put("type", "string") })
+                put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
+            },
         ),
         required = listOf("taskId", "followUp"),
     ) { args ->
+        rejectRawEvidencePaths(args)
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
-        agentRuns.resume(id, followUp)
+        agentRuns.resume(id, followUp, contextBundleIds = strList(args, "contextBundleIds"))
         textResult("""{"ok":true,"id":"$id"}""")
     }
 

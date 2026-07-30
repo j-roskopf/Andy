@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/traditional_scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:id="@+id/traditional_root"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/traditional_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Traditional XML hierarchy"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/traditional_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Capture in Andy Inspector — compare merged vs unmerged sources"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:id="@+id/traditional_card_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="#FFF8E1"
+            android:orientation="horizontal"
+            android:padding="12dp">
+
+            <ImageView
+                android:id="@+id/traditional_icon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="#FFCC80"
+                android:contentDescription="Traditional icon placeholder" />
+
+            <LinearLayout
+                android:id="@+id/traditional_card_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/traditional_card_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Nested LinearLayout card"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/traditional_card_body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ImageView + nested text column"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/traditional_primary_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Primary action" />
+
+        <Button
+            android:id="@+id/traditional_secondary_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Back to Compose demo" />
+    </LinearLayout>
+</ScrollView>

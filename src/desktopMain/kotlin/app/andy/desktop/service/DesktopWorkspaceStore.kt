@@ -37,6 +37,10 @@ class DesktopWorkspaceStore(
         WorkspaceState(
             selectedSdkPath = props.getProperty("selectedSdkPath")?.takeIf { it.isNotBlank() },
             selectedDeviceSerial = props.getProperty("selectedDeviceSerial")?.takeIf { it.isNotBlank() },
+            // Indexed key/value properties, not a `key:value:...` line format — device serials
+            // for Wi‑Fi-paired devices are themselves `host:port` and would break a colon split.
+            deviceLabels = loadIndexedStringMap(props, "deviceLabel"),
+            deviceNotes = loadIndexedStringMap(props, "deviceNote"),
             savedIntents = decodeSavedIntents(props.getProperty("savedIntents").orEmpty()),
             logSearch = props.getProperty("logSearch").orEmpty(),
             proxyPort = props.getProperty("proxyPort")?.toIntOrNull() ?: 9099,
@@ -119,7 +123,9 @@ class DesktopWorkspaceStore(
             tracingPresetsPaneWidth = props.getProperty("tracingPresetsPaneWidth")?.toFloatOrNull() ?: 320f,
             tracingLibraryPaneHeight = props.getProperty("tracingLibraryPaneHeight")?.toFloatOrNull() ?: 240f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
-            accessibilityTreePaneWidth = props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull() ?: 760f,
+            inspectorTreePaneWidth = props.getProperty("inspectorTreePaneWidth")?.toFloatOrNull()
+                ?: props.getProperty("accessibilityTreePaneWidth")?.toFloatOrNull()
+                ?: 760f,
             hostFileRoots = props.getProperty("hostFileRoots").orEmpty().lines().filter { it.isNotBlank() },
             lastHostFilePath = props.getProperty("lastHostFilePath")?.takeIf { it.isNotBlank() },
             recentHostFiles = props.getProperty("recentHostFiles").orEmpty().lines().filter { it.isNotBlank() },
@@ -142,6 +148,8 @@ class DesktopWorkspaceStore(
         val props = Properties().apply {
             setProperty("selectedSdkPath", state.selectedSdkPath.orEmpty())
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
+            saveIndexedStringMap(this, "deviceLabel", state.deviceLabels)
+            saveIndexedStringMap(this, "deviceNote", state.deviceNotes)
             setProperty("savedIntents", encodeSavedIntents(state.savedIntents))
             setProperty("logSearch", state.logSearch)
             setProperty("proxyPort", state.proxyPort.toString())
@@ -205,7 +213,7 @@ class DesktopWorkspaceStore(
             setProperty("tracingPresetsPaneWidth", state.tracingPresetsPaneWidth.toString())
             setProperty("tracingLibraryPaneHeight", state.tracingLibraryPaneHeight.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())
-            setProperty("accessibilityTreePaneWidth", state.accessibilityTreePaneWidth.toString())
+            setProperty("inspectorTreePaneWidth", state.inspectorTreePaneWidth.toString())
             setProperty("hostFileRoots", state.hostFileRoots.joinToString("\n"))
             setProperty("lastHostFilePath", state.lastHostFilePath.orEmpty())
             setProperty("recentHostFiles", state.recentHostFiles.joinToString("\n"))
@@ -268,6 +276,22 @@ class DesktopWorkspaceStore(
                 lastEndpoint = props.getProperty(prefix + "lastEndpoint")?.takeIf { it.isNotBlank() },
                 pairedAtMillis = props.getProperty(prefix + "pairedAtMillis")?.toLongOrNull() ?: 0L,
             )
+        }
+    }
+
+    private fun loadIndexedStringMap(props: Properties, prefix: String): Map<String, String> {
+        val count = props.getProperty("${prefix}Count")?.toIntOrNull() ?: return emptyMap()
+        return (0 until count).mapNotNull { index ->
+            val key = props.getProperty("$prefix.$index.key")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            key to props.getProperty("$prefix.$index.value").orEmpty()
+        }.toMap()
+    }
+
+    private fun saveIndexedStringMap(props: Properties, prefix: String, map: Map<String, String>) {
+        props.setProperty("${prefix}Count", map.size.toString())
+        map.entries.forEachIndexed { index, (key, value) ->
+            props.setProperty("$prefix.$index.key", key)
+            props.setProperty("$prefix.$index.value", value)
         }
     }
 

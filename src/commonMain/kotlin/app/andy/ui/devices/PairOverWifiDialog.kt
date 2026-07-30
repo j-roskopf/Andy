@@ -144,8 +144,8 @@ internal fun PairOverWifiDialog(
                             pairing.forEach { service ->
                                 Row(
                                     Modifier.fillMaxWidth()
-                                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                                         .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -195,8 +195,8 @@ internal fun PairOverWifiDialog(
                             connectable.forEach { service ->
                                 Row(
                                     Modifier.fillMaxWidth()
-                                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                                         .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -292,7 +292,7 @@ internal fun PairOverWifiDialog(
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 Modifier.size(220.dp)
-                                    .background(Color.White, RoundedCornerShape(AndyRadius.R4))
+                                    .background(Color.White, RoundedCornerShape(AndyRadius.Row))
                                     .padding(12.dp),
                                 contentAlignment = Alignment.Center,
                             ) {

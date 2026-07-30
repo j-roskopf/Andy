@@ -18,7 +18,23 @@ class DesktopLogcatService(
 ) : LogcatService {
     override fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>> = channelFlow {
         val adb = devices.adbPath() ?: return@channelFlow
-        val command = listOf(adb, "-s", serial, "logcat", "-v", "threadtime") + filter.buffers.flatMap { listOf("-b", it) }
+        val command = buildList {
+            add(adb)
+            add("-s")
+            add(serial)
+            add("logcat")
+            add("-v")
+            add("threadtime")
+            // Skip the existing ring buffer — critical for bug-capture's 30s window.
+            if (filter.followOnly) {
+                add("-T")
+                add("0")
+            }
+            filter.buffers.forEach { buffer ->
+                add("-b")
+                add(buffer)
+            }
+        }
         val normalizedFilter = resolveLogcatFilter(serial, filter)
         var process: Process? = null
         val reader = launch(Dispatchers.IO) {

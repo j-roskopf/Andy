@@ -38,8 +38,8 @@ internal actual fun EditorSyntaxThemePreview(
     val chrome = modifier
         .fillMaxWidth()
         .height(132.dp)
-        .clip(RoundedCornerShape(AndyRadius.R3))
-        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+        .clip(RoundedCornerShape(AndyRadius.Control))
+        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
     // Roborazzi's off-window scene cannot host heavyweight Swing interop.
     if (System.getProperty("andy.screenshot.renderer") == "compose") {
         Box(chrome.background(panelBackground).padding(horizontal = 10.dp, vertical = 8.dp)) {

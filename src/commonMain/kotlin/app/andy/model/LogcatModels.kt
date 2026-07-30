@@ -13,3 +13,11 @@ data class LogcatEntry(
     val tag: String,
     val message: String,
 )
+
+/** A contiguous run of [LogcatEntry] rows reassembled into one stack trace/ANR dump. */
+data class StackTraceBlock(
+    val startIndex: Int,
+    val endIndex: Int,
+    val header: String,
+    val frames: List<String>,
+)

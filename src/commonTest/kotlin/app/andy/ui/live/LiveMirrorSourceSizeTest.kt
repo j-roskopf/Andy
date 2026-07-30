@@ -39,6 +39,21 @@ class LiveMirrorSourceSizeTest {
     }
 
     @Test
+    fun frameSizePrefersDecodedFrameOverSessionForOverlays() {
+        val frame = MirrorFrame(486, 1080, IntArray(0), frameNumber = 12)
+        val session = MirrorSession(
+            serial = "emulator-5554",
+            requestedMode = MirrorRendererMode.Auto,
+            backend = MirrorBackend(MirrorBackendKind.NativeHardware),
+            width = 492,
+            height = 1080,
+            readyForPresentation = true,
+        )
+
+        assertEquals(MirrorSourceSize(486, 1080), liveMirrorFrameSize(frame, session))
+    }
+
+    @Test
     fun streamSizePrefersOpenSessionWhenUnfolding() {
         val device = device(screenSize = "1080x2364")
         val frame = MirrorFrame(486, 1080, IntArray(0), frameNumber = 12)

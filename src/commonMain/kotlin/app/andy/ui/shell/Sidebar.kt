@@ -425,7 +425,7 @@ private fun navMark(item: AndyDestination): String = when (item) {
     AndyDestination.Performance -> "/^"
     AndyDestination.Tracing -> "~*"
     AndyDestination.Design -> "%%"
-    AndyDestination.Accessibility -> "13"
+    AndyDestination.Inspector -> "{}"
     AndyDestination.Bugs -> "!!"
     AndyDestination.Recordings -> ">o"
     AndyDestination.Settings -> "*:"

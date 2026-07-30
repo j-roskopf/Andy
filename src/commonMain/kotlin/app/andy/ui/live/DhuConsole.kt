@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -51,8 +52,10 @@ import app.andy.service.DhuService
 import app.andy.service.DhuSession
 import app.andy.service.DhuSessionPhase
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
@@ -78,14 +81,12 @@ internal fun DhuConsolePanel(
     LaunchedEffect(console.lines.size) {
         scroll.animateScrollTo(scroll.maxValue)
     }
-    val shape = RoundedCornerShape(AndyRadius.R2)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(AndyColors.Neutral900, shape)
-            .border(1.dp, Border, shape)
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    val shape = RoundedCornerShape(AndyRadius.Control)
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900,
+        contentPadding = PaddingValues(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Row(
             Modifier.fillMaxWidth(),

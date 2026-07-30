@@ -118,6 +118,8 @@ internal class GpuMirrorPresenter internal constructor(
     private var geometryUpdateScheduled = false
     private var lastGeometryKey: String? = null
     private var visibleRequested = true
+    /** Last value actually pushed to the hub, so geometry passes skip redundant JNI hops. */
+    private var visibleApplied: Boolean? = null
 
     fun attach(host: Canvas, fillHost: Boolean): Boolean {
         if (attachedHost === host && this.fillHost == fillHost) {
@@ -128,7 +130,9 @@ internal class GpuMirrorPresenter internal constructor(
         this.fillHost = fillHost
         if (!GpuMirrorJni.openPresenterOverlay(presenterId)) return false
         GpuMirrorJni.setPresenterFillHost(presenterId, fillHost)
-        GpuMirrorJni.setPresenterVisible(presenterId, false)
+        // Fresh native window: push the hidden state even if that is what we last applied.
+        visibleApplied = null
+        applyVisible(false)
         attachedHost = host
         GpuMirrorHostRegistry.registerPresenter(host, this)
         lastGeometryKey = null
@@ -157,12 +161,12 @@ internal class GpuMirrorPresenter internal constructor(
         } else {
             GpuMirrorHostRegistry.forgetPresenter(this)
         }
-        GpuMirrorJni.setPresenterVisible(presenterId, false)
+        applyVisible(false)
     }
 
     fun setVisible(visible: Boolean) {
         visibleRequested = visible
-        GpuMirrorJni.setPresenterVisible(presenterId, visible)
+        applyVisible(visible)
         // Do not refresh geometry here. updateGeometry → setFrame flashes the black Canvas
         // under the mouse-transparent Metal overlay (every click looked like a black blink).
         // Occlusion resume and attach/resize paths call updateGeometry explicitly.
@@ -171,7 +175,16 @@ internal class GpuMirrorPresenter internal constructor(
     /** Re-front the Metal overlay without resizing (safe on mouse press / focus). */
     fun bringToFront() {
         visibleRequested = true
-        GpuMirrorJni.setPresenterVisible(presenterId, true)
+        // Explicit re-front request: always reach the hub, even if visibility never changed.
+        visibleApplied = null
+        applyVisible(true)
+    }
+
+    /** Pushes visibility only when it changed; the hub call is otherwise pure JNI churn. */
+    private fun applyVisible(visible: Boolean) {
+        if (visibleApplied == visible) return
+        visibleApplied = visible
+        GpuMirrorJni.setPresenterVisible(presenterId, visible)
     }
 
     fun setContentSize(width: Int, height: Int) {
@@ -294,9 +307,9 @@ internal class GpuMirrorPresenter internal constructor(
             }
             true
         }.getOrDefault(false)
-        // Mark visible once geometry has been attempted. setPresenterVisible no longer
-        // orderFronts when already showing, so this is cheap and does not flash.
-        GpuMirrorJni.setPresenterVisible(presenterId, visibleRequested)
+        // Mark visible once geometry has been attempted. apply_presenter_frame re-fronts a hidden
+        // window on its own, so repeating an unchanged visibility here is pure overhead.
+        applyVisible(visibleRequested)
         if (!applied) {
             GpuMirrorJni.repaintPresenter(presenterId)
         }

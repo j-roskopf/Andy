@@ -1,7 +1,5 @@
 package app.andy.ui.bugs
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -47,12 +44,28 @@ import app.andy.BugLogcatTextSurface
 import app.andy.MirrorGestureOverlay
 import app.andy.MirrorOverlay
 import app.andy.MirrorVideoSurface
-import app.andy.domain.activeBugActionIndex
+import app.andy.domain.actionEventsForOverlay
 import app.andy.domain.activeBugPointerEvent
+import app.andy.domain.activeInvestigationEventIndex
 import app.andy.domain.bugPlaybackMillis
 import app.andy.domain.BugPointerEvent
+import app.andy.domain.filtered
+import app.andy.domain.investigationTimelineFor
+import app.andy.domain.nearestBugFrameIndex
+import app.andy.model.InvestigationEvent
+import app.andy.model.explainMomentRequest
+import app.andy.model.investigateSelectionRequest
+import app.andy.rememberCopyText
+import app.andy.service.AndyServices
 import app.andy.service.BugService
 import app.andy.service.MirrorFrame
+import app.andy.service.OpenInvestigationRequest
+import app.andy.service.RecordingExportService
+import app.andy.service.UnavailableRecordingExportService
+import app.andy.ui.agents.ContextualAiActionHost
+import app.andy.ui.agents.ExplainActionButton
+import app.andy.ui.agents.contextualAiActionsEnabled
+import app.andy.ui.agents.rememberContextualAiActionState
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.DetailRow
@@ -65,7 +78,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.theme.AndyColors
+import app.andy.ui.live.RecordingExportSheet
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
@@ -80,11 +93,24 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
+internal fun BugsScreen(
+    services: AndyServices,
+    recordings: Boolean = false,
+    pendingInvestigation: OpenInvestigationRequest? = null,
+    onPendingInvestigationConsumed: () -> Unit = {},
+) {
+    val bugs: BugService = services.bugs
+    val recordingExport: RecordingExportService =
+        if (recordings) services.recordingExport else UnavailableRecordingExportService
     val scope = rememberCoroutineScope()
+    val copyText = rememberCopyText()
     val state = remember(bugs) { BugsScreenState(bugs) }
-    val stepsListState = rememberLazyListState()
+    val timelineListState = rememberLazyListState()
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    var exportSheetVisible by remember { mutableStateOf(false) }
+    var pendingSeek by remember { mutableStateOf<OpenInvestigationRequest?>(null) }
+    val contextualActions = rememberContextualAiActionState()
+    val explainAvailable = contextualAiActionsEnabled(services) && !recordings
     val pageTitle = if (recordings) "Recordings" else "Bugs"
     val itemLabel = if (recordings) "recording" else "bug report"
 
@@ -98,11 +124,20 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
     }
 
     LaunchedEffect(Unit) { refreshReports() }
+    LaunchedEffect(pendingInvestigation) {
+        val request = pendingInvestigation ?: return@LaunchedEffect
+        state.reports = if (recordings) state.bugs.listRecordings() else state.bugs.listBugs()
+        state.selectedId = request.investigationId
+        pendingSeek = request
+        onPendingInvestigationConsumed()
+    }
     LaunchedEffect(state.selectedId, state.reports) {
+        exportSheetVisible = false
         val id = state.selectedId
         state.selected = state.reports.firstOrNull { it.id == id } ?: id?.let { state.bugs.loadBug(it) }
         state.logcat = id?.let { state.bugs.loadBugLog(it) }.orEmpty()
         state.resetPlaybackForSelection()
+        state.timeline = id?.let { runCatching { state.bugs.loadBugTimeline(it) }.getOrNull() }
         state.isVideoLoading = id != null
         state.playbackFrameCount = id?.let { state.bugs.bugVideoFrameCount(it) } ?: 0
         if (state.playbackFrameCount <= 0) state.isVideoLoading = false
@@ -114,6 +149,19 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
             state.playbackFrame = frame
         }
         state.isVideoLoading = false
+    }
+    LaunchedEffect(pendingSeek, state.selectedId, state.playbackFrameCount) {
+        val request = pendingSeek ?: return@LaunchedEffect
+        val report = state.selected ?: return@LaunchedEffect
+        if (report.id != request.investigationId || state.playbackFrameCount <= 0) return@LaunchedEffect
+        val atMillis = request.playbackMillis
+            ?: state.timeline?.events?.firstOrNull { it.id == request.eventId }?.atMillis
+        if (atMillis != null) {
+            val index = nearestBugFrameIndex(report, atMillis, state.playbackFrameCount)
+            val eventId = request.eventId
+            if (eventId != null) state.seekPlaybackToEvent(index, eventId) else state.seekPlayback(index)
+        }
+        pendingSeek = null
     }
     LaunchedEffect(state.selectedId, state.playbackRunId, state.isReplaying) {
         val id = state.selectedId ?: return@LaunchedEffect
@@ -134,6 +182,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
         }
     }
 
+    Box(Modifier.fillMaxSize()) {
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         PanelCard(Modifier.width(250.dp).fillMaxHeight()) {
             Toolbar(pageTitle, "${state.reports.size} ${if (recordings) "recordings" else "reports"}", onPrimary = { refreshReports() }, primaryLabel = "Refresh")
@@ -145,8 +194,8 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         val active = report.id == state.selectedId
                         Column(
                             Modifier.fillMaxWidth()
-                                .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.R3))
-                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.R3))
+                                .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.Control))
                                 .clickable { state.selectedId = report.id }
                                 .padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -166,19 +215,29 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                 Text(if (recordings) "Start a recording from Live to see its replay here." else "Save a bug from Live to see its replay here.", color = TextSecondary)
             }
         } else {
+            val effectiveTimeline = remember(report.id, state.timeline, state.logcat) {
+                investigationTimelineFor(report, state.timeline, state.logcat)
+            }
+            val overlayActions = remember(effectiveTimeline) { effectiveTimeline.actionEventsForOverlay() }
+            val filteredEvents = remember(effectiveTimeline, state.timelineFilters) { effectiveTimeline.filtered(state.timelineFilters) }
             val playbackMillis = bugPlaybackMillis(report, state.playbackFrameIndex, state.playbackFrameCount)
             val showReplayAnnotations = state.isInspectingPlayback && state.playbackFrame != null
-            val activeActionIndex = if (showReplayAnnotations) activeBugActionIndex(report.actions, playbackMillis) else -1
-            val pointerEvent = if (showReplayAnnotations) activeBugPointerEvent(report.actions, playbackMillis) else null
+            val pointerEvent = if (showReplayAnnotations) activeBugPointerEvent(overlayActions, playbackMillis) else null
+            val activeEventIndex = if (showReplayAnnotations) activeInvestigationEventIndex(filteredEvents, playbackMillis) else -1
+            val activeEvent = filteredEvents.getOrNull(activeEventIndex)
             fun toggleBugReplay() {
                 state.toggleReplay()
             }
-            LaunchedEffect(report.id, activeActionIndex) {
-                if (activeActionIndex >= 0) {
-                    val targetIndex = activeActionIndex + 1
-                    val isVisible = stepsListState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+            fun onToggleTimelineEvent(event: InvestigationEvent) {
+                state.expandedEventIds[event.id] = state.expandedEventIds[event.id] != true
+                val targetIndex = nearestBugFrameIndex(report, event.atMillis, state.playbackFrameCount)
+                state.seekPlaybackToEvent(targetIndex, event.id)
+            }
+            LaunchedEffect(report.id, activeEventIndex) {
+                if (activeEventIndex >= 0) {
+                    val isVisible = timelineListState.layoutInfo.visibleItemsInfo.any { it.index == activeEventIndex }
                     if (!isVisible) {
-                        stepsListState.scrollToItem(targetIndex)
+                        timelineListState.scrollToItem(activeEventIndex)
                     }
                 }
             }
@@ -203,11 +262,57 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         shape = RoundedCornerShape(10.dp),
                     ) { Text(if (state.isReplaying) "Pause" else if (recordings) "Play" else "Reproduce") }
                     Spacer(Modifier.width(8.dp))
+                    if (explainAvailable) {
+                        val momentEventId = state.selectedEventId ?: activeEvent?.id
+                        ExplainActionButton("Explain this moment…") {
+                            contextualActions.open(
+                                explainMomentRequest(
+                                    investigationId = report.id,
+                                    eventId = momentEventId,
+                                    playbackMillis = playbackMillis,
+                                    momentSummary = filteredEvents.firstOrNull { it.id == momentEventId }?.summary,
+                                    packageName = report.appIdentity?.packageName,
+                                ),
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        val selectionEvents = investigationSelectionAround(filteredEvents, playbackMillis)
+                        ExplainActionButton("Investigate selection…", enabled = selectionEvents.isNotEmpty()) {
+                            contextualActions.open(
+                                investigateSelectionRequest(
+                                    investigationId = report.id,
+                                    eventIds = selectionEvents.map { it.id },
+                                    playbackMillis = playbackMillis,
+                                    selectionSummary = investigationSelectionSummary(selectionEvents),
+                                    packageName = report.appIdentity?.packageName,
+                                ),
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    if (recordings) {
+                        OutlinedButton(onClick = { exportSheetVisible = true }) { Text("Export…") }
+                        Spacer(Modifier.width(8.dp))
+                    }
                     OutlinedButton(onClick = {
                         scope.launch {
                             state.status = state.bugs.exportBug(report.id)?.let { "Exported to $it" } ?: "Export failed"
                         }
-                    }) { Text("Export") }
+                    }) { Text("Duplicate") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { scope.launch { state.bugs.revealBug(report.id) } }) { Text("Reveal") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            val path = state.bugs.bugDirectoryPath(report.id)
+                            state.status = if (path != null) {
+                                copyText(path)
+                                "Copied path to clipboard"
+                            } else {
+                                "Path is not available on this platform"
+                            }
+                        }
+                    }) { Text("Copy path") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
@@ -227,9 +332,12 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
                     ) { Text("Delete") }
                 }
+                report.videoCaptureWarning?.let { warning ->
+                    Text("⚠ $warning", color = Rust, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-                    val paneGuttersWidth = AndySpace.S3 * 2 + AndyStroke.PaneHandleHitWidth * 2
+                    val paneGuttersWidth = AndySpace.Space4 * 2 + AndyStroke.PaneHandleHitWidth * 2
                     val minimumVideoWidth = 260.dp
                     val minimumStepsWidth = 220.dp
                     val minimumDetailsWidth = 220.dp
@@ -238,12 +346,12 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                     val maximumDetailsWidth = (availableForSidePanes - minimumStepsWidth).coerceAtLeast(minimumDetailsWidth)
                     val (displayStepsWidth, displayDetailsWidth) = remember(
                         maxWidth,
-                        state.stepsPaneWidth,
+                        state.timelinePaneWidth,
                         state.bugDetailsPaneWidth,
                     ) {
                         val maxSteps = maximumStepsWidth.value.coerceIn(minimumStepsWidth.value, 1_400f)
                         val maxDetails = maximumDetailsWidth.value.coerceIn(minimumDetailsWidth.value, 900f)
-                        var steps = state.stepsPaneWidth.coerceIn(minimumStepsWidth.value, maxSteps)
+                        var steps = state.timelinePaneWidth.coerceIn(minimumStepsWidth.value, maxSteps)
                         var details = state.bugDetailsPaneWidth.coerceIn(minimumDetailsWidth.value, maxDetails)
                         val overflow = steps + details - availableForSidePanes.value
                         if (overflow > 0f) {
@@ -256,56 +364,18 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
 
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PanelCard(Modifier.width(displayStepsWidth.dp).fillMaxHeight()) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("STEPS", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                            Text("${report.actions.size} events", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        }
-                        LazyColumn(Modifier.fillMaxSize(), state = stepsListState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            item {
-                                Text("captured here", color = Rust, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
-                            }
-                            itemsIndexed(report.actions) { index, action ->
-                                val active = index == activeActionIndex
-                                val expanded = state.expandedStepIds[action.id] == true
-                                Column(
-                                    Modifier.fillMaxWidth()
-                                        .animateContentSize()
-                                        .background(if (active) Rust.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                                        .border(1.dp, if (active) Rust.copy(alpha = 0.55f) else Color.Transparent, RoundedCornerShape(AndyRadius.R2))
-                                        .clickable { state.expandedStepIds[action.id] = !expanded }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(if (expanded) "v" else ">", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(10.dp))
-                                        Text("${index + 1}", color = if (active) Rust else TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.width(22.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(action.label, color = if (active) AndyColors.Neutral100 else TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            action.detail?.let { Text(it, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                        }
-                                        Text(relativeSeconds(action.timestampMillis, report.windowEndedAtMillis), color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                                    }
-                                    AnimatedVisibility(visible = expanded) {
-                                        Column(
-                                            Modifier.fillMaxWidth()
-                                                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.R2))
-                                                .padding(horizontal = 8.dp, vertical = 7.dp),
-                                            verticalArrangement = Arrangement.spacedBy(5.dp),
-                                        ) {
-                                            BugStepExpandedRow("label", action.label)
-                                            action.detail?.takeIf { it.isNotBlank() }?.let { BugStepExpandedRow("detail", it) }
-                                            BugStepExpandedRow("kind", action.kind)
-                                            BugStepExpandedRow("time", "${formatMillis(action.timestampMillis)}  ${relativeSeconds(action.timestampMillis, report.windowEndedAtMillis)}")
-                                            BugStepExpandedRow("id", action.id)
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        InvestigationTimelinePane(
+                            events = filteredEvents,
+                            totalEventCount = effectiveTimeline.events.size,
+                            filters = state.timelineFilters,
+                            onFiltersChange = { state.timelineFilters = it },
+                            activeEventId = activeEvent?.id,
+                            expandedEventIds = state.expandedEventIds,
+                            onToggleEvent = ::onToggleTimelineEvent,
+                            referenceMillis = report.windowEndedAtMillis,
+                            listState = timelineListState,
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     }
                     PaneDivider(
                         onDrag = { dragX ->
@@ -313,7 +383,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                                 .coerceAtLeast(minimumStepsWidth)
                                 .value
                                 .coerceAtMost(1_400f)
-                            state.stepsPaneWidth = (displayStepsWidth + dragX)
+                            state.timelinePaneWidth = (displayStepsWidth + dragX)
                                 .coerceIn(minimumStepsWidth.value, maxSteps)
                         },
                     )
@@ -322,8 +392,8 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(
                                 Modifier.weight(1f).fillMaxWidth()
-                                    .background(Color.Black, RoundedCornerShape(AndyRadius.R3))
-                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
+                                    .background(Color.Black, RoundedCornerShape(AndyRadius.Control))
+                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                                     .clickable(enabled = state.playbackFrameCount > 0) { toggleBugReplay() },
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -394,6 +464,25 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                             FilterPill("Logcat", state.selectedTab == "Logcat", Rust) { state.selectedTab = "Logcat" }
                         }
                         if (state.selectedTab == "Details") {
+                            DetailSection("APP")
+                            DetailRow("Package", report.appIdentity?.packageName)
+                            DetailRow("Version", listOfNotNull(report.appIdentity?.versionName, report.appIdentity?.versionCode?.let { "($it)" }).joinToString(" ").ifBlank { null })
+                            DetailRow("Min/Target SDK", listOfNotNull(report.appIdentity?.minSdk, report.appIdentity?.targetSdk).joinToString(" / ").ifBlank { null })
+                            DetailRow("Debuggable", report.appIdentity?.debuggable?.toString())
+                            DetailSection("PROJECT / BUILD")
+                            DetailRow("Project", report.projectIdentity?.projectId)
+                            DetailRow("Git branch", report.projectIdentity?.gitBranch)
+                            DetailRow("Git head", report.projectIdentity?.gitHead)
+                            DetailRow("Working tree", report.projectIdentity?.gitDirty?.let { if (it) "dirty" else "clean" })
+                            DetailSection("HOST")
+                            DetailRow("Andy version", report.hostIdentity?.andyVersionName)
+                            DetailRow("Host OS", report.hostIdentity?.hostOs)
+                            Text(
+                                "Host clock is authoritative; device timestamps are approximate when shown.",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            )
                             DetailSection("DEVICE")
                             DetailRow("Model", report.deviceModel)
                             DetailRow("Serial", report.deviceSerial)
@@ -401,6 +490,12 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                             DetailRow("ABI", report.abi)
                             DetailRow("Resolution", report.resolution)
                             DetailRow("Captured", formatMillis(report.capturedAtMillis))
+                            if (recordings) {
+                                DetailSection("VIDEO")
+                                DetailRow("Duration", formatDurationSeconds(report))
+                                DetailRow("Frame rate", report.videoFrameRate?.let { "${app.andy.formatDecimal(it, 1)} fps" })
+                                DetailRow("Frames", report.videoFrameTimestampsMillis.size.takeIf { it > 0 }?.toString())
+                            }
                             DetailSection("ARTIFACT FILES")
                             report.artifacts.forEach { artifact ->
                                 DetailRow(artifact.name, artifact.sizeBytes?.let(::formatBytes) ?: artifact.kind)
@@ -415,7 +510,7 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                             }
                             DetailSection("NOTES")
                             SelectionContainer {
-                                Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.R3)).padding(10.dp))
+                                Text(report.notes.ifBlank { "<none>" }, color = TextPrimary, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().background(Color.Black, RoundedCornerShape(AndyRadius.Control)).padding(10.dp))
                             }
                         } else {
                             BugLogcatView(state.logcat, Modifier.fillMaxSize())
@@ -425,6 +520,8 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
                 }
             }
         }
+    }
+    ContextualAiActionHost(services, contextualActions)
     }
     pendingConfirmation?.let { confirmation ->
         ConfirmationDialog(
@@ -436,35 +533,32 @@ internal fun BugsScreen(bugs: BugService, recordings: Boolean = false) {
             },
         )
     }
+    if (exportSheetVisible) {
+        state.selected?.let { report ->
+            RecordingExportSheet(
+                report = report,
+                bugs = state.bugs,
+                recordingExport = recordingExport,
+                onDismiss = { exportSheetVisible = false },
+                onRenamed = { refreshReports() },
+            )
+        }
+    }
 }
 
 @Composable
 private fun BugLogcatView(logcat: String, modifier: Modifier = Modifier) {
-    BugLogcatTextSurface(logcat, modifier.background(Color.Black, RoundedCornerShape(AndyRadius.R3)))
-}
-
-@Composable
-private fun BugStepExpandedRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            label,
-            color = TextSecondary,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
-            modifier = Modifier.width(46.dp),
-            maxLines = 1,
-        )
-        Text(
-            value,
-            color = TextPrimary,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            modifier = Modifier.weight(1f),
-        )
-    }
+    BugLogcatTextSurface(logcat, modifier.background(Color.Black, RoundedCornerShape(AndyRadius.Control)))
 }
 
 private fun formatMillis(value: Long): String = if (value <= 0L) "-" else value.toString()
+
+private fun formatDurationSeconds(report: app.andy.model.BugReport): String? {
+    val start = report.videoStartedAtMillis ?: return null
+    val end = report.videoEndedAtMillis ?: return null
+    val seconds = (end - start).coerceAtLeast(0L) / 1000.0
+    return "${app.andy.formatDecimal(seconds, 1)}s"
+}
 
 private fun BugPointerEvent.toMirrorGestureOverlay() = MirrorGestureOverlay(
     startX = x,
@@ -474,11 +568,6 @@ private fun BugPointerEvent.toMirrorGestureOverlay() = MirrorGestureOverlay(
     fadeProgress = progress,
     swipeProgress = swipeProgress,
 )
-
-private fun relativeSeconds(timestampMillis: Long, endMillis: Long): String {
-    val seconds = ((timestampMillis - endMillis) / 1000.0)
-    return "${app.andy.formatDecimal(seconds, 1)}s"
-}
 
 private fun formatBytes(bytes: Long): String {
     if (bytes < 1024) return "$bytes B"

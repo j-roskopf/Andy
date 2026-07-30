@@ -51,6 +51,7 @@ import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Red
@@ -84,10 +85,10 @@ internal fun NetworkTrafficRowItem(
         targetValue = when {
             focused -> AndyColors.Orange.copy(alpha = 0.18f)
             flashing -> Rust.copy(alpha = 0.24f)
-            else -> AndyColors.Neutral900.copy(alpha = 0.65f)
+            else -> AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium)
         },
     )
-    val selectedColor = if (row.exchange != null) AndyColors.Neutral800.copy(alpha = 0.9f) else flashColor
+    val selectedColor = if (row.exchange != null) AndyColors.Neutral800.copy(alpha = AndyOverlay.Strong) else flashColor
     var showMenu by remember { mutableStateOf(false) }
 
     Box {
@@ -229,7 +230,13 @@ internal fun NetworkTrafficRowItem(
 }
 
 @Composable
-internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SelectedFlowPanel(
+    selected: NetworkExchange?,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    actions: @Composable () -> Unit = {},
+) {
     PanelCard(modifier.animateContentSize()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Selected flow", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -242,6 +249,7 @@ internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, on
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            actions()
             FilterPill(if (expanded) "Hide" else "Show", expanded, Rust, onClick = onToggle)
         }
         AnimatedVisibility(expanded) {

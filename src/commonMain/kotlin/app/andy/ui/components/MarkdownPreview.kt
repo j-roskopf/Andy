@@ -60,8 +60,8 @@ internal fun MarkdownPreview(
 ) {
     Box(
         modifier
-            .background(Panel, RoundedCornerShape(AndyRadius.R2))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R2)),
+            .background(Panel, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control)),
     ) {
         if (text.isBlank()) {
             Text(
@@ -69,7 +69,7 @@ internal fun MarkdownPreview(
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 12.sp,
-                modifier = Modifier.padding(AndySpace.S4),
+                modifier = Modifier.padding(AndySpace.Space5),
             )
         } else {
             AndyMarkdown(
@@ -79,7 +79,7 @@ internal fun MarkdownPreview(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(AndySpace.S4),
+                    .padding(AndySpace.Space5),
             )
         }
     }

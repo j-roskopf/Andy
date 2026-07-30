@@ -31,6 +31,10 @@ enum class EditorSyntaxTheme(val id: String, val label: String) {
 data class WorkspaceState(
     val selectedSdkPath: String? = null,
     val selectedDeviceSerial: String? = null,
+    /** Friendly display names keyed by serial/udid, shown in device lists and target pickers (§C.5). */
+    val deviceLabels: Map<String, String> = emptyMap(),
+    /** Freeform notes keyed by serial/udid (§C.5). */
+    val deviceNotes: Map<String, String> = emptyMap(),
     val savedIntents: List<IntentDraft> = emptyList(),
     val logSearch: String = "",
     val enabledLogLevels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
@@ -71,13 +75,14 @@ data class WorkspaceState(
     val performanceLivePaneWidth: Float = 320f,
     val performanceTab: String = PerformanceTab.Metrics.name,
     val filesTab: String = FilesTab.Files.name,
+    val logcatTab: String = LogcatTab.Stream.name,
     val tracingPresetId: String = "default",
     val tracingDurationSeconds: Int = 10,
     val tracingBufferSizeMb: Int = 64,
     val tracingPresetsPaneWidth: Float = 320f,
     val tracingLibraryPaneHeight: Float = 240f,
     val designDevicePaneWidth: Float = 820f,
-    val accessibilityTreePaneWidth: Float = 560f,
+    val inspectorTreePaneWidth: Float = 560f,
     val hostFileRoots: List<String> = emptyList(),
     val lastHostFilePath: String? = null,
     val recentHostFiles: List<String> = emptyList(),

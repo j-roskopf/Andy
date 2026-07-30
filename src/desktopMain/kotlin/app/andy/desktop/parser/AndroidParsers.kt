@@ -62,6 +62,18 @@ object AndroidParsers {
         return Regex("""level:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)?.toIntOrNull()
     }
 
+    fun parseThermalStatus(output: String): String? =
+        app.andy.ui.controls.parseThermalStatus(output)
+
+    fun parseSensorStatus(output: String): Map<String, List<Float>> =
+        app.andy.ui.controls.parseSensorStatus(output)
+
+    fun parseGpxTrack(xml: String): List<app.andy.ui.controls.GeoFix> =
+        app.andy.ui.controls.parseGpxTrack(xml)
+
+    fun parseKmlLineString(xml: String): List<app.andy.ui.controls.GeoFix> =
+        app.andy.ui.controls.parseKmlLineString(xml)
+
     fun parseNetworkTotals(output: String): Pair<Long, Long>? {
         var rxBytes = 0L
         var txBytes = 0L
@@ -417,6 +429,185 @@ object AndroidParsers {
 
     private fun Element.attr(name: String): String? = getAttribute(name).takeIf { it.isNotBlank() }
 
+    // ---- B.2: dropbox crash/ANR index ----------------------------------------------------
+
+    data class DropboxParseResult(
+        val records: List<CrashRecord>,
+        val bodiesById: Map<String, String>,
+    )
+
+    private val dropboxEntryHeaderRegex =
+        Regex("""^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+\((?:text|data|compressed text),\s*(\d+)\s*bytes\)\s*$""")
+
+    /**
+     * Parses `dumpsys dropbox --print` into crash records plus full entry bodies keyed by [CrashRecord.id].
+     * IDs use `dropbox|<timestamp>|<tag>` so [app.andy.desktop.service.DesktopCrashInspectorService]
+     * can reload via `dumpsys dropbox --print <date> <time> <tag>` when the cache is cold.
+     */
+    fun parseDropboxIndex(output: String): DropboxParseResult {
+        if (output.isBlank()) return DropboxParseResult(emptyList(), emptyMap())
+        val chunks = output.split(Regex("""(?m)^={5,}\s*$"""))
+        val records = mutableListOf<CrashRecord>()
+        val bodiesById = mutableMapOf<String, String>()
+        chunks.forEach { chunk ->
+            val headerLine = chunk.lineSequence().map { it.trim() }.firstOrNull { dropboxEntryHeaderRegex.matches(it) }
+                ?: return@forEach
+            val header = dropboxEntryHeaderRegex.find(headerLine) ?: return@forEach
+            val (timestampText, tag, _) = header.destructured
+            val timestampMillis = parseDropboxTimestamp(timestampText)
+            val body = chunk.substringAfter(headerLine, "")
+            val packageName = Regex("""Process:\s*([\w.]+)""").find(body)?.groupValues?.getOrNull(1)
+            val summary = body.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { line ->
+                    line.isNotBlank() && !line.startsWith("Process:") && !line.startsWith("Flags:") &&
+                        !line.startsWith("Package:") && !line.startsWith("Foreground:") && !line.startsWith("Build:")
+                }
+                ?: tag
+            val id = "dropbox|$timestampText|$tag"
+            records += CrashRecord(
+                id = id,
+                kind = classifyDropboxTag(tag),
+                packageName = packageName,
+                timestampMillis = timestampMillis,
+                summary = summary.take(200),
+            )
+            bodiesById[id] = parseDropboxEntry(chunk)
+        }
+        return DropboxParseResult(records, bodiesById)
+    }
+
+    /** Strips the `========` chunk wrapper (if present) from a single `--file` entry's raw text. */
+    fun parseDropboxEntry(output: String): String {
+        val withoutHeaderRule = output.replace(Regex("""(?m)^={5,}\s*$"""), "").trim()
+        val withoutTimestampHeader = withoutHeaderRule.lineSequence().firstOrNull()
+            ?.let { first -> if (dropboxEntryHeaderRegex.matches(first.trim())) withoutHeaderRule.substringAfter(first).trimStart('\n') else withoutHeaderRule }
+            ?: withoutHeaderRule
+        return withoutTimestampHeader.trim()
+    }
+
+    private fun classifyDropboxTag(tag: String): CrashKind = when {
+        tag.contains("native_crash") -> CrashKind.NativeCrash
+        tag.contains("anr") -> CrashKind.Anr
+        tag.contains("wtf") -> CrashKind.Watchdog
+        tag.startsWith("system_app_crash") -> CrashKind.SystemAppCrash
+        tag.contains("crash") -> CrashKind.JavaCrash
+        else -> CrashKind.JavaCrash
+    }
+
+    private fun parseDropboxTimestamp(text: String): Long {
+        return runCatching {
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse(text).time
+        }.getOrDefault(0L)
+    }
+
+    // ---- B.3: dumpsys meminfo breakdown ---------------------------------------------------
+
+    /** `dumpsys meminfo <pkg>` "App Summary" Pss(KB) breakdown, converted to MB. */
+    fun parseMeminfoBreakdown(output: String, packageName: String): MeminfoBreakdown? {
+        fun valueFor(label: String): Float? =
+            Regex("""(?m)^\s*$label:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.div(1024f)
+
+        val totalPss = Regex("""(?m)^\s*TOTAL\s+PSS:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.div(1024f)
+            ?: Regex("""(?m)^\s*TOTAL:\s*(\d+)""").find(output)?.groupValues?.getOrNull(1)?.toFloatOrNull()?.div(1024f)
+        val javaHeap = valueFor("Java Heap")
+        val nativeHeap = valueFor("Native Heap")
+        val code = valueFor("Code")
+        val stack = valueFor("Stack")
+        val graphics = valueFor("Graphics")
+        val privateOther = valueFor("Private Other")
+        val system = valueFor("System")
+        if (javaHeap == null && nativeHeap == null && totalPss == null) return null
+        return MeminfoBreakdown(
+            packageName = packageName,
+            javaHeapMb = javaHeap,
+            nativeHeapMb = nativeHeap,
+            codeMb = code,
+            stackMb = stack,
+            graphicsMb = graphics,
+            privateOtherMb = privateOther,
+            systemMb = system,
+            totalPssMb = totalPss,
+        )
+    }
+
+    // ---- B.4: dumpsys batterystats summary -------------------------------------------------
+
+    private val wakelockRegex = Regex("""Wake lock\s+(\S+).*?:\s*([\w. ]+?)\s+realtime(?:\s*\((\d+)\s*times?\))?""", RegexOption.IGNORE_CASE)
+    private val alarmRegex = Regex("""Alarm\s+(\S+):\s*(\d+)\s*times?""", RegexOption.IGNORE_CASE)
+    private val jobRegex = Regex("""Job\s+(\S+).*?:\s*([\w. ]+?)\s+realtime(?:\s*\((\d+)\s*times?\))?""", RegexOption.IGNORE_CASE)
+    private val durationRegex = Regex("""(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\s*(?:(\d+)ms)?""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Summarizes `dumpsys batterystats --charged [pkg]` into wakelock/alarm/job tables plus an
+     * estimated per-package power-drain list. Does not attempt a Battery Historian-style timeline
+     * — a sorted table answering "what is holding a wakelock" is the goal (§B.4).
+     */
+    fun parseBatteryStatsSummary(output: String, packageName: String? = null): BatteryStatsSummary {
+        val wakelocks = mutableListOf<BatteryStatsWakelock>()
+        val alarms = mutableListOf<BatteryStatsAlarm>()
+        val jobs = mutableListOf<BatteryStatsJob>()
+        val drain = mutableListOf<BatteryStatsDrain>()
+
+        output.lineSequence().map { it.trim() }.forEach { line ->
+            wakelockRegex.find(line)?.let { m ->
+                wakelocks += BatteryStatsWakelock(
+                    name = m.groupValues[1],
+                    packageName = packageName,
+                    heldMillis = parseDurationToMillis(m.groupValues[2]),
+                    count = m.groupValues[3].toIntOrNull() ?: 1,
+                )
+                return@forEach
+            }
+            jobRegex.find(line)?.let { m ->
+                jobs += BatteryStatsJob(
+                    name = m.groupValues[1],
+                    packageName = packageName,
+                    durationMillis = parseDurationToMillis(m.groupValues[2]),
+                    count = m.groupValues[3].toIntOrNull() ?: 1,
+                )
+                return@forEach
+            }
+            alarmRegex.find(line)?.let { m ->
+                alarms += BatteryStatsAlarm(name = m.groupValues[1], packageName = packageName, count = m.groupValues[2].toIntOrNull() ?: 0)
+                return@forEach
+            }
+        }
+
+        var inPowerSection = false
+        output.lineSequence().forEach { rawLine ->
+            if (rawLine.contains("Estimated power use", ignoreCase = true)) {
+                inPowerSection = true
+                return@forEach
+            }
+            if (!inPowerSection) return@forEach
+            val trimmed = rawLine.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("All ") || trimmed.startsWith("Statistics")) {
+                inPowerSection = false
+                return@forEach
+            }
+            val match = Regex("""^([\w.]+)\s*:\s*([\d.]+)""").find(trimmed) ?: return@forEach
+            val label = match.groupValues[1]
+            if (label.equals("Capacity", true) || label.equals("Computed", true) ||
+                label.equals("Actual", true) || label.equals("Screen", true) || label.equals("Uid", true)
+            ) {
+                return@forEach
+            }
+            drain += BatteryStatsDrain(packageName = label, percent = match.groupValues[2].toFloatOrNull() ?: 0f)
+        }
+
+        return BatteryStatsSummary(wakelocks = wakelocks, alarms = alarms, jobs = jobs, drain = drain, raw = output)
+    }
+
+    private fun parseDurationToMillis(text: String): Long {
+        val match = durationRegex.find(text) ?: return 0L
+        val hours = match.groupValues[1].toLongOrNull() ?: 0L
+        val minutes = match.groupValues[2].toLongOrNull() ?: 0L
+        val seconds = match.groupValues[3].toLongOrNull() ?: 0L
+        val millis = match.groupValues[4].toLongOrNull() ?: 0L
+        return hours * 3_600_000L + minutes * 60_000L + seconds * 1_000L + millis
+    }
+
     private fun parseLevel(value: String): LogLevel = when (value) {
         "V" -> LogLevel.Verbose
         "D" -> LogLevel.Debug
@@ -435,6 +626,271 @@ object AndroidParsers {
             'M' -> value
             'K' -> value / 1024f
             else -> value / 1024f
+        }
+    }
+
+    // ---- D: view hierarchy inspector -----------------------------------------------------
+
+    /**
+     * One raw `View.toString()` line under `dumpsys activity top`'s "View Hierarchy:" section,
+     * e.g. `android.widget.TextView{97c2680 V.ED..... ........ 60,50-605,120 #1020016 android:id/title}`.
+     * [left]/[top]/[right]/[bottom] are in the *parent's* coordinate space, matching
+     * `View.mLeft/mTop/mRight/mBottom` — [parseActivityTopHierarchy] accumulates them into
+     * screen-absolute bounds while walking the indentation-derived tree.
+     */
+    private data class RawActivityViewLine(
+        val className: String,
+        val hashCode: String,
+        val flags1: String,
+        val flags2: String,
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int,
+        val resourceId: String?,
+        val resourceName: String?,
+        val aid: String?,
+        val trailing: String?,
+    )
+
+    private class RawActivityViewNode(val line: RawActivityViewLine) {
+        val children = mutableListOf<RawActivityViewNode>()
+    }
+
+    private val activityTopBoundsRegex = Regex("""^(-?\d+),(-?\d+)-(-?\d+),(-?\d+)$""")
+
+    private fun parseActivityTopViewLine(trimmed: String): RawActivityViewLine? {
+        val braceStart = trimmed.indexOf('{')
+        val braceEnd = trimmed.lastIndexOf('}')
+        if (braceStart <= 0 || braceEnd <= braceStart) return null
+        val className = trimmed.substring(0, braceStart)
+        val inner = trimmed.substring(braceStart + 1, braceEnd)
+        val trailingRaw = trimmed.substring(braceEnd + 1).trim()
+        val trailing = trailingRaw.removePrefix("[").removeSuffix("]").takeIf { it.isNotBlank() }
+
+        val tokens = inner.split(' ').filter { it.isNotBlank() }
+        if (tokens.size < 4) return null
+        val hashCode = tokens[0]
+        val flags1 = tokens[1]
+        val flags2 = tokens[2]
+        val bounds = activityTopBoundsRegex.find(tokens[3]) ?: return null
+        val (left, top, right, bottom) = bounds.destructured
+
+        var resourceId: String? = null
+        var resourceName: String? = null
+        var aid: String? = null
+        var index = 4
+        while (index < tokens.size) {
+            val token = tokens[index]
+            when {
+                token.startsWith("aid=") -> {
+                    aid = token.removePrefix("aid=")
+                    index++
+                }
+                token.startsWith("#") -> {
+                    resourceId = token.removePrefix("#")
+                    val next = tokens.getOrNull(index + 1)
+                    if (next != null && !next.startsWith("aid=")) {
+                        resourceName = next
+                        index += 2
+                    } else {
+                        index++
+                    }
+                }
+                else -> index++
+            }
+        }
+
+        return RawActivityViewLine(
+            className = className,
+            hashCode = hashCode,
+            flags1 = flags1,
+            flags2 = flags2,
+            left = left.toInt(),
+            top = top.toInt(),
+            right = right.toInt(),
+            bottom = bottom.toInt(),
+            resourceId = resourceId,
+            resourceName = resourceName,
+            aid = aid,
+            trailing = trailing,
+        )
+    }
+
+    /**
+     * Parses the first "View Hierarchy:" block of `dumpsys activity top` into an [AccessibilityNode]
+     * tree carrying view classes, ids, and flags that `uiautomator dump` collapses out of Compose
+     * semantics trees (§D.3, tier 2). Node identity, text, and content-description are not
+     * available from this source — [mergeViewHierarchy] enriches a uiautomator tree with it instead
+     * of replacing it, except when the caller explicitly asks for the unmerged tree.
+     */
+    fun parseActivityTopHierarchy(output: String): AccessibilityNode? {
+        val lines = output.lines()
+        val headerIndex = lines.indexOfFirst { it.trim() == "View Hierarchy:" }
+        if (headerIndex == -1) return null
+        val headerIndent = lines[headerIndex].indexOfFirst { it != ' ' }.let { if (it < 0) 0 else it }
+
+        val roots = mutableListOf<RawActivityViewNode>()
+        val stack = ArrayDeque<Pair<Int, RawActivityViewNode>>()
+        for (lineIndex in (headerIndex + 1) until lines.size) {
+            val rawLine = lines[lineIndex]
+            if (rawLine.isBlank()) continue
+            val indent = rawLine.indexOfFirst { it != ' ' }.let { if (it < 0) rawLine.length else it }
+            if (indent <= headerIndent) break
+            val parsed = parseActivityTopViewLine(rawLine.trim()) ?: continue
+            val node = RawActivityViewNode(parsed)
+            while (stack.isNotEmpty() && stack.last().first >= indent) stack.removeLast()
+            if (stack.isEmpty()) roots += node else stack.last().second.children += node
+            stack.addLast(indent to node)
+        }
+        val rawRoot = roots.firstOrNull() ?: return null
+
+        var idCounter = 0
+        fun build(raw: RawActivityViewNode, parentAbsLeft: Int, parentAbsTop: Int): AccessibilityNode {
+            val line = raw.line
+            val absLeft = parentAbsLeft + line.left
+            val absTop = parentAbsTop + line.top
+            val absRight = parentAbsLeft + line.right
+            val absBottom = parentAbsTop + line.bottom
+            val id = "activity-top.${idCounter++}"
+            return AccessibilityNode(
+                id = id,
+                className = line.className,
+                resourceId = line.resourceName,
+                text = null,
+                contentDescription = null,
+                bounds = "[$absLeft,$absTop][$absRight,$absBottom]",
+                clickable = line.flags1.getOrNull(6) == 'C',
+                longClickable = line.flags1.getOrNull(7) == 'L',
+                focusable = line.flags1.getOrNull(1) == 'F',
+                focused = line.flags2.getOrNull(1) == 'F',
+                enabled = line.flags1.getOrNull(2) == 'E',
+                visible = line.flags1.getOrNull(0) == 'V',
+                attributes = buildMap {
+                    put("view-hash", line.hashCode)
+                    put("view-flags1", line.flags1)
+                    put("view-flags2", line.flags2)
+                    line.resourceId?.let { put("view-resource-id", it) }
+                    line.aid?.let { put("view-aid", it) }
+                    line.trailing?.let { put("view-activity", it) }
+                },
+                children = raw.children.map { build(it, absLeft, absTop) },
+            )
+        }
+        return build(rawRoot, 0, 0)
+    }
+
+    /**
+     * Parses `mScrollY` values from `dumpsys activity top`, keyed by the view instance hash
+     * (`ScrollView{abc123` → `abc123`). Used to correct Compose scroll-container overlays.
+     */
+    fun parseActivityTopScrollOffsets(output: String): Map<String, Int> {
+        val result = mutableMapOf<String, Int>()
+        var currentHash: String? = null
+        val viewLine = Regex("""\b([\w.$]+)\{([0-9a-f]+)""")
+        val scrollYRegex = Regex("""mScrollY=(\d+)""")
+        for (line in output.lines()) {
+            viewLine.find(line)?.let { currentHash = it.groupValues[2] }
+            scrollYRegex.find(line)?.let { match ->
+                currentHash?.let { hash -> result[hash] = match.groupValues[1].toInt() }
+            }
+        }
+        return result
+    }
+
+    fun attachScrollOffsetsFromActivityTop(output: String, root: AccessibilityNode?): AccessibilityNode? {
+        if (root == null) return null
+        val offsetsByHash = parseActivityTopScrollOffsets(output)
+        fun attach(node: AccessibilityNode): AccessibilityNode {
+            val hash = node.attributes["view-hash"]
+            val scrollY = hash?.let(offsetsByHash::get)
+            val attrs = if (scrollY != null) node.attributes + ("scroll-y" to scrollY.toString()) else node.attributes
+            return node.copy(attributes = attrs, children = node.children.map(::attach))
+        }
+        return attach(root)
+    }
+
+    /**
+     * Merges a `uiautomator dump` tree with a [parseActivityTopHierarchy] tree by matching nodes
+     * on exact bounds + class name (§D.3's "technical core"). Matched view-tree attributes (raw
+     * flags, native hash, `aid`) are copied into the uiautomator node's `attributes` map with a
+     * `view-` prefix, leaving [AccessibilityNode]'s typed fields (from uiautomator) untouched. A
+     * uiautomator node with no bounds/class match keeps its own attributes unchanged. Pure and
+     * order-independent: each activity-top node is used for at most one match.
+     */
+    fun mergeViewHierarchy(uiautomatorRoot: AccessibilityNode?, activityTopRoot: AccessibilityNode?): AccessibilityNode? {
+        if (activityTopRoot == null) return uiautomatorRoot
+        if (uiautomatorRoot == null) return activityTopRoot
+
+        val flatActivityNodes = mutableListOf<AccessibilityNode>()
+        fun flatten(node: AccessibilityNode) {
+            flatActivityNodes += node
+            node.children.forEach(::flatten)
+        }
+        flatten(activityTopRoot)
+        val used = BooleanArray(flatActivityNodes.size)
+
+        fun bestMatchIndex(node: AccessibilityNode): Int {
+            var bestIndex = -1
+            for (candidateIndex in flatActivityNodes.indices) {
+                if (used[candidateIndex]) continue
+                val candidate = flatActivityNodes[candidateIndex]
+                if (candidate.bounds != node.bounds) continue
+                if (bestIndex == -1) bestIndex = candidateIndex
+                if (candidate.className == node.className) {
+                    bestIndex = candidateIndex
+                    break
+                }
+            }
+            return bestIndex
+        }
+
+        fun mergeNode(node: AccessibilityNode): AccessibilityNode {
+            val mergedChildren = node.children.map(::mergeNode)
+            val matchIndex = bestMatchIndex(node)
+            if (matchIndex == -1) return node.copy(children = mergedChildren)
+            used[matchIndex] = true
+            val extraAttrs = flatActivityNodes[matchIndex].attributes.filterKeys { it.startsWith("view-") || it == "scroll-y" }
+            return node.copy(
+                attributes = node.attributes + extraAttrs + mapOf("view-matched" to "true"),
+                children = mergedChildren,
+            )
+        }
+        return mergeNode(uiautomatorRoot)
+    }
+
+    private val dumpsysWindowHeaderRegex = Regex("""^\s*Window #(\d+) Window\{[0-9a-fA-F]+(?: u-?\d+)? (.*)}:\s*$""")
+    private val dumpsysWindowFrameRegex = Regex("""\bframe=(\[-?\d+,-?\d+]\[-?\d+,-?\d+])""")
+    private val dumpsysWindowTypeRegex = Regex("""\bty=([A-Za-z_]+)""")
+    private val dumpsysWindowDisplayIdRegex = Regex("""\bmDisplayId=(-?\d+)""")
+    private val dumpsysWindowVisibleRegex = Regex("""\bisVisible=(true|false)""")
+    private val dumpsysWindowOnScreenRegex = Regex("""\bisOnScreen=(true|false)""")
+
+    /**
+     * Parses `dumpsys window` / `dumpsys window windows`'s window list into z-ordered
+     * [WindowLayerInfo] entries for the layer view (§D.3/D.4). Entries are returned in the
+     * dump's own order, which lists windows front-to-back — index 0 is topmost.
+     */
+    fun parseDumpsysWindow(output: String): List<WindowLayerInfo> {
+        val lines = output.lines()
+        val headers = lines.withIndex().mapNotNull { (index, line) -> dumpsysWindowHeaderRegex.find(line)?.let { index to it } }
+        return headers.mapIndexed { position, (lineIndex, match) ->
+            val index = match.groupValues[1].toIntOrNull() ?: position
+            val title = match.groupValues[2].trim()
+            val blockEnd = headers.getOrNull(position + 1)?.first ?: lines.size
+            val block = lines.subList((lineIndex + 1).coerceAtMost(lines.size), blockEnd).joinToString("\n")
+            val packageName = title.substringBefore('/', missingDelimiterValue = "")
+                .takeIf { title.contains('/') && it.isNotBlank() }
+            WindowLayerInfo(
+                index = index,
+                title = title,
+                packageName = packageName,
+                displayId = dumpsysWindowDisplayIdRegex.find(block)?.groupValues?.getOrNull(1)?.toIntOrNull(),
+                bounds = dumpsysWindowFrameRegex.find(block)?.groupValues?.getOrNull(1),
+                windowType = dumpsysWindowTypeRegex.find(block)?.groupValues?.getOrNull(1),
+                isVisible = dumpsysWindowVisibleRegex.find(block)?.groupValues?.getOrNull(1)?.toBoolean() ?: false,
+                isOnScreen = dumpsysWindowOnScreenRegex.find(block)?.groupValues?.getOrNull(1)?.toBoolean() ?: false,
+            )
         }
     }
 }

@@ -256,6 +256,10 @@ data class AgentQueuedFollowUp(
     val text: String,
     val imagePaths: List<String> = emptyList(),
     val skills: List<AgentSkill> = emptyList(),
+    /** Managed evidence bundle ids (§4) attached to this follow-up, if any. */
+    val contextBundleIds: List<String> = emptyList(),
+    /** Where this follow-up's contextual action was triggered from, if any. */
+    val provenance: AgentContextualProvenance? = null,
 )
 
 /** One selectable answer supplied by an agent when it needs a product decision. */
@@ -366,6 +370,16 @@ data class AgentTask(
     val latestPrompt: String? = null,
     /** Final provider response for non-plan workflow stages and completed chats. */
     val completedResultText: String? = null,
+    /** Managed evidence bundle ids (§4) attached to this task, if any. Never arbitrary paths. */
+    val contextBundleIds: List<String> = emptyList(),
+    /** Where this task's contextual action was triggered from, if launched from one. */
+    val provenance: AgentContextualProvenance? = null,
+    /**
+     * Desktop-only: prompt text pointing at [contextBundleIds] after they were copied into this
+     * task's local evidence directory. Recomputed at each launch/resume, so it does not need to
+     * survive a restart — null simply omits the hint until the next materialization.
+     */
+    val evidenceLocalPathsHint: String? = null,
 ) {
     /** True only before launch — both [status] and [startedAtMillis] are still unset. */
     val isQueued: Boolean get() = status == null && startedAtMillis == null
@@ -489,6 +503,10 @@ data class AgentTaskDraft(
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
     val workflowAttempt: Int? = null,
+    /** Managed evidence bundle ids (§4) to attach to the launched task, if any. */
+    val contextBundleIds: List<String> = emptyList(),
+    /** Where this task's contextual action was triggered from, if launched from one. */
+    val provenance: AgentContextualProvenance? = null,
 )
 
 /** Last-used launch settings, stored independently for each provider. */
@@ -707,8 +725,31 @@ private fun promptWithPlanModeHint(text: String, planMode: Boolean): String = if
     text
 }
 
+/** Andy never resolves bundle ids to paths here — that happens at launch time, per adapter/cwd. */
+fun promptWithEvidenceHint(text: String, contextBundleIds: List<String>): String = if (contextBundleIds.isEmpty()) {
+    text
+} else {
+    buildString {
+        append(text)
+        append("\n\nManaged evidence bundle")
+        if (contextBundleIds.size != 1) append('s')
+        append(" (redacted investigation context under ~/.andy/evidence/):\n")
+        contextBundleIds.forEach { append("- ").append(it).append('\n') }
+    }.trimEnd()
+}
+
+/** Appends resolved local evidence paths (desktop-only) after they were copied for this launch. */
+fun promptWithLocalEvidencePathsHint(text: String, hint: String?): String =
+    if (hint.isNullOrBlank()) text else text + hint
+
 fun AgentTask.promptForCli(): String = promptWithImageHints(
-    promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(continuationPrompt ?: implementationPrompt ?: prompt, skills), planMode), goal),
+    promptWithLocalEvidencePathsHint(
+        promptWithEvidenceHint(
+            promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(continuationPrompt ?: implementationPrompt ?: prompt, skills), planMode), goal),
+            contextBundleIds,
+        ),
+        evidenceLocalPathsHint,
+    ),
     imagePaths,
 )
 

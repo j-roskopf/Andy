@@ -24,7 +24,6 @@ import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.IosTargetRegistry
 import app.andy.service.OpenAgentTaskRequest
-import app.andy.ui.accessibility.AccessibilityScreen
 import app.andy.ui.actions.ActionsScreen
 import app.andy.ui.agents.AgentsScreen
 import app.andy.ui.apps.AppsScreen
@@ -38,6 +37,7 @@ import app.andy.ui.design.DesignScreen
 import app.andy.ui.devices.DevicesScreen
 import app.andy.ui.files.FilesScreen
 import app.andy.ui.hostfiles.HostFilesScreen
+import app.andy.ui.inspector.InspectorScreen
 import app.andy.ui.intents.IntentsScreen
 import app.andy.ui.live.LiveScreen
 import app.andy.ui.logcat.LogcatScreen
@@ -83,6 +83,12 @@ internal fun AndyShell(
 ) {
     val state = rememberShellState(services)
     val capabilities = services.capabilities
+    // OS notification deep links and in-app contextual launches share one open-chat request.
+    val effectiveOpenAgentTask = requestedOpenAgentTask ?: state.pendingAgentTaskOpen
+    val consumeOpenAgentTask = {
+        state.consumeAgentTaskOpen()
+        onOpenAgentTaskConsumed()
+    }
     val runningActions by if (capabilities.hostAutomation) {
         services.actionRuns.running.collectAsState()
     } else {
@@ -116,9 +122,14 @@ internal fun AndyShell(
         }
     }
 
-    val visibleDestinations = remember(capabilities.destinations, state.workspaceState.disabledDestinations) {
-        capabilities.destinations.filter {
-            !it.isToggleableInSidebar() || it.name !in state.workspaceState.disabledDestinations
+    val visibleDestinations = remember(
+        capabilities.destinations,
+        state.workspaceState.disabledDestinations,
+        state.isIosSelection,
+    ) {
+        capabilities.destinations.filter { destination ->
+            (!destination.isToggleableInSidebar() || destination.name !in state.workspaceState.disabledDestinations) &&
+                !(state.isIosSelection && destination == AndyDestination.Controls)
         }
     }
     LaunchedEffect(state.destination, visibleDestinations) {
@@ -215,6 +226,8 @@ internal fun AndyShell(
         // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
         // Modal dialogs share the same rule as chrome menus: interop surfaces paint over them.
         LocalSuppressHeavyweightSurfaces provides (state.chromeMenuExpanded || ModalDialogRegistry.anyOpen),
+        LocalOpenAgentTask provides state::openAgentTask,
+        LocalOpenInvestigation provides state::openInvestigation,
     ) {
     Box(
         Modifier.fillMaxSize().background(Ink)
@@ -266,6 +279,7 @@ internal fun AndyShell(
                     devices = state.devices,
                     iosTargets = state.iosTargets,
                     selectedIosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
+                    deviceLabels = state.workspaceState.deviceLabels,
                     onSelectDevice = { state.selectDevice(it) },
                     onSelectIosTarget = { state.selectIosTarget(it) },
                     onRefresh = { state.refreshDevices() },
@@ -334,9 +348,9 @@ internal fun AndyShell(
                             active = actionsActive,
                             initialWorkflowTaskId = initialProjectTaskId,
                             initialCanvasLabel = initialProjectTab,
-                            requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
-                            requestedProjectId = requestedOpenAgentTask?.projectId,
-                            onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
+                            requestedAgentTaskId = effectiveOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
+                            requestedProjectId = effectiveOpenAgentTask?.projectId,
+                            onRequestedAgentTaskConsumed = consumeOpenAgentTask,
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
@@ -345,8 +359,8 @@ internal fun AndyShell(
                     RetainedDestination(active = agentsActive) {
                         AgentsScreen(
                             services = services, active = agentsActive,
-                            requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
-                            onRequestedTaskConsumed = onOpenAgentTaskConsumed,
+                            requestedTaskId = effectiveOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
+                            onRequestedTaskConsumed = consumeOpenAgentTask,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {
@@ -410,6 +424,9 @@ internal fun AndyShell(
                             allowAvdManagement = capabilities.avdManagement,
                             allowIosManagement = capabilities.iosDeviceManagement,
                             allowWifiPairing = capabilities.wifiPairing,
+                            transfer = state.transfer,
+                            deviceLabels = state.workspaceState.deviceLabels,
+                            onSetDeviceLabel = { serial, label -> state.setDeviceLabel(serial, label) },
                         )
                         AndyDestination.Catalog -> CatalogScreen(services.avd)
                         AndyDestination.Live -> LiveScreen(
@@ -451,12 +468,13 @@ internal fun AndyShell(
                             onPaneChange = { listWidth, detailsHeight -> state.updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneHeight = detailsHeight) } },
                         )
                         AndyDestination.Logcat -> LogcatScreen(
-                            logcat = services.logcat,
-                            appsService = services.apps,
+                            services = services,
                             serial = state.selectedSerial,
                             state = state.logcatState,
                             selectedPackage = state.workspaceState.selectedPackage,
-                            onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } }
+                            onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
+                            workspaceState = state.workspaceState,
+                            onUpdateWorkspace = { state.updateWorkspace(it) },
                         )
                         AndyDestination.Intents -> IntentsScreen(
                             services = services,
@@ -515,6 +533,8 @@ internal fun AndyShell(
                             serial = state.selectedSerial,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             avd = services.avd,
+                            apps = services.apps,
+                            hostFiles = services.hostFiles,
                             hingeAngle = state.foldableHingeAngle,
                             onHingeAngleChange = state::updateFoldableHingeAngle,
                         )
@@ -525,16 +545,22 @@ internal fun AndyShell(
                             state.workspaceState.designDevicePaneWidth,
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(designDevicePaneWidth = width) } },
                         )
-                        AndyDestination.Accessibility -> AccessibilityScreen(
-                            services,
-                            state.selectedSerial,
-                            state.devices.firstOrNull { it.serial == state.selectedSerial },
-                            state.workspaceState.accessibilityTreePaneWidth,
-                            onTreePaneWidthChange = { width -> state.updateWorkspace { it.copy(accessibilityTreePaneWidth = width) } },
-                            state = state.accessibilityState
+                        AndyDestination.Inspector -> {
+                            InspectorScreen(
+                                services,
+                                state.selectedSerial,
+                                state.devices.firstOrNull { it.serial == state.selectedSerial },
+                                state.workspaceState.inspectorTreePaneWidth,
+                                onTreePaneWidthChange = { width -> state.updateWorkspace { it.copy(inspectorTreePaneWidth = width) } },
+                                state = state.inspectorState
+                            )
+                        }
+                        AndyDestination.Bugs -> BugsScreen(
+                            services = services,
+                            pendingInvestigation = state.pendingInvestigationOpen,
+                            onPendingInvestigationConsumed = state::consumeInvestigationOpen,
                         )
-                        AndyDestination.Bugs -> BugsScreen(services.bugs)
-                        AndyDestination.Recordings -> BugsScreen(services.bugs, recordings = true)
+                        AndyDestination.Recordings -> BugsScreen(services, recordings = true)
                         AndyDestination.Settings -> SettingsScreen(
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },

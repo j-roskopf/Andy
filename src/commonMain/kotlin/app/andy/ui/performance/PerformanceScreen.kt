@@ -19,12 +19,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,16 +39,26 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.formatDecimal
+import app.andy.formatDisplayDateTime
 import app.andy.model.AndroidDevice
+import app.andy.model.BatteryStatsSummary
+import app.andy.model.HeapDumpInfo
+import app.andy.model.MeminfoBreakdown
 import app.andy.model.PerformanceSample
 import app.andy.model.PerformanceTab
+import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
+import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.PackageSelector
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
+import app.andy.ui.components.TextField
 import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -57,6 +70,7 @@ import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import app.andy.ui.tracing.TracingScreen
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun PerformanceScreen(
@@ -90,6 +104,9 @@ internal fun PerformanceScreen(
             FilterPill("Tracing", selectedTab == PerformanceTab.Tracing, Rust) {
                 onSelectedTabChange(PerformanceTab.Tracing)
             }
+            FilterPill("Memory", selectedTab == PerformanceTab.Memory, Rust) {
+                onSelectedTabChange(PerformanceTab.Memory)
+            }
         }
         Box(Modifier.fillMaxSize().weight(1f)) {
             // Compose only the active tab. Tracing must not realize a heavyweight editor
@@ -120,6 +137,11 @@ internal fun PerformanceScreen(
                     onBufferSizeMbChange = onTracingBufferSizeMbChange,
                     onPresetsPaneWidthChange = onTracingPresetsPaneWidthChange,
                     onLibraryPaneHeightChange = onTracingLibraryPaneHeightChange,
+                )
+                PerformanceTab.Memory -> MemoryTabContent(
+                    services = services,
+                    serial = serial,
+                    active = active,
                 )
             }
         }
@@ -302,5 +324,215 @@ private fun PerformanceChartCard(
             drawPath(linePath, color = lineColor, style = Stroke(width = 2f))
         }
         Text(caption.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+    }
+}
+
+/**
+ * Memory & battery diagnostics (§B.3/B.4): `dumpsys meminfo` breakdown, a heap-dump capture
+ * library shaped like [TracingScreen]'s trace library, and a `dumpsys batterystats` summary.
+ */
+@Composable
+private fun MemoryTabContent(
+    services: AndyServices,
+    serial: String?,
+    active: Boolean,
+) {
+    val scope = rememberCoroutineScope()
+    val copyText = rememberCopyText()
+    var packageName by remember(serial) { mutableStateOf("") }
+    var breakdown by remember { mutableStateOf<MeminfoBreakdown?>(null) }
+    var breakdownError by remember { mutableStateOf<String?>(null) }
+    var heapDumps by remember { mutableStateOf<List<HeapDumpInfo>>(emptyList()) }
+    var capturingHeapDump by remember { mutableStateOf(false) }
+    var heapDumpMessage by remember { mutableStateOf<String?>(null) }
+    var batteryStats by remember { mutableStateOf(BatteryStatsSummary()) }
+    var loadingBattery by remember { mutableStateOf(false) }
+
+    suspend fun refreshMeminfo() {
+        val target = serial
+        if (target == null || packageName.isBlank()) return
+        val result = services.metrics.meminfoBreakdown(target, packageName)
+        breakdown = result
+        breakdownError = if (result == null) "No meminfo data for $packageName (is it running?)" else null
+    }
+
+    suspend fun refreshHeapDumps() {
+        heapDumps = services.heapDump.listCaptures()
+    }
+
+    suspend fun refreshBattery() {
+        val target = serial ?: return
+        loadingBattery = true
+        batteryStats = services.metrics.batteryStatsSummary(target, packageName.takeIf { it.isNotBlank() })
+        loadingBattery = false
+    }
+
+    LaunchedEffect(serial, active) {
+        if (!active || serial == null) return@LaunchedEffect
+        if (packageName.isBlank()) packageName = services.apps.focusedPackage(serial).orEmpty()
+        refreshHeapDumps()
+    }
+
+    LaunchedEffect(serial, packageName, active) {
+        if (active) refreshMeminfo()
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Package", color = TextSecondary, fontSize = 11.sp)
+            PackageSelector(
+                appsService = services.apps,
+                serial = serial,
+                selectedPackage = packageName.takeIf { it.isNotBlank() },
+                onSelectedPackageChange = { selected -> packageName = selected.orEmpty() },
+                modifier = Modifier.width(320.dp),
+                allowAll = false,
+                placeholder = "Select package",
+                buttonPrefix = "",
+                autoSelectForeground = true,
+            )
+            OutlinedButton(onClick = { scope.launch { refreshMeminfo() } }, enabled = serial != null && packageName.isNotBlank()) { Text("Refresh") }
+        }
+
+        PanelCard(Modifier.fillMaxWidth()) {
+            Text("Memory breakdown \u00b7 dumpsys meminfo", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+            val info = breakdown
+            when {
+                breakdownError != null -> Text(breakdownError.orEmpty(), color = TextSecondary, fontSize = 12.sp)
+                info == null -> Text("No data yet.", color = TextSecondary, fontSize = 12.sp)
+                else -> {
+                    MeminfoRow("Java heap", info.javaHeapMb)
+                    MeminfoRow("Native heap", info.nativeHeapMb)
+                    MeminfoRow("Code", info.codeMb)
+                    MeminfoRow("Stack", info.stackMb)
+                    MeminfoRow("Graphics", info.graphicsMb)
+                    MeminfoRow("Private other", info.privateOtherMb)
+                    MeminfoRow("System", info.systemMb)
+                    MeminfoRow("Total PSS", info.totalPssMb, emphasize = true)
+                }
+            }
+        }
+
+        PanelCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Heap dumps", color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Button(
+                    onClick = {
+                        val target = serial ?: return@Button
+                        if (packageName.isBlank()) return@Button
+                        capturingHeapDump = true
+                        heapDumpMessage = null
+                        scope.launch {
+                            val result = services.heapDump.capture(target, packageName, "")
+                            capturingHeapDump = false
+                            result.fold(
+                                onSuccess = { refreshHeapDumps() },
+                                onFailure = { heapDumpMessage = it.message ?: "Heap dump failed" },
+                            )
+                        }
+                    },
+                    enabled = serial != null && packageName.isNotBlank() && !capturingHeapDump,
+                ) { Text(if (capturingHeapDump) "Capturing\u2026" else "Capture heap dump") }
+            }
+            heapDumpMessage?.let { Text(it, color = Red, fontSize = 12.sp) }
+            if (heapDumps.isEmpty()) {
+                Text("No heap dumps captured yet.", color = TextSecondary, fontSize = 12.sp)
+            } else {
+                TableHeader(listOf("Package" to 1.dp, "Device" to 120.dp, "When" to 190.dp, "Size" to 80.dp, "" to 170.dp))
+                heapDumps.forEach { dump ->
+                    TableRow {
+                        MonoCell(dump.packageName, 1.dp, TextPrimary, Modifier.weight(1f))
+                        MonoCell(dump.deviceLabel ?: dump.serial, 120.dp, TextSecondary)
+                        MonoCell(formatDisplayDateTime(dump.capturedAtMillis), 190.dp, TextSecondary)
+                        MonoCell(formatHeapSize(dump.sizeBytes), 80.dp, TextSecondary)
+                        Row(Modifier.width(170.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OutlinedButton(onClick = { scope.launch { services.heapDump.revealCapture(dump.id) } }) { Text("Reveal", fontSize = 11.sp) }
+                            OutlinedButton(onClick = { scope.launch { services.heapDump.deleteCapture(dump.id); refreshHeapDumps() } }) { Text("Delete", fontSize = 11.sp) }
+                        }
+                    }
+                }
+            }
+        }
+
+        PanelCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Battery stats \u00b7 dumpsys batterystats", color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                OutlinedButton(onClick = { scope.launch { refreshBattery() } }, enabled = serial != null) {
+                    Text(if (loadingBattery) "Loading\u2026" else "Refresh")
+                }
+                OutlinedButton(onClick = { copyText(batteryStats.raw) }, enabled = batteryStats.raw.isNotBlank()) { Text("Copy raw") }
+            }
+            if (batteryStats.wakelocks.isEmpty() && batteryStats.alarms.isEmpty() && batteryStats.jobs.isEmpty()) {
+                Text(if (loadingBattery) "Loading\u2026" else "No data yet. Tap Refresh.", color = TextSecondary, fontSize = 12.sp)
+            } else {
+                if (batteryStats.wakelocks.isNotEmpty()) {
+                    Text("Wakelocks", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    TableHeader(listOf("Name" to 1.dp, "Held" to 100.dp, "Count" to 70.dp))
+                    batteryStats.wakelocks.forEach { wakelock ->
+                        TableRow {
+                            MonoCell(wakelock.name, 1.dp, TextPrimary, Modifier.weight(1f))
+                            MonoCell(formatDurationMillis(wakelock.heldMillis), 100.dp, TextSecondary)
+                            MonoCell(wakelock.count.toString(), 70.dp, TextSecondary)
+                        }
+                    }
+                }
+                if (batteryStats.alarms.isNotEmpty()) {
+                    Text("Alarms", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+                    TableHeader(listOf("Name" to 1.dp, "Count" to 70.dp))
+                    batteryStats.alarms.forEach { alarm ->
+                        TableRow {
+                            MonoCell(alarm.name, 1.dp, TextPrimary, Modifier.weight(1f))
+                            MonoCell(alarm.count.toString(), 70.dp, TextSecondary)
+                        }
+                    }
+                }
+                if (batteryStats.jobs.isNotEmpty()) {
+                    Text("Jobs", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+                    TableHeader(listOf("Name" to 1.dp, "Duration" to 100.dp, "Count" to 70.dp))
+                    batteryStats.jobs.forEach { job ->
+                        TableRow {
+                            MonoCell(job.name, 1.dp, TextPrimary, Modifier.weight(1f))
+                            MonoCell(formatDurationMillis(job.durationMillis), 100.dp, TextSecondary)
+                            MonoCell(job.count.toString(), 70.dp, TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MeminfoRow(label: String, valueMb: Float?, emphasize: Boolean = false) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = TextSecondary, fontSize = 12.sp)
+        Text(
+            valueMb?.let { "${formatDecimal(it, 1)} MB" } ?: "-",
+            color = if (emphasize) TextPrimary else TextSecondary,
+            fontSize = 12.sp,
+            fontFamily = MonoFont,
+            fontWeight = if (emphasize) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
+}
+
+private fun formatHeapSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> "${bytes / (1024 * 1024)} MB"
+}
+
+private fun formatDurationMillis(millis: Long): String {
+    val totalSeconds = millis / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
     }
 }

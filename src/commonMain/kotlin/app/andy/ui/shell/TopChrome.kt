@@ -73,6 +73,8 @@ internal fun TopChrome(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     selectedIosTarget: IosTarget?,
+    /** Friendly display names keyed by serial/udid (§C.5), shown in the device picker when set. */
+    deviceLabels: Map<String, String> = emptyMap(),
     onSelectDevice: (String) -> Unit,
     onSelectIosTarget: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -117,8 +119,10 @@ internal fun TopChrome(
                 lineHeight = 18.sp,
             )
             Text(
-                selectedIosTarget?.displayName
-                    ?: selectedDevice?.let { "${it.displayName} · API ${it.apiLevel ?: "—"} · ${it.abi ?: "—"}" }
+                selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
+                    ?: selectedDevice?.let {
+                        "${deviceLabels[it.serial] ?: it.displayName} · API ${it.apiLevel ?: "—"} · ${it.abi ?: "—"}"
+                    }
                     ?: "No device selected",
                 color = AndyColors.TextTertiary,
                 fontFamily = DisplayFont,
@@ -176,6 +180,7 @@ internal fun TopChrome(
             selectedDevice = selectedDevice,
             iosTargets = iosTargets,
             selectedIosTarget = selectedIosTarget,
+            deviceLabels = deviceLabels,
             expanded = deviceMenuExpanded,
             onExpandedChange = { deviceMenuExpanded = it },
             onSelect = onSelectDevice,
@@ -319,6 +324,7 @@ private fun DevicePicker(
     selectedDevice: AndroidDevice?,
     iosTargets: List<IosTarget>,
     selectedIosTarget: IosTarget?,
+    deviceLabels: Map<String, String> = emptyMap(),
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onSelect: (String) -> Unit,
@@ -342,7 +348,9 @@ private fun DevicePicker(
             Text("•", color = Green, fontSize = 16.sp)
             Spacer(Modifier.width(AndySpace.Space2))
             Text(
-                selectedIosTarget?.displayName ?: selectedDevice?.displayName ?: "No device",
+                selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
+                    ?: selectedDevice?.let { deviceLabels[it.serial] ?: it.displayName }
+                    ?: "No device",
                 color = TextPrimary,
                 fontFamily = DisplayFont,
                 fontSize = 12.sp,
@@ -366,8 +374,8 @@ private fun DevicePicker(
                     DropdownMenuItem(
                         text = {
                             DeviceMenuRow(
-                                title = device.displayName,
-                                subtitle = null,
+                                title = deviceLabels[device.serial] ?: device.displayName,
+                                subtitle = deviceLabels[device.serial]?.let { device.displayName },
                                 showPopOut = showPopOut,
                                 onPopOut = {
                                     onExpandedChange(false)
@@ -396,7 +404,7 @@ private fun DevicePicker(
                     DropdownMenuItem(
                         text = {
                             DeviceMenuRow(
-                                title = target.displayName,
+                                title = deviceLabels[target.udid] ?: target.displayName,
                                 subtitle = subtitle,
                                 showPopOut = showPopOut,
                                 onPopOut = {

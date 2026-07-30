@@ -861,14 +861,25 @@ function renderMirrorHighlight() {
     highlight.style.display = "none";
     return;
   }
+  const displayWidth = config.boundsDisplayWidth || 0;
+  const displayHeight = config.boundsDisplayHeight || 0;
+  let left = Number(match[1]);
+  let top = Number(match[2]);
+  let right = Number(match[3]);
+  let bottom = Number(match[4]);
+  if (displayWidth > 0 && displayHeight > 0 &&
+      (displayWidth !== config.sourceWidth || displayHeight !== config.sourceHeight)) {
+    const scaleX = config.sourceWidth / displayWidth;
+    const scaleY = config.sourceHeight / displayHeight;
+    left = Math.round(left * scaleX);
+    top = Math.round(top * scaleY);
+    right = Math.round(right * scaleX);
+    bottom = Math.round(bottom * scaleY);
+  }
   const hostRect = host.getBoundingClientRect();
   const canvasRect = canvas.getBoundingClientRect();
   const scaleX = canvasRect.width / config.sourceWidth;
   const scaleY = canvasRect.height / config.sourceHeight;
-  const left = Number(match[1]);
-  const top = Number(match[2]);
-  const right = Number(match[3]);
-  const bottom = Number(match[4]);
   highlight.style.display = "block";
   highlight.style.left = `${canvasRect.left - hostRect.left + left * scaleX}px`;
   highlight.style.top = `${canvasRect.top - hostRect.top + top * scaleY}px`;

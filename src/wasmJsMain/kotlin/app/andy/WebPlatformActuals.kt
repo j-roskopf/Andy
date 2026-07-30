@@ -45,6 +45,7 @@ actual fun HostCodeEditor(
     languageHint: String,
     modifier: Modifier,
     syntaxThemeId: String,
+    initialLine: Int?,
     onTextChange: (String, String) -> Unit,
     onSave: (String, String) -> Unit,
     onClose: () -> Unit,

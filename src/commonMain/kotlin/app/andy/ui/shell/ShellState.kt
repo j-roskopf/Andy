@@ -21,8 +21,10 @@ import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
+import app.andy.service.OpenAgentTaskRequest
+import app.andy.service.OpenInvestigationRequest
 import app.andy.transfer.DeviceTransferCoordinator
-import app.andy.ui.accessibility.AccessibilityState
+import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
 import kotlinx.coroutines.CoroutineScope
@@ -49,12 +51,12 @@ internal class ShellState(
     /** Shared Live/Controls hinge angle for foldable emulator previews (degrees, 0–180). */
     var foldableHingeAngle by mutableStateOf(180f)
         private set
-
     val activeTargetId: String?
         get() = selectedIosUdid ?: selectedSerial
 
     val isIosSelection: Boolean
         get() = selectedIosUdid != null
+
     var workspaceState by mutableStateOf(WorkspaceState())
         private set
     var workspaceLoaded by mutableStateOf(false)
@@ -81,12 +83,18 @@ internal class ShellState(
         private set
     var chromeMenuExpanded by mutableStateOf(false)
         private set
+
+    /** In-app deep links for contextual agent actions (§5), separate from OS-level requests. */
+    var pendingAgentTaskOpen by mutableStateOf<OpenAgentTaskRequest?>(null)
+        private set
+    var pendingInvestigationOpen by mutableStateOf<OpenInvestigationRequest?>(null)
+        private set
     private var startupTargetId: String? = null
     private var startupSelectionResolved = false
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
-    val accessibilityState = AccessibilityState()
+    val inspectorState = InspectorState()
     val transfer = DeviceTransferCoordinator()
 
     fun navigateTo(value: AndyDestination) {
@@ -96,6 +104,26 @@ internal class ShellState(
         } else {
             destination = value
         }
+    }
+
+    /** Opens the chat a contextual action just launched, in whichever destination owns it. */
+    fun openAgentTask(request: OpenAgentTaskRequest) {
+        pendingAgentTaskOpen = request
+        navigateTo(if (request.projectId == null) AndyDestination.Agents else AndyDestination.Actions)
+    }
+
+    fun consumeAgentTaskOpen() {
+        pendingAgentTaskOpen = null
+    }
+
+    /** Returns from a chat to the investigation, event, and playback position behind it. */
+    fun openInvestigation(request: OpenInvestigationRequest) {
+        pendingInvestigationOpen = request
+        navigateTo(AndyDestination.Bugs)
+    }
+
+    fun consumeInvestigationOpen() {
+        pendingInvestigationOpen = null
     }
 
     fun selectDevice(serial: String?) {
@@ -115,6 +143,30 @@ internal class ShellState(
 
     fun updateFoldableHingeAngle(angle: Float) {
         foldableHingeAngle = if (angle.coerceIn(0f, 180f) < 90f) 0f else 180f
+    }
+
+    fun setDeviceLabel(targetId: String, label: String) {
+        updateWorkspace { state ->
+            state.copy(
+                deviceLabels = if (label.isBlank()) {
+                    state.deviceLabels - targetId
+                } else {
+                    state.deviceLabels + (targetId to label.trim())
+                },
+            )
+        }
+    }
+
+    fun setDeviceNote(targetId: String, note: String) {
+        updateWorkspace { state ->
+            state.copy(
+                deviceNotes = if (note.isBlank()) {
+                    state.deviceNotes - targetId
+                } else {
+                    state.deviceNotes + (targetId to note)
+                },
+            )
+        }
     }
 
     private fun persistSelectedTarget() {

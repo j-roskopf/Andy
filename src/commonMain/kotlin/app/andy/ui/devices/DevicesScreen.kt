@@ -69,6 +69,7 @@ import app.andy.model.VirtualDevice
 import app.andy.model.VirtualDeviceType
 import app.andy.service.AndyServices
 import app.andy.service.AvdService
+import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
@@ -85,6 +86,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -123,6 +125,9 @@ internal fun DevicesScreen(
     allowAvdManagement: Boolean = true,
     allowIosManagement: Boolean = false,
     allowWifiPairing: Boolean = true,
+    transfer: DeviceTransferCoordinator? = null,
+    deviceLabels: Map<String, String> = emptyMap(),
+    onSetDeviceLabel: (String, String) -> Unit = { _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(services.avd) { DevicesScreenState(services.avd) }
@@ -288,6 +293,8 @@ internal fun DevicesScreen(
                 onForgetPairedWifi = onForgetPairedWifi,
                 onDisconnectWifi = onDisconnectWifi,
                 refreshAvds = ::refreshAvds,
+                deviceLabels = deviceLabels,
+                onSetDeviceLabel = onSetDeviceLabel,
             )
         }
         if (allowAvdManagement && state.showCreateWizard) {
@@ -407,6 +414,8 @@ private fun AndroidDevicesTab(
     onForgetPairedWifi: (String) -> Unit,
     onDisconnectWifi: (String) -> Unit,
     refreshAvds: () -> Unit,
+    deviceLabels: Map<String, String> = emptyMap(),
+    onSetDeviceLabel: (String, String) -> Unit = { _, _ -> },
 ) {
     fun avdRunningDevice(avd: VirtualDevice): AndroidDevice? =
         devices.firstOrNull {
@@ -434,7 +443,8 @@ private fun AndroidDevicesTab(
         }
         items(filteredDevices, key = { it.serial }) { device ->
             val online = device.state == DeviceConnectionState.Online
-            val rowShape = RoundedCornerShape(AndyRadius.R4)
+            val rowShape = RoundedCornerShape(AndyRadius.Row)
+            var labelDialogOpen by remember(device.serial) { mutableStateOf(false) }
             Row(
                 Modifier.fillMaxWidth()
                     .height(IntrinsicSize.Min)
@@ -444,10 +454,24 @@ private fun AndroidDevicesTab(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.R2)))
+                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)))
                 Spacer(Modifier.width(18.dp))
                 Column(Modifier.width(260.dp)) {
-                    Text(device.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            deviceLabels[device.serial] ?: device.displayName,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "· label",
+                            color = Cyan,
+                            fontSize = 10.sp,
+                            modifier = Modifier.clickable { labelDialogOpen = true },
+                        )
+                    }
                     Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 }
                 Text(
@@ -480,6 +504,17 @@ private fun AndroidDevicesTab(
                         Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
                     }
                 }
+            }
+            if (labelDialogOpen) {
+                SetLabelDialog(
+                    currentLabel = deviceLabels[device.serial].orEmpty(),
+                    subtitle = device.serial,
+                    onDismiss = { labelDialogOpen = false },
+                    onSave = { label ->
+                        onSetDeviceLabel(device.serial, label)
+                        labelDialogOpen = false
+                    },
+                )
             }
         }
         if (allowAvdManagement) {
@@ -530,8 +565,8 @@ private fun AndroidDevicesTab(
                 Row(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -660,8 +695,8 @@ private fun AndroidDevicesTab(
                 Row(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .background(PanelSoft, RoundedCornerShape(AndyRadius.R4))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.R4))
+                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
+                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -825,7 +860,7 @@ private fun IosTargetRow(
         target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
         else -> TextSecondary
     }
-    val rowShape = RoundedCornerShape(AndyRadius.R4)
+    val rowShape = RoundedCornerShape(AndyRadius.Row)
     Row(
         Modifier.fillMaxWidth()
             .height(IntrinsicSize.Min)
@@ -844,7 +879,7 @@ private fun IosTargetRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (liveReady) {
-            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.R2)))
+            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.Control)))
             Spacer(Modifier.width(18.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -934,6 +969,26 @@ private fun CloneAvdDialog(source: VirtualDevice, onDismiss: () -> Unit, onClone
 }
 
 @Composable
+private fun SetLabelDialog(currentLabel: String, subtitle: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var label by remember(currentLabel) { mutableStateOf(currentLabel) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Set label", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(subtitle, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                LabeledField("Friendly name", label, { label = it }, Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(label) }, colors = primaryButtonColors()) { Text("Save") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun CreateVirtualDeviceDialog(
     avd: AvdService,
     onDismiss: () -> Unit,
@@ -970,13 +1025,10 @@ private fun CreateVirtualDeviceDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Column(
-            Modifier
-                .width(820.dp)
-                .background(Panel, RoundedCornerShape(AndyRadius.R3))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+        PanelCard(
+            modifier = Modifier.width(820.dp),
+            contentPadding = PaddingValues(AndySpace.Space7),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space5),
         ) {
             Text("Create virtual device", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Column(Modifier.heightIn(max = 620.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

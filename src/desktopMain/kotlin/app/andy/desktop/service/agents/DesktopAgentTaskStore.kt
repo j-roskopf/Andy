@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
 import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
@@ -16,6 +17,7 @@ import app.andy.model.AgentUserInputOption
 import app.andy.model.AgentUserInputQuestion
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.ContextualActionKind
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
@@ -65,6 +67,9 @@ class DesktopAgentTaskStore(
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
 
     fun launchLogFile(taskId: String): File = File(taskDir(taskId), "launch.log")
+
+    /** Task-local copies of managed evidence bundles (§4), keyed by bundle id under this directory. */
+    fun taskEvidenceDir(taskId: String): File = File(taskDir(taskId), "evidence")
 
     /** Cumulative KetraTerm scrollback (ANSI) for finished-chat replay. */
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
@@ -223,6 +228,45 @@ internal data class AgentTaskDto(
     val workflowStage: String = "",
     val workflowAttempt: Int = 0,
     val completedResultText: String = "",
+    val contextBundleIds: List<String> = emptyList(),
+    val provenance: AgentContextualProvenanceDto? = null,
+)
+
+@Serializable
+internal data class AgentContextualProvenanceDto(
+    val sourceKind: String,
+    val investigationId: String = "",
+    val eventId: String = "",
+    val playbackMillis: Long = 0,
+    val networkExchangeId: String = "",
+    val crashId: String = "",
+    val hierarchyNodeId: String = "",
+    val packageName: String = "",
+)
+
+private fun AgentContextualProvenanceDto.toModel(): AgentContextualProvenance? {
+    val kind = ContextualActionKind.entries.firstOrNull { it.name == sourceKind } ?: return null
+    return AgentContextualProvenance(
+        sourceKind = kind,
+        investigationId = investigationId.takeIf { it.isNotBlank() },
+        eventId = eventId.takeIf { it.isNotBlank() },
+        playbackMillis = playbackMillis.takeIf { it > 0 },
+        networkExchangeId = networkExchangeId.takeIf { it.isNotBlank() },
+        crashId = crashId.takeIf { it.isNotBlank() },
+        hierarchyNodeId = hierarchyNodeId.takeIf { it.isNotBlank() },
+        packageName = packageName.takeIf { it.isNotBlank() },
+    )
+}
+
+private fun AgentContextualProvenance.toDto(): AgentContextualProvenanceDto = AgentContextualProvenanceDto(
+    sourceKind = sourceKind.name,
+    investigationId = investigationId.orEmpty(),
+    eventId = eventId.orEmpty(),
+    playbackMillis = playbackMillis ?: 0,
+    networkExchangeId = networkExchangeId.orEmpty(),
+    crashId = crashId.orEmpty(),
+    hierarchyNodeId = hierarchyNodeId.orEmpty(),
+    packageName = packageName.orEmpty(),
 )
 
 @Serializable
@@ -384,6 +428,8 @@ internal data class AgentQueuedFollowUpDto(
     val imagePaths: List<String> = emptyList(),
     val skillNames: List<String> = emptyList(),
     val skillPaths: List<String> = emptyList(),
+    val contextBundleIds: List<String> = emptyList(),
+    val provenance: AgentContextualProvenanceDto? = null,
 )
 
 @Serializable
@@ -513,6 +559,8 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
                     skills = queued.skillNames.zip(queued.skillPaths)
                     .filter { (_, path) -> path.isNotBlank() }
                     .map { (name, path) -> AgentSkill(name = name, description = "", path = path) },
+                    contextBundleIds = queued.contextBundleIds,
+                    provenance = queued.provenance?.toModel(),
                 )
             }
         } + listOfNotNull(legacyQueuedFollowUp),
@@ -539,6 +587,8 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         contextWindowTokens = contextWindowTokens.takeIf { it > 0 },
         unread = unread,
         archived = archived,
+        contextBundleIds = contextBundleIds,
+        provenance = provenance?.toModel(),
     )
     return recoverInterruptedTaskStatus(task, scrollbackFile(id))
 }
@@ -605,6 +655,8 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
                     imagePaths = queued.imagePaths,
                     skillNames = queued.skills.map { it.name },
                     skillPaths = queued.skills.map { it.path },
+                    contextBundleIds = queued.contextBundleIds,
+                    provenance = queued.provenance?.toDto(),
                 )
             },
             userInputRequest = task.userInputRequest?.toDto(),
@@ -630,6 +682,8 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             contextWindowTokens = task.contextWindowTokens ?: 0,
             unread = task.unread,
             archived = task.archived,
+            contextBundleIds = task.contextBundleIds,
+            provenance = task.provenance?.toDto(),
         )
     },
     projectWorkflows = projectWorkflows.values.map { it.toDto() },

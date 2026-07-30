@@ -1,12 +1,11 @@
 package app.andy.ui.tracing
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -20,8 +19,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.TracePreset
+import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -34,17 +35,12 @@ internal fun TracePresetCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
-    Column(
-        modifier
-            .background(
-                if (selected) AndyColors.OrangeSubtle.copy(alpha = 0.35f) else AndyColors.Neutral900.copy(alpha = 0.55f),
-                shape,
-            )
-            .border(1.dp, if (selected) Rust else Border, shape)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    PanelCard(
+        modifier = modifier.clickable(onClick = onClick),
+        background = if (selected) AndyColors.OrangeSubtle.copy(alpha = 0.35f) else AndyColors.Neutral900.copy(alpha = 0.55f),
+        borderColor = if (selected) Rust else Border,
+        contentPadding = PaddingValues(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
     ) {
         Text(preset.title, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
         Text(preset.subtitle, color = TextSecondary, fontSize = 11.sp, lineHeight = 14.sp)
@@ -56,17 +52,14 @@ internal fun TraceImportConfigCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R2)
-    Box(
-        modifier
-            .height(56.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.45f), shape)
-            .border(1.dp, Border, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.CenterStart,
+    PanelCard(
+        modifier = modifier.height(56.dp).clickable(onClick = onClick),
+        background = AndyColors.Neutral900.copy(alpha = 0.45f),
+        contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = 0.dp),
     ) {
-        Text("Import…", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+            Text("Import…", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        }
     }
 }
 
@@ -82,7 +75,7 @@ internal fun TraceStatusChip(
         fontSize = 11.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier
-            .background(color.copy(alpha = 0.16f), RoundedCornerShape(AndyRadius.R2))
+            .background(color.copy(alpha = 0.16f), RoundedCornerShape(AndyRadius.Control))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }

@@ -47,8 +47,9 @@ internal enum class AndyScreenshotScenario(
     PerformanceSamples("desktop-performance-samples.png", AndyDestination.Performance),
     TracingPerfetto("desktop-tracing-perfetto.png", AndyDestination.Performance),
     DesignOverlay("desktop-design-overlay.png", AndyDestination.Design),
-    AccessibilityHierarchy("desktop-accessibility-hierarchy.png", AndyDestination.Accessibility),
+    InspectorHierarchy("desktop-inspector-hierarchy.png", AndyDestination.Inspector),
     BugsReplay("desktop-bugs-replay.png", AndyDestination.Bugs),
+    RecordingsExport("desktop-recordings-export.png", AndyDestination.Recordings),
     SettingsMcp("desktop-settings-mcp.png", AndyDestination.Settings),
     MirrorPopOut("desktop-mirror-pop-out.png"),
 }

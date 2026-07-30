@@ -110,13 +110,13 @@ private fun ProviderUsagePanel(
     Column(
         Modifier
             .background(Panel)
-            .padding(AndySpace.S4),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.S3),
+            .padding(AndySpace.Space5),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(AndySpace.S2),
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 AgentBadge(agent)
@@ -139,9 +139,9 @@ private fun ProviderUsagePanel(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(PanelSoft, RoundedCornerShape(AndyRadius.R3))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-                    .padding(AndySpace.S3),
+                    .background(PanelSoft, RoundedCornerShape(AndyRadius.Control))
+                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                    .padding(AndySpace.Space4),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
@@ -164,7 +164,7 @@ private fun ProviderUsagePanel(
                 )
             }
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(AndySpace.S2)) {
+            Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
                 Text("live account limits", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 windows.forEach { window -> QuotaWindowRow(window, agentColor(agent), nowMillis) }
             }
@@ -173,7 +173,7 @@ private fun ProviderUsagePanel(
         AndyHorizontalDivider(color = Border)
 
         Text("local activity", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AndySpace.S4)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5)) {
             UsageMetric("24h", overview.runsLast24Hours, overview.tokensLast24Hours, overview.costLast24Hours, Modifier.weight(1f))
             UsageMetric("30d", overview.runsLast30Days, overview.tokensLast30Days, overview.costLast30Days, Modifier.weight(1f))
         }
@@ -212,10 +212,10 @@ private fun AccountAccessPrompt(agent: AgentKind, onEnable: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .background(PanelSoft, RoundedCornerShape(AndyRadius.R3))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.R3))
-            .padding(AndySpace.S3),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.S2),
+            .background(PanelSoft, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .padding(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text("account limits are off", color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp)
         Text(

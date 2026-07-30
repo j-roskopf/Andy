@@ -8,8 +8,7 @@ tick to drive a sustained-frame-rate measurement without changing the probe sign
 Build and install it on a connected device:
 
 ```sh
-./gradlew -p native/andy-mirror/latency-probe assembleDebug
-adb install -r native/andy-mirror/latency-probe/build/outputs/apk/debug/andy-mirror-latency-probe-debug.apk
+./gradlew -p native/andy-mirror/latency-probe installDebug
 adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity
 ```
 

@@ -29,6 +29,39 @@
       "request": "launch",
       "command": "./gradlew wasmJsBrowserDevelopmentRun",
       "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Andy: Install Inspector Demo",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+        "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+      }
+    },
+    {
+      "name": "Andy: Install Latency Probe",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+        "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+      }
+    },
+    {
+      "name": "Andy: Install Demo Apps",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./gradlew -p samples/inspector-demo :app:installDebug && adb shell am start -n app.andy.inspectordemo/.MainActivity && ./gradlew -p native/andy-mirror/latency-probe installDebug && adb shell am start -n app.andy.latencyprobe/.LatencyProbeActivity",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "ANDROID_HOME": "${env:HOME}/Library/Android/sdk",
+        "PATH": "/Applications/scrcpy:${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
+      }
     }
   ]
 }

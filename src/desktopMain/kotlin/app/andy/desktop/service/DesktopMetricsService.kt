@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.parser.AndroidParsers
+import app.andy.model.BatteryStatsSummary
+import app.andy.model.MeminfoBreakdown
 import app.andy.model.PerformanceSample
 import app.andy.service.MetricsService
 import kotlinx.coroutines.delay
@@ -11,6 +13,20 @@ class DesktopMetricsService(
     private val runner: CommandRunner,
     private val devices: DesktopDeviceService,
 ) : MetricsService {
+    override suspend fun meminfoBreakdown(serial: String, packageName: String): MeminfoBreakdown? {
+        val output = devices.shell(serial, listOf("dumpsys", "meminfo", packageName)).stdout
+        return runCatching { AndroidParsers.parseMeminfoBreakdown(output, packageName) }.getOrNull()
+    }
+
+    override suspend fun batteryStatsSummary(serial: String, packageName: String?): BatteryStatsSummary {
+        val args = buildList {
+            add("dumpsys"); add("batterystats"); add("--charged")
+            if (!packageName.isNullOrBlank()) add(packageName)
+        }
+        val output = devices.shell(serial, args).stdout
+        return runCatching { AndroidParsers.parseBatteryStatsSummary(output, packageName) }.getOrDefault(BatteryStatsSummary(raw = output))
+    }
+
     override fun stream(serial: String, packageName: String?): Flow<PerformanceSample> = flow {
         var lastNetworkTotals: Pair<Long, Long>? = null
         var lastNetworkAtMillis: Long? = null
@@ -54,7 +70,13 @@ class DesktopMetricsService(
                     fps = frameTimes.takeLast(30).mapNotNull { it.vsyncGapMillis }.takeIf { it.isNotEmpty() }
                         ?.let { gaps -> 1000f / (gaps.sum() / gaps.size) },
                     batteryPercent = AndroidParsers.parseBatteryPercent(battery),
-                    thermalStatus = null,
+                    thermalStatus = run {
+                        val thermalOut = devices.shell(serial, listOf("cmd", "thermalservice", "get-status")).stdout
+                            .ifBlank {
+                                devices.shell(serial, listOf("dumpsys", "thermalservice")).stdout
+                            }
+                        AndroidParsers.parseThermalStatus(thermalOut)
+                    },
                     networkRxKbps = networkRxKbps,
                     networkTxKbps = networkTxKbps,
                     processes = processes,

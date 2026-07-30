@@ -62,6 +62,8 @@ device; it remains skipped on CI and on Mac-only setups.
 
 Optional helpers: `ANDY_DEVICE_SERIAL`, `ANDY_DEVICE_SMOKE_MAX_SIZE`.
 
+Emulator-state injection (geo fix, battery override/reset), crash list, and heap-dump capture also belong behind this gate when live-device round-trips are added — keep them skipped by default via `OptInGates`.
+
 ```sh
 # Emulator or USB device online first
 ANDY_DEVICE_SMOKE=1 ./gradlew desktopTest --tests '*DesktopMirrorEngineDeviceSmokeTest*'

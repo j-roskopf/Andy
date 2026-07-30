@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.domain.BugReplayFps
+import app.andy.domain.investigationTimelineFor
+import app.andy.domain.toInvestigationEvent
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
 import app.andy.desktop.service.mirror.GpuMirrorSessions
 import app.andy.desktop.service.mirror.NativeMirrorJni
@@ -11,14 +13,28 @@ import app.andy.model.BugArtifact
 import app.andy.model.BugCaptureDraft
 import app.andy.model.BugCaptureStatus
 import app.andy.model.BugReport
+import app.andy.model.CrashRecord
+import app.andy.model.InvestigationCaptureMode
+import app.andy.model.InvestigationEvent
+import app.andy.model.InvestigationReportSchemaVersion
+import app.andy.model.InvestigationTimeline
+import app.andy.model.InvestigationTimelineSchemaVersion
 import app.andy.model.LogLevel
 import app.andy.service.AccessibilityService
+import app.andy.service.ActionConfigStore
+import app.andy.service.AppService
 import app.andy.service.BugService
+import app.andy.service.CommandResult
+import app.andy.service.CrashInspectorService
 import app.andy.service.DeviceService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
+import app.andy.service.MetricsService
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
+import app.andy.service.ProxyService
+import app.andy.service.ViewHierarchyService
+import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +50,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.bytedeco.ffmpeg.global.avcodec
 import org.bytedeco.ffmpeg.global.avutil
 import org.bytedeco.javacv.FFmpegFrameGrabber
@@ -51,6 +68,13 @@ class DesktopBugService(
     private val homeDir: File = File(System.getProperty("user.home")),
     private val devices: DeviceService? = null,
     private val accessibility: AccessibilityService? = null,
+    private val proxy: ProxyService? = null,
+    private val metrics: MetricsService? = null,
+    private val crashInspector: CrashInspectorService? = null,
+    private val viewHierarchy: ViewHierarchyService? = null,
+    private val apps: AppService? = null,
+    private val workspaceStore: WorkspaceStore? = null,
+    private val actionConfig: ActionConfigStore? = null,
 ) : BugService {
     override val status = MutableStateFlow(BugCaptureStatus())
 
@@ -60,6 +84,12 @@ class DesktopBugService(
     private val logs = ArrayDeque<TimestampedLogLine>()
     private val frames = ArrayDeque<TimestampedFrame>()
     private val h264Units = ArrayDeque<TimestampedH264>()
+    private val networkEvents = LinkedHashMap<String, TimestampedNetworkEvent>()
+    private val proxyWarningEvents = LinkedHashMap<String, TimestampedEvent>()
+    private val metricEvents = ArrayDeque<TimestampedEvent>()
+    private val crashRecords = LinkedHashMap<String, CrashRecord>()
+    private val hierarchyEvents = ArrayDeque<TimestampedHierarchyEvent>()
+    private val screenshotEvents = ArrayDeque<TimestampedScreenshotEvent>()
     private var latestH264Config: ByteArray? = null
     private var captureSerial: String? = null
     private var captureDevice: AndroidDevice? = null
@@ -69,6 +99,10 @@ class DesktopBugService(
     private var encodedJob: Job? = null
     private var logJob: Job? = null
     private var screenJob: Job? = null
+    private var networkJob: Job? = null
+    private var warningsJob: Job? = null
+    private var metricsJob: Job? = null
+    private var crashJob: Job? = null
     @Volatile private var lastFrameSampledAtMillis: Long = 0L
 
     private val bugsDir: File get() = File(homeDir, ".andy/bugs")
@@ -144,6 +178,7 @@ class DesktopBugService(
                             "${entry.time} ${entry.pid ?: "-"} ${entry.tid ?: "-"} ${entry.level.name.first()} ${entry.tag}: ${entry.message}",
                         )
                     }
+                    while (logs.size > InvestigationMaxLogLinesInRing) logs.removeFirst()
                     trimLocked(now)
                     publishStatusLocked("Recording last 30s for $serial")
                 }
@@ -153,6 +188,21 @@ class DesktopBugService(
             scope.launch {
                 pollForegroundScreens(serial, deviceService, accessibility)
             }
+        }
+        networkJob = proxy?.let { proxyService ->
+            scope.launch { collectNetworkExchanges(serial, proxyService) }
+        }
+        warningsJob = proxy?.let { proxyService ->
+            scope.launch { collectProxyWarnings(serial, proxyService) }
+        }
+        metricsJob = metrics?.let { metricsService ->
+            scope.launch { collectMetrics(serial, metricsService) }
+        }
+        crashJob = crashInspector?.let { inspector ->
+            scope.launch { pollCrashes(serial, inspector) }
+        }
+        viewHierarchy?.let {
+            scope.launch { captureHierarchySnapshot(serial, "start") }
         }
     }
 
@@ -165,6 +215,14 @@ class DesktopBugService(
         logJob = null
         screenJob?.cancel()
         screenJob = null
+        networkJob?.cancel()
+        networkJob = null
+        warningsJob?.cancel()
+        warningsJob = null
+        metricsJob?.cancel()
+        metricsJob = null
+        crashJob?.cancel()
+        crashJob = null
         synchronized(lock) {
             clearCaptureLocked()
             captureSerial = null
@@ -194,10 +252,33 @@ class DesktopBugService(
         appendAction(kind, label, detail)
     }
 
+    override fun recordScreenshot(pngBytes: ByteArray, label: String, detail: String?) {
+        if (pngBytes.size > InvestigationMaxScreenshotBytes) return
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
+            val serial = captureSerial ?: return
+            val idSuffix = "$now-${screenshotEvents.size}"
+            val event = screenshotEvent(idSuffix, now, label, detail, pngBytes.size)
+            screenshotEvents += TimestampedScreenshotEvent(now, event, pngBytes.copyOf())
+            while (screenshotEvents.size > InvestigationMaxScreenshots) screenshotEvents.removeFirst()
+            trimLocked(now)
+            publishStatusLocked(
+                if (recordingActive) "Recording screen and inputs for $serial" else "Recording last 30s for $serial",
+            )
+        }
+    }
+
+    override suspend fun loadBugTimeline(id: String): InvestigationTimeline? = withContext(Dispatchers.IO) {
+        val file = File(File(bugsDir, id), InvestigationJson.TimelineRelativePath)
+        if (!file.isFile) return@withContext null
+        runCatching { InvestigationJson.readTimeline(file.readText()) }.getOrNull()
+    }
+
     private fun sampleArgbBackup(now: Long, lastCpuFrame: MirrorFrame?) {
-        val sampled = lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
-            ?: copyDecodedArgbBackup()
-            ?: return
+        val sampled = when {
+            recordingActive -> copyDecodedArgbBackup() ?: lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) }
+            else -> lastCpuFrame?.let { it.copy(argb = it.argb.copyOf()) } ?: copyDecodedArgbBackup()
+        } ?: return
         synchronized(lock) {
             if (captureSerial == null) return
             val minInterval = if (recordingActive) {
@@ -249,14 +330,26 @@ class DesktopBugService(
             val screen = readForegroundScreen(serial, devices, accessibility)
             if (screen != null) {
                 val last = previous
-                when {
-                    last == null -> appendAction("screen", "Screen ${screen.shortActivityName}", screen.detail)
-                    last.packageName != screen.packageName -> appendAction("screen", "Launch ${screen.packageName}", screen.detail)
-                    last.activityName != screen.activityName || last.fragments != screen.fragments ->
+                val transitioned = when {
+                    last == null -> {
                         appendAction("screen", "Screen ${screen.shortActivityName}", screen.detail)
-                    last.semanticSignature != null && last.semanticSignature != screen.semanticSignature ->
+                        true
+                    }
+                    last.packageName != screen.packageName -> {
+                        appendAction("screen", "Launch ${screen.packageName}", screen.detail)
+                        true
+                    }
+                    last.activityName != screen.activityName || last.fragments != screen.fragments -> {
+                        appendAction("screen", "Screen ${screen.shortActivityName}", screen.detail)
+                        true
+                    }
+                    last.semanticSignature != null && last.semanticSignature != screen.semanticSignature -> {
                         appendAction("screen", "Screen ${screen.semanticTitle ?: screen.shortActivityName}", screen.detail)
+                        true
+                    }
+                    else -> false
                 }
+                if (transitioned) captureHierarchySnapshot(serial, "screen")
                 previous = screen
             }
             delay(SCREEN_POLL_MILLIS)
@@ -270,6 +363,113 @@ class DesktopBugService(
         val windowOutput = window.stdout.takeIf { window.isSuccess }.orEmpty()
         val semantic = accessibility?.dump(serial)?.toScreenSemantics()
         return parseForegroundScreen(activityOutput, windowOutput, semantic)
+    }
+
+    /** Subscribes to proxy exchanges, deduping by exchange id. Never claims package ownership. */
+    private suspend fun collectNetworkExchanges(serial: String, proxyService: ProxyService) {
+        proxyService.exchanges.collect { exchanges ->
+            val now = System.currentTimeMillis()
+            synchronized(lock) {
+                if (captureSerial == null) return@synchronized
+                exchanges.forEach { exchange ->
+                    val (event, sidecar) = networkEventAndSidecar(exchange)
+                    networkEvents[exchange.id] = TimestampedNetworkEvent(event.atMillis, event, sidecar)
+                }
+                while (networkEvents.size > InvestigationMaxNetworkEvents) {
+                    val oldestKey = networkEvents.keys.firstOrNull() ?: break
+                    networkEvents.remove(oldestKey)
+                }
+                trimLocked(now)
+            }
+        }
+    }
+
+    private suspend fun collectProxyWarnings(serial: String, proxyService: ProxyService) {
+        proxyService.warnings.collect { warnings ->
+            val now = System.currentTimeMillis()
+            synchronized(lock) {
+                if (captureSerial == null) return@synchronized
+                warnings.forEach { warning ->
+                    proxyWarningEvents[warning.id] = TimestampedEvent(warning.atMillis, proxyWarningEvent(warning))
+                }
+                while (proxyWarningEvents.size > InvestigationMaxProxyWarnings) {
+                    val oldestKey = proxyWarningEvents.keys.firstOrNull() ?: break
+                    proxyWarningEvents.remove(oldestKey)
+                }
+                trimLocked(now)
+            }
+        }
+    }
+
+    /** Refreshes the focused package periodically since [MetricsService.stream] cannot re-target mid-collection. */
+    private suspend fun collectMetrics(serial: String, metricsService: MetricsService) {
+        while (currentCoroutineContext().isActive) {
+            val focusedPackage = apps?.let { runCatching { it.focusedPackage(serial) }.getOrNull() }
+            withTimeoutOrNull(InvestigationMetricsRefreshIntervalMillis) {
+                metricsService.stream(serial, focusedPackage).collect { sample ->
+                    val now = System.currentTimeMillis()
+                    synchronized(lock) {
+                        if (captureSerial == null) return@synchronized
+                        metricEvents += TimestampedEvent(sample.timestampMillis, metricSampleEvent(sample))
+                        while (metricEvents.size > InvestigationMaxMetricSamples) metricEvents.removeFirst()
+                        trimLocked(now)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun pollCrashes(serial: String, inspector: CrashInspectorService) {
+        // First poll seeds IDs already on the device so we only emit crashes that appear
+        // during this capture window (dropbox lists historical entries every time).
+        var baselineSeeded = false
+        val seenIds = linkedSetOf<String>()
+        while (currentCoroutineContext().isActive) {
+            val records = runCatching { inspector.listCrashes(serial) }.getOrDefault(emptyList())
+            var newCrashObserved = false
+            synchronized(lock) {
+                if (captureSerial != null) {
+                    if (!baselineSeeded) {
+                        seenIds += records.map { it.id }
+                        baselineSeeded = true
+                    } else {
+                        val observedAt = System.currentTimeMillis()
+                        records.forEach { record ->
+                            if (seenIds.add(record.id) && !crashRecords.containsKey(record.id)) {
+                                crashRecords[record.id] = record.copy(
+                                    timestampMillis = record.timestampMillis.takeIf { it > 0L } ?: observedAt,
+                                )
+                                newCrashObserved = true
+                            }
+                        }
+                        while (crashRecords.size > InvestigationMaxCrashEvents) {
+                            val oldestKey = crashRecords.keys.firstOrNull() ?: break
+                            crashRecords.remove(oldestKey)
+                        }
+                        trimLocked(observedAt)
+                    }
+                }
+            }
+            if (newCrashObserved) captureHierarchySnapshot(serial, "crash")
+            delay(InvestigationCrashPollIntervalMillis)
+        }
+    }
+
+    /** Captured at investigation start, on screen transitions, and when a new crash is observed. */
+    private suspend fun captureHierarchySnapshot(serial: String, reason: String) {
+        val service = viewHierarchy ?: return
+        val now = System.currentTimeMillis()
+        val result = runCatching { service.capture(serial) }.getOrElse { Result.failure(it) }
+        synchronized(lock) {
+            if (captureSerial == null) return@synchronized
+            val (event, sidecar) = result.fold(
+                onSuccess = { snapshot -> hierarchySuccessEventAndSidecar(snapshot, now, reason) },
+                onFailure = { error -> hierarchyErrorEvent(now, reason, error.message ?: error.toString()) to null },
+            )
+            hierarchyEvents += TimestampedHierarchyEvent(now, event, sidecar)
+            while (hierarchyEvents.size > InvestigationMaxHierarchyEvents) hierarchyEvents.removeFirst()
+            trimLocked(now)
+        }
     }
 
     override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = saveCapture(
@@ -313,6 +513,13 @@ class DesktopBugService(
                 frames = frames.toList(),
                 h264Units = h264Units.toList(),
                 h264Config = latestH264Config?.copyOf(),
+                recordingActive = recordingActive,
+                networkEvents = networkEvents.values.toList(),
+                proxyWarningEvents = proxyWarningEvents.values.toList(),
+                metricEvents = metricEvents.toList(),
+                crashRecords = crashRecords.values.toList(),
+                hierarchyEvents = hierarchyEvents.toList(),
+                screenshotEvents = screenshotEvents.toList(),
             )
         }
         val reportId = "$idPrefix$now"
@@ -321,6 +528,7 @@ class DesktopBugService(
         val logFile = File(reportDir, "logcat.txt")
         val actionsFile = File(reportDir, "actions.json")
         val metadataFile = File(reportDir, "metadata.json")
+        val timelineFile = File(reportDir, InvestigationJson.TimelineRelativePath)
 
         logFile.writeText(snapshot.logs.joinToString("\n") { it.line } + if (snapshot.logs.isNotEmpty()) "\n" else "")
         actionsFile.writeText(BugJson.writeActions(snapshot.actions))
@@ -333,17 +541,33 @@ class DesktopBugService(
             )
         }
 
+        // Crash sidecars load lazily here (full stack text) so the polling ring stays light.
+        // A load failure must not fail the save — the event survives without a payloadRef.
+        // Also synthesize Crash events from AndroidRuntime FATAL stacks in logcat — dropbox is
+        // often empty/laggy on production devices, which is exactly when users hit crash buttons.
+        val dropboxCrashResults = snapshot.crashRecords.map { record ->
+            val text = crashInspector?.let { inspector ->
+                runCatching { inspector.loadCrash(snapshot.serial, record.id) }.getOrNull()
+            }
+            record to text?.takeIf { it.isNotBlank() }?.let { crashSidecar(record, it) }
+        }
+        val logcatCrashResults = extractFatalExceptionsFromLogs(snapshot.logs)
+        val crashResults = dropboxCrashResults + logcatCrashResults.map { (record, sidecar) -> record to sidecar }
+        val timeline = buildInvestigationTimeline(snapshot, videoMeta, crashResults, now)
+        timelineFile.writeText(InvestigationJson.writeTimeline(timeline))
+        writeInvestigationSidecars(reportDir, snapshot, crashResults)
+
         val artifacts = listOf(
             BugArtifact("actions.json", "actions.json", "actions", actionsFile.length()),
             BugArtifact("logcat.txt", "logcat.txt", "logcat", logFile.length()),
             BugArtifact("capture.mp4", "capture.mp4", "video", captureFile.length()),
+            BugArtifact("timeline.json", InvestigationJson.TimelineRelativePath, "timeline", timelineFile.length()),
             BugArtifact("metadata.json", "metadata.json", "metadata", null),
         )
-        val windowStart = listOfNotNull(
-            snapshot.actions.minOfOrNull { it.timestampMillis },
-            snapshot.logs.minOfOrNull { it.timestampMillis },
-            videoMeta.startedAtMillis,
-        ).minOrNull() ?: max(snapshot.startedAtMillis, now - WINDOW_MILLIS)
+        val windowStart = timeline.originMillis
+        val appIdentity = runCatching { resolveAppIdentity(apps, snapshot.serial) }.getOrNull()
+        val projectIdentity = runCatching { resolveProjectIdentity(workspaceStore, actionConfig) }.getOrNull()
+        val captureMode = if (snapshot.recordingActive) InvestigationCaptureMode.Recording else InvestigationCaptureMode.Rolling
         val report = BugReport(
             id = reportId,
             title = title,
@@ -363,11 +587,94 @@ class DesktopBugService(
             videoFrameRate = videoMeta.frameRate,
             videoFrameTimestampsMillis = videoMeta.timestampsMillis,
             videoCaptureWarning = videoMeta.warning,
+            schemaVersion = InvestigationReportSchemaVersion,
+            timelineRelativePath = InvestigationJson.TimelineRelativePath,
+            captureMode = captureMode,
+            appIdentity = appIdentity,
+            projectIdentity = projectIdentity,
+            hostIdentity = hostIdentity(),
         )
         metadataFile.writeText(BugJson.writeReport(report.copy(artifacts = artifacts.map {
             if (it.name == "metadata.json") it.copy(sizeBytes = metadataFile.length()) else it
         })))
         report
+    }
+
+    /** Merges all capture rings into a single sorted timeline; a `LogLine` cap keeps the index compact. */
+    private fun buildInvestigationTimeline(
+        snapshot: BugSnapshot,
+        videoMeta: VideoEncodeMeta,
+        crashResults: List<Pair<CrashRecord, CrashEventSidecarDto?>>,
+        now: Long,
+    ): InvestigationTimeline {
+        val actionEvents = snapshot.actions.map { it.toInvestigationEvent() }
+        val logEvents = selectLogLinesForTimeline(snapshot.logs).mapIndexed { index, line ->
+            logLineEvent(index, line.timestampMillis, line.line)
+        }
+        val networkTimelineEvents = snapshot.networkEvents.map { it.event }
+        val warningTimelineEvents = snapshot.proxyWarningEvents.map { it.event }
+        val metricTimelineEvents = snapshot.metricEvents.map { it.event }
+        val crashTimelineEvents = crashResults.map { (record, sidecar) -> crashEvent(record, hasSidecar = sidecar != null) }
+        val hierarchyTimelineEvents = snapshot.hierarchyEvents.map { it.event }
+        val screenshotTimelineEvents = snapshot.screenshotEvents.map { it.event }
+
+        val allEvents = (
+            actionEvents + logEvents + networkTimelineEvents + warningTimelineEvents +
+                metricTimelineEvents + crashTimelineEvents + hierarchyTimelineEvents + screenshotTimelineEvents
+            ).sortedBy(InvestigationEvent::atMillis)
+
+        val originMillis = listOfNotNull(
+            snapshot.actions.minOfOrNull { it.timestampMillis },
+            snapshot.logs.minOfOrNull { it.timestampMillis },
+            snapshot.networkEvents.minOfOrNull { it.atMillis },
+            snapshot.proxyWarningEvents.minOfOrNull { it.atMillis },
+            snapshot.metricEvents.minOfOrNull { it.atMillis },
+            snapshot.crashRecords.minOfOrNull { it.timestampMillis },
+            snapshot.hierarchyEvents.minOfOrNull { it.atMillis },
+            snapshot.screenshotEvents.minOfOrNull { it.atMillis },
+            videoMeta.startedAtMillis,
+        ).minOrNull() ?: max(snapshot.startedAtMillis, now - WINDOW_MILLIS)
+
+        return InvestigationTimeline(
+            schemaVersion = InvestigationTimelineSchemaVersion,
+            originMillis = originMillis,
+            endedAtMillis = now,
+            events = allEvents,
+        )
+    }
+
+    /** Writes sidecars alongside `timeline.json`. Each write is independently best-effort. */
+    private fun writeInvestigationSidecars(
+        reportDir: File,
+        snapshot: BugSnapshot,
+        crashResults: List<Pair<CrashRecord, CrashEventSidecarDto?>>,
+    ) {
+        if (snapshot.networkEvents.isNotEmpty()) {
+            val dir = File(reportDir, InvestigationJson.EventsNetworkDir).apply { mkdirs() }
+            snapshot.networkEvents.forEach { entry ->
+                runCatching { File(dir, "${entry.event.id}.json").writeText(InvestigationJson.writeNetworkSidecar(entry.sidecar)) }
+            }
+        }
+        val crashSidecars = crashResults.mapNotNull { (record, sidecar) -> sidecar?.let { record.id to it } }
+        if (crashSidecars.isNotEmpty()) {
+            val dir = File(reportDir, InvestigationJson.EventsCrashesDir).apply { mkdirs() }
+            crashSidecars.forEach { (crashId, sidecar) ->
+                runCatching { File(dir, "crash-$crashId.json").writeText(InvestigationJson.writeCrashSidecar(sidecar)) }
+            }
+        }
+        val hierarchySidecars = snapshot.hierarchyEvents.mapNotNull { entry -> entry.sidecar?.let { entry.event.id to it } }
+        if (hierarchySidecars.isNotEmpty()) {
+            val dir = File(reportDir, InvestigationJson.EventsHierarchyDir).apply { mkdirs() }
+            hierarchySidecars.forEach { (id, sidecar) ->
+                runCatching { File(dir, "$id.json").writeText(InvestigationJson.writeHierarchySidecar(sidecar)) }
+            }
+        }
+        if (snapshot.screenshotEvents.isNotEmpty()) {
+            val dir = File(reportDir, InvestigationJson.EventsScreenshotsDir).apply { mkdirs() }
+            snapshot.screenshotEvents.forEach { entry ->
+                runCatching { File(dir, "${entry.event.id}.png").writeBytes(entry.pngBytes) }
+            }
+        }
     }
 
     override suspend fun listBugs(): List<BugReport> = withContext(Dispatchers.IO) {
@@ -396,6 +703,56 @@ class DesktopBugService(
         if (target.exists()) target.deleteRecursively()
         copyDirectory(source, target)
         target.absolutePath
+    }
+
+    /**
+     * Folder-based investigation bundle (§4): a duplicate of the report directory plus
+     * `manifest.json` and `summary.md`, so a bundle can be shared without a zip dependency.
+     * `timeline.json` is backfilled for v1 reports that only ever had `actions.json`.
+     */
+    override suspend fun exportInvestigationBundle(id: String): String? = withContext(Dispatchers.IO) {
+        val source = File(bugsDir, id).takeIf { it.isDirectory } ?: return@withContext null
+        val report = readReport(source) ?: return@withContext null
+        val timeline = loadBugTimeline(id) ?: investigationTimelineFor(report, null)
+        val target = File(exportsDir, "$id-bundle")
+        if (target.exists()) target.deleteRecursively()
+        copyDirectory(source, target)
+        val timelineFile = File(target, InvestigationJson.TimelineRelativePath)
+        if (!timelineFile.isFile) timelineFile.writeText(InvestigationJson.writeTimeline(timeline))
+        File(target, "manifest.json").writeText(writeInvestigationBundleManifest(buildInvestigationBundleManifest(report, timeline)))
+        File(target, "summary.md").writeText(buildInvestigationBundleSummaryMarkdown(report, timeline))
+        target.absolutePath
+    }
+
+    override suspend fun revealBug(id: String): CommandResult = withContext(Dispatchers.IO) {
+        val dir = File(bugsDir, id)
+        if (!dir.isDirectory) return@withContext CommandResult.failure("Report not found: $id")
+        val target = File(dir, "capture.mp4").takeIf { it.isFile } ?: dir
+        runCatching {
+            val desktop = java.awt.Desktop.getDesktop()
+            if (java.awt.Desktop.isDesktopSupported() && desktop.isSupported(java.awt.Desktop.Action.BROWSE_FILE_DIR)) {
+                desktop.browseFileDirectory(target)
+            } else {
+                desktop.open(dir)
+            }
+            CommandResult.success(dir.absolutePath)
+        }.getOrElse { CommandResult.failure(it.message ?: "Reveal failed") }
+    }
+
+    override suspend fun bugDirectoryPath(id: String): String? = withContext(Dispatchers.IO) {
+        File(bugsDir, id).takeIf { it.isDirectory }?.absolutePath
+    }
+
+    override suspend fun renameBug(id: String, title: String): CommandResult = withContext(Dispatchers.IO) {
+        val trimmed = title.trim()
+        if (trimmed.isBlank()) return@withContext CommandResult.failure("Title is required")
+        val reportDir = File(bugsDir, id)
+        val report = readReport(reportDir) ?: return@withContext CommandResult.failure("Report not found: $id")
+        val metadataFile = File(reportDir, "metadata.json")
+        runCatching {
+            metadataFile.writeText(BugJson.writeReport(report.copy(title = trimmed)))
+            CommandResult.success(trimmed)
+        }.getOrElse { CommandResult.failure(it.message ?: "Rename failed") }
     }
 
     override fun playbackFrames(id: String, startFrameIndex: Int): Flow<MirrorFrame> = flow {
@@ -861,6 +1218,31 @@ class DesktopBugService(
         while (frames.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) frames.removeFirst()
         while (h264Units.firstOrNull()?.timestampMillis?.let { it < cutoff } == true) h264Units.removeFirst()
         trimArgbBudgetLocked()
+        trimInvestigationRingsLocked(cutoff)
+    }
+
+    private fun trimInvestigationRingsLocked(cutoff: Long) {
+        networkEvents.entries.removeAll { it.value.atMillis < cutoff }
+        proxyWarningEvents.entries.removeAll { it.value.atMillis < cutoff }
+        while (metricEvents.firstOrNull()?.atMillis?.let { it < cutoff } == true) metricEvents.removeFirst()
+        crashRecords.entries.removeAll { it.value.timestampMillis < cutoff }
+        while (hierarchyEvents.firstOrNull()?.atMillis?.let { it < cutoff } == true) hierarchyEvents.removeFirst()
+        while (screenshotEvents.firstOrNull()?.atMillis?.let { it < cutoff } == true) screenshotEvents.removeFirst()
+    }
+
+    /** Test hook: force a trim without waiting on the wall clock. */
+    internal fun forceTrimForTest(now: Long) = synchronized(lock) { trimLocked(now) }
+
+    /** Test hook: current size of each investigation capture ring, for cap/trim assertions. */
+    internal fun investigationRingSizesForTest(): Map<String, Int> = synchronized(lock) {
+        mapOf(
+            "network" to networkEvents.size,
+            "proxyWarnings" to proxyWarningEvents.size,
+            "metrics" to metricEvents.size,
+            "crashes" to crashRecords.size,
+            "hierarchy" to hierarchyEvents.size,
+            "screenshots" to screenshotEvents.size,
+        )
     }
 
     /** Cap ARGB backup so soft-decode fallback cannot grow into multi‑GB rings. */
@@ -877,6 +1259,12 @@ class DesktopBugService(
         logs.clear()
         frames.clear()
         h264Units.clear()
+        networkEvents.clear()
+        proxyWarningEvents.clear()
+        metricEvents.clear()
+        crashRecords.clear()
+        hierarchyEvents.clear()
+        screenshotEvents.clear()
         if (!preserveH264Config) {
             latestH264Config = null
         }
@@ -921,6 +1309,7 @@ class DesktopBugService(
     private fun rollingLogcatFilter() = LogcatFilter(
         levels = setOf(LogLevel.Verbose, LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
         buffers = setOf("main", "system", "crash"),
+        followOnly = true,
     )
 
     private fun MirrorFrame.toBufferedImage(): BufferedImage {
@@ -942,7 +1331,10 @@ class DesktopBugService(
         val width: Int,
         val height: Int,
     )
-    private data class TimestampedLogLine(val timestampMillis: Long, val line: String)
+    private data class TimestampedNetworkEvent(val atMillis: Long, val event: InvestigationEvent, val sidecar: NetworkEventSidecarDto)
+    private data class TimestampedEvent(val atMillis: Long, val event: InvestigationEvent)
+    private data class TimestampedHierarchyEvent(val atMillis: Long, val event: InvestigationEvent, val sidecar: HierarchyEventSidecarDto?)
+    private data class TimestampedScreenshotEvent(val atMillis: Long, val event: InvestigationEvent, val pngBytes: ByteArray)
     private data class VideoEncodeMeta(
         val frameRate: Double,
         val startedAtMillis: Long?,
@@ -974,6 +1366,13 @@ class DesktopBugService(
         val frames: List<TimestampedFrame>,
         val h264Units: List<TimestampedH264>,
         val h264Config: ByteArray?,
+        val recordingActive: Boolean,
+        val networkEvents: List<TimestampedNetworkEvent>,
+        val proxyWarningEvents: List<TimestampedEvent>,
+        val metricEvents: List<TimestampedEvent>,
+        val crashRecords: List<CrashRecord>,
+        val hierarchyEvents: List<TimestampedHierarchyEvent>,
+        val screenshotEvents: List<TimestampedScreenshotEvent>,
     )
 
     companion object {
@@ -984,8 +1383,8 @@ class DesktopBugService(
         private const val ARGB_POLL_MILLIS = 100L
         /** Sparse ARGB backup when the bitstream tap is missing (~2 fps). */
         private const val ARGB_FALLBACK_SAMPLE_INTERVAL_MILLIS = 500L
-        /** Full-rate ARGB backup while an explicit screen recording is active. */
-        private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 66L
+        /** Full-rate ARGB backup while an explicit screen recording is active (~30 fps). */
+        private const val RECORDING_ARGB_SAMPLE_INTERVAL_MILLIS = 33L
         /** Hard cap so even ARGB-only soft decode cannot retain multi‑GB of pixels. */
         private const val ARGB_MAX_BYTES = 96L * 1024L * 1024L
         private const val SCREEN_POLL_MILLIS = 3_000L

@@ -126,7 +126,7 @@ internal fun PackageSelector(
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = TextPrimary,
             ),
-            shape = RoundedCornerShape(AndyRadius.R2),
+            shape = RoundedCornerShape(AndyRadius.Control),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
         ) {
             val selectedApp = installedApps.firstOrNull { it.packageName == selectedPackage }

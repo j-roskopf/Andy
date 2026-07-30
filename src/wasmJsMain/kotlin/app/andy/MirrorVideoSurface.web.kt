@@ -61,6 +61,8 @@ private fun webMirrorSourcePoint(hostId: String, event: Event): Pair<Float, Floa
 
 private fun MirrorOverlay.webConfig(): String = buildJsonObject {
     put("highlightBounds", highlightBounds.orEmpty())
+    put("boundsDisplayWidth", boundsDisplayWidth ?: 0)
+    put("boundsDisplayHeight", boundsDisplayHeight ?: 0)
     put("sourceWidth", sourceWidth ?: 0)
     put("sourceHeight", sourceHeight ?: 0)
     put("showGrid", showGrid)

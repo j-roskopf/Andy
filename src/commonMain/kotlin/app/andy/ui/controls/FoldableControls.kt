@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,8 +29,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -43,14 +46,12 @@ internal fun FoldableControlsPanel(
     modifier: Modifier = Modifier,
 ) {
     val selectedPosture = foldablePostureForAngle(hingeAngle)
-    val shape = RoundedCornerShape(AndyRadius.R4)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(AndyColors.Neutral900.copy(alpha = 0.44f), shape)
-            .border(1.dp, Border.copy(alpha = 0.72f), shape)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900.copy(alpha = 0.44f),
+        borderColor = Border.copy(alpha = 0.72f),
+        contentPadding = PaddingValues(AndySpace.Space5),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text(
             "Foldable controls",
@@ -83,7 +84,7 @@ private fun PosturePresetButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.R3)
+    val shape = RoundedCornerShape(AndyRadius.Control)
     val borderColor = when {
         !enabled -> Border.copy(alpha = 0.40f)
         selected -> Rust
