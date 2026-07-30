@@ -96,7 +96,7 @@ class DesktopInvestigationEvidenceService(
 
         ManagedEvidenceBundle(
             id = bundleId,
-            rootRelativePath = bundleDir.relativeTo(homeDir).path,
+            rootRelativePath = bundleDir.relativeTo(homeDir).path.replace('\\', '/'),
             manifest = fullManifest,
             redactionReport = redactionReport,
             investigationId = request.evidence.investigationId,

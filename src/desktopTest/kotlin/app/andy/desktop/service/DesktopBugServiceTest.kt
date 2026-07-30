@@ -431,6 +431,8 @@ class DesktopBugServiceTest {
         val activeDeadline = System.currentTimeMillis() + 15_000
         while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
 
+        // Let the crash poller finish its baseline (empty) seed before injecting crashes.
+        delay(InvestigationCrashPollIntervalMillis + 250L)
         crashInspector.crashes = listOf(
             CrashRecord(
                 id = "c1",
