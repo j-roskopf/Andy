@@ -652,6 +652,7 @@ internal fun LiveScreen(
                                     scope.launch {
                                         val bytes = services.artifacts.captureScreenshotForEditing(serial)
                                         if (bytes != null) {
+                                            services.bugs.recordScreenshot(bytes, "Screenshot")
                                             screenshotEditorBytes = bytes
                                         } else {
                                             liveActionStatus = "Screenshot: " + runCatching {
@@ -849,6 +850,7 @@ internal fun LiveScreen(
         ScreenshotEditorSheet(
             pngBytes = bytes,
             artifacts = services.artifacts,
+            bugs = services.bugs,
             suggestedName = "andy-${serial ?: "screenshot"}.png",
             onDismiss = { screenshotEditorBytes = null },
         )

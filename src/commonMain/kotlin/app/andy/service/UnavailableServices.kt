@@ -141,6 +141,8 @@ object UnavailableBugService : BugService {
     override suspend fun stopCapture() = Unit
     override suspend fun beginRecording() = Unit
     override fun recordAction(kind: String, label: String, detail: String?) = Unit
+    override fun recordScreenshot(pngBytes: ByteArray, label: String, detail: String?) = Unit
+    override suspend fun loadBugTimeline(id: String): InvestigationTimeline? = null
     override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport = error(BrowserUnavailable)
     override suspend fun saveRecording(device: AndroidDevice?): BugReport = error(BrowserUnavailable)
     override suspend fun listBugs() = emptyList<BugReport>()
@@ -287,14 +289,28 @@ object UnavailableAgentRunService : AgentRunService {
     override fun stop(taskId: String) = Unit
     override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
-    override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+    override fun resume(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) = Unit
 
     override fun reattachSession(taskId: String) = Unit
 
     override fun canReattachSession(taskId: String): Boolean = false
     override fun isViewing(taskId: String): Boolean = false
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
-    override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+    override fun queueFollowUp(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
     override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit

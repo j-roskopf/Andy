@@ -83,6 +83,12 @@ internal fun AndyShell(
 ) {
     val state = rememberShellState(services)
     val capabilities = services.capabilities
+    // OS notification deep links and in-app contextual launches share one open-chat request.
+    val effectiveOpenAgentTask = requestedOpenAgentTask ?: state.pendingAgentTaskOpen
+    val consumeOpenAgentTask = {
+        state.consumeAgentTaskOpen()
+        onOpenAgentTaskConsumed()
+    }
     val runningActions by if (capabilities.hostAutomation) {
         services.actionRuns.running.collectAsState()
     } else {
@@ -220,6 +226,8 @@ internal fun AndyShell(
         // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
         // Modal dialogs share the same rule as chrome menus: interop surfaces paint over them.
         LocalSuppressHeavyweightSurfaces provides (state.chromeMenuExpanded || ModalDialogRegistry.anyOpen),
+        LocalOpenAgentTask provides state::openAgentTask,
+        LocalOpenInvestigation provides state::openInvestigation,
     ) {
     Box(
         Modifier.fillMaxSize().background(Ink)
@@ -340,9 +348,9 @@ internal fun AndyShell(
                             active = actionsActive,
                             initialWorkflowTaskId = initialProjectTaskId,
                             initialCanvasLabel = initialProjectTab,
-                            requestedAgentTaskId = requestedOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
-                            requestedProjectId = requestedOpenAgentTask?.projectId,
-                            onRequestedAgentTaskConsumed = onOpenAgentTaskConsumed,
+                            requestedAgentTaskId = effectiveOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
+                            requestedProjectId = effectiveOpenAgentTask?.projectId,
+                            onRequestedAgentTaskConsumed = consumeOpenAgentTask,
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
@@ -351,8 +359,8 @@ internal fun AndyShell(
                     RetainedDestination(active = agentsActive) {
                         AgentsScreen(
                             services = services, active = agentsActive,
-                            requestedTaskId = requestedOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
-                            onRequestedTaskConsumed = onOpenAgentTaskConsumed,
+                            requestedTaskId = effectiveOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
+                            onRequestedTaskConsumed = consumeOpenAgentTask,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {
@@ -547,8 +555,12 @@ internal fun AndyShell(
                                 state = state.inspectorState
                             )
                         }
-                        AndyDestination.Bugs -> BugsScreen(services.bugs)
-                        AndyDestination.Recordings -> BugsScreen(services.bugs, recordings = true, recordingExport = services.recordingExport)
+                        AndyDestination.Bugs -> BugsScreen(
+                            services = services,
+                            pendingInvestigation = state.pendingInvestigationOpen,
+                            onPendingInvestigationConsumed = state::consumeInvestigationOpen,
+                        )
+                        AndyDestination.Recordings -> BugsScreen(services, recordings = true)
                         AndyDestination.Settings -> SettingsScreen(
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },

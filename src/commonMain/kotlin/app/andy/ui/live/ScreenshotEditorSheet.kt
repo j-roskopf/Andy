@@ -48,6 +48,7 @@ import app.andy.loadImageBitmap
 import app.andy.model.ScreenshotAnnotation
 import app.andy.model.ScreenshotEdits
 import app.andy.service.ArtifactService
+import app.andy.service.BugService
 import app.andy.service.CommandResult
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
@@ -83,6 +84,7 @@ internal enum class ScreenshotTool(val label: String) {
 internal fun ScreenshotEditorSheet(
     pngBytes: ByteArray,
     artifacts: ArtifactService,
+    bugs: BugService? = null,
     suggestedName: String,
     onDismiss: () -> Unit,
 ) {
@@ -138,6 +140,7 @@ internal fun ScreenshotEditorSheet(
             val result: CommandResult = artifacts.saveEditedScreenshot(finalBytes, suggestedName)
             saving = false
             if (result.isSuccess) {
+                bugs?.recordScreenshot(finalBytes, "Edited screenshot")
                 onDismiss()
             } else {
                 status = result.stderr.ifBlank { "Save failed" }

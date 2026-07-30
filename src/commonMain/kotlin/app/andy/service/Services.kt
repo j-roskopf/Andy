@@ -232,6 +232,10 @@ interface BugService {
     /** Starts a durable screen recording from this instant, replacing the rolling bug window. */
     suspend fun beginRecording()
     fun recordAction(kind: String, label: String, detail: String? = null)
+    /** Records a screenshot into the active investigation timeline (no-op if capture inactive). */
+    fun recordScreenshot(pngBytes: ByteArray, label: String = "Screenshot", detail: String? = null) {}
+    /** Loads timeline.json for a saved report, or null when absent (v1 reports). */
+    suspend fun loadBugTimeline(id: String): InvestigationTimeline? = null
     suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?): BugReport
     suspend fun saveRecording(device: AndroidDevice?): BugReport
     suspend fun listBugs(): List<BugReport>
@@ -240,6 +244,13 @@ interface BugService {
     suspend fun loadBugLog(id: String): String
     suspend fun deleteBug(id: String): Boolean
     suspend fun exportBug(id: String): String?
+    /**
+     * Exports a portable investigation bundle: `manifest.json`, `summary.md`, `timeline.json`,
+     * and sidecars/media, alongside the plain duplicate produced by [exportBug]. Desktop writes
+     * this as a folder under `exports/` (no zip dependency); platforms without a timeline just
+     * fall back to [exportBug].
+     */
+    suspend fun exportInvestigationBundle(id: String): String? = exportBug(id)
     fun playbackFrames(id: String, startFrameIndex: Int = 0): Flow<MirrorFrame>
     suspend fun bugVideoFrameCount(id: String): Int
     suspend fun loadBugVideoFrame(id: String, frameIndex: Int): MirrorFrame?
@@ -362,6 +373,16 @@ enum class AgentAttentionKind {
 data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
 data class OpenAgentTaskRequest(val taskId: String, val projectId: String?)
 
+/**
+ * Returns from an agent chat to the investigation a contextual action (§5) was launched from,
+ * optionally re-selecting the exact event and playback position.
+ */
+data class OpenInvestigationRequest(
+    val investigationId: String,
+    val eventId: String? = null,
+    val playbackMillis: Long? = null,
+)
+
 interface OsNotificationService { fun show(event: AgentAttentionEvent) }
 interface NotificationSoundPlayer { fun play(soundId: String) }
 interface AgentAttentionCoordinator {
@@ -429,6 +450,10 @@ interface AgentRunService {
         followUp: String,
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
+        /** Managed evidence bundle ids (§4) to copy into the task's local evidence dir and reference in the prompt. */
+        contextBundleIds: List<String> = emptyList(),
+        /** Where this turn's contextual action came from (§5); recorded on the task when it has none yet. */
+        provenance: AgentContextualProvenance? = null,
     )
     /** Reopens a stored provider session so the live interactive terminal UI comes back. */
     fun reattachSession(taskId: String)
@@ -463,6 +488,10 @@ interface AgentRunService {
         followUp: String,
         imagePaths: List<String> = emptyList(),
         skills: List<AgentSkill> = emptyList(),
+        /** Managed evidence bundle ids (§4); copied into the task's local evidence dir at queue time so they survive even if the managed bundle is later removed. */
+        contextBundleIds: List<String> = emptyList(),
+        /** Where this follow-up's contextual action came from (§5). */
+        provenance: AgentContextualProvenance? = null,
     )
     /** Removes an unsent follow-up at [queueIndex]. */
     fun removeQueuedFollowUp(taskId: String, queueIndex: Int)
@@ -541,6 +570,12 @@ data class LogcatFilter(
     val levels: Set<LogLevel> = setOf(LogLevel.Debug, LogLevel.Info, LogLevel.Warn, LogLevel.Error, LogLevel.Fatal),
     val packageName: String? = null,
     val buffers: Set<String> = setOf("main", "system", "crash"),
+    /**
+     * When true, the stream skips the device's existing log buffer and only follows new lines
+     * (`adb logcat -T 0`). Used by rolling bug capture so a 30s window isn't flooded with hours
+     * of historical logcat.
+     */
+    val followOnly: Boolean = false,
 )
 
 data class MirrorFrame(
@@ -796,6 +831,7 @@ data class AndyServices(
     val dhu: DhuService = UnavailableDhuService,
     val crashInspector: CrashInspectorService = UnavailableCrashInspectorService,
     val heapDump: HeapDumpService = UnavailableHeapDumpService,
+    val evidence: InvestigationEvidenceService = UnavailableInvestigationEvidenceService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val mcp: McpServerService,

@@ -141,6 +141,8 @@ Capture the on-screen view hierarchy beside the live mirror: a tree pane, a read
 
 Capture reproducible bug reports from Live. Andy saves recent actions, live video frames, logcat, device metadata, and notes, then lets you replay, scrub, export, or delete reports from the Bugs screen.
 
+An "Explain…" action sits beside a selected crash, network exchange, hierarchy node, and investigation moment. It opens a confirmation sheet showing the editable prompt and exactly which evidence would be attached — events, time window, size, exclusions, and redactions — before starting a read-only agent chat. Nothing is sent to a provider until you confirm the sheet, and the resulting chat links back to the investigation moment it came from. Desktop only.
+
 ### Updates
 
 Check for desktop app updates and confirm installation from inside Andy. Version metadata is generated at build time and the app can surface a close-and-install prompt when an update is ready.

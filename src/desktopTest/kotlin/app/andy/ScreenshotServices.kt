@@ -474,12 +474,127 @@ internal object ScreenshotServices {
     }
 
     private object ScreenshotBugs : BugService {
-        private val report = BugReport("bug-001", "Checkout address validation", "Postal code remains red after correction.", serial, "Pixel 8", "36", "arm64-v8a", "1080x2400", now, now - 20_000, now, listOf(BugAction("tap-1", now - 15_000, "Tap", "Checkout"), BugAction("input-1", now - 8_000, "Text", "Enter postal code", "60601")), listOf(BugArtifact("logcat.txt", "bug-001/logcat.txt", "log", 1024)), now - 20_000, now, 60.0, listOf(now - 20_000, now - 19_983, now - 19_966))
+        private val timeline = InvestigationTimeline(
+            originMillis = now - 20_000,
+            endedAtMillis = now,
+            events = listOf(
+                InvestigationEvent(
+                    id = "hierarchy-1",
+                    atMillis = now - 16_000,
+                    kind = InvestigationEventKind.HierarchySnapshot,
+                    summary = "Hierarchy captured (start)",
+                    detail = "start",
+                    inline = InvestigationInlinePayload(
+                        hierarchySource = "Uiautomator",
+                        packageName = gardenPackage,
+                        displayWidth = 1080,
+                        displayHeight = 2400,
+                        nodeCount = 128,
+                    ),
+                    payloadRef = InvestigationPayloadRef("events/hierarchy/hierarchy-1.json", "hierarchy"),
+                ),
+                InvestigationEvent(
+                    id = "tap-1",
+                    atMillis = now - 15_000,
+                    kind = InvestigationEventKind.Action,
+                    summary = "Tap Checkout",
+                    correlationIds = mapOf("actionId" to "tap-1", "legacyKind" to "Tap"),
+                    inline = InvestigationInlinePayload(text = "Checkout"),
+                ),
+                InvestigationEvent(
+                    id = "network-ex1",
+                    atMillis = now - 12_000,
+                    kind = InvestigationEventKind.NetworkExchange,
+                    summary = "POST api.example.test/checkout/validate",
+                    severity = InvestigationEventSeverity.Warning,
+                    inline = InvestigationInlinePayload(
+                        method = "POST",
+                        url = "https://api.example.test/checkout/validate",
+                        statusCode = 422,
+                        durationMillis = 340,
+                        tlsStatus = "tls",
+                    ),
+                    payloadRef = InvestigationPayloadRef("events/network/network-ex1.json", "network"),
+                ),
+                InvestigationEvent(
+                    id = "metric-1",
+                    atMillis = now - 10_000,
+                    kind = InvestigationEventKind.MetricSample,
+                    summary = "CPU 24.0% · 182.0MB · 58.0fps",
+                    inline = InvestigationInlinePayload(cpuPercent = 24f, memoryMb = 182f, fps = 58f),
+                ),
+                InvestigationEvent(
+                    id = "input-1",
+                    atMillis = now - 8_000,
+                    kind = InvestigationEventKind.Action,
+                    summary = "Enter postal code",
+                    detail = "60601",
+                    correlationIds = mapOf("actionId" to "input-1", "legacyKind" to "Text"),
+                    inline = InvestigationInlinePayload(text = "60601"),
+                ),
+                InvestigationEvent(
+                    id = "screenshot-1",
+                    atMillis = now - 6_000,
+                    kind = InvestigationEventKind.Screenshot,
+                    summary = "Screenshot",
+                    detail = "Postal code field highlighted red",
+                    payloadRef = InvestigationPayloadRef("events/screenshots/screenshot-1.png", "screenshot", 48_000L),
+                ),
+                InvestigationEvent(
+                    id = "legacy-log-0",
+                    atMillis = now - 2_000,
+                    kind = InvestigationEventKind.LogLine,
+                    summary = "E Checkout: Address validation rejected postal code",
+                    severity = InvestigationEventSeverity.Error,
+                    detail = "01-01 12:00:00 E Checkout: Address validation rejected postal code",
+                    inline = InvestigationInlinePayload(tag = "Checkout", level = "E"),
+                ),
+            ),
+        )
+        private val report = BugReport(
+            id = "bug-001",
+            title = "Checkout address validation",
+            notes = "Postal code remains red after correction.",
+            deviceSerial = serial,
+            deviceModel = "Pixel 8",
+            apiLevel = "36",
+            abi = "arm64-v8a",
+            resolution = "1080x2400",
+            capturedAtMillis = now,
+            windowStartedAtMillis = now - 20_000,
+            windowEndedAtMillis = now,
+            actions = listOf(BugAction("tap-1", now - 15_000, "Tap", "Checkout"), BugAction("input-1", now - 8_000, "Text", "Enter postal code", "60601")),
+            artifacts = listOf(BugArtifact("logcat.txt", "bug-001/logcat.txt", "log", 1024)),
+            videoStartedAtMillis = now - 20_000,
+            videoEndedAtMillis = now,
+            videoFrameRate = 60.0,
+            videoFrameTimestampsMillis = listOf(now - 20_000, now - 19_983, now - 19_966),
+            schemaVersion = 2,
+            timelineRelativePath = "timeline.json",
+            captureMode = InvestigationCaptureMode.Rolling,
+            appIdentity = AppIdentity(
+                packageName = gardenPackage,
+                versionName = "4.2.0",
+                versionCode = "42",
+                minSdk = "24",
+                targetSdk = "34",
+                debuggable = true,
+            ),
+            projectIdentity = ProjectIdentity(
+                projectId = "garden-app",
+                contextDir = "/workspace/garden-app",
+                gitHead = "a1b2c3d",
+                gitBranch = "main",
+                gitDirty = false,
+            ),
+            hostIdentity = HostIdentity(andyVersionName = "1.0.0", andyVersionCode = 1, hostOs = "macOS 14"),
+        )
         override val status = flowOf(BugCaptureStatus(true, serial, 2, 18, 3, "Capturing Pixel 8 API 36"))
         override suspend fun startCapture(serial: String, device: AndroidDevice?) = Unit
         override suspend fun stopCapture() = Unit
         override suspend fun beginRecording() = Unit
         override fun recordAction(kind: String, label: String, detail: String?) = Unit
+        override suspend fun loadBugTimeline(id: String) = timeline.takeIf { id == report.id }
         override suspend fun saveBug(draft: BugCaptureDraft, device: AndroidDevice?) = report
         override suspend fun saveRecording(device: AndroidDevice?) = report.copy(id = "recording-001", title = "Screen recording")
         override suspend fun listBugs() = listOf(report)
@@ -557,13 +672,27 @@ internal object ScreenshotServices {
         override fun stop(taskId: String) = Unit
         override fun completeWorkflowRun(taskId: String) = Unit
         override suspend fun retry(taskId: String) = Unit
-        override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+        override fun resume(
+            taskId: String,
+            followUp: String,
+            imagePaths: List<String>,
+            skills: List<AgentSkill>,
+            contextBundleIds: List<String>,
+            provenance: app.andy.model.AgentContextualProvenance?,
+        ) = Unit
         override fun reattachSession(taskId: String) = Unit
         override fun canReattachSession(taskId: String): Boolean = false
         override fun isTerminalLive(taskId: String): Boolean = false
         override fun isViewing(taskId: String): Boolean = false
         override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) = Unit
-        override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) = Unit
+        override fun queueFollowUp(
+            taskId: String,
+            followUp: String,
+            imagePaths: List<String>,
+            skills: List<AgentSkill>,
+            contextBundleIds: List<String>,
+            provenance: app.andy.model.AgentContextualProvenance?,
+        ) = Unit
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
         override fun updateGoal(taskId: String, goal: String?) = Unit
         override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit

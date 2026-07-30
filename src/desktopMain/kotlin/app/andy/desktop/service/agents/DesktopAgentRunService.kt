@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
@@ -102,6 +103,8 @@ class DesktopAgentRunService(
     private val enableProbes: Boolean = true,
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
     artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
+    /** Managed evidence bundle root (§4), mirroring [app.andy.desktop.service.DesktopInvestigationEvidenceService]. */
+    private val evidenceRootDir: File = File(System.getProperty("user.home"), ".andy/evidence"),
 ) : AgentRunService, ProjectWorkflowService {
     private class TaskHandle(
         @Volatile var job: Job? = null,
@@ -224,6 +227,22 @@ class DesktopAgentRunService(
 
     /** Cumulative scrollback file for finished-chat replay (may not exist yet). */
     internal fun scrollbackFile(taskId: String): File = store.scrollbackFile(taskId)
+
+    /**
+     * Copies [bundleIds] from the managed evidence root into this task's local evidence
+     * directory (so they survive even if the shared managed bundle is later removed) and
+     * returns prompt text pointing the agent at the copied paths, or "" when [bundleIds] is
+     * empty or none resolve. Blocking file I/O — always call from [Dispatchers.IO].
+     */
+    private fun materializeTaskEvidence(taskId: String, bundleIds: List<String>): String {
+        if (bundleIds.isEmpty()) return ""
+        val bundles = AgentEvidenceMaterializer.copyBundles(
+            managedRootDir = evidenceRootDir,
+            bundleIds = bundleIds,
+            taskEvidenceDir = store.taskEvidenceDir(taskId),
+        )
+        return AgentEvidenceMaterializer.promptSuffix(bundles)
+    }
 
     internal fun hasScrollback(taskId: String): Boolean = terminals.hasScrollback(taskId)
 
@@ -855,6 +874,8 @@ class DesktopAgentRunService(
             skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
             maxBudgetUsd = draft.maxBudgetUsd,
+            contextBundleIds = draft.contextBundleIds,
+            provenance = draft.provenance,
             status = null,
             vendorSessionId = null,
             createdAtMillis = now,
@@ -908,9 +929,15 @@ class DesktopAgentRunService(
             }
         }
 
+        val adapter = adapters.getValue(task.agent)
+        if (task.contextBundleIds.isNotEmpty()) {
+            val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(task.id, task.contextBundleIds) }
+            if (evidenceSuffix.isNotBlank()) {
+                task = task.copy(evidenceLocalPathsHint = evidenceSuffix)
+            }
+        }
         upsertTask(task)
         persist()
-        val adapter = adapters.getValue(task.agent)
         val initialPrompt = task.promptForCli().takeIf { it.isNotBlank() }
         // Prefer argv/flag delivery when the CLI supports it (agy --prompt-interactive,
         // claude/codex/cursor positional). PTY typing is a fragile fallback.
@@ -927,10 +954,23 @@ class DesktopAgentRunService(
     private fun isLaunchInProgress(taskId: String): Boolean =
         handles[taskId]?.job?.isActive == true
 
-    override fun resume(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
-        val task = currentTask(taskId) ?: return
-        if (task.userInputRequest != null) return
-        val adapter = adapters[task.agent] ?: return
+    override fun resume(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) {
+        val existing = currentTask(taskId) ?: return
+        if (existing.userInputRequest != null) return
+        val adapter = adapters[existing.agent] ?: return
+        // Keep the chat's original provenance; a contextual follow-up only fills an empty one.
+        val task = if (provenance != null && existing.provenance == null) {
+            existing.copy(provenance = provenance)
+        } else {
+            existing
+        }
 
         _lastUsedAgent.value = task.agent
 
@@ -959,7 +999,8 @@ class DesktopAgentRunService(
                 // A tmux session can outlive the app that spawned it. Mount a viewer before
                 // typing so a chat resumed from read-only replay comes back interactive.
                 attachTerminalIfNeeded(taskId)
-                terminals.write(taskId, liveText)
+                val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
+                terminals.write(taskId, liveText + evidenceSuffix)
                 persist()
             }
             return
@@ -1007,14 +1048,16 @@ class DesktopAgentRunService(
         upsertTask(queued)
         scope.launch {
             persist()
+            val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
+            val enrichedFollowUp = followUpForCli + evidenceSuffix
             if (resumeArgv == null) {
                 // Provider cannot resume (missing vendor session). Start a fresh
                 // interactive session that still includes the original Andy prompt.
                 val seeded = composeResumePrompt(
                     originalPrompt = queued.promptForCli(),
-                    followUp = followUpForCli,
+                    followUp = enrichedFollowUp,
                     boundToConversation = false,
-                ) ?: followUpForCli
+                ) ?: enrichedFollowUp
                 val writeAfterStart = seeded.takeUnless { adapter.embedsInitialPrompt }
                 launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { nextAdapter, binary, mcpUrl ->
                     val current = currentTask(taskId) ?: queued
@@ -1035,13 +1078,13 @@ class DesktopAgentRunService(
             }
             // Await the PTY so the detail pane remounts the live terminal instead of
             // staying on the "session ended" placeholder until a manual refresh.
-            val writeAfterStart = followUpForCli.takeUnless { adapter.embedsResumePrompt }
+            val writeAfterStart = enrichedFollowUp.takeUnless { adapter.embedsResumePrompt }
             launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { resumeAdapter, binary, mcpUrl ->
                 resumeAdapter.buildInteractiveResumeCommand(
                     binary,
                     currentTask(taskId) ?: queued,
                     mcpUrl,
-                    followUpForCli,
+                    enrichedFollowUp,
                     followUpImagePathsForCli,
                 ) ?: error("interactive resume not supported")
             }
@@ -1237,7 +1280,14 @@ class DesktopAgentRunService(
         }
     }
 
-    override fun queueFollowUp(taskId: String, followUp: String, imagePaths: List<String>, skills: List<AgentSkill>) {
+    override fun queueFollowUp(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) {
         val task = currentTask(taskId) ?: return
         if (!task.isActive && !terminals.isAlive(taskId)) return
 
@@ -1247,33 +1297,45 @@ class DesktopAgentRunService(
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
-        val followUpCli = task.followUpCliPayload(text, imagePaths, selectedSkills)
-        val followUpForCli = followUpCli.prompt
 
         if (terminals.isAlive(taskId)) {
             val now = System.currentTimeMillis()
             appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths)))
             updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
-            terminals.write(taskId, task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills))
+            val liveText = task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills)
+            scope.launch {
+                val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
+                terminals.write(taskId, liveText + evidenceSuffix)
+            }
             return
         }
 
         if (task.isActive && !isLaunchInProgress(taskId)) {
-            resume(taskId, text, imagePaths, selectedSkills)
+            resume(taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance)
             return
         }
 
         updateTask(taskId) { current ->
             current.copy(
                 latestPrompt = text.ifBlank { current.latestPrompt },
+                provenance = current.provenance ?: provenance,
                 queuedFollowUps = current.queuedFollowUps + AgentQueuedFollowUp(
                     text = text,
                     imagePaths = imagePaths,
                     skills = selectedSkills,
+                    contextBundleIds = contextBundleIds,
+                    provenance = provenance,
                 ),
             )
         }
-        scope.launch { persist() }
+        // Copy evidence into task-local storage at queue time (not just at run time) so it
+        // survives even if the shared managed bundle is deleted before this follow-up runs.
+        scope.launch {
+            if (contextBundleIds.isNotEmpty()) {
+                withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
+            }
+            persist()
+        }
     }
 
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) {
@@ -3355,7 +3417,14 @@ class DesktopAgentRunService(
         previousTaskStatuses.remove(taskId)
         if (status == AgentStatus.Done && queuedFollowUp != null) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
-            resume(taskId, queuedFollowUp.text, queuedFollowUp.imagePaths, queuedFollowUp.skills)
+            resume(
+                taskId,
+                queuedFollowUp.text,
+                queuedFollowUp.imagePaths,
+                queuedFollowUp.skills,
+                queuedFollowUp.contextBundleIds,
+                queuedFollowUp.provenance,
+            )
         } else {
             scope.launch {
                 persist()

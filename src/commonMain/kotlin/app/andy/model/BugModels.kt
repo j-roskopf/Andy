@@ -23,6 +23,17 @@ data class BugReport(
     val videoFrameTimestampsMillis: List<Long> = emptyList(),
     /** Non-null when capture.mp4 has no playable video (e.g. no frames captured, encode failure). */
     val videoCaptureWarning: String? = null,
+    /**
+     * 1 (default) = legacy bug report without a timeline sidecar.
+     * 2+ = investigation report with [timelineRelativePath].
+     */
+    val schemaVersion: Int = 1,
+    /** Relative path to `timeline.json` when [schemaVersion] >= 2. */
+    val timelineRelativePath: String? = null,
+    val captureMode: InvestigationCaptureMode? = null,
+    val appIdentity: AppIdentity? = null,
+    val projectIdentity: ProjectIdentity? = null,
+    val hostIdentity: HostIdentity? = null,
 )
 
 @Serializable

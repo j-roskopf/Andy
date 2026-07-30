@@ -51,8 +51,15 @@ import app.andy.model.AndroidDevice
 import app.andy.model.HierarchyOptions
 import app.andy.model.HierarchySnapshot
 import app.andy.model.HierarchySource
+import app.andy.model.InvestigationEventKind
+import app.andy.model.explainNodeRequest
 import app.andy.service.AndyServices
 import app.andy.service.MirrorSession
+import app.andy.ui.agents.ContextualAiActionHost
+import app.andy.ui.agents.ExplainActionButton
+import app.andy.ui.agents.contextualAiActionsEnabled
+import app.andy.ui.agents.findLatestInvestigationEvent
+import app.andy.ui.agents.rememberContextualAiActionState
 import app.andy.ui.components.DetailRow
 import app.andy.ui.components.DetailSection
 import app.andy.ui.components.FilterPill
@@ -237,6 +244,32 @@ internal fun InspectorScreen(
         }
     }
 
+    val contextualActions = rememberContextualAiActionState()
+    val explainAvailable = contextualAiActionsEnabled(services)
+
+    /** Attaches the newest saved hierarchy snapshot when one exists; otherwise prompt-only. */
+    fun explainSelectedNode() {
+        val node = state.selectedNode ?: return
+        scope.launch {
+            val location = findLatestInvestigationEvent(services.bugs, InvestigationEventKind.HierarchySnapshot)
+            contextualActions.open(
+                explainNodeRequest(
+                    nodeId = node.id,
+                    className = node.className,
+                    resourceId = node.resourceId,
+                    text = node.text,
+                    contentDescription = node.contentDescription,
+                    bounds = node.bounds,
+                    packageName = node.packageName,
+                    investigationId = location?.investigationId,
+                    eventId = location?.eventId,
+                    atMillis = location?.atMillis,
+                ),
+            )
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Toolbar(
             "Inspector",
@@ -278,6 +311,10 @@ internal fun InspectorScreen(
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
                 colors = fieldColors(),
             )
+            if (explainAvailable) {
+                Spacer(Modifier.width(8.dp))
+                ExplainActionButton("Explain node…", enabled = state.selectedNode != null) { explainSelectedNode() }
+            }
         }
         Row(modifier = Modifier.fillMaxSize()) {
             Column(Modifier.width(localTreePaneWidth.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -360,6 +397,8 @@ internal fun InspectorScreen(
                 )
             }
         }
+    }
+    ContextualAiActionHost(services, contextualActions)
     }
 }
 

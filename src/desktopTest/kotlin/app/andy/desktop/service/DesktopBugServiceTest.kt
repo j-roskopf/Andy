@@ -1,25 +1,53 @@
 package app.andy.desktop.service
 
+import app.andy.model.AccessibilityNode
+import app.andy.model.ActionProject
+import app.andy.model.ActionsConfig
+import app.andy.model.AndroidAppDetails
 import app.andy.model.AndroidDevice
 import app.andy.model.BugAction
 import app.andy.model.BugArtifact
 import app.andy.model.BugCaptureDraft
 import app.andy.model.BugReport
+import app.andy.model.CrashKind
+import app.andy.model.CrashRecord
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.HierarchyOptions
+import app.andy.model.HierarchySnapshot
+import app.andy.model.HierarchySource
+import app.andy.model.InvestigationCaptureMode
+import app.andy.model.InvestigationEventKind
+import app.andy.model.InvestigationEventSeverity
 import app.andy.model.LogcatEntry
 import app.andy.model.LogLevel
+import app.andy.model.NetworkExchange
+import app.andy.model.PerformanceSample
+import app.andy.model.ProxyWarning
+import app.andy.model.ProxyWarningKind
 import app.andy.model.SdkDiscovery
+import app.andy.model.WorkspaceState
+import app.andy.service.ActionConfigStore
+import app.andy.service.AppService
 import app.andy.service.CommandResult
+import app.andy.service.CrashInspectorService
 import app.andy.service.DeviceService
 import app.andy.service.EncodedVideoAccessUnit
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
+import app.andy.service.MetricsService
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorVideoConfig
+import app.andy.service.ProxyService
+import app.andy.service.UnavailableAppService
+import app.andy.service.UnavailableCrashInspectorService
+import app.andy.service.UnavailableMetricsService
+import app.andy.service.UnavailableProxyService
+import app.andy.service.ViewHierarchyService
+import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,7 +57,9 @@ import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopBugServiceTest {
@@ -350,6 +380,276 @@ class DesktopBugServiceTest {
         home.resolve(".andy/bugs/${recording.id}/capture.mp4").writeBytes(ByteArray(261))
         assertTrue(service.playbackFrames(recording.id).toList().isEmpty())
     }
+
+    @Test
+    fun saveInvestigationTimelinePersistsSidecarsAndIdentity() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-investigation-test").toFile()
+        val proxy = FakeProxyService()
+        val metrics = FakeMetricsService()
+        val crashInspector = FakeCrashInspectorService()
+        val viewHierarchy = FakeViewHierarchyService()
+        val apps = FakeAppService()
+        val projectDir = Files.createTempDirectory("andy-bugs-project-test").toFile()
+        val workspaceStore = FakeWorkspaceStore(WorkspaceState(lastActionProjectId = "p1"))
+        val actionConfig = FakeActionConfigStore(
+            ActionsConfig(projects = listOf(ActionProject(id = "p1", name = "Demo", contextDir = projectDir.absolutePath))),
+        )
+        val service = DesktopBugService(
+            FakeMirrorEngine(),
+            FakeLogcatService(),
+            home,
+            proxy = proxy,
+            metrics = metrics,
+            crashInspector = crashInspector,
+            viewHierarchy = viewHierarchy,
+            apps = apps,
+            workspaceStore = workspaceStore,
+            actionConfig = actionConfig,
+        )
+
+        service.startCapture("emulator-5554", null)
+        val activeDeadline = System.currentTimeMillis() + 15_000
+        while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
+
+        proxy.exchangesFlow.value = listOf(
+            NetworkExchange(
+                id = "ex1",
+                startedAtMillis = System.currentTimeMillis(),
+                completedAtMillis = System.currentTimeMillis(),
+                method = "GET",
+                url = "https://example.test/api",
+                statusCode = 200,
+                contentType = "application/json",
+                sizeBytes = 12,
+                durationMillis = 5,
+                requestHeaders = mapOf("Accept" to "*/*"),
+                responseHeaders = mapOf("Content-Type" to "application/json"),
+                requestBodyPreview = null,
+                responseBodyPreview = "{}",
+                error = null,
+                tlsStatus = "tls",
+                matchedRuleId = null,
+                flowId = "f1",
+            ),
+        )
+        crashInspector.crashes = listOf(
+            CrashRecord(
+                id = "c1",
+                kind = CrashKind.JavaCrash,
+                packageName = "app.demo",
+                timestampMillis = System.currentTimeMillis(),
+                summary = "NullPointerException",
+            ),
+        )
+        crashInspector.crashText["c1"] = "full stack trace"
+
+        // Wait for the background collectors/pollers to observe the injected data.
+        val ringDeadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < ringDeadline) {
+            val sizes = service.investigationRingSizesForTest()
+            if ((sizes["network"] ?: 0) > 0 && (sizes["crashes"] ?: 0) > 0 && (sizes["hierarchy"] ?: 0) > 0) break
+            delay(50)
+        }
+
+        val report = service.saveBug(BugCaptureDraft("Investigation save"), null)
+        val reportDir = home.resolve(".andy/bugs/${report.id}")
+
+        assertTrue(reportDir.resolve("timeline.json").isFile, "timeline.json should be written")
+        assertEquals(2, report.schemaVersion)
+        assertEquals(InvestigationJson.TimelineRelativePath, report.timelineRelativePath)
+        assertEquals(InvestigationCaptureMode.Rolling, report.captureMode)
+        assertEquals("app.demo", report.appIdentity?.packageName)
+        assertEquals("1.2.3", report.appIdentity?.versionName)
+        assertEquals("p1", report.projectIdentity?.projectId)
+        assertNotNull(report.hostIdentity)
+        assertTrue(report.artifacts.any { it.name == "timeline.json" })
+
+        val timeline = service.loadBugTimeline(report.id)
+        assertNotNull(timeline)
+        assertTrue(timeline.events.any { it.kind == InvestigationEventKind.NetworkExchange })
+        assertTrue(timeline.events.any { it.kind == InvestigationEventKind.Crash })
+        assertTrue(timeline.events.any { it.kind == InvestigationEventKind.HierarchySnapshot })
+
+        assertTrue(reportDir.resolve("events/network").listFiles()?.isNotEmpty() == true, "network sidecar dir should not be empty")
+        assertTrue(reportDir.resolve("events/crashes").listFiles()?.isNotEmpty() == true, "crash sidecar dir should not be empty")
+        assertTrue(reportDir.resolve("events/hierarchy").listFiles()?.isNotEmpty() == true, "hierarchy sidecar dir should not be empty")
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun exportInvestigationBundleWritesManifestSummaryAndTimeline() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-bundle-test").toFile()
+        val apps = FakeAppService()
+        val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home, apps = apps)
+
+        service.startCapture("emulator-5554", null)
+        val activeDeadline = System.currentTimeMillis() + 15_000
+        while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
+        service.recordAction("input", "Tap 1,1")
+
+        val report = service.saveBug(BugCaptureDraft("Bundle export", "Notes for the bundle"), null)
+        val bundlePath = service.exportInvestigationBundle(report.id)
+        assertNotNull(bundlePath)
+        val bundleDir = java.io.File(bundlePath)
+
+        assertTrue(bundleDir.resolve("manifest.json").isFile, "manifest.json should be written")
+        assertTrue(bundleDir.resolve("summary.md").isFile, "summary.md should be written")
+        assertTrue(bundleDir.resolve("timeline.json").isFile, "timeline.json should be included in the bundle")
+        assertTrue(bundleDir.resolve("actions.json").isFile, "actions.json should be included in the bundle")
+        assertTrue(bundleDir.resolve("capture.mp4").isFile, "capture.mp4 should be included in the bundle")
+
+        val manifest = readInvestigationBundleManifest(bundleDir.resolve("manifest.json").readText())
+        assertEquals(report.id, manifest.reportId)
+        assertEquals(2, manifest.schemaVersion)
+        assertTrue(manifest.eventCount > 0)
+
+        val summary = bundleDir.resolve("summary.md").readText()
+        assertTrue(summary.contains("Bundle export"))
+        assertTrue(summary.contains("Notes for the bundle"))
+        assertTrue(summary.contains("Host clock is authoritative"))
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun exportInvestigationBundleFallsBackToMigrationForLegacyReports() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-bundle-legacy-test").toFile()
+        val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home)
+
+        service.startCapture("emulator-5554", null)
+        service.recordAction("input", "Tap 5,5")
+        val report = service.saveBug(BugCaptureDraft("Legacy bundle export"), null)
+
+        // Simulate a v1 report saved before timeline.json existed.
+        val reportDir = home.resolve(".andy/bugs/${report.id}")
+        assertTrue(reportDir.resolve("timeline.json").delete())
+
+        val bundlePath = service.exportInvestigationBundle(report.id)
+        assertNotNull(bundlePath)
+        val bundleDir = java.io.File(bundlePath)
+        assertTrue(bundleDir.resolve("timeline.json").isFile, "a migrated timeline.json should be backfilled")
+        assertTrue(bundleDir.resolve("manifest.json").isFile)
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun recordScreenshotAddsTimelineEvent() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-screenshot-test").toFile()
+        val service = DesktopBugService(FakeMirrorEngine(), FakeLogcatService(), home)
+
+        service.startCapture("emulator-5554", null)
+        val activeDeadline = System.currentTimeMillis() + 15_000
+        while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
+
+        val png = ByteArray(64) { it.toByte() }
+        service.recordScreenshot(png, "Screenshot", "before tap")
+
+        val report = service.saveBug(BugCaptureDraft("Screenshot save"), null)
+        val reportDir = home.resolve(".andy/bugs/${report.id}")
+        val timeline = service.loadBugTimeline(report.id)
+
+        assertNotNull(timeline)
+        val screenshotEvent = timeline.events.firstOrNull { it.kind == InvestigationEventKind.Screenshot }
+        assertNotNull(screenshotEvent, "screenshot event should be present in the timeline")
+        assertEquals("before tap", screenshotEvent.detail)
+        val relativePath = screenshotEvent.payloadRef?.relativePath
+        assertNotNull(relativePath)
+        assertTrue(reportDir.resolve(relativePath).isFile, "screenshot png should be written to disk")
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun hierarchyCaptureFailureEmitsErrorEvent() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-hierarchy-error-test").toFile()
+        val viewHierarchy = FakeViewHierarchyService()
+        viewHierarchy.result = Result.failure(IllegalStateException("uiautomator unavailable"))
+        val service = DesktopBugService(
+            FakeMirrorEngine(),
+            FakeLogcatService(),
+            home,
+            viewHierarchy = viewHierarchy,
+        )
+
+        service.startCapture("emulator-5554", null)
+        val deadline = System.currentTimeMillis() + 15_000
+        while ((service.investigationRingSizesForTest()["hierarchy"] ?: 0) < 1 && System.currentTimeMillis() < deadline) {
+            delay(20)
+        }
+
+        val report = service.saveBug(BugCaptureDraft("Hierarchy failure save"), null)
+        val timeline = service.loadBugTimeline(report.id)
+
+        assertNotNull(timeline)
+        val errorEvent = timeline.events.firstOrNull {
+            it.kind == InvestigationEventKind.HierarchySnapshot && it.severity == InvestigationEventSeverity.Error
+        }
+        assertNotNull(errorEvent, "a hierarchy capture failure should surface an error event")
+        assertEquals("uiautomator unavailable", errorEvent.detail)
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun trimDropsOldNetworkAndMetricEventsOutsideWindow() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-trim-test").toFile()
+        val proxy = FakeProxyService()
+        val metrics = FakeMetricsService()
+        val service = DesktopBugService(
+            FakeMirrorEngine(),
+            FakeLogcatService(),
+            home,
+            proxy = proxy,
+            metrics = metrics,
+        )
+
+        service.startCapture("emulator-5554", null)
+        val activeDeadline = System.currentTimeMillis() + 15_000
+        while (!service.status.value.active && System.currentTimeMillis() < activeDeadline) delay(20)
+
+        // Insert with a *fresh* timestamp first so the automatic trim-on-receipt in the
+        // collector doesn't discard it before we can observe it in the ring.
+        val now = System.currentTimeMillis()
+        proxy.exchangesFlow.value = listOf(
+            NetworkExchange(
+                id = "fresh",
+                startedAtMillis = now,
+                completedAtMillis = now,
+                method = "GET",
+                url = "https://example.test/fresh",
+                statusCode = 200,
+                contentType = null,
+                sizeBytes = null,
+                durationMillis = null,
+                requestHeaders = emptyMap(),
+                responseHeaders = emptyMap(),
+                requestBodyPreview = null,
+                responseBodyPreview = null,
+                error = null,
+                tlsStatus = null,
+                matchedRuleId = null,
+                flowId = "f-fresh",
+            ),
+        )
+        metrics.samples.emit(PerformanceSample(now, 1f, 1f, 1f, 1, null))
+
+        val ringDeadline = System.currentTimeMillis() + 15_000
+        while ((service.investigationRingSizesForTest()["network"] ?: 0) < 1 && System.currentTimeMillis() < ringDeadline) {
+            delay(20)
+        }
+        val sizesBeforeTrim = service.investigationRingSizesForTest()
+        assertEquals(1, sizesBeforeTrim["network"], "the fresh network exchange should be captured in the ring")
+
+        // Simulate the rolling window elapsing so the previously-fresh event is now stale.
+        service.forceTrimForTest(now + 60_000)
+
+        val sizesAfterTrim = service.investigationRingSizesForTest()
+        assertEquals(0, sizesAfterTrim["network"], "network exchanges older than the rolling window should be trimmed")
+
+        service.stopCapture()
+    }
 }
 
 internal class FakeMirrorEngine : MirrorEngine {
@@ -373,6 +673,69 @@ internal class FakeLogcatService : LogcatService {
     override fun stream(serial: String, filter: LogcatFilter): Flow<List<LogcatEntry>> = batches
     override suspend fun snapshot(serial: String, filter: LogcatFilter, limit: Int): List<LogcatEntry> = emptyList()
     override suspend fun clear(serial: String) = Unit
+}
+
+internal class FakeProxyService : ProxyService by UnavailableProxyService {
+    val exchangesFlow = MutableStateFlow<List<NetworkExchange>>(emptyList())
+    val warningsFlow = MutableStateFlow<List<ProxyWarning>>(emptyList())
+    override val exchanges: Flow<List<NetworkExchange>> = exchangesFlow
+    override val warnings: Flow<List<ProxyWarning>> = warningsFlow
+}
+
+internal class FakeMetricsService : MetricsService by UnavailableMetricsService {
+    val samples = MutableSharedFlow<PerformanceSample>(replay = 1, extraBufferCapacity = 16)
+    override fun stream(serial: String, packageName: String?): Flow<PerformanceSample> = samples
+}
+
+internal class FakeCrashInspectorService : CrashInspectorService by UnavailableCrashInspectorService {
+    var crashes: List<CrashRecord> = emptyList()
+    val crashText = mutableMapOf<String, String>()
+    override suspend fun listCrashes(serial: String): List<CrashRecord> = crashes
+    override suspend fun loadCrash(serial: String, id: String): String = crashText[id] ?: ""
+}
+
+internal class FakeViewHierarchyService : ViewHierarchyService {
+    var result: Result<HierarchySnapshot> = Result.success(
+        HierarchySnapshot(
+            root = AccessibilityNode(
+                id = "root",
+                className = "android.widget.FrameLayout",
+                packageName = "app.demo",
+                resourceId = null,
+                text = null,
+                contentDescription = null,
+                bounds = "[0,0][100,100]",
+                clickable = false,
+                focusable = false,
+                enabled = true,
+            ),
+            capturedAtMillis = System.currentTimeMillis(),
+            displayWidth = 1080,
+            displayHeight = 1920,
+            source = HierarchySource.Uiautomator,
+        ),
+    )
+    override suspend fun capture(serial: String, options: HierarchyOptions): Result<HierarchySnapshot> = result
+}
+
+internal class FakeAppService : AppService by UnavailableAppService {
+    override suspend fun focusedPackage(serial: String): String? = "app.demo"
+    override suspend fun getAppDetails(serial: String, packageName: String): AndroidAppDetails =
+        AndroidAppDetails(versionName = "1.2.3", versionCode = "42", minSdk = "24", targetSdk = "34", debuggable = true)
+}
+
+internal class FakeWorkspaceStore(private var state: WorkspaceState) : WorkspaceStore {
+    override suspend fun load(): WorkspaceState = state
+    override suspend fun save(state: WorkspaceState) {
+        this.state = state
+    }
+}
+
+internal class FakeActionConfigStore(private var config: ActionsConfig) : ActionConfigStore {
+    override suspend fun load(): ActionsConfig = config
+    override suspend fun save(config: ActionsConfig) {
+        this.config = config
+    }
 }
 
 private class FakeForegroundDeviceService : DeviceService {

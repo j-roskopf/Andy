@@ -67,8 +67,15 @@ import app.andy.model.ProxyRule
 import app.andy.model.ProxyStartOptions
 import app.andy.model.SdkDiscovery
 import app.andy.model.diagnoseNetworkTraffic
+import app.andy.model.explainNetworkRequest
 import app.andy.service.AndyServices
 import app.andy.currentTimeMillis
+import app.andy.ui.agents.ContextualAiActionHost
+import app.andy.ui.agents.ExplainActionButton
+import app.andy.ui.agents.contextualAiActionsEnabled
+import app.andy.ui.agents.findInvestigationEvent
+import app.andy.ui.agents.redactedHeaderSummary
+import app.andy.ui.agents.rememberContextualAiActionState
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
@@ -397,6 +404,31 @@ internal fun NetworkScreen(
         onRulesVisibleChange(true)
     }
 
+    val contextualActions = rememberContextualAiActionState()
+    val explainAvailable = contextualAiActionsEnabled(services)
+
+    /** Prefers the saved investigation holding this exchange; falls back to a prompt-only action. */
+    fun explainExchange(exchange: NetworkExchange) {
+        scope.launch {
+            val location = findInvestigationEvent(services.bugs, key = "flowId", value = exchange.flowId)
+            contextualActions.open(
+                explainNetworkRequest(
+                    exchangeId = exchange.flowId,
+                    method = exchange.method,
+                    url = exchange.url,
+                    statusCode = exchange.statusCode,
+                    durationMillis = exchange.durationMillis,
+                    error = exchange.error,
+                    headerSummary = redactedHeaderSummary(exchange.requestHeaders, exchange.responseHeaders),
+                    investigationId = location?.investigationId,
+                    eventId = location?.eventId,
+                    atMillis = location?.atMillis,
+                ),
+            )
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(
             Modifier
@@ -883,6 +915,13 @@ internal fun NetworkScreen(
                 expanded = state.selectedExpanded,
                 onToggle = { state.selectedExpanded = !state.selectedExpanded },
                 modifier = Modifier.fillMaxWidth().then(if (state.selectedExpanded) Modifier.height(340.dp) else Modifier.heightIn(min = 54.dp)),
+                actions = {
+                    if (explainAvailable) {
+                        ExplainActionButton("Explain request…", enabled = selected != null) {
+                            selected?.let(::explainExchange)
+                        }
+                    }
+                },
             )
         }
         if (rulesVisible || liveVisible) {
@@ -955,6 +994,8 @@ internal fun NetworkScreen(
                 }
             }
         }
+    }
+    ContextualAiActionHost(services, contextualActions)
     }
 }
 

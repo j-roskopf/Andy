@@ -229,7 +229,13 @@ internal fun NetworkTrafficRowItem(
 }
 
 @Composable
-internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SelectedFlowPanel(
+    selected: NetworkExchange?,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    actions: @Composable () -> Unit = {},
+) {
     PanelCard(modifier.animateContentSize()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Selected flow", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -242,6 +248,7 @@ internal fun SelectedFlowPanel(selected: NetworkExchange?, expanded: Boolean, on
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            actions()
             FilterPill(if (expanded) "Hide" else "Show", expanded, Rust, onClick = onToggle)
         }
         AnimatedVisibility(expanded) {

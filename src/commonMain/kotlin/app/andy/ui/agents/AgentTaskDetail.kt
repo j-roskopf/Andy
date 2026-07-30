@@ -82,7 +82,9 @@ import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
+import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.shell.LocalOpenInvestigation
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
@@ -278,6 +280,34 @@ internal fun AgentTaskDetail(
                 onDelete = { onDelete(task) },
                 onCopyPrompt = { copyText(task.prompt) },
             )
+        }
+        val provenance = task.provenance
+        if (provenance?.investigationId != null) {
+            val openInvestigation = LocalOpenInvestigation.current
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "launched from ${provenance.sourceKind.name} · investigation ${provenance.investigationId}",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                OutlinedButton(
+                    onClick = {
+                        openInvestigation(
+                            OpenInvestigationRequest(
+                                investigationId = provenance.investigationId,
+                                eventId = provenance.eventId,
+                                playbackMillis = provenance.playbackMillis,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("open investigation", fontSize = 10.sp) }
+            }
         }
         task.userInputRequest?.let { request ->
             AgentUserInputCard(

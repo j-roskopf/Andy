@@ -118,8 +118,20 @@ fun createDaemonRuntime(
     val crashInspector = DesktopCrashInspectorService(devices)
     val heapDump = DesktopHeapDumpService(runner, devices, files)
 
-    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val bugService = DesktopBugService(
+        mirror, logcat,
+        devices = devices,
+        accessibility = accessibility,
+        proxy = proxy,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        viewHierarchy = viewHierarchy,
+        apps = apps,
+        workspaceStore = store,
+        actionConfig = actionConfig,
+    )
     val recordingExportService = DesktopRecordingExportService(bugService)
+    val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -182,6 +194,7 @@ fun createDaemonRuntime(
         dhu = dhu,
         crashInspector = crashInspector,
         heapDump = heapDump,
+        evidence = evidenceService,
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         mcp = mcp,
@@ -294,8 +307,20 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         runCatching { traceViewer.shutdown() }
     })
 
-    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val bugService = DesktopBugService(
+        mirror, logcat,
+        devices = devices,
+        accessibility = accessibility,
+        proxy = proxy,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        viewHierarchy = viewHierarchy,
+        apps = apps,
+        workspaceStore = store,
+        actionConfig = actionConfig,
+    )
     val recordingExportService = DesktopRecordingExportService(bugService)
+    val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -379,6 +404,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         dhu = dhu,
         crashInspector = crashInspector,
         heapDump = heapDump,
+        evidence = evidenceService,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,
@@ -444,8 +470,20 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         runCatching { traceViewer.shutdown() }
     })
 
-    val bugService = DesktopBugService(mirror, logcat, devices = devices, accessibility = accessibility)
+    val bugService = DesktopBugService(
+        mirror, logcat,
+        devices = devices,
+        accessibility = accessibility,
+        proxy = proxy,
+        metrics = metrics,
+        crashInspector = crashInspector,
+        viewHierarchy = viewHierarchy,
+        apps = apps,
+        workspaceStore = store,
+        actionConfig = actionConfig,
+    )
     val recordingExportService = DesktopRecordingExportService(bugService)
+    val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val mcp = DesktopMcpServerService(
         devices = devices,
@@ -534,6 +572,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         dhu = dhu,
         crashInspector = crashInspector,
         heapDump = heapDump,
+        evidence = evidenceService,
         workspaceStore = store,
         updates = updates,
         mcp = mcp,

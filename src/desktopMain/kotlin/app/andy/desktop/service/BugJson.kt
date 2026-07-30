@@ -3,6 +3,9 @@ package app.andy.desktop.service
 import app.andy.model.BugAction
 import app.andy.model.BugArtifact
 import app.andy.model.BugReport
+import app.andy.model.InvestigationCaptureMode
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -13,6 +16,7 @@ private val BugJsonFormat = Json {
     explicitNulls = true
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 internal data class BugReportDto(
     val id: String,
@@ -33,6 +37,19 @@ internal data class BugReportDto(
     val videoCaptureWarning: String? = null,
     val actions: List<BugActionDto> = emptyList(),
     val artifacts: List<BugArtifactDto> = emptyList(),
+    /** Omitted from wire format when 1 so v1 golden fixtures stay byte-stable. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val schemaVersion: Int = 1,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val timelineRelativePath: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val captureMode: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val appIdentity: AppIdentityDto? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val projectIdentity: ProjectIdentityDto? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val hostIdentity: HostIdentityDto? = null,
 ) {
     fun toModel(): BugReport = BugReport(
         id = id,
@@ -53,6 +70,12 @@ internal data class BugReportDto(
         videoFrameRate = videoFrameRate,
         videoFrameTimestampsMillis = videoFrameTimestampsMillis,
         videoCaptureWarning = videoCaptureWarning,
+        schemaVersion = schemaVersion,
+        timelineRelativePath = timelineRelativePath,
+        captureMode = captureMode?.let { runCatching { InvestigationCaptureMode.valueOf(it) }.getOrNull() },
+        appIdentity = appIdentity?.toModel(),
+        projectIdentity = projectIdentity?.toModel(),
+        hostIdentity = hostIdentity?.toModel(),
     )
 
     companion object {
@@ -75,6 +98,12 @@ internal data class BugReportDto(
             videoCaptureWarning = report.videoCaptureWarning,
             actions = report.actions.map { BugActionDto.fromModel(it) },
             artifacts = report.artifacts.map { BugArtifactDto.fromModel(it) },
+            schemaVersion = report.schemaVersion,
+            timelineRelativePath = report.timelineRelativePath,
+            captureMode = report.captureMode?.name,
+            appIdentity = report.appIdentity?.let { AppIdentityDto.fromModel(it) },
+            projectIdentity = report.projectIdentity?.let { ProjectIdentityDto.fromModel(it) },
+            hostIdentity = report.hostIdentity?.let { HostIdentityDto.fromModel(it) },
         )
     }
 }

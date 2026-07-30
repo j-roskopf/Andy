@@ -37,10 +37,15 @@ one operating system into another directory. Capture it on that platform instead
 | Design overlay | Design | mirror with deterministic design tooling data | `desktop-design-overlay.png` | yes |
 | Accessibility hierarchy | Accessibility | selected hierarchy with bounds metadata | `desktop-accessibility-hierarchy.png` | yes |
 | Inspector hierarchy | Inspector | merged uiautomator/dumpsys tree, properties panel | `desktop-inspector-hierarchy.png` | yes |
-| Bug replay | Bugs | captured checkout report, actions, frames, and log | `desktop-bugs-replay.png` | yes |
+| Bug replay | Bugs | captured checkout report, investigation timeline (actions/network/metrics/crash-free hierarchy/screenshot/log), frames, and identity | `desktop-bugs-replay.png` | yes |
 | Recordings export | Recordings | recording library with export sheet (trim + format) | `desktop-recordings-export.png` | yes |
 | Settings MCP | Settings | configured local SDK, proxy, and MCP service | `desktop-settings-mcp.png` | yes |
 | Mirror pop-out | Pop-out mirror | focused mirror with hardware controls | `desktop-mirror-pop-out.png` | yes |
+
+The contextual "Explain…" actions never appear in these baselines: they are gated on a
+real `InvestigationEvidenceService`, and the screenshot fixtures use the unavailable one.
+Adding a fixture with a live evidence service will change the Bugs, Network, Inspector,
+and Logcat surfaces and needs a re-record.
 
 ## Local workflow
 

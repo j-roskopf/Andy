@@ -39,8 +39,14 @@ import app.andy.model.CrashRecord
 import app.andy.model.HostSearchMode
 import app.andy.model.LogcatEntry
 import app.andy.model.StackTraceBlock
+import app.andy.model.explainCrashRequest
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.ui.agents.ContextualAiActionHost
+import app.andy.ui.agents.ExplainActionButton
+import app.andy.ui.agents.contextualAiActionsEnabled
+import app.andy.ui.agents.findInvestigationEvent
+import app.andy.ui.agents.rememberContextualAiActionState
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
@@ -138,6 +144,8 @@ internal fun CrashesPanel(
     var selectedId by remember { mutableStateOf<String?>(null) }
     var crashText by remember { mutableStateOf("") }
     var loadError by remember { mutableStateOf<String?>(null) }
+    val contextualActions = rememberContextualAiActionState()
+    val explainAvailable = contextualAiActionsEnabled(services)
 
     suspend fun refresh() {
         val target = serial ?: return
@@ -156,7 +164,26 @@ internal fun CrashesPanel(
         crashText = services.crashInspector.loadCrash(target, id)
     }
 
-    Row(modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    /** Prefers the saved investigation holding this crash; falls back to a prompt-only action. */
+    fun explainCrash(crash: CrashRecord) {
+        scope.launch {
+            val location = findInvestigationEvent(services.bugs, key = "crashId", value = crash.id)
+            contextualActions.open(
+                explainCrashRequest(
+                    crashId = crash.id,
+                    packageName = crash.packageName,
+                    summary = crash.summary,
+                    crashText = crashText,
+                    investigationId = location?.investigationId,
+                    eventId = location?.eventId,
+                    atMillis = location?.atMillis,
+                ),
+            )
+        }
+    }
+
+    Box(modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.width(340.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Crashes, ANRs & tombstones", color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -206,6 +233,11 @@ internal fun CrashesPanel(
                             val target = serial ?: return@OutlinedButton
                             scope.launch { services.crashInspector.exportCrash(target, id, "") }
                         }) { Text("Export", fontSize = 11.sp) }
+                        if (explainAvailable) {
+                            ExplainActionButton("Explain crash…", enabled = crashText.isNotBlank()) {
+                                crashes.firstOrNull { it.id == selectedId }?.let(::explainCrash)
+                            }
+                        }
                     }
                     SelectionContainer(
                         Modifier
@@ -225,6 +257,8 @@ internal fun CrashesPanel(
                 }
             }
         }
+    }
+    ContextualAiActionHost(services, contextualActions)
     }
 }
 
