@@ -13,6 +13,8 @@ object McpClientConfig {
         Antigravity("Antigravity"),
         OpenCode("OpenCode"),
         Pi("Pi"),
+        Hermes("Hermes"),
+        OpenClaw("OpenClaw"),
         VSCode("VS Code"),
         Windsurf("Windsurf")
     }
@@ -50,6 +52,14 @@ object McpClientConfig {
                 ANDY_MCP_URL=http://127.0.0.1:$port/mcp-http
                 """.trimIndent()
             }
+            ClientType.Hermes -> """
+                mcp_servers:
+                  andy:
+                    url: "http://127.0.0.1:$port/mcp-http"
+            """.trimIndent()
+            ClientType.OpenClaw -> """
+                { "mcp": { "andy": { "transport": "streamable-http", "url": "http://127.0.0.1:$port/mcp-http" } } }
+            """.trimIndent()
             ClientType.Codex -> {
                 """
                 [mcp_servers.andy]
@@ -93,6 +103,8 @@ object McpClientConfig {
             // Antigravity (IDE and agy CLI) reads MCP servers from this file.
             ClientType.Antigravity -> File(home, ".gemini/config/mcp_config.json")
             ClientType.OpenCode -> File(home, ".config/opencode/opencode.json")
+            ClientType.Hermes -> File(home, ".hermes/config.yaml")
+            ClientType.OpenClaw -> File(home, ".openclaw/openclaw.json")
             ClientType.ClaudeDesktop -> {
                 val osName = System.getProperty("os.name")?.lowercase().orEmpty()
                 if (osName.contains("win")) {
@@ -135,6 +147,8 @@ object McpClientConfig {
                     mergeJson(client, currentContent, port)
                 }
                 ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port)
+                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port)
+                ClientType.Hermes -> mergeHermesYaml(currentContent, port)
                 ClientType.Codex -> {
                     mergeToml(currentContent, port)
                 }
@@ -179,6 +193,37 @@ object McpClientConfig {
         }
         val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun mergeOpenClawJson(content: String, port: Int): String {
+        val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
+        val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        mcp["andy"] = buildJsonObject {
+            put("transport", "streamable-http")
+            put("url", "http://127.0.0.1:$port/mcp-http")
+        }
+        val pretty = Json { prettyPrint = true }
+        return pretty.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
+    }
+
+    internal fun mergeHermesYaml(content: String, port: Int): String {
+        val lines = content.lines().toMutableList()
+        val url = "    url: \"http://127.0.0.1:$port/mcp-http\""
+        val root = lines.indexOfFirst { it.trim() == "mcp_servers:" }
+        if (root < 0) {
+            if (lines.isNotEmpty() && lines.last().isNotBlank()) lines.add("")
+            lines.addAll(listOf("mcp_servers:", "  andy:", url))
+            return lines.joinToString("\n").trimEnd() + "\n"
+        }
+        val andy = (root + 1 until lines.size).firstOrNull { lines[it].trim() == "andy:" }
+        if (andy != null) {
+            var end = andy + 1
+            while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) end++
+            lines.subList(andy, end).clear()
+        }
+        val insert = (andy ?: (root + 1)).coerceAtMost(lines.size)
+        lines.addAll(insert, listOf("  andy:", url))
+        return lines.joinToString("\n").trimEnd() + "\n"
     }
 
     private fun mergeToml(content: String, port: Int): String {

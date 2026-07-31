@@ -52,7 +52,7 @@ class DesktopWorkspaceStore(
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
-            // Legacy Andy hex theme ids coerce to KetraTerm built-ins; hex fields are ignored at runtime.
+            // Legacy Andy hex theme ids coerce to BossTerm built-ins; hex fields are ignored at runtime.
             terminalThemeId = TerminalThemePreset.fromId(
                 props.getProperty("terminalThemeId").orEmpty(),
             ).id,

@@ -4,11 +4,10 @@ import app.andy.desktop.service.agents.AgentScratchWorkspace
 
 actual object TerminalSessions {
     actual fun create(request: TerminalLaunchRequest): TerminalSession {
-        AndyKetraTermConfig.ensureInitialized()
         val cwd = AgentScratchWorkspace.resolveCwd(request.cwd)
         return when (request.mode) {
             TerminalMode.DirectPty -> {
-                val session = KetraTermBackend(
+                val session = BossTermBackend(
                     sessionId = request.sessionId,
                     cols = request.cols,
                     rows = request.rows,
@@ -29,7 +28,6 @@ actual object TerminalSessions {
                 if (TmuxAndy.hasSession(sessionId) && TmuxAndy.sessionLooksBroken(sessionId)) {
                     TmuxAndy.killSession(sessionId)
                 }
-                // Ensure the agent session exists (create if argv provided and missing).
                 if (!TmuxAndy.hasSession(sessionId) && request.argv.isNotEmpty()) {
                     TmuxAndy.newSession(sessionId, cwd, request.argv, request.env)
                 }

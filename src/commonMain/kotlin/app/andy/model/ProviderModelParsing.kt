@@ -1,5 +1,13 @@
 package app.andy.model
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
 /**
  * Parses provider CLI `models` output into Andy's base-model + effort catalog shape.
  * Cursor prints `id - Label`; Antigravity prints one slug per line.
@@ -18,6 +26,28 @@ private val EffortTokenOrder = listOf(
 )
 
 private val EffortTokenByLength = EffortTokenOrder.map { it.first }.sortedByDescending { it.length }
+
+private fun parseProviderJsonModels(output: String): List<Pair<String, String>> = runCatching {
+    val root = Json.parseToJsonElement(output.trim())
+    val values = when (root) {
+        is JsonArray -> root
+        is JsonObject -> (root["models"] ?: root["data"] ?: root["items"])?.jsonArray
+        else -> null
+    } ?: return emptyList()
+    values.mapNotNull { element ->
+        when (element) {
+            is JsonPrimitive -> element.content.takeIf { it.isNotBlank() }?.let { it to humanizeProviderModel(it) }
+            is JsonObject -> {
+                val id = element["id"]?.jsonPrimitive?.content ?: element["model"]?.jsonPrimitive?.content ?: element["name"]?.jsonPrimitive?.content
+                id?.takeIf { it.isNotBlank() }?.let { it to (element["label"]?.jsonPrimitive?.content ?: humanizeProviderModel(it)) }
+            }
+            else -> null
+        }
+    }
+}.getOrDefault(emptyList())
+
+fun parseHermesModels(output: String): List<AgentModelOption> = groupProviderModelVariants(parseProviderJsonModels(output))
+fun parseOpenClawModels(output: String): List<AgentModelOption> = groupProviderModelVariants(parseProviderJsonModels(output))
 
 internal data class ProviderModelVariant(
     val baseId: String,
@@ -290,4 +320,3 @@ fun List<AgentModelOption>.groupedByModelFamily(): List<Pair<AgentModelFamily, L
         buckets.getValue(family).takeIf { it.isNotEmpty() }?.let { family to it }
     }
 }
-

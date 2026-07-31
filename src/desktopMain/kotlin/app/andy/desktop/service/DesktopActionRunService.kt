@@ -6,12 +6,13 @@ import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.service.ActionRunService
-import app.andy.terminal.KetraTermBackend
+import app.andy.terminal.AndyTerminalView
+import app.andy.terminal.BossTermBackend
 import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalSession
 import app.andy.terminal.TerminalSessions
 import app.andy.terminal.buildTerminalLaunchEnvironment
-import io.github.ketraterm.ui.swing.api.SwingTerminal
+import app.andy.terminal.toTerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,7 +30,7 @@ class DesktopActionRunService(
 ) : ActionRunService {
     private data class RunHandle(
         val session: TerminalSession?,
-        val terminal: SwingTerminal?,
+        val terminal: AndyTerminalView?,
     )
 
     private val nextRun = AtomicInteger(1)
@@ -95,8 +96,8 @@ class DesktopActionRunService(
                     appearance = terminalAppearance(),
                 ),
             )
-            val terminal = (session as? KetraTermBackend)?.swingTerminal()
-                ?: error("terminal widget missing after start")
+            val terminal = (session as? BossTermBackend)?.toTerminalView()
+                ?: error("terminal view missing after start")
             session to terminal
         }.fold(
             onSuccess = { (session, terminal) ->
@@ -142,7 +143,7 @@ class DesktopActionRunService(
         _running.update { runs -> runs.filterNot { it.runId == runId } }
     }
 
-    internal fun terminalWidget(runId: String): SwingTerminal? = handles[runId]?.terminal
+    internal fun terminalView(runId: String): AndyTerminalView? = handles[runId]?.terminal
 
     internal fun writeToTerminal(runId: String, text: String) {
         handles[runId]?.session?.writeText(text)
@@ -155,7 +156,7 @@ class DesktopActionRunService(
     fun reloadAppearance() {
         val appearance = terminalAppearance()
         handles.values.forEach { handle ->
-            (handle.session as? KetraTermBackend)?.updateAppearance(appearance)
+            (handle.session as? BossTermBackend)?.updateAppearance(appearance)
         }
     }
 

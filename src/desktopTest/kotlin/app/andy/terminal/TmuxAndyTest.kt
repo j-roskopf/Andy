@@ -44,6 +44,41 @@ class TmuxAndyTest {
     }
 
     @Test
+    fun serverEnablesMouseScrollbackWithBoundedHistory() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        TmuxAndy.startServer()
+
+        fun globalOption(name: String): String {
+            val process = ProcessBuilder(
+                TmuxAndy.tmuxBinary(), "-L", TmuxAndy.SERVER,
+                "show-options", "-gv", name,
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(0, process.exitValue(), output)
+            return output
+        }
+
+        assertEquals("on", globalOption("mouse"))
+        assertEquals("10000", globalOption("history-limit"))
+
+        val wheelBinding = ProcessBuilder(
+            TmuxAndy.tmuxBinary(), "-L", TmuxAndy.SERVER,
+            "list-keys", "-T", "root",
+        ).redirectErrorStream(true).start().let { process ->
+            val output = process.inputStream.bufferedReader().readText().trim()
+            assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(0, process.exitValue(), output)
+            output.lineSequence().firstOrNull { it.contains("WheelUpPane") }.orEmpty()
+        }
+        assertTrue(wheelBinding.contains("copy-mode -e"), wheelBinding)
+        assertFalse(wheelBinding.contains("alternate_on"), wheelBinding)
+    }
+
+    @Test
     fun newSessionCaptureAndKill() {
         if (!TmuxAndy.isAvailable()) {
             println("SKIP: tmux not installed")
@@ -73,6 +108,97 @@ class TmuxAndyTest {
             TmuxAndy.killSession(taskId)
             assertFalse(TmuxAndy.hasSession(taskId), "session should be gone after kill")
         }
+    }
+
+    @Test
+    fun outputProducedWithoutViewerRemainsInPaneHistory() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        val taskId = "headless-history-" + UUID.randomUUID().toString().take(8)
+        try {
+            TmuxAndy.newSession(
+                taskId = taskId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf(
+                    "/bin/sh",
+                    "-c",
+                    "i=1; while [ \$i -le 200 ]; do printf 'history-line-%03d\\n' \$i; i=\$((i+1)); done; sleep 30",
+                ),
+            )
+            Thread.sleep(400)
+
+            val history = TmuxAndy.capturePane(taskId, historyLines = -1)
+            assertTrue(history.contains("history-line-001"), "oldest output missing from tmux history")
+            assertTrue(history.contains("history-line-200"), "newest output missing from tmux history")
+        } finally {
+            TmuxAndy.killSession(taskId)
+        }
+    }
+
+    @Test
+    fun sgrWheelInputEntersTmuxCopyMode() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        val taskId = "wheel-protocol-" + UUID.randomUUID().toString().take(8)
+        val backend = TmuxAttachBackend(sessionId = taskId)
+        try {
+            TmuxAndy.newSession(
+                taskId = taskId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf(
+                    "/bin/sh",
+                    "-c",
+                    "i=1; while [ \$i -le 100 ]; do printf 'wheel-line-%03d\\n' \$i; i=\$((i+1)); done; sleep 30",
+                ),
+            )
+            backend.attach()
+            val view = assertNotNull(backend.terminalView())
+            val deadline = System.currentTimeMillis() + 5_000
+            while ((!BossTermAccess.isUsingAlternateBuffer(view.state) ||
+                    !BossTermAccess.isMouseReporting(view.state)) &&
+                System.currentTimeMillis() < deadline
+            ) {
+                Thread.sleep(25)
+            }
+            assertTrue(BossTermAccess.isUsingAlternateBuffer(view.state), "tmux client did not enter alternate buffer")
+            assertTrue(BossTermAccess.isMouseReporting(view.state), "tmux client did not enable mouse reporting")
+
+            val wheel = TmuxWheelInput { bytes -> BossTermAccess.writeBytes(view.state, bytes) }
+            assertTrue(wheel.onScroll(-1f))
+            Thread.sleep(200)
+            val paneModeAfterRawSgr = ProcessBuilder(
+                TmuxAndy.tmuxBinary(), "-L", TmuxAndy.SERVER,
+                "display-message", "-p", "-t", TmuxAndy.sessionName(taskId), "#{pane_in_mode}",
+            ).redirectErrorStream(true).start().let { process ->
+                val output = process.inputStream.bufferedReader().readText().trim()
+                assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertEquals(0, process.exitValue(), output)
+                output
+            }
+            assertEquals("1", paneModeAfterRawSgr, "raw SGR wheel event did not enter tmux copy mode")
+        } finally {
+            backend.close()
+            TmuxAndy.killSession(taskId)
+        }
+    }
+
+    @Test
+    fun tmuxWheelInputAccumulatesTrackpadDeltasAndPreservesDirection() {
+        val writes = mutableListOf<String>()
+        val wheel = TmuxWheelInput { writes += it.decodeToString() }
+
+        assertTrue(wheel.onScroll(-0.1f))
+        assertTrue(wheel.onScroll(-0.1f))
+        assertTrue(wheel.onScroll(-0.2f))
+        assertEquals(listOf("\u001B[<64;1;1M"), writes)
+
+        writes.clear()
+        assertTrue(wheel.onScroll(1f))
+        assertTrue(writes.joinToString("").contains("\u001B[<65;1;1M"))
     }
 
     @Test
@@ -132,7 +258,6 @@ class TmuxAndyTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val taskId = "attach-scrape-" + UUID.randomUUID().toString().take(8)
         val backend = TmuxAttachBackend(sessionId = taskId)
         try {
@@ -160,7 +285,6 @@ class TmuxAndyTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val taskId = "attach-reattach-" + UUID.randomUUID().toString().take(8)
         val backend = TmuxAttachBackend(sessionId = taskId)
         try {
@@ -177,7 +301,7 @@ class TmuxAndyTest {
                 assertTrue(backend.isAlive, "tmux session should stay alive on cycle $it")
                 backend.reattachViewer()
                 assertTrue(backend.isViewerAlive, "viewer should be alive after reattach on cycle $it")
-                assertNotNull(backend.swingTerminal(), "widget should exist after reattach on cycle $it")
+                assertNotNull(backend.terminalView(), "view should exist after reattach on cycle $it")
             }
             val snap = backend.bufferSnapshot()
             assertTrue(snap.contains("andy-reattach"), "expected tmux capture, got=${snap.take(200)}")

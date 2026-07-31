@@ -133,9 +133,9 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
-                implementation("io.github.ketraterm:ketraterm-ui-swing:0.2.1")
-                implementation("io.github.ketraterm:ketraterm-pty:0.2.1")
-                implementation("io.github.ketraterm:ketraterm-workspace:0.2.1")
+                // Compose-native terminal (replaces KetraTerm Swing embed).
+                implementation("com.risaboss:bossterm-compose:1.2.143")
+                implementation("com.risaboss:bossterm-core:1.2.143")
                 // Explicit pin so macOS release notarization can locate pty4j-*.jar.
                 implementation("org.jetbrains.pty4j:pty4j:0.13.12")
                 implementation("com.google.zxing:core:3.5.3")

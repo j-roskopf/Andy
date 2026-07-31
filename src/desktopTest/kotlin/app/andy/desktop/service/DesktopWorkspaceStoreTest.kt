@@ -130,7 +130,7 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
 
-        // Legacy / unknown theme ids coerce to KetraTerm One Dark on load.
+        // Legacy / unknown theme ids coerce to One Dark on load.
         file.writeText(file.readText().replace("terminalThemeId=nord", "terminalThemeId=andy"))
         assertEquals("one-dark", DesktopWorkspaceStore(file).load().terminalThemeId)
 

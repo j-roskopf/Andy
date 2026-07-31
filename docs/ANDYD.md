@@ -224,11 +224,11 @@ launchctl load ~/Library/LaunchAgents/com.joetr.andyd.plist
 
 On launch the GUI calls `resolveRuntimeMode()`:
 
-1. **EmbeddedDaemon** (default) — agents run in-process with KetraTerm + tmux attach.
+1. **EmbeddedDaemon** (default) — agents run in-process with BossTerm + tmux attach.
    Fully self-contained; also binds `~/.andy/andyd.sock` for the CLI when no external
    daemon owns it.
 2. **DaemonClient** — only when a **standalone** `andyd` is already running (pidfile +
-   live socket), e.g. launchd or `./gradlew runAndyd`. The GUI attaches KetraTerm viewers
+   live socket), e.g. launchd or `./gradlew runAndyd`. The GUI attaches BossTerm viewers
    to tmux sessions owned by that process.
 
 The GUI does **not** spawn `andyd` and switch to client mode — that split left chats
@@ -250,6 +250,6 @@ In addition to the existing device tools:
 
 | Env `ANDY_TERMINAL_MODE` | Behavior |
 |--------------------------|----------|
-| (default) | `TmuxWithAttach` — create tmux session + KetraTerm attach |
+| (default) | `TmuxWithAttach` — create tmux session + BossTerm attach |
 | `headless` | `TmuxHeadless` — daemon executor, no Swing |
 | `direct` | Legacy direct Pty4J (tests / no-tmux fallback) |

@@ -1,7 +1,5 @@
 package app.andy.terminal
 
-import io.github.ketraterm.core.api.TerminalBuffer
-
 private val SpinnerStatusLine = Regex("""[⠀-⣿].*\b(Working|Running|Grepping|Reading|Loading|Thinking)\b""")
 private val TokenStatusLine = Regex("""\b(Working|Running|Grepping|Reading|Loading|Thinking)\b.*\btokens\b""", RegexOption.IGNORE_CASE)
 private val SpinnerTokenLine = Regex("""[⠀-⣿].*tokens""", RegexOption.IGNORE_CASE)
@@ -67,6 +65,8 @@ internal fun isVolatileTerminalChromeLine(line: String): Boolean {
     if (ProviderBootBannerLine.matches(trimmed)) return true
     if (ProviderBootMetadataLine.matches(trimmed)) return true
     if (ProviderBootHintLine.matches(trimmed)) return true
+    // Sign-in / spinner status on Antigravity boot is repainted in place.
+    if (trimmed.contains("Signing in") && trimmed.length < 40) return true
     return false
 }
 
@@ -187,30 +187,6 @@ internal fun formatScrollbackForDisplay(raw: String): String {
     }
     flushDiff()
     return output.joinToString("\n\n").trim()
-}
-
-internal fun extractReadableLines(buffer: TerminalBuffer): List<String> {
-    val total = buffer.historySize + buffer.height
-    if (total <= 0) return emptyList()
-    return buildList {
-        for (row in 0 until total) {
-            val line = buffer.getLineAsString(row).trimEnd()
-            if (!isScrollbackNoiseLine(line) && !isScrollbackDisplayNoise(line)) add(line)
-        }
-    }
-}
-
-/** Append only meaningful lines we have not captured yet (conversation before scroll-out). */
-internal fun captureNewReadableLines(
-    buffer: TerminalBuffer,
-    seenKeys: MutableSet<String>,
-): List<String> = buildList {
-    for (line in extractReadableLines(buffer)) {
-        val key = line.trim()
-        if (key.isEmpty() || key in seenKeys) continue
-        seenKeys += key
-        add(line)
-    }
 }
 
 internal fun joinReadableLines(lines: List<String>): String = lines.joinToString("\n").trimEnd()

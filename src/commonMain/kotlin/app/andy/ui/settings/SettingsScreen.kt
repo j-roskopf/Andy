@@ -462,7 +462,7 @@ private fun TerminalAppearancePanel(
     PanelCard {
         SettingsSectionHeader(
             title = "Terminal",
-            description = "KetraTerm theme and font for agent and project terminals. Changes apply to new and live sessions.",
+            description = "Terminal theme and font for agent and project terminals. Changes apply to new and live sessions.",
         )
 
         Text("Theme", color = TextSecondary, fontSize = 12.sp)

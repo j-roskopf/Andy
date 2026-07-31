@@ -7,6 +7,8 @@ enum class AgentKind(val label: String, val cliName: String) {
     Antigravity("Antigravity", "agy"),
     OpenCode("OpenCode", "opencode"),
     Pi("Pi", "pi"),
+    Hermes("Hermes", "hermes"),
+    OpenClaw("OpenClaw", "openclaw"),
 }
 
 /** Unified autonomy dial; each adapter maps it to vendor-specific flags. */
@@ -34,7 +36,8 @@ fun AgentAutonomy.defaultSandboxMode(): AgentSandboxMode = when (this) {
 
 fun AgentKind.sandboxControlLabel(): String = when (this) {
     AgentKind.Codex, AgentKind.Cursor -> "sandbox"
-    AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi -> "permissions"
+    AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
+    AgentKind.Hermes, AgentKind.OpenClaw -> "approvals"
 }
 
 fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
@@ -63,6 +66,16 @@ fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.ReadOnly -> "read-only prompt"
         AgentSandboxMode.WorkspaceWrite -> "standard"
         AgentSandboxMode.None -> "unrestricted"
+    }
+    AgentKind.Hermes -> when (this) {
+        AgentSandboxMode.ReadOnly -> "read-only prompt"
+        AgentSandboxMode.WorkspaceWrite -> "standard"
+        AgentSandboxMode.None -> "yolo"
+    }
+    AgentKind.OpenClaw -> when (this) {
+        AgentSandboxMode.ReadOnly -> "approval prompt"
+        AgentSandboxMode.WorkspaceWrite -> "ask on tools"
+        AgentSandboxMode.None -> "auto-approve where allowed"
     }
 }
 
@@ -96,6 +109,16 @@ fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.ReadOnly -> "Pi has no native sandbox; Andy asks it to inspect only and write a plan."
         AgentSandboxMode.WorkspaceWrite -> "Pi runs with its default tools (read, write, edit, bash)."
         AgentSandboxMode.None -> "Pi runs unrestricted; there is no native permission UI to skip."
+    }
+    AgentKind.Hermes -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Hermes receives a read-only instruction and restricted toolsets."
+        AgentSandboxMode.WorkspaceWrite -> "Hermes uses its standard toolsets and approval behavior."
+        AgentSandboxMode.None -> "Hermes runs with --yolo; provider-side safeguards still apply."
+    }
+    AgentKind.OpenClaw -> when (this) {
+        AgentSandboxMode.ReadOnly -> "OpenClaw receives a read-only instruction."
+        AgentSandboxMode.WorkspaceWrite -> "OpenClaw keeps its native approval prompts."
+        AgentSandboxMode.None -> "OpenClaw auto-approves where local mode allows; it does not silently bypass safeguards."
     }
 }
 
@@ -237,6 +260,14 @@ object AgentModelCatalog {
                 ),
             ),
             AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
+        )
+        AgentKind.Hermes -> listOf(
+            AgentModelOption("anthropic/claude-sonnet-4", "Claude Sonnet 4", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+        )
+        AgentKind.OpenClaw -> listOf(
+            AgentModelOption("openai/gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
         )
     }
 
@@ -489,11 +520,11 @@ data class AgentQuotaAccess(
         AgentKind.Cursor -> cursorAccountAccess
         AgentKind.Antigravity -> antigravityAccountAccess
         // Multi-provider auth; no stable quota probe yet.
-        AgentKind.OpenCode, AgentKind.Pi -> false
+        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
     fun withAccess(agent: AgentKind, enabled: Boolean): AgentQuotaAccess = when (agent) {
-        AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi -> this
+        AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> this
         AgentKind.ClaudeCode -> copy(claudeAccountAccess = enabled)
         AgentKind.Cursor -> copy(cursorAccountAccess = enabled)
         AgentKind.Antigravity -> copy(antigravityAccountAccess = enabled)
@@ -893,7 +924,8 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
             else -> null
         }
         // Claude Code reports its billed total; these providers currently report no token usage.
-        AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi -> null
+        AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
+        AgentKind.Hermes, AgentKind.OpenClaw -> null
     } ?: return null
     return ((inputTokens ?: 0) * price.inputUsdPerMillion + (outputTokens ?: 0) * price.outputUsdPerMillion) / 1_000_000.0
 }

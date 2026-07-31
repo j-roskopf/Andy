@@ -7,6 +7,14 @@ import kotlin.test.assertTrue
 
 class ProviderModelParsingTest {
     @Test
+    fun parsesHermesAndOpenClawJsonModelLists() {
+        val hermes = parseHermesModels("{\"models\":[{\"id\":\"anthropic/claude-sonnet-4\",\"label\":\"Sonnet\"}]}")
+        val openClaw = parseOpenClawModels("[{\"model\":\"openai/gpt-5.6-sol\"}]")
+        assertEquals("anthropic/claude-sonnet-4", hermes.single().id)
+        assertEquals("Sonnet", hermes.single().label)
+        assertEquals("openai/gpt-5.6-sol", openClaw.single().id)
+    }
+    @Test
     fun parsesOpenCodeProviderModelSlugs() {
         val options = parseOpenCodeModels(
             """

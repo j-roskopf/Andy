@@ -49,7 +49,7 @@ data class WorkspaceState(
     val tintId: String = "andy-blue",
     val surfaceModeId: String = "tinted",
     val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,
-    /** KetraTerm built-in theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
+    /** Terminal theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
     val terminalThemeId: String = TerminalThemePreset.Default.id,
     /** Legacy per-role hex fields — retained for properties compatibility; ignored at runtime. */
     val terminalForegroundHex: String = "#ABB2BF",

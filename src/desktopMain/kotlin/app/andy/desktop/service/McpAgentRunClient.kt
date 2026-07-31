@@ -66,7 +66,7 @@ import java.util.concurrent.atomic.AtomicLong
  * calling tools on `andyd` over a Unix domain socket.
  *
  * Terminal attach is bridged to a local [DesktopAgentRunService] in TmuxWithAttach mode
- * so the Compose GUI can still embed KetraTerm.
+ * so the Compose GUI can still embed BossTerm.
  */
 class McpAgentRunClient(
     private val scope: CoroutineScope,
@@ -138,7 +138,7 @@ class McpAgentRunClient(
     private var localBridge: DesktopAgentRunService? = null
 
     private val _interactiveTerminalTaskIds = MutableStateFlow<Set<String>>(emptySet())
-    /** Mirrors the local terminal bridge, which owns the KetraTerm viewers this GUI hosts. */
+    /** Mirrors the local terminal bridge, which owns the BossTerm viewers this GUI hosts. */
     override val interactiveTerminalTaskIds: StateFlow<Set<String>> =
         _interactiveTerminalTaskIds.asStateFlow()
 
@@ -165,7 +165,7 @@ class McpAgentRunClient(
         }
     }
 
-    /** Local KetraTerm/tmux-attach host used by [app.andy.ui.agents.AgentTerminalSurface]. */
+    /** Local BossTerm/tmux-attach host used by [app.andy.ui.agents.AgentTerminalSurface]. */
     fun terminalHost(): DesktopAgentRunService? = localBridge
 
     internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {

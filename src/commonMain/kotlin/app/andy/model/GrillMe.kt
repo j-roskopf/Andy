@@ -11,6 +11,8 @@ private fun AgentKind.grillMeSkillsAgent(): String = when (this) {
     AgentKind.Antigravity -> "antigravity-cli"
     AgentKind.OpenCode -> "opencode"
     AgentKind.Pi -> "pi"
+    AgentKind.Hermes -> "hermes"
+    AgentKind.OpenClaw -> "openclaw"
 }
 
 internal fun isGrillMeSkillName(name: String): Boolean =

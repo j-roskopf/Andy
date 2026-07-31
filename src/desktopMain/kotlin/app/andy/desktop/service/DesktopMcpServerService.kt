@@ -208,6 +208,8 @@ class DesktopMcpServerService(
             McpClientConfig.ClientType.Antigravity,
             McpClientConfig.ClientType.OpenCode,
             McpClientConfig.ClientType.Pi,
+            McpClientConfig.ClientType.Hermes,
+            McpClientConfig.ClientType.OpenClaw,
         )
     }
 

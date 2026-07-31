@@ -225,6 +225,8 @@ internal fun screenManifestFor(agent: AgentKind): List<ScreenRule> = when (agent
     AgentKind.Antigravity -> AntigravityScreenManifest
     AgentKind.OpenCode -> OpenCodeScreenManifest
     AgentKind.Pi -> PiScreenManifest
+    AgentKind.Hermes -> HermesScreenManifest
+    AgentKind.OpenClaw -> OpenClawScreenManifest
 }
 
 // region Ported Herdr manifests (+ Andy extras)
@@ -871,6 +873,28 @@ private val PiScreenManifest: List<ScreenRule> = listOf(
             ),
         ),
     ),
+)
+
+private val HermesScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule("approval_prompt", ScreenState.Blocked, 300, ScreenRegion.BottomNonEmpty(12), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("approve")), ScreenGate(contains = listOf("allow")), ScreenGate(contains = listOf("deny")),
+    )), visibleBlocker = true),
+    ScreenRule("working_feed", ScreenState.Working, 100, ScreenRegion.BottomNonEmpty(10), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("pondering")), ScreenGate(contains = listOf("contemplating")), ScreenGate(contains = listOf("┊ 💻")), ScreenGate(contains = listOf("┊ 🔍")),
+    )), visibleWorking = true),
+    ScreenRule("prompt_idle", ScreenState.Idle, 50, ScreenRegion.BottomNonEmpty(5), ScreenGate(lineRegex = listOf(Regex("""^\s*❯\s*$"""))), visibleIdle = true),
+)
+
+private val OpenClawScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule("approval_prompt", ScreenState.Blocked, 300, ScreenRegion.BottomNonEmpty(12), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("approval")), ScreenGate(contains = listOf("approve")), ScreenGate(contains = listOf("tool consent")),
+    )), visibleBlocker = true),
+    ScreenRule("working_feed", ScreenState.Working, 100, ScreenRegion.BottomNonEmpty(10), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("thinking")), ScreenGate(contains = listOf("running")), ScreenGate(contains = listOf("interrupt")),
+    )), visibleWorking = true),
+    ScreenRule("prompt_idle", ScreenState.Idle, 50, ScreenRegion.BottomNonEmpty(5), ScreenGate(any = listOf(
+        ScreenGate(lineRegex = listOf(Regex("""^\s*[❯›>]\s*$"""))), ScreenGate(contains = listOf("send a message")),
+    )), visibleIdle = true),
 )
 
 // endregion

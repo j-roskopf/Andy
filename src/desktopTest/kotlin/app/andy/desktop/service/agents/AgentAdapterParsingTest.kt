@@ -191,6 +191,39 @@ class ClaudeCodeInteractiveAdapterTest {
     }
 }
 
+class HermesOpenClawAdapterTest {
+    @Test
+    fun hermesUsesInteractiveChatAndMapsModelSkillsAndYolo() {
+        val hermes = HermesAdapter()
+        val argv = hermes.buildInteractiveCommand(
+            "/bin/hermes",
+            task(AgentKind.Hermes, autonomy = AgentAutonomy.Full).copy(
+                model = "openai/gpt-5.5",
+                skills = listOf(app.andy.model.AgentSkill("grill-me", "", "/tmp/SKILL.md")),
+            ),
+            null,
+        )
+        assertEquals(listOf("/bin/hermes", "chat"), argv.take(2))
+        assertTrue("--model" in argv && "openai/gpt-5.5" in argv)
+        assertTrue("-s" in argv && "grill-me" in argv)
+        assertTrue("--yolo" in argv)
+        assertTrue(!hermes.embedsInitialPrompt)
+    }
+
+    @Test
+    fun openClawEmbedsMessageAndSessionOnResume() {
+        val openClaw = OpenClawAdapter()
+        val fresh = openClaw.buildInteractiveCommand("/bin/openclaw", task(AgentKind.OpenClaw), null)
+        assertEquals(listOf("/bin/openclaw", "chat"), fresh.take(2))
+        assertTrue("--message" in fresh && "do the thing" in fresh)
+        val resumed = openClaw.buildInteractiveResumeCommand(
+            "/bin/openclaw", task(AgentKind.OpenClaw, sessionId = "agent:main:incident-42"), null, "continue", emptyList(),
+        )
+        assertTrue("--session" in resumed && "agent:main:incident-42" in resumed)
+        assertTrue("--message" in resumed && "continue" in resumed)
+    }
+}
+
 class CodexInteractiveAdapterTest {
     private val adapter = CodexAdapter()
 

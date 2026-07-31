@@ -10,6 +10,8 @@ import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.OpenCodeAdapter
 import app.andy.desktop.service.agents.PiAdapter
+import app.andy.desktop.service.agents.HermesAdapter
+import app.andy.desktop.service.agents.OpenClawAdapter
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
@@ -165,6 +167,8 @@ fun createDaemonRuntime(
             AgentKind.Antigravity to AntigravityAdapter(),
             AgentKind.OpenCode to OpenCodeAdapter(),
             AgentKind.Pi to PiAdapter(),
+            AgentKind.Hermes to HermesAdapter(),
+            AgentKind.OpenClaw to OpenClawAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,
@@ -367,6 +371,8 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
             AgentKind.Antigravity to AntigravityAdapter(),
             AgentKind.OpenCode to OpenCodeAdapter(),
             AgentKind.Pi to PiAdapter(),
+            AgentKind.Hermes to HermesAdapter(),
+            AgentKind.OpenClaw to OpenClawAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,
@@ -523,6 +529,8 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
             AgentKind.Antigravity to AntigravityAdapter(),
             AgentKind.OpenCode to OpenCodeAdapter(),
             AgentKind.Pi to PiAdapter(),
+            AgentKind.Hermes to HermesAdapter(),
+            AgentKind.OpenClaw to OpenClawAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,
@@ -531,7 +539,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     )
     mcp.bindAgentServices(agentRuns, agentRuns)
 
-    // Live sessions pick up KetraTerm theme/font changes from Settings.
+    // Live sessions pick up terminal theme/font changes from Settings.
     updatesScope.launch {
         store.state
             .map { Triple(it.terminalThemeId, it.terminalFontFamilyId, it.terminalFontSize) }

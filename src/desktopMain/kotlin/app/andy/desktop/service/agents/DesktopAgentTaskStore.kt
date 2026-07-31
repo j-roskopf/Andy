@@ -71,7 +71,7 @@ class DesktopAgentTaskStore(
     /** Task-local copies of managed evidence bundles (§4), keyed by bundle id under this directory. */
     fun taskEvidenceDir(taskId: String): File = File(taskDir(taskId), "evidence")
 
-    /** Cumulative KetraTerm scrollback (ANSI) for finished-chat replay. */
+    /** Cumulative terminal scrollback (ANSI) for finished-chat replay. */
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {

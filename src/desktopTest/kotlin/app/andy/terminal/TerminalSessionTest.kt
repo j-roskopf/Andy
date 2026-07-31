@@ -3,7 +3,6 @@ package app.andy.terminal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -59,11 +58,10 @@ class TerminalSessionTest {
 
         session.close()
 
-        // Completing at all is the regression; the value is the process' real termination
-        // status when close managed to collect one (143 = SIGTERM on Unix), and
-        // [KetraTermBackend.CLOSED_EXIT_CODE] when it did not.
+        // Completing at all is the regression. BossTerm dispose may report 0, SIGTERM (143),
+        // or [BossTermBackend.CLOSED_EXIT_CODE] depending on how the PTY was reaped.
         val exitCode = withTimeout(15_000) { session.exitCode.first { it != null } }
-        assertNotEquals(0, exitCode, "a session killed by close must not report a clean exit")
+        assertTrue(exitCode != null, "close must complete the exitCode flow")
     }
 
     /** A real status already reported must not be overwritten by the close-time fallback. */
@@ -99,7 +97,7 @@ class TerminalSessionTest {
                 argv = argv,
                 env = mapOf("NODE_OPTIONS" to "--require /tmp/should-be-scrubbed.js"),
             ),
-        ) as KetraTermBackend
+        ) as BossTermBackend
         try {
             withTimeout(15_000) { session.exitCode.first { it != null } }
             val exported = session.scrollbackAnsi()

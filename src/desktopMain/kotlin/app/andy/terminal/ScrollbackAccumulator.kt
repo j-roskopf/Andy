@@ -1,5 +1,41 @@
 package app.andy.terminal
 
+/**
+ * One captured terminal row. [plain] drives snapshot alignment and text search;
+ * [ansi] carries the styling replay needs to look like the live terminal.
+ */
+data class StyledTerminalRow(val plain: String, val ansi: String) {
+    val isBlank: Boolean = plain.isBlank()
+
+    /** [plain] without surrounding whitespace, shared by every alignment comparison. */
+    internal val trimmedPlain: String = plain.trim()
+
+    /**
+     * Cached [isVolatileTerminalChromeLine] verdict.
+     *
+     * Alignment scores one row against every candidate overlap, so recomputing the
+     * classifier per pair dominated scrollback derivation. The verdict is a pure
+     * function of [plain], so compute it at most once per row and reuse it thereafter.
+     */
+    internal val isVolatileChrome: Boolean
+        get() = when (volatileChrome) {
+            VOLATILE_TRUE -> true
+            VOLATILE_FALSE -> false
+            else -> isVolatileTerminalChromeLine(plain).also {
+                volatileChrome = if (it) VOLATILE_TRUE else VOLATILE_FALSE
+            }
+        }
+
+    @Volatile
+    private var volatileChrome: Byte = VOLATILE_UNKNOWN
+
+    private companion object {
+        const val VOLATILE_UNKNOWN: Byte = 0
+        const val VOLATILE_TRUE: Byte = 1
+        const val VOLATILE_FALSE: Byte = 2
+    }
+}
+
 /** CSI sequences other than SGR (`m`) — cursor motion, erases, mode switches. */
 private val NonSgrControlSequence = Regex("\u001B\\[[0-9;:?<=>]*[ -/]*[@-ln-~]")
 private val AnyEscapeSequence = Regex(
@@ -121,6 +157,12 @@ private fun terminalRowsEquivalent(
 ): Boolean {
     if (previous.plain == current.plain) return !current.isBlank
     if (previous.isVolatileChrome && current.isVolatileChrome) return true
+    if (isAntigravityWelcomeLine(previous.plain) && isAntigravityWelcomeLine(current.plain)) {
+        return true
+    }
+    if (isProviderLogoArtLine(previous.plain) && isProviderLogoArtLine(current.plain)) {
+        return true
+    }
     val left = previous.trimmedPlain
     val right = current.trimmedPlain
     val shorter = minOf(left.length, right.length)
@@ -168,17 +210,13 @@ internal fun compactRepeatedProviderStartupText(content: String): String {
 private fun compactProviderStartupSegment(
     rows: List<StyledTerminalRow>,
 ): List<StyledTerminalRow> {
-    val frameStarts = rows.indices.filter { index ->
-        index > 0 &&
-            isProviderBootBannerLine(rows[index].plain) &&
-            isTerminalBoxTop(rows[index - 1].plain)
-    }.map { it - 1 }
+    val frameStarts = providerStartupFrameStarts(rows)
     if (frameStarts.size < 2) return rows
 
     // A partially painted old-width border can precede the first complete frame. Drop
     // only that terminal chrome; preserve any real text earlier in the session.
     val prefix = rows.subList(0, frameStarts.first()).dropLastWhile { row ->
-        row.isBlank || isTerminalBoxTop(row.plain)
+        row.isBlank || isTerminalBoxTop(row.plain) || isProviderLogoArtLine(row.plain)
     }
     val mergedFrames = mutableListOf<StyledTerminalRow>()
     frameStarts.forEachIndexed { index, start ->
@@ -189,6 +227,31 @@ private fun compactProviderStartupSegment(
         )
     }
     return collapseRepeatedStartupChrome(prefix + mergedFrames)
+}
+
+/** Codex boxed banner or Antigravity welcome/logo frames that were captured more than once. */
+private fun providerStartupFrameStarts(rows: List<StyledTerminalRow>): List<Int> {
+    val codex = rows.indices.filter { index ->
+        index > 0 &&
+            isProviderBootBannerLine(rows[index].plain) &&
+            isTerminalBoxTop(rows[index - 1].plain)
+    }.map { it - 1 }
+    if (codex.size >= 2) return codex
+
+    val welcomes = rows.indices.filter { isAntigravityWelcomeLine(rows[it].plain) }
+    if (welcomes.size < 2) return emptyList()
+    return welcomes.map { welcomeIndex ->
+        var start = welcomeIndex
+        while (start > 0) {
+            val prev = rows[start - 1].plain
+            if (prev.isBlank() || isProviderLogoArtLine(prev)) {
+                start--
+            } else {
+                break
+            }
+        }
+        start
+    }.distinct()
 }
 
 /**
@@ -205,16 +268,23 @@ private fun collapseRepeatedStartupChrome(
     rows.forEach { row ->
         val previous = result.lastOrNull()
         val repeatedProviderBanner = previous?.plain == row.plain &&
-            isProviderBootBannerLine(row.plain)
+            (isProviderBootBannerLine(row.plain) || isAntigravityWelcomeLine(row.plain))
         val repeatedLeadingBoxTop = !providerBannerSeen &&
             previous != null &&
             isTerminalBoxTop(previous.plain) &&
             isTerminalBoxTop(row.plain)
-        if (repeatedProviderBanner || repeatedLeadingBoxTop) {
+        val repeatedLogoArt = !providerBannerSeen &&
+            previous != null &&
+            isProviderLogoArtLine(previous.plain) &&
+            isProviderLogoArtLine(row.plain) &&
+            previous.trimmedPlain == row.trimmedPlain
+        if (repeatedProviderBanner || repeatedLeadingBoxTop || repeatedLogoArt) {
             return@forEach
         }
         result += row
-        if (isProviderBootBannerLine(row.plain)) providerBannerSeen = true
+        if (isProviderBootBannerLine(row.plain) || isAntigravityWelcomeLine(row.plain)) {
+            providerBannerSeen = true
+        }
     }
     return result
 }
@@ -224,13 +294,83 @@ private fun isTerminalBoxTop(line: String): Boolean {
     return trimmed.startsWith('╭') && trimmed.endsWith('╮')
 }
 
+internal fun isAntigravityWelcomeLine(line: String): Boolean =
+    line.contains("Welcome to the Antigravity CLI", ignoreCase = true)
+
+/** Block-drawing logo rows (Antigravity rainbow mark) without relying on SGR. */
+internal fun isProviderLogoArtLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (trimmed.length < 2) return false
+    var blocks = 0
+    for (char in trimmed) {
+        if (char in PROVIDER_LOGO_BLOCK_CHARS) blocks++
+    }
+    return blocks * 2 >= trimmed.length
+}
+
+private const val PROVIDER_LOGO_BLOCK_CHARS =
+    "█▀▄▌▐░▒▓■□▪▫◆◇▲▼△▽◢◣◤◥▆▇▅▃▂▁▔▕▖▗▘▙▚▛▜▝▞▟"
+
 private fun mergeTerminalRows(
     captured: MutableList<StyledTerminalRow>,
     incoming: List<StyledTerminalRow>,
 ) {
-    val overlap = scrollbackSnapshotOverlap(captured, incoming)
+    val overlap = when {
+        isLikelyHomeRepaint(captured, incoming) -> minOf(captured.size, incoming.size)
+        else -> scrollbackSnapshotOverlap(captured, incoming)
+    }
     repeat(overlap) { captured.removeAt(captured.lastIndex) }
     captured += incoming
+}
+
+/**
+ * Alt-screen TUIs often CSI-home and repaint the whole viewport (boot chrome, growing
+ * markdown, tool lists). Line-by-line scoring then underlaps because most body rows
+ * changed, and the previous screen is appended again — duplicated headings/logos.
+ *
+ * When the top stable line of [incoming] matches the top stable line of the previous
+ * viewport, replace that viewport wholesale. True scrolling changes the top line, so
+ * those snapshots still go through [scrollbackSnapshotOverlap].
+ */
+private fun isLikelyHomeRepaint(
+    captured: List<StyledTerminalRow>,
+    incoming: List<StyledTerminalRow>,
+): Boolean {
+    if (incoming.size < HOME_REPAINT_MIN_ROWS || captured.size < incoming.size) return false
+    val previousTop = firstStableRow(captured.takeLast(incoming.size)) ?: return false
+    val incomingTop = firstStableRow(incoming) ?: return false
+    return terminalRowsEquivalent(previousTop, incomingTop) ||
+        previousTop.trimmedPlain == incomingTop.trimmedPlain
+}
+
+private fun firstStableRow(rows: List<StyledTerminalRow>): StyledTerminalRow? =
+    rows.firstOrNull { row ->
+        if (row.isBlank) return@firstOrNull false
+        if (isAntigravityWelcomeLine(row.plain) || isProviderLogoArtLine(row.plain)) return@firstOrNull true
+        !row.isVolatileChrome && row.trimmedPlain.length >= 8
+    }
+
+private const val HOME_REPAINT_MIN_ROWS = 12
+
+/**
+ * Fold a durable prefix ([committed]) into a freshly derived current-run transcript.
+ *
+ * Mid-session `.ansi` writes are often a partial prefix of the same raw run (history
+ * bridge / early persist). Blind concatenation duplicated Antigravity boot frames;
+ * accumulator merge collapses the overlap while still appending true prior sessions.
+ */
+internal fun combineCommittedAndDerivedScrollback(
+    committed: String,
+    derived: String,
+): String {
+    val prior = committed.trimEnd()
+    val current = derived.trimEnd()
+    if (prior.isEmpty()) return current
+    if (current.isEmpty()) return prior
+    val acc = ScrollbackAccumulator()
+    acc.seed(styledRowsFromAnsiText(prior))
+    acc.merge(styledRowsFromAnsiText(current))
+    return acc.render()
 }
 
 /**

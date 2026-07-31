@@ -53,7 +53,17 @@ object TmuxAndy {
         "set-option", "-g", "exit-empty", "off", ";",
         // Interactive agent TUIs need a real terminal type (Cursor hosts often use TERM=dumb).
         "set-option", "-g", "default-terminal", "xterm-256color", ";",
+        // tmux owns durable pane history while the attached client occupies BossTerm's
+        // alternate buffer. Mouse wheel events enter copy mode and scroll that history.
+        "set-option", "-g", "mouse", "on", ";",
+        "set-option", "-g", "history-limit", "10000", ";",
         "set-option", "-g", "status", "off", ";",
+        // tmux's default binding forwards WheelUpPane whenever alternate_on is true,
+        // which hands the gesture to agent TUIs instead of revealing pane history.
+        // Enter copy mode on the first upward wheel; copy-mode's native wheel bindings
+        // preserve position as output arrives and `-e` exits when scrolling to the bottom.
+        "bind-key", "-n", "WheelUpPane", "if-shell", "-F", "#{pane_in_mode}",
+        "send-keys -M", "copy-mode -e", ";",
         // CLI attach has no chrome — prefix-free ways back to `andy tui`.
         "bind-key", "-n", "F12", "detach-client", ";",
         "bind-key", "-n", "C-]", "detach-client", ";",

@@ -1,18 +1,19 @@
 package app.andy.terminal
 
-import app.andy.model.TerminalAppearanceSnapshot
-import io.github.ketraterm.core.TerminalBuffers
-import io.github.ketraterm.core.api.TerminalBuffer
-import io.github.ketraterm.session.TerminalSession as KetraSession
-import io.github.ketraterm.transport.TerminalConnector
-import io.github.ketraterm.transport.TerminalConnectorListener
-import io.github.ketraterm.ui.swing.api.SwingTerminal
-import java.awt.event.MouseWheelListener
+import ai.rever.bossterm.compose.daemon.HeadlessTerminalDisplay
+import ai.rever.bossterm.core.util.TermSize
+import ai.rever.bossterm.terminal.ArrayTerminalDataStream
+import ai.rever.bossterm.terminal.RequestOrigin
+import ai.rever.bossterm.terminal.TerminalColor
+import ai.rever.bossterm.terminal.TextStyle
+import ai.rever.bossterm.terminal.emulator.BossEmulator
+import ai.rever.bossterm.terminal.model.BossTerminal
+import ai.rever.bossterm.terminal.model.StyleState
+import ai.rever.bossterm.terminal.model.TerminalLine
+import ai.rever.bossterm.terminal.model.TerminalTextBuffer
 import java.io.File
 import java.nio.charset.StandardCharsets
-import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicLong
-import javax.swing.SwingUtilities
 
 /** Soft cap for cumulative `scrollback.ansi` files (~5 MB). */
 internal const val SCROLLBACK_MAX_BYTES: Int = 5 * 1024 * 1024
@@ -401,48 +402,6 @@ class RawScrollbackFile(
 }
 
 /**
- * Collapse legacy raw ANSI tee streams into readable plain text. New scrollback files
- * are already resolved on write; this mainly repairs pre-fix `scrollback.ansi` blobs.
- */
-internal fun resolveScrollbackForReplay(
-    content: String,
-    cols: Int = 120,
-    rows: Int = 32,
-): String {
-    if (content.isBlank() || !looksLikeRawAnsiTee(content)) return content
-    return joinReadableLines(replayCaptureReadableLines(content, cols, rows))
-}
-
-/** Feed legacy ANSI in chunks and capture readable lines before spinner history pushes them out. */
-internal fun replayCaptureReadableLines(
-    content: String,
-    cols: Int = 120,
-    rows: Int = 32,
-    chunkSize: Int = 8_192,
-): List<String> {
-    val bytes = content.toByteArray(StandardCharsets.UTF_8)
-    val buffer = TerminalBuffers.create(width = cols, height = rows, maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY)
-    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
-    val seen = LinkedHashSet<String>()
-    val captured = mutableListOf<String>()
-    return try {
-        session.start(cols, rows)
-        var offset = 0
-        while (offset < bytes.size) {
-            val length = minOf(chunkSize, bytes.size - offset)
-            session.onBytes(bytes, offset, length)
-            offset += length
-            for (line in captureNewReadableLines(buffer, seen)) {
-                captured += line
-            }
-        }
-        captured
-    } finally {
-        runCatching { session.close() }
-    }
-}
-
-/**
  * In-band layout record for `scrollback.raw`.
  *
  * PTY output contains absolute cursor addressing but not the terminal dimensions that give
@@ -453,6 +412,24 @@ internal fun replayCaptureReadableLines(
 private const val SCROLLBACK_LAYOUT_OSC = "777;andy-grid="
 private val ScrollbackLayoutMarker = Regex(
     "\u001B]${Regex.escape(SCROLLBACK_LAYOUT_OSC)}(\\d+)x(\\d+)\u0007",
+)
+
+/**
+ * Remove attached-client copy-mode redraws from legacy raw tmux recordings.
+ *
+ * Old Andy builds teed bytes rendered by `tmux attach-session`. Scrolling therefore
+ * recorded tmux's yellow `HH:mm [position/history]` client overlay and every historical
+ * viewport the user visited as if it were fresh agent output. New builds never persist
+ * attached-client bytes. For an existing file, output before the first unmistakable tmux
+ * overlay is the pane's real stream and is safe to reconstruct once.
+ */
+internal fun trimLegacyTmuxCopyModeOutput(content: String): String {
+    val marker = LegacyTmuxCopyModeMarker.find(content) ?: return content
+    return content.substring(0, marker.range.first).trimEnd()
+}
+
+private val LegacyTmuxCopyModeMarker = Regex(
+    "\u001B\\[30m\u001B\\[43m\\d{1,2}:\\d{2} \\[\\d+/\\d+]",
 )
 
 internal fun scrollbackLayoutMarker(columns: Int, rows: Int): String {
@@ -481,8 +458,16 @@ internal fun inferScrollbackGridSize(
     fallbackColumns: Int = REPLAY_COLUMNS,
     fallbackRows: Int = REPLAY_ROWS,
 ): ScrollbackGridSize {
-    ScrollbackLayoutMarker.find(content)?.let { marker ->
-        layoutMarkerGrid(marker)?.let { return it }
+    // Markers record the live PTY grid, but a stale default (e.g. 120x32 written before the
+    // first real resize) must not win over CUP/CHA evidence from the stream itself. Replaying
+    // a 50-row TUI into a 32-row buffer turns every home-repaint into pages of duplicates.
+    var markerColumns = 0
+    var markerRows = 0
+    ScrollbackLayoutMarker.findAll(content).forEach { marker ->
+        layoutMarkerGrid(marker)?.let { grid ->
+            markerColumns = maxOf(markerColumns, grid.columns)
+            markerRows = maxOf(markerRows, grid.rows)
+        }
     }
 
     var maxColumn = 0
@@ -499,9 +484,13 @@ internal fun inferScrollbackGridSize(
         val payloadWidth = visiblePayloadWidth(content, match.range.last + 1)
         maxColumn = maxOf(maxColumn, column + (payloadWidth - 1).coerceAtLeast(0))
     }
+    val cupColumns = maxColumn.takeIf { it >= MIN_INFERRED_COLUMNS } ?: 0
+    val cupRows = maxRow.takeIf { it >= MIN_INFERRED_ROWS } ?: 0
     return ScrollbackGridSize(
-        columns = maxColumn.takeIf { it >= MIN_INFERRED_COLUMNS } ?: fallbackColumns,
-        rows = maxRow.takeIf { it >= MIN_INFERRED_ROWS } ?: fallbackRows,
+        // Prefer the larger of marker vs CUP. A too-small stale marker alone caused
+        // full-screen TUI repaints to be mis-merged as pages of duplicated history.
+        columns = maxOf(markerColumns, cupColumns).takeIf { it > 0 } ?: fallbackColumns,
+        rows = maxOf(markerRows, cupRows).takeIf { it > 0 } ?: fallbackRows,
     )
 }
 
@@ -536,47 +525,6 @@ private val CursorHorizontalAbsolute = Regex("\u001B\\[(\\d+)G")
 private const val MIN_INFERRED_COLUMNS = 40
 private const val MIN_INFERRED_ROWS = 10
 
-/**
- * Feed the *complete* raw PTY tee ([ScrollbackAnsiTee.snapshot]) through a fresh terminal
- * emulator, sampling styled rows at terminal-aware boundaries instead of relying on a
- * live poll.
- *
- * Agent CLIs redraw on the alt screen, which has no native scrollback: whatever is not
- * currently visible when a live poll samples the screen is gone forever, and a fast model
- * (or a fast redraw) can blow through several screens' worth of content between two polls
- * of even a tight timer. The raw tee itself never loses a byte, so replaying it and
- * sampling completed redraws plus bounded complete-line batches reconstructs the full
- * transcript independently of how fast the original output streamed in. [chunkSize]
- * bounds only ordinary sequential output; full redraws remain atomic.
- *
- * New raw mirrors carry in-band layout records, so every redraw is replayed at the same
- * dimensions as the live terminal. For captures made before those records existed,
- * [inferScrollbackGridSize] recovers the grid from absolute cursor addressing. Explicit
- * [cols]/[rows] remain available as legacy fallbacks.
- */
-internal fun replayCaptureStyledRows(
-    content: String,
-    cols: Int = 0,
-    rows: Int = 0,
-    chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
-): List<StyledTerminalRow> {
-    val inferred = inferScrollbackGridSize(content)
-    val initialColumns = cols.takeIf { it > 0 } ?: inferred.columns
-    val initialRows = rows.takeIf { it > 0 } ?: inferred.rows
-    return ScrollbackReplayCapture(initialColumns, initialRows, chunkSize).use { replay ->
-        replay.capture(
-            ScrollbackAnsiSnapshot(
-                content = content,
-                startOffset = 0L,
-                endOffset = content.length.toLong(),
-                epoch = 0L,
-                columns = initialColumns,
-                rows = initialRows,
-            ),
-        )
-    }
-}
-
 /** A retained window of raw PTY output positioned within its full stream. */
 data class ScrollbackAnsiSnapshot(
     val content: String,
@@ -601,13 +549,77 @@ data class ScrollbackGridSize(
     val rows: Int,
 )
 
+
+
 /**
- * Incrementally reconstructs styled history from a raw PTY stream.
- *
- * Layout markers split the stream at resize boundaries. They are consumed here instead of
- * being sent to the emulator, and each output segment is painted on the grid that was live
- * when it arrived. If a consumer misses more than the tee retains (or the tee is cleared),
- * rebuilding from the retained window still produces a safe capture.
+ * Collapse legacy raw ANSI tee streams into readable plain text. New scrollback files
+ * are already resolved on write; this mainly repairs pre-fix `scrollback.ansi` blobs.
+ */
+internal fun resolveScrollbackForReplay(
+    content: String,
+    cols: Int = 120,
+    rows: Int = 32,
+): String {
+    if (content.isBlank() || !looksLikeRawAnsiTee(content)) return content
+    return joinReadableLines(replayCaptureReadableLines(content, cols, rows))
+}
+
+/** Feed legacy ANSI in chunks and capture readable lines before spinner history pushes them out. */
+internal fun replayCaptureReadableLines(
+    content: String,
+    cols: Int = 120,
+    rows: Int = 32,
+    chunkSize: Int = 8_192,
+): List<String> {
+    val seen = LinkedHashSet<String>()
+    val captured = mutableListOf<String>()
+    BossTermScrollbackReplay(cols, rows).use { replay ->
+        var offset = 0
+        while (offset < content.length) {
+            val end = minOf(offset + chunkSize, content.length)
+            replay.feed(content.substring(offset, end))
+            for (line in replay.readableLines()) {
+                val key = line.trim()
+                if (key.isEmpty() || key in seen) continue
+                seen += key
+                captured += line
+            }
+            offset = end
+        }
+    }
+    return captured
+}
+
+/**
+ * Feed the complete raw PTY tee through a fresh BossTerm emulator, sampling styled rows
+ * at terminal-aware boundaries. Agent CLIs redraw on the alt screen, which has no native
+ * scrollback — the raw tee is the source of truth.
+ */
+internal fun replayCaptureStyledRows(
+    content: String,
+    cols: Int = 0,
+    rows: Int = 0,
+    chunkSize: Int = REPLAY_CAPTURE_CHUNK_SIZE,
+): List<StyledTerminalRow> {
+    val inferred = inferScrollbackGridSize(content)
+    val initialColumns = cols.takeIf { it > 0 } ?: inferred.columns
+    val initialRows = rows.takeIf { it > 0 } ?: inferred.rows
+    return ScrollbackReplayCapture(initialColumns, initialRows, chunkSize).use { replay ->
+        replay.capture(
+            ScrollbackAnsiSnapshot(
+                content = content,
+                startOffset = 0L,
+                endOffset = content.length.toLong(),
+                epoch = 0L,
+                columns = initialColumns,
+                rows = initialRows,
+            ),
+        )
+    }
+}
+
+/**
+ * Incrementally reconstructs styled history from a raw PTY stream via BossTerm.
  */
 class ScrollbackReplayCapture(
     cols: Int = REPLAY_COLUMNS,
@@ -616,15 +628,10 @@ class ScrollbackReplayCapture(
 ) : AutoCloseable {
     private var currentColumns = cols.coerceAtLeast(1)
     private var currentRows = rows.coerceAtLeast(1)
-    private var session = newSession()
+    private var replay = BossTermScrollbackReplay(currentColumns, currentRows)
     private var captured = ScrollbackAccumulator()
-    private val frameCache = StyledTerminalFrameCache()
     private var lastOffset = 0L
     private var lastEpoch = 0L
-
-    init {
-        session.start(currentColumns, currentRows)
-    }
 
     fun capture(snapshot: ScrollbackAnsiSnapshot): List<StyledTerminalRow> {
         val mustReset = snapshot.epoch != lastEpoch ||
@@ -664,49 +671,226 @@ class ScrollbackReplayCapture(
     private fun captureTerminalBytes(content: String) {
         if (content.isEmpty()) return
         for (chunk in replayCaptureChunks(content, chunkSize, currentRows)) {
-            val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
-            session.onBytes(bytes, 0, bytes.size)
-            // Sample only after a complete redraw or complete-line batch. Arbitrary byte
-            // slices expose half-painted screens and make the accumulator preserve each
-            // transient repaint as duplicated, ill-formatted history.
-            captured.merge(frameCache.read(session, maxRows = currentRows))
+            replay.feed(chunk)
+            captured.merge(replay.styledRows(maxRows = currentRows))
         }
     }
 
     private fun resizeGrid(columns: Int, rows: Int) {
         if (columns <= 0 || rows <= 0) return
-        if (columns == currentColumns && rows == currentRows) return
-        currentColumns = columns
-        currentRows = rows
-        session.resize(columns, rows)
-        frameCache.clear()
+        // Never shrink during replay. Stale `andy-grid` markers (defaults written before the
+        // live window resized) would otherwise collapse a tall TUI into a short buffer and
+        // duplicate every subsequent home-repaint into history.
+        val nextColumns = maxOf(currentColumns, columns)
+        val nextRows = maxOf(currentRows, rows)
+        if (nextColumns == currentColumns && nextRows == currentRows) return
+        currentColumns = nextColumns
+        currentRows = nextRows
+        replay.resize(nextColumns, nextRows)
     }
 
+    /** Live replay grid; used to detect when a growing stream needs a taller capture. */
+    fun gridSize(): ScrollbackGridSize = ScrollbackGridSize(currentColumns, currentRows)
+
     private fun reset(epoch: Long, offset: Long, columns: Int, rows: Int) {
-        runCatching { session.close() }
+        runCatching { replay.close() }
         currentColumns = columns.coerceAtLeast(1)
         currentRows = rows.coerceAtLeast(1)
-        session = newSession()
-        session.start(currentColumns, currentRows)
+        replay = BossTermScrollbackReplay(currentColumns, currentRows)
         captured = ScrollbackAccumulator()
-        frameCache.clear()
         lastEpoch = epoch
         lastOffset = offset
     }
 
-    private fun newSession(): KetraSession = KetraSession.create(
-        terminal = TerminalBuffers.create(
-            width = currentColumns,
-            height = currentRows,
-            maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
-        ),
-        connector = ParkedTerminalConnector(),
-    )
-
     override fun close() {
-        runCatching { session.close() }
+        runCatching { replay.close() }
     }
 }
+
+/** Headless BossTerm emulator used only for raw-tee → transcript derivation. */
+internal class BossTermScrollbackReplay(
+    cols: Int,
+    rows: Int,
+) : AutoCloseable {
+    private var columns = cols.coerceAtLeast(1)
+    private var rowCount = rows.coerceAtLeast(1)
+    private val styleState = StyleState()
+    private var textBuffer = TerminalTextBuffer(columns, rowCount, styleState, BossTermBackend.DEFAULT_MAX_HISTORY)
+    private val display = HeadlessTerminalDisplay(columns, rowCount)
+    private var terminal = BossTerminal(display, textBuffer, styleState)
+
+    fun feed(chunk: String) {
+        if (chunk.isEmpty()) return
+        val stream = ArrayTerminalDataStream(chunk.toCharArray())
+        val emulator = BossEmulator(stream, terminal, allowKittyFileTransfers = false)
+        while (emulator.hasNext()) {
+            emulator.next()
+        }
+    }
+
+    fun resize(cols: Int, rows: Int) {
+        columns = cols.coerceAtLeast(1)
+        rowCount = rows.coerceAtLeast(1)
+        runCatching {
+            terminal.resize(TermSize(columns, rowCount), RequestOrigin.User)
+        }
+    }
+
+    fun readableLines(): List<String> = styledRows().map { it.plain }
+
+    fun styledRows(maxRows: Int = 0): List<StyledTerminalRow> {
+        val snapshot = textBuffer.createSnapshot()
+        val height = snapshot.height
+        if (height <= 0) return emptyList()
+        // Capture/merge samples must be the visible screen only. Including history lines
+        // re-emits already-scrolled rows on every sample and duplicates pages of history.
+        if (maxRows > 0) {
+            val wanted = minOf(maxRows, height)
+            val start = height - wanted
+            val rows = ArrayList<StyledTerminalRow>(wanted)
+            var row = start
+            while (row < height) {
+                rows += styledRowFromTerminalLine(snapshot.getLine(row))
+                row++
+            }
+            return rows
+        }
+        val total = snapshot.historyLinesCount + height
+        val rows = ArrayList<StyledTerminalRow>(total)
+        var row = -snapshot.historyLinesCount
+        while (row < height) {
+            rows += styledRowFromTerminalLine(snapshot.getLine(row))
+            row++
+        }
+        return rows
+    }
+
+    override fun close() {
+        runCatching { terminal.disconnected() }
+    }
+}
+
+/**
+ * Export one emulator line as plain text (for merge/alignment) plus SGR-styled ANSI
+ * (for durable `scrollback.ansi` and BossTerm history replay).
+ */
+internal fun styledRowFromTerminalLine(line: TerminalLine): StyledTerminalRow {
+    val plainFull = line.text
+    val plain = plainFull.trimEnd()
+    if (plain.isEmpty()) return StyledTerminalRow("", "")
+
+    val ansi = StringBuilder(plain.length + 16)
+    var emitted = 0
+    var lastStyle: TextStyle? = null
+    for (entry in line.entries) {
+        if (entry == null) continue
+        if (emitted >= plain.length) break
+        val text = entry.text.toString()
+        if (text.isEmpty()) continue
+        val remaining = plain.length - emitted
+        val piece = if (text.length <= remaining) text else text.substring(0, remaining)
+        val style = entry.style
+        if (style != lastStyle) {
+            ansi.append(textStyleToSgr(style))
+            lastStyle = style
+        }
+        ansi.append(piece)
+        emitted += piece.length
+    }
+    if (lastStyle != null) ansi.append("\u001b[0m")
+    return StyledTerminalRow(plain = plain, ansi = ansi.toString())
+}
+
+/** CSI SGR for a BossTerm [TextStyle], always starting from a reset for stable row splicing. */
+internal fun textStyleToSgr(style: TextStyle): String {
+    if (style == TextStyle.EMPTY) return "\u001b[0m"
+    val codes = mutableListOf("0")
+    if (style.hasOption(TextStyle.Option.BOLD)) codes += "1"
+    if (style.hasOption(TextStyle.Option.DIM)) codes += "2"
+    if (style.hasOption(TextStyle.Option.ITALIC)) codes += "3"
+    if (style.hasOption(TextStyle.Option.UNDERLINED)) codes += "4"
+    if (style.hasOption(TextStyle.Option.INVERSE)) codes += "7"
+    if (style.hasOption(TextStyle.Option.HIDDEN)) codes += "8"
+    appendTerminalColorSgr(codes, style.foreground, foreground = true)
+    appendTerminalColorSgr(codes, style.background, foreground = false)
+    return "\u001b[${codes.joinToString(";")}m"
+}
+
+private fun appendTerminalColorSgr(
+    codes: MutableList<String>,
+    color: TerminalColor?,
+    foreground: Boolean,
+) {
+    if (color == null) return
+    if (color.isIndexed) {
+        val index = color.colorIndex
+        when (index) {
+            in 0..7 -> codes += ((if (foreground) 30 else 40) + index).toString()
+            in 8..15 -> codes += ((if (foreground) 90 else 100) + (index - 8)).toString()
+            else -> {
+                codes += if (foreground) "38" else "48"
+                codes += "5"
+                codes += index.toString()
+            }
+        }
+        return
+    }
+    val rgb = runCatching { color.toColor() }.getOrNull() ?: return
+    codes += if (foreground) "38" else "48"
+    codes += "2"
+    codes += rgb.red.toString()
+    codes += rgb.green.toString()
+    codes += rgb.blue.toString()
+}
+
+/**
+ * True when a persisted `.ansi` transcript looks like the BossTerm migration bug that
+ * wrote plain screen text into both fields (no real SGR) and/or duplicated full frames.
+ */
+internal fun looksLikeBrokenPlainScrollback(content: String): Boolean {
+    if (content.isBlank()) return false
+    if (looksLikeRawAnsiTee(content)) return false
+    val lines = content.replace("\r\n", "\n").split('\n')
+    if (lines.size < 40) {
+        // Short files: plain-only (no SGR) after a session that should have had color is suspicious
+        // only when we also see extreme repetition.
+    }
+    val hasRealSgr = SGR_SEQUENCE.containsMatchIn(content)
+    val counts = HashMap<String, Int>()
+    var maxRepeat = 0
+    for (line in lines) {
+        val key = stripAnsi(line).trim()
+        if (key.length < 12) continue
+        val next = (counts[key] ?: 0) + 1
+        counts[key] = next
+        if (next > maxRepeat) maxRepeat = next
+    }
+    // Hundreds of identical banners = the alt-screen home-repaint duplication bug.
+    if (maxRepeat >= 8) return true
+    // Even styled transcripts can keep progressive boot frames / section redraws.
+    if (maxRepeat >= 4 && lines.size >= 40) return true
+    val antigravityWelcomes = lines.count { isAntigravityWelcomeLine(it) }
+    if (antigravityWelcomes >= 2) return true
+    // Plain-only long transcripts from agent TUIs lost all styling during migration.
+    if (!hasRealSgr && lines.size >= 30 && maxRepeat >= 3) return true
+    return false
+}
+
+/** Collapse adjacent identical non-blank lines left by older plain exports. */
+internal fun collapseRepeatedScrollbackLines(content: String): String {
+    if (content.isBlank()) return content.trimEnd()
+    val out = ArrayList<String>()
+    var prevPlain: String? = null
+    for (line in content.replace("\r\n", "\n").split('\n')) {
+        val plain = stripAnsi(line).trimEnd()
+        if (plain.isNotEmpty() && plain == prevPlain) continue
+        out += line
+        prevPlain = plain
+    }
+    return out.joinToString("\n").trimEnd()
+}
+
+private val SGR_SEQUENCE = Regex("\u001B\\[[0-9;]*m")
 
 /** Replay grid height: taller than any real viewport so one sequential batch cannot outrun it. */
 private const val REPLAY_ROWS = 200
@@ -716,6 +900,7 @@ private const val REPLAY_CAPTURE_CHUNK_SIZE = 1_024
 
 /** Replay grid width: matches the agent CLI terminal's own default column count. */
 private const val REPLAY_COLUMNS = 120
+
 
 /**
  * Split a raw PTY tee at terminal-aware capture points.
@@ -862,187 +1047,4 @@ internal fun scrollbackReplayColumns(
     // One spare column: a row exactly as wide as the terminal triggers an auto-wrap
     // that turns the following newline into a blank line.
     return (widest + 1).coerceIn(minColumns, maxColumns)
-}
-
-/**
- * Build a read-only [SwingTerminal] that replays [content] instantly and stays
- * open for scrolling. User keystrokes are discarded by the parked connector.
- *
- * [content] is written to the emulator verbatim so colors, indentation and box
- * drawing land exactly as they did live. Legacy raw PTY tees must be collapsed to
- * text by the caller first — replaying their cursor motion paints overlapping garbage.
- *
- * Dispose with [disposeScrollbackReplayTerminal] so the replay session goes with the widget.
- */
-fun createScrollbackReplayTerminal(
-    content: String,
-    cols: Int = 0,
-    rows: Int = 32,
-    appearance: TerminalAppearanceSnapshot = TerminalAppearanceSnapshot(),
-): SwingTerminal {
-    val display = content.trimEnd().ifBlank { "(no readable history for this chat)" }
-    val columns = if (cols > 0) cols else scrollbackReplayColumns(display)
-    val payload = (display.replace("\r\n", "\n").replace("\n", "\r\n") + "\u001b[0m\u001b[?25l")
-        .toByteArray(StandardCharsets.UTF_8)
-    val buffer = TerminalBuffers.create(
-        width = columns,
-        height = rows,
-        maxHistory = KetraTermBackend.DEFAULT_MAX_HISTORY,
-    )
-    val session = KetraSession.create(terminal = buffer, connector = ParkedTerminalConnector())
-    session.start(columns, rows)
-    session.onBytes(payload, 0, payload.size)
-    return onSwingEdt {
-        val settings = appearance.toScrollbackReplaySettings(columns = columns, rows = rows)
-        SwingTerminal(
-            settingsProvider = { settings },
-            hostServices = andyScrollbackSwingHostServices(),
-        ).also { terminal ->
-            terminal.bind(session)
-            // History is view-only — keep focus out of the widget so typing goes to
-            // the follow-up composer (or elsewhere), not the parked replay session.
-            terminal.isFocusable = false
-            installScrollbackReplayWheelHandler(terminal)
-            scrollbackReplaySessions[terminal] = session
-        }
-    }
-}
-
-/**
- * Dispose a widget built by [createScrollbackReplayTerminal], closing its replay session.
- *
- * [SwingTerminal.dispose] only unbinds, so disposing alone leaks the session's render worker
- * thread — one per history peek — for the life of the app.
- */
-fun disposeScrollbackReplayTerminal(terminal: SwingTerminal) {
-    val session = onSwingEdt {
-        runCatching { terminal.dispose() }
-        scrollbackReplaySessions.remove(terminal)
-    } ?: return
-    // TerminalSession.close awaits its render worker, so keep it off the EDT.
-    Thread({ runCatching { session.close() } }, "andy-scrollback-replay-close").apply {
-        isDaemon = true
-        start()
-    }
-}
-
-/** Replay session per viewer widget, so disposal can close it. EDT only. */
-private val scrollbackReplaySessions = WeakHashMap<SwingTerminal, KetraSession>()
-
-/**
- * KetraTerm only scrolls on wheel when the terminal is focused. Replay viewers stay
- * unfocusable so follow-up typing stays in the composer, so wheel deltas are applied
- * explicitly here.
- */
-internal fun installScrollbackReplayWheelHandler(terminal: SwingTerminal) {
-    terminal.addMouseWheelListener(
-        MouseWheelListener { event ->
-            val delta = terminalWheelScrollDelta(
-                event = event,
-                visibleRows = runCatching { terminal.visibleGridSize().height }.getOrDefault(1),
-            )
-            if (delta != 0.0) {
-                terminal.scrollViewportBy(delta)
-            }
-        },
-    )
-}
-
-/** Forwards transport events while teeing host→emulator stdout into [tee]. */
-internal class TeeTerminalConnector(
-    private val delegate: TerminalConnector,
-    private val tee: ScrollbackAnsiTee,
-) : TerminalConnector {
-    override fun start(listener: TerminalConnectorListener) {
-        delegate.start(
-            object : TerminalConnectorListener {
-                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
-                    tee.append(bytes, offset, length)
-                    listener.onBytes(bytes, offset, length)
-                }
-
-                override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)
-
-                override fun onError(error: Throwable) = listener.onError(error)
-            },
-        )
-    }
-
-    override fun write(bytes: ByteArray, offset: Int, length: Int) =
-        delegate.write(bytes, offset, length)
-
-    override fun resize(columns: Int, rows: Int) = delegate.resize(columns, rows)
-
-    override fun close() = delegate.close()
-}
-
-/**
- * Tee for agent-CLI sessions. Currently identical to [TeeTerminalConnector].
- *
- * This used to strip show-cursor (`ESC [ ? 2 5 h`) so KetraTerm stayed cursorless while an
- * agent TUI drew its own prompt block; that was removed in 4234932. It is kept as a distinct
- * type because `agentCliMode` is the seam where PTY bytes can be filtered before either the tee
- * or the emulator sees them, and only agent sessions may be filtered that way.
- *
- * Restoring a filter here is a rendering decision, not a performance one: feeding those bytes
- * through costs nothing measurable (`LiveTerminalPipelineBenchmark`'s `cursor-25h` variant is
- * within noise of its control).
- */
-internal class AgentCliTeeTerminalConnector(
-    private val delegate: TerminalConnector,
-    private val tee: ScrollbackAnsiTee,
-) : TerminalConnector {
-    override fun start(listener: TerminalConnectorListener) {
-        delegate.start(
-            object : TerminalConnectorListener {
-                override fun onBytes(bytes: ByteArray, offset: Int, length: Int) {
-                    tee.append(bytes, offset, length)
-                    listener.onBytes(bytes, offset, length)
-                }
-
-                override fun onClosed(exitCode: Int?) = listener.onClosed(exitCode)
-
-                override fun onError(error: Throwable) = listener.onError(error)
-            },
-        )
-    }
-
-    override fun write(bytes: ByteArray, offset: Int, length: Int) =
-        delegate.write(bytes, offset, length)
-
-    override fun resize(columns: Int, rows: Int) = delegate.resize(columns, rows)
-
-    override fun close() = delegate.close()
-}
-
-/** Parked connector for sessions fed manually via [io.github.ketraterm.session.TerminalSession.onBytes]. */
-internal class ParkedTerminalConnector : TerminalConnector {
-    override fun start(listener: TerminalConnectorListener) = Unit
-    override fun write(bytes: ByteArray, offset: Int, length: Int) = Unit
-    override fun resize(columns: Int, rows: Int) = Unit
-    override fun close() = Unit
-}
-
-/** Feeds [ansi] synchronously when the session connector starts. */
-internal class SynchronousAnsiConnector(
-    private val ansi: ByteArray,
-) : TerminalConnector {
-    override fun start(listener: TerminalConnectorListener) {
-        if (ansi.isNotEmpty()) {
-            listener.onBytes(ansi, 0, ansi.size)
-        }
-    }
-
-    override fun write(bytes: ByteArray, offset: Int, length: Int) = Unit
-
-    override fun resize(columns: Int, rows: Int) = Unit
-
-    override fun close() = Unit
-}
-
-internal fun <T> onSwingEdt(block: () -> T): T {
-    if (SwingUtilities.isEventDispatchThread()) return block()
-    var result: Result<T>? = null
-    SwingUtilities.invokeAndWait { result = runCatching(block) }
-    return result!!.getOrThrow()
 }

@@ -7,6 +7,16 @@ import kotlin.test.assertEquals
 
 class SkillRootsTest {
     @Test
+    fun hermesAndOpenClawUseNativeRootsBeforeWorkspaceFallbacks() {
+        val home = File("/test/home")
+        val workspace = File("/test/workspace")
+        assertEquals(listOf(File(workspace, ".hermes/skills"), File(home, ".hermes/skills")), skillRootsFor(AgentKind.Hermes, workspace, home))
+        assertEquals(
+            listOf(File(workspace, ".openclaw/skills"), File(workspace, "skills"), File(home, ".openclaw/skills")),
+            skillRootsFor(AgentKind.OpenClaw, workspace, home),
+        )
+    }
+    @Test
     fun cursorIncludesCompatibleCodexSkillsAfterNativeRoots() {
         val home = File("/test/home")
         val workspace = File("/test/workspace")

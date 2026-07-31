@@ -103,6 +103,8 @@ class AgentCliLocator {
                 "$home/.pi/bin/pi",
                 "$home/.local/share/pi/bin/pi",
             )
+            AgentKind.Hermes -> listOf("$home/.local/bin/hermes", "$home/.local/share/uv/tools/hermes/bin/hermes")
+            AgentKind.OpenClaw -> listOf("$home/.local/bin/openclaw", "/opt/homebrew/bin/openclaw")
         }
         return (common + specific).firstOrNull { File(it).canExecute() }
     }

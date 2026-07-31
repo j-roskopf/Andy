@@ -38,6 +38,8 @@ import app.andy.andy.generated.resources.agent_codex
 import app.andy.andy.generated.resources.agent_cursor
 import app.andy.andy.generated.resources.agent_opencode
 import app.andy.andy.generated.resources.agent_pi
+import app.andy.andy.generated.resources.agent_hermes
+import app.andy.andy.generated.resources.agent_openclaw
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
@@ -67,6 +69,8 @@ private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
     AgentKind.Antigravity -> Res.drawable.agent_antigravity
     AgentKind.OpenCode -> Res.drawable.agent_opencode
     AgentKind.Pi -> Res.drawable.agent_pi
+    AgentKind.Hermes -> Res.drawable.agent_hermes
+    AgentKind.OpenClaw -> Res.drawable.agent_openclaw
 }
 
 private val PiViolet = Color(0xFFA78BFA)
@@ -78,6 +82,8 @@ internal fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.Antigravity -> Red
     AgentKind.OpenCode -> Yellow
     AgentKind.Pi -> PiViolet
+    AgentKind.Hermes -> Color(0xFF32C7B5)
+    AgentKind.OpenClaw -> Color(0xFFFF5A2D)
 }
 
 internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {

@@ -65,10 +65,6 @@ private data class MirrorPopOutWindow(
 )
 
 fun main() {
-    app.andy.terminal.AndyKetraTermConfig.ensureInitialized()
-    // Before any terminal widget exists: RepaintManager is per-AppContext and swapping it
-    // out from under live components would strand whatever they had already queued.
-    app.andy.terminal.TerminalRepaintThrottle.ensureInstalled()
     runCatching { app.andy.desktop.service.agents.AndyStatusHookInstaller.ensureInstalled() }
     runCatching { app.andy.desktop.service.agents.AndyPiExtensionInstaller.ensureInstalled() }
     installRuntimeAppIcon()
