@@ -578,6 +578,7 @@ class AgentTerminalManager(
                 session = session,
                 onSnapshot = onStatusSnapshot,
                 foreground = foreground,
+                suppressPrematureIdle = true,
             )
             artifacts.start()
             tracker.start()

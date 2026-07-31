@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +49,7 @@ import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.CommandResult
 import app.andy.ui.components.Button
+import app.andy.ui.components.EmptyState
 import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
@@ -87,6 +89,7 @@ internal fun AppsScreen(
     var permissions by remember { mutableStateOf<List<AndroidPermission>>(emptyList()) }
     var activities by remember { mutableStateOf<List<AndroidActivity>>(emptyList()) }
     var status by remember { mutableStateOf("Select a device") }
+    var packagesLoading by remember { mutableStateOf(false) }
     var localListPaneWidth by remember(listPaneWidth) { mutableStateOf(listPaneWidth) }
     var localDetailsPaneHeight by remember(detailsPaneHeight) { mutableStateOf(detailsPaneHeight) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
@@ -95,13 +98,23 @@ internal fun AppsScreen(
     fun refresh() {
         if (serial == null) {
             status = "Select an online device"
+            packagesLoading = false
             return
         }
         scope.launch {
+            packagesLoading = true
             status = "Loading packages..."
-            rows = apps.listApps(serial)
-            selected = selected?.let { current -> rows.firstOrNull { it.packageName == current.packageName } }
-            status = "${rows.size} apps"
+            runCatching { apps.listApps(serial) }
+                .onSuccess { loadedRows ->
+                    rows = loadedRows
+                    selected = selected?.let { current -> rows.firstOrNull { it.packageName == current.packageName } }
+                    status = "${loadedRows.size} apps"
+                }
+                .onFailure {
+                    rows = emptyList()
+                    status = "Unable to load packages"
+                }
+            packagesLoading = false
         }
     }
 
@@ -121,8 +134,10 @@ internal fun AppsScreen(
         activities = emptyList()
         val currentSerial = serial ?: run {
             status = "Select an online device"
+            packagesLoading = false
             return@LaunchedEffect
         }
+        packagesLoading = true
         status = "Loading packages..."
         runCatching { apps.listApps(currentSerial) }
             .onSuccess { loadedRows ->
@@ -136,6 +151,7 @@ internal fun AppsScreen(
                 rows = emptyList()
                 status = "Unable to load packages"
             }
+        packagesLoading = false
     }
     val filtered = remember(rows, query) {
         rows.filter { app ->
@@ -156,33 +172,66 @@ internal fun AppsScreen(
             )
             TextField(query, { query = it }, placeholder = { Text("Filter packages", color = TextSecondary) }, singleLine = true, modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors())
             TableHeader(listOf("" to 56.dp, "TYPE" to 70.dp, "STATE" to 80.dp, "VERSION" to 90.dp, "APP NAME" to 160.dp, "PACKAGE" to 1.dp))
-            LazyColumn {
-                items(filtered, key = { it.packageName }) { app ->
-                    TableRow(Modifier.clickable {
-                        selected = app
-                        appDetails = null
-                        appDetailsLoading = serial != null
-                        if (serial != null) scope.launch {
-                            val packageName = app.packageName
-                            val details = apps.getAppDetails(serial, packageName)
-                            val packagePermissions = apps.listPermissions(serial, packageName)
-                            val packageActivities = apps.listActivities(serial, packageName)
-                            if (selected?.packageName == packageName) {
-                                appDetails = details
-                                appDetailsLoading = false
-                                permissions = packagePermissions
-                                activities = packageActivities
-                            }
+            when {
+                serial == null -> EmptyState("Select an online device")
+                packagesLoading && rows.isEmpty() -> {
+                    Box(
+                        Modifier.fillMaxWidth().weight(1f),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp,
+                                color = TextSecondary,
+                            )
+                            Text("Loading packages...", color = TextSecondary, fontSize = 13.sp)
                         }
-                    }) {
+                    }
+                }
+                !packagesLoading && filtered.isEmpty() -> {
+                    EmptyState(
+                        when {
+                            query.isNotBlank() -> "No packages match your filter"
+                            status.contains("Unable") -> "Unable to load packages"
+                            else -> "No packages found on this device"
+                        },
+                    )
+                }
+                else -> LazyColumn(Modifier.weight(1f)) {
+                    items(filtered, key = { it.packageName }) { app ->
+                        TableRow(
+                            Modifier.clickable {
+                                selected = app
+                                appDetails = null
+                                appDetailsLoading = true
+                                scope.launch {
+                                    val packageName = app.packageName
+                                    val details = apps.getAppDetails(serial, packageName)
+                                    val packagePermissions = apps.listPermissions(serial, packageName)
+                                    val packageActivities = apps.listActivities(serial, packageName)
+                                    if (selected?.packageName == packageName) {
+                                        appDetails = details
+                                        appDetailsLoading = false
+                                        permissions = packagePermissions
+                                        activities = packageActivities
+                                    }
+                                }
+                            },
+                            selected = selected?.packageName == app.packageName,
+                        ) {
                         Box(Modifier.width(56.dp)) {
-                            if (serial != null) AppIconCell(serial, app.packageName, apps, iconCache)
+                            AppIconCell(serial, app.packageName, apps, iconCache)
                         }
                         MonoCell(if (app.system) "system" else "user", 70.dp, if (app.system) TextSecondary else Green)
                         MonoCell(if (app.enabled) "enabled" else "disabled", 80.dp, if (app.enabled) TextPrimary else Rust)
                         MonoCell(app.versionCode ?: "-", 90.dp, TextSecondary)
                         MonoCell(app.label ?: "-", 160.dp, TextSecondary)
                         MonoCell(app.packageName, 1.dp, if (selected?.packageName == app.packageName) Rust else TextPrimary, Modifier.weight(1f))
+                        }
                     }
                 }
             }

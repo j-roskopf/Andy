@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,7 +72,9 @@ internal fun WorkspaceRail(
 ) {
     Column(
         modifier
-            .rightBorder(Border.copy(alpha = 0.28f))
+            .rightBorder(
+                Border.copy(alpha = if (AndyColors.isLight) 0.20f else 0.44f),
+            )
             .padding(end = AndySpace.Space4),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
         content = content,
@@ -170,10 +173,11 @@ internal fun WorkspaceItemRow(
         modifier
             .fillMaxWidth()
             .padding(start = if (indented) AndySpace.Space4 else 0.dp)
-            .background(background, RoundedCornerShape(AndyRadius.Row))
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(background)
             .hoverable(interactionSource)
             .clickable(onClick = onClick)
-            .padding(horizontal = AndySpace.Space4, vertical = if (subtitle == null) 10.dp else AndySpace.Space3),
+            .padding(horizontal = AndySpace.Space4, vertical = if (subtitle == null) 11.dp else AndySpace.Space3),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {

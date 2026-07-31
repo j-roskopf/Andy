@@ -134,6 +134,38 @@ class AgentStatusScenarioTest {
     }
 
     @Test
+    fun bootIdlePromptStaysWorkingUntilChrome() = runScenario(AgentKind.ClaudeCode, suppressPrematureIdle = true) {
+        // argv prompt is still being digested — splash already shows an idle `>` prompt.
+        screen("> ")
+            .expect(AgentStatus.Working)
+
+        screen("✨ Perambulating... (3s · ↓ 10 tokens · thinking more)\n")
+            .expect(AgentStatus.Working)
+
+        screen("The weather in Fond du Lac is sunny.\n✻ Cooked for 4s\n> ")
+            .expect(AgentStatus.Done)
+    }
+
+    @Test
+    fun cursorBootFollowUpChromeStaysWorkingUntilSpinner() = runScenario(AgentKind.Cursor, suppressPrematureIdle = true) {
+        screen(
+            "  → Add a follow-up\n" +
+                "  Cursor Grok 4.5 High Fast · 5%\n",
+        ).expect(AgentStatus.Working)
+
+        screen(
+            "Reading files…\n" +
+                "            ctrl+c to stop\n" +
+                "  Cursor Grok 4.5 High Fast · 22%\n",
+        ).expect(AgentStatus.Working)
+
+        screen(
+            "Done with that.\n" +
+                "  → Add a follow-up\n",
+        ).expect(AgentStatus.Done)
+    }
+
+    @Test
     fun claudeBlockedThenWorkingChromeThenIdleDone() = runScenario(AgentKind.ClaudeCode) {
         screen(
             """
@@ -202,6 +234,7 @@ class AgentStatusScenarioTest {
 
     private fun runScenario(
         agent: AgentKind,
+        suppressPrematureIdle: Boolean = false,
         block: suspend ScenarioRobot.() -> Unit,
     ) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -219,6 +252,7 @@ class AgentStatusScenarioTest {
                 artifactDir = artifactDir,
                 session = session,
                 onSnapshot = { statuses += it.status },
+                suppressPrematureIdle = suppressPrematureIdle,
             )
             tracker.start()
             ScenarioRobot(tracker, session, statuses).block()

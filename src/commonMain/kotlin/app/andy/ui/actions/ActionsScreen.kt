@@ -41,6 +41,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -59,8 +60,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -103,16 +111,13 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.WorkspaceCanvas
 import app.andy.ui.components.WorkspaceEmptyCanvas
-import app.andy.ui.components.WorkspaceItemRow
 import app.andy.ui.components.WorkspaceRail
-import app.andy.ui.components.WorkspaceRailHeader
-import app.andy.ui.components.WorkspaceSectionLabel
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.model.AgentStatus
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
-import app.andy.ui.agents.ProjectActivityIndicator
+import app.andy.ui.agents.ChatSessionSidebarRow
 import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
@@ -190,6 +195,8 @@ private fun ProjectCockpit(
     var initialWorkflowSelectionApplied by remember { mutableStateOf(false) }
     var canvas by remember { mutableStateOf(ProjectCanvas.entries.firstOrNull { it.label == initialCanvasLabel } ?: ProjectCanvas.Chat) }
     var query by remember { mutableStateOf("") }
+    var searchExpanded by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var specEditorOpen by remember { mutableStateOf(false) }
@@ -321,11 +328,11 @@ private fun ProjectCockpit(
     }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
-    val projects = remember(config.projects, query) {
-        config.projects.filter { project ->
-            query.isBlank() || project.name.contains(query, true) || project.contextDir.contains(query, true)
-        }
+    LaunchedEffect(searchExpanded) {
+        if (searchExpanded) searchFocusRequester.requestFocus()
     }
+
+    val searchActive = query.isNotBlank()
     val unreadProjectIds = remember(agentTasks, config.projects) {
         val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
@@ -343,6 +350,24 @@ private fun ProjectCockpit(
                     archived = tasks.filter { it.archived }.sortedByDescending { it.createdAtMillis },
                 )
             }
+    }
+    val sidebarEntries = remember(config.projects, query, projectChatLists) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) {
+            config.projects.map { ProjectSidebarEntry(it) }
+        } else {
+            config.projects.mapNotNull { project ->
+                val chats = projectChatLists[project.id] ?: ProjectChatLists(emptyList(), emptyList())
+                val matchingSessions = (chats.active + chats.archived)
+                    .filter { projectSidebarTaskMatches(trimmed, it) }
+                    .distinctBy { it.id }
+                when {
+                    !projectSidebarProjectMatches(trimmed, project) && matchingSessions.isEmpty() -> null
+                    matchingSessions.isNotEmpty() -> ProjectSidebarEntry(project, matchingSessions)
+                    else -> ProjectSidebarEntry(project)
+                }
+            }
+        }
     }
     val projectTasks = project?.let { item ->
         agentTasks
@@ -371,7 +396,7 @@ private fun ProjectCockpit(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val railWidth = 248.dp
+        val railWidth = AndyLayout.ListWidth
         val chatMinWidth = if (docks.right != null) 280.dp else 520.dp
         val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
         val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
@@ -382,47 +407,48 @@ private fun ProjectCockpit(
         ) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 WorkspaceRail(Modifier.width(railWidth).fillMaxHeight()) {
-                    WorkspaceRailHeader(
-                        title = "Projects",
-                        subtitle = "${config.projects.size} workspaces",
-                        actions = {
-                            Toolbar(
-                                "Projects",
-                                "",
-                                onPrimary = { editingProject = EditingProject(null) },
-                                primaryLabel = "New",
-                            )
+                    ProjectsSidebarHeader(
+                        query = query,
+                        onQueryChange = { query = it },
+                        searchExpanded = searchExpanded,
+                        onSearchExpandedChange = { expanded ->
+                            searchExpanded = expanded
+                            if (!expanded) query = ""
                         },
+                        searchFocusRequester = searchFocusRequester,
+                        onNew = { editingProject = EditingProject(null) },
                     )
-                    TextField(
-                        query,
-                        { query = it },
-                        Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("Search", color = TextSecondary, fontFamily = MonoFont) },
-                    )
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
-                        items(projects, key = { it.id }) { item ->
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        if (sidebarEntries.isEmpty()) {
+                            item {
+                                EmptyState(
+                                    if (query.isBlank()) "Create a project to start" else "No projects or chats match your search",
+                                )
+                            }
+                        }
+                        items(sidebarEntries, key = { entry -> entry.project.id }) { entry ->
+                            val item = entry.project
                             val chatLists = projectChatLists[item.id] ?: ProjectChatLists(emptyList(), emptyList())
                             val sessions = chatLists.active
                             val archivedSessions = chatLists.archived
                             val viewingArchived = viewingArchivedForProjectId == item.id
-                            val sessionsCollapsed = item.id in collapsedProjectIds
+                            val sessionsCollapsed = !searchActive && item.id in collapsedProjectIds
                             ProjectSessionGroup(
                                 project = item,
+                                nowMillis = nowMillis,
+                                hasUnread = item.id in unreadProjectIds,
                                 sessions = when {
+                                    entry.searchSessions != null -> entry.searchSessions
                                     sessionsCollapsed -> emptyList()
                                     viewingArchived -> archivedSessions
                                     expandedProjectSessionsId == item.id -> sessions
                                     else -> sessions.take(RecentSessionsPerProject)
                                 },
-                                selectedProject = item.id == selectedProjectId,
                                 selectedSessionId = selectedTaskId,
-                                hasUnread = item.id in unreadProjectIds,
                                 sessionsCollapsed = sessionsCollapsed,
-                                viewingArchived = viewingArchived,
+                                viewingArchived = viewingArchived && entry.searchSessions == null,
                                 archivedCount = archivedSessions.size,
-                                showMore = !sessionsCollapsed && !viewingArchived &&
+                                showMore = !searchActive && !sessionsCollapsed && !viewingArchived &&
                                     sessions.size > RecentSessionsPerProject &&
                                     expandedProjectSessionsId != item.id,
                                 onToggleProject = {
@@ -470,6 +496,7 @@ private fun ProjectCockpit(
                             )
                         }
                     }
+                    ProjectsSidebarFooter()
                 }
                 val current = project
                 if (current == null) {
@@ -809,12 +836,328 @@ private fun ProjectSectionHeader(
 }
 
 @Composable
+private fun ProjectsSidebarHeader(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    searchExpanded: Boolean,
+    onSearchExpandedChange: (Boolean) -> Unit,
+    searchFocusRequester: FocusRequester,
+    onNew: () -> Unit,
+) {
+    val searchVisible = searchExpanded || query.isNotBlank()
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Projects",
+                color = TextSecondary.copy(alpha = 0.85f),
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SearchGlyphButton(
+                    active = searchVisible,
+                    onClick = {
+                        if (searchVisible && query.isBlank()) {
+                            onSearchExpandedChange(false)
+                        } else {
+                            onSearchExpandedChange(true)
+                        }
+                    },
+                )
+                PlusGlyphButton(onClick = onNew)
+            }
+        }
+        AnimatedVisibility(
+            visible = searchVisible,
+            enter = fadeIn(tween(120)) + expandVertically(tween(160)),
+            exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
+        ) {
+            TextField(
+                query,
+                onQueryChange,
+                Modifier
+                    .fillMaxWidth()
+                    .focusRequester(searchFocusRequester),
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        "Search",
+                        color = TextSecondary,
+                        fontFamily = DisplayFont,
+                        fontSize = 12.sp,
+                    )
+                },
+                textStyle = LocalTextStyle.current.copy(
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontSize = 12.sp,
+                ),
+                colors = fieldColors(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchGlyphButton(
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val tint = when {
+        active -> TextPrimary.copy(alpha = 0.9f)
+        hovered -> TextSecondary.copy(alpha = 0.9f)
+        else -> TextSecondary.copy(alpha = 0.62f)
+    }
+    HeaderGlyphButton(onClick = onClick, interactionSource = interactionSource, contentDescription = "Search projects") {
+        SearchGlyph(color = tint)
+    }
+}
+
+@Composable
+private fun PlusGlyphButton(onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val tint = when {
+        hovered -> TextPrimary.copy(alpha = 0.9f)
+        else -> TextSecondary.copy(alpha = 0.62f)
+    }
+    HeaderGlyphButton(onClick = onClick, interactionSource = interactionSource, contentDescription = "New project") {
+        PlusGlyph(color = tint)
+    }
+}
+
+@Composable
+private fun HeaderGlyphButton(
+    onClick: () -> Unit,
+    interactionSource: MutableInteractionSource,
+    contentDescription: String,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(24.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .hoverable(interactionSource)
+            .clickable(onClick = onClick)
+            .semantics {
+                this.contentDescription = contentDescription
+                role = Role.Button
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun SearchGlyph(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(14.dp)) {
+        val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round)
+        val radius = size.minDimension * 0.28f
+        val center = Offset(size.width * 0.42f, size.height * 0.42f)
+        drawCircle(color, radius = radius, center = center, style = stroke)
+        drawLine(
+            color,
+            Offset(center.x + radius * 0.72f, center.y + radius * 0.72f),
+            Offset(size.width * 0.82f, size.height * 0.82f),
+            strokeWidth = 1.4f,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun PlusGlyph(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(14.dp)) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val arm = size.minDimension * 0.24f
+        drawLine(
+            color,
+            Offset(center.x - arm, center.y),
+            Offset(center.x + arm, center.y),
+            strokeWidth = 1.5f,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color,
+            Offset(center.x, center.y - arm),
+            Offset(center.x, center.y + arm),
+            strokeWidth = 1.5f,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+@Composable
+private fun ProjectFolderGlyph(
+    expanded: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val fillColor = AndyColors.SurfaceHover.copy(alpha = 0.85f)
+    val strokeColor = TextSecondary.copy(alpha = 0.78f)
+    val stroke = remember(strokeColor) {
+        Stroke(width = 1.15f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+    }
+    Canvas(modifier.size(16.dp)) {
+        val w = size.width
+        val h = size.height
+        if (!expanded) {
+            val body = Path().apply {
+                moveTo(w * 0.506f, h * 0.272f)
+                lineTo(w * 0.558f, h * 0.281f)
+                lineTo(w * 0.592f, h * 0.281f)
+                lineTo(w * 0.812f, h * 0.281f)
+                cubicTo(w * 0.891f, h * 0.281f, w * 0.906f, h * 0.323f, w * 0.906f, h * 0.375f)
+                lineTo(w * 0.906f, h * 0.758f)
+                cubicTo(w * 0.906f, h * 0.809f, w * 0.871f, h * 0.844f, w * 0.848f, h * 0.844f)
+                lineTo(w * 0.165f, h * 0.844f)
+                cubicTo(w * 0.129f, h * 0.844f, w * 0.094f, h * 0.809f, w * 0.094f, h * 0.758f)
+                lineTo(w * 0.094f, h * 0.242f)
+                cubicTo(w * 0.094f, h * 0.191f, w * 0.129f, h * 0.156f, w * 0.165f, h * 0.156f)
+                lineTo(w * 0.383f, h * 0.156f)
+                cubicTo(w * 0.411f, h * 0.156f, w * 0.438f, h * 0.166f, w * 0.457f, h * 0.191f)
+                close()
+            }
+            drawPath(body, fillColor)
+            drawPath(body, strokeColor, style = stroke)
+        } else {
+            val back = Path().apply {
+                moveTo(w * 0.094f, h * 0.313f)
+                lineTo(w * 0.165f, h * 0.188f)
+                lineTo(w * 0.383f, h * 0.188f)
+                cubicTo(w * 0.411f, h * 0.188f, w * 0.438f, h * 0.198f, w * 0.457f, h * 0.223f)
+                lineTo(w * 0.506f, h * 0.304f)
+                lineTo(w * 0.812f, h * 0.304f)
+                cubicTo(w * 0.891f, h * 0.304f, w * 0.906f, h * 0.346f, w * 0.906f, h * 0.398f)
+                lineTo(w * 0.906f, h * 0.844f)
+                lineTo(w * 0.094f, h * 0.844f)
+                close()
+            }
+            val flap = Path().apply {
+                moveTo(w * 0.094f, h * 0.313f)
+                lineTo(w * 0.906f, h * 0.313f)
+                lineTo(w * 0.906f, h * 0.844f)
+                lineTo(w * 0.094f, h * 0.844f)
+                close()
+            }
+            drawPath(back, fillColor)
+            drawPath(back, strokeColor, style = stroke)
+            drawPath(flap, strokeColor, style = stroke)
+            drawLine(
+                strokeColor,
+                Offset(w * 0.094f, h * 0.313f),
+                Offset(w * 0.906f, h * 0.313f),
+                strokeWidth = 1.15f,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+private data class ProjectSidebarEntry(
+    val project: ActionProject,
+    val searchSessions: List<AgentTask>? = null,
+)
+
+private fun projectSidebarProjectMatches(query: String, project: ActionProject): Boolean {
+    if (project.name.contains(query, ignoreCase = true)) return true
+    if (project.contextDir.contains(query, ignoreCase = true)) return true
+    if (project.actions.any { action ->
+            action.name.contains(query, ignoreCase = true) || action.command.contains(query, ignoreCase = true)
+        }) {
+        return true
+    }
+    if (project.notes.any { note ->
+            note.title.contains(query, ignoreCase = true) || note.body.contains(query, ignoreCase = true)
+        }) {
+        return true
+    }
+    return false
+}
+
+private fun projectSidebarTaskMatches(query: String, task: AgentTask): Boolean {
+    val fields = buildList {
+        add(task.title)
+        add(task.prompt)
+        task.latestPrompt?.let(::add)
+        task.goal?.let(::add)
+        task.completedResultText?.let(::add)
+        task.implementationPrompt?.let(::add)
+        task.continuationPrompt?.let(::add)
+        task.completedPlanText?.let(::add)
+        task.branchName?.let(::add)
+        task.errorMessage?.let(::add)
+        task.model?.let(::add)
+        addAll(task.queuedFollowUps.map { it.text })
+        addAll(task.skills.map { it.name })
+        addAll(task.skills.mapNotNull { it.description.takeIf(String::isNotBlank) })
+    }
+    return fields.any { it.contains(query, ignoreCase = true) }
+}
+
+private val ProjectSidebarViolet = Color(0xFF8B5CF6)
+
+@Composable
+private fun WorktreeBranchGlyph(modifier: Modifier = Modifier) {
+    Canvas(modifier.size(14.dp)) {
+        val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round)
+        val path = Path().apply {
+            moveTo(size.width * 0.72f, size.height * 0.18f)
+            lineTo(size.width * 0.72f, size.height * 0.82f)
+            moveTo(size.width * 0.72f, size.height * 0.42f)
+            cubicTo(
+                size.width * 0.72f, size.height * 0.22f,
+                size.width * 0.28f, size.height * 0.22f,
+                size.width * 0.28f, size.height * 0.42f,
+            )
+            cubicTo(
+                size.width * 0.28f, size.height * 0.62f,
+                size.width * 0.72f, size.height * 0.62f,
+                size.width * 0.72f, size.height * 0.82f,
+            )
+        }
+        drawPath(path, ProjectSidebarViolet, style = stroke)
+        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.18f))
+        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.28f, size.height * 0.42f))
+        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.82f))
+    }
+}
+
+@Composable
+private fun ProjectsSidebarFooter() {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Local only",
+            color = TextSecondary.copy(alpha = 0.48f),
+            fontFamily = DisplayFont,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+@Composable
 private fun ProjectSessionGroup(
     project: ActionProject,
-    sessions: List<AgentTask>,
-    selectedProject: Boolean,
-    selectedSessionId: String?,
+    nowMillis: Long,
     hasUnread: Boolean,
+    sessions: List<AgentTask>,
+    selectedSessionId: String?,
     sessionsCollapsed: Boolean,
     viewingArchived: Boolean,
     archivedCount: Int,
@@ -832,46 +1175,75 @@ private fun ProjectSessionGroup(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        WorkspaceItemRow(
-            title = project.name,
-            selected = selectedProject,
-            onClick = onToggleProject,
-            trailing = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (project.source == ConfigSource.Repo) {
-                        RepoSourceBadge()
-                    } else if (hovered) {
+
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .hoverable(interactionSource)
+                .clickable(onClick = onToggleProject)
+                .padding(vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ProjectFolderGlyph(expanded = !sessionsCollapsed)
+            Text(
+                project.name,
+                color = TextPrimary.copy(alpha = 0.92f),
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (hovered) {
+                    if (project.source != ConfigSource.Repo) {
                         Text(
-                            "Edit",
-                            color = Cyan,
-                            fontFamily = MonoFont,
-                            fontSize = 10.sp,
+                            "edit",
+                            color = TextSecondary.copy(alpha = 0.72f),
+                            fontFamily = DisplayFont,
+                            fontSize = 11.sp,
                             modifier = Modifier.clickable(onClick = onEditProject),
                         )
                     }
-                    NewProjectChatButton(onClick = onNewChat, size = 14.dp)
-                    if (hasUnread) UnreadDot()
+                    NewProjectChatButton(onClick = onNewChat, size = 13.dp)
                 }
-            },
-            modifier = Modifier.hoverable(interactionSource),
-        )
+                if (hasUnread) UnreadDot()
+            }
+        }
         AnimatedVisibility(
             visible = !sessionsCollapsed,
             enter = fadeIn(tween(120)) + expandVertically(tween(160)),
             exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Column(
+                Modifier.padding(start = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 if (viewingArchived) {
-                    WorkspaceSectionLabel("Archived chats")
+                    Text(
+                        "ARCHIVED",
+                        color = TextSecondary.copy(alpha = 0.55f),
+                        fontFamily = MonoFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 10.sp,
+                        letterSpacing = 0.6.sp,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
+                    )
                 }
                 sessions.forEach { task ->
                     ProjectSessionRow(
                         task = task,
                         selected = task.id == selectedSessionId,
+                        nowMillis = nowMillis,
                         onOpen = { onOpenSession(task) },
                         onMarkUnread = { onMarkSessionUnread(task) },
                         onArchive = {
@@ -884,11 +1256,11 @@ private fun ProjectSessionGroup(
                 if (showMore) {
                     Text(
                         "Show more",
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
+                        color = TextSecondary.copy(alpha = 0.55f),
+                        fontFamily = DisplayFont,
+                        fontSize = 12.sp,
                         modifier = Modifier
-                            .padding(start = 12.dp, top = 2.dp)
+                            .padding(top = 2.dp)
                             .clickable(onClick = onShowMore)
                             .padding(vertical = 4.dp),
                     )
@@ -896,11 +1268,11 @@ private fun ProjectSessionGroup(
                 if (archivedCount > 0 || viewingArchived) {
                     Text(
                         if (viewingArchived) "Back to chats" else "Archived ($archivedCount)",
-                        color = if (viewingArchived) Cyan else TextSecondary.copy(alpha = 0.78f),
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
+                        color = TextSecondary.copy(alpha = 0.55f),
+                        fontFamily = DisplayFont,
+                        fontSize = 12.sp,
                         modifier = Modifier
-                            .padding(start = 12.dp, top = 2.dp)
+                            .padding(top = 2.dp)
                             .clickable(onClick = onToggleArchived)
                             .padding(vertical = 4.dp),
                     )
@@ -914,6 +1286,7 @@ private fun ProjectSessionGroup(
 private fun ProjectSessionRow(
     task: AgentTask,
     selected: Boolean,
+    nowMillis: Long,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
@@ -921,19 +1294,12 @@ private fun ProjectSessionRow(
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Box {
-        WorkspaceItemRow(
-            title = task.title,
+    Box(Modifier.fillMaxWidth()) {
+        ChatSessionSidebarRow(
+            task = task,
             selected = selected,
-            indented = true,
+            nowMillis = nowMillis,
             onClick = onOpen,
-            leading = {
-                when {
-                    isSessionWorking(task) -> ProjectActivityIndicator(12.dp)
-                    task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
-                    task.unread -> UnreadDot()
-                }
-            },
             modifier = Modifier.pointerInput(task.id) {
                 awaitPointerEventScope {
                     while (true) {
@@ -946,6 +1312,15 @@ private fun ProjectSessionRow(
                         }
                     }
                 }
+            },
+            trailing = when {
+                task.status == AgentStatus.Blocked -> {
+                    { StatusTag("blocked", Red) }
+                }
+                task.worktreePath != null || task.branchName != null -> {
+                    { WorktreeBranchGlyph() }
+                }
+                else -> null
             },
         )
         DropdownMenu(

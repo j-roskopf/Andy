@@ -34,6 +34,8 @@ data class AgentStatusSnapshot(
  * - known agent + no match → idle/Done (idle fallback)
  * - Working→plain-idle requires pending confirmation (Herdr-style)
  * - user send ([markUserWorking]) bumps Working; scrape owns the rest
+ * - boot splash / idle prompt before the first turn is armed stays Working (no
+ *   confident Done — mirrors [AgentTerminalManager.awaitExit] arming)
  * - process exit / phaseFinished force Done/Error
  *
  * Intentionally does **not** treat PTY buffer churn as Working. That heuristic
@@ -52,6 +54,7 @@ class AgentStatusTracker(
      * New runs leave this null.
      */
     initialSnapshot: AgentStatusSnapshot? = null,
+    private val suppressPrematureIdle: Boolean = false,
     private val foreground: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(true),
 ) {
     private val _status = MutableStateFlow(
@@ -66,6 +69,8 @@ class AgentStatusTracker(
 
     @Volatile private var latch: AgentStatusSnapshot? =
         initialSnapshot?.takeIf { it.confident }
+
+    @Volatile private var turnArmed = false
 
     fun start() {
         if (closed.get() || paused.get()) return
@@ -154,6 +159,7 @@ class AgentStatusTracker(
      */
     fun markUserWorking() {
         if (closed.get()) return
+        turnArmed = true
         latch = null
         scrape.clearPendingIdle()
         emit(AgentStatusSnapshot(AgentStatus.Working, confident = true))
@@ -214,12 +220,26 @@ class AgentStatusTracker(
             AgentStatus.Working -> scrape.showsWorkingIndicator()
             else -> false
         }
+        maybeArmTurn(publishedStatus, scrapeConfident)
+        if (suppressPrematureIdle && !turnArmed && publishedStatus == AgentStatus.Done) {
+            emit(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            return
+        }
         val snapshot = AgentStatusSnapshot(publishedStatus, confident = scrapeConfident)
         // Latch only Blocked/Done — Working must yield as soon as chrome changes.
         if (scrapeConfident && snapshot.status != AgentStatus.Working) {
             latch = snapshot
         }
         emit(snapshot)
+    }
+
+    private fun maybeArmTurn(publishedStatus: AgentStatus, scrapeConfident: Boolean) {
+        if (turnArmed) return
+        when (publishedStatus) {
+            AgentStatus.Blocked -> if (scrapeConfident) turnArmed = true
+            AgentStatus.Working -> if (scrape.showsWorkingIndicator()) turnArmed = true
+            else -> Unit
+        }
     }
 
     private fun latchHolds(latch: AgentStatusSnapshot): Boolean = when (latch.status) {

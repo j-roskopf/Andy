@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
@@ -111,7 +112,7 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
     ) {
         Row(
             Modifier.heightIn(min = AndyLayout.ControlHeightXs)
-                .background(color.copy(alpha = 0.10f), RoundedCornerShape(AndyRadius.Control))
+                .background(color.copy(alpha = 0.12f), AndyShape.Interactive)
                 .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -158,19 +159,23 @@ internal fun Toolbar(
 @Composable
 internal fun PanelCard(
     modifier: Modifier = Modifier,
-    background: Color = AndyColors.PaneBg,
+    background: Color = AndyColors.SurfaceRaised,
     accent: Color? = null,
     borderColor: Color? = null,
     contentPadding: PaddingValues = PaddingValues(AndySpace.Space5),
-    verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AndySpace.Space3),
+    verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AndySpace.Space4),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.Row)
+    val shape = RoundedCornerShape(AndyRadius.Sheet)
+    val resolvedBorder = borderColor ?: accent?.copy(alpha = 0.35f)
     Column(
         modifier
             .background(background, shape)
             .clip(shape)
-            .border(1.dp, borderColor ?: accent?.copy(alpha = 0.40f) ?: Border, shape)
+            .then(
+                if (resolvedBorder != null) Modifier.border(1.dp, resolvedBorder, shape)
+                else Modifier,
+            )
             .padding(contentPadding),
         verticalArrangement = verticalArrangement,
         content = content,
@@ -209,16 +214,16 @@ internal fun FilterPill(
     leadingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.Control)
+    val shape = AndyShape.Interactive
     val containerColor = when {
         !enabled -> AndyColors.PaneBg
         selected -> AndyColors.SurfaceSelected
         else -> Color.Transparent
     }
     val borderColor = when {
-        !enabled -> AndyColors.TextDisabled.copy(alpha = 0.40f)
-        selected -> Border
-        else -> Border
+        !enabled -> Color.Transparent
+        selected -> Border.copy(alpha = 0.5f)
+        else -> Color.Transparent
     }
     val contentColor = when {
         !enabled -> AndyColors.TextDisabled
@@ -259,9 +264,12 @@ internal fun FilterPill(
         Modifier
             .height(AndyLayout.ControlHeightSm)
             .background(containerColor, shape)
-            .border(1.dp, borderColor, shape)
+            .then(
+                if (borderColor != Color.Transparent) Modifier.border(1.dp, borderColor, shape)
+                else Modifier,
+            )
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
         Row(

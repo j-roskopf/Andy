@@ -76,6 +76,7 @@ import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.network.GlowingDot
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyLayout
@@ -851,8 +852,8 @@ private fun McpToolsPanel(toolNames: List<String>) {
             toolNames.sorted().forEach { tool ->
                 Box(
                     Modifier
-                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Pill))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Pill))
+                        .background(AndyColors.Neutral850, AndyShape.Interactive)
+                        .border(1.dp, Border, AndyShape.Interactive)
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)

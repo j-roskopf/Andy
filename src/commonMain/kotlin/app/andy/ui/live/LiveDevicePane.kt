@@ -198,7 +198,7 @@ private fun resolveLiveMirrorSourceSize(
         return pickMismatchedStreamSize(
             frameSize = frameSize,
             sessionSize = sessionSize,
-            sessionReady = session?.readyForPresentation == true,
+            sessionReady = session.readyForPresentation,
             foldable = foldable,
         )
     }
@@ -366,13 +366,11 @@ internal fun LiveDevicePane(
     onConnect: () -> Unit,
 ) {
     val windowResizing = LocalWindowResizing.current
-    val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.Control else 0.dp)
+    val containerShape = RoundedCornerShape(if (showContainerChrome) AndyRadius.Sheet else 0.dp)
     val containerModifier = if (showContainerChrome) {
         modifier
-            .background(AndyColors.Neutral800.copy(alpha = 0.82f), containerShape)
-            .border(1.dp, Border, containerShape)
-            .noiseGridOverlay(0.025f)
-            .padding(AndySpace.Space5)
+            .background(AndyColors.PaneBg, containerShape)
+            .padding(AndySpace.Space4)
     } else {
         modifier.background(Color.Black)
     }
@@ -439,7 +437,7 @@ internal fun LiveDevicePane(
                     terminalPlacement = terminalPlacement,
                     onTerminalToggle = onTerminalToggle,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(6.dp))
             }
 
             BoxWithConstraints(
@@ -860,10 +858,9 @@ internal fun LiveHardwareToolbar(
         Column(
             Modifier
                 .width(58.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(AndyColors.Neutral900.copy(alpha = 0.92f))
-                .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(15.dp))
-                .padding(vertical = 10.dp),
+                .clip(RoundedCornerShape(AndyRadius.Sheet))
+                .background(AndyColors.SurfaceRaised)
+                .padding(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -961,13 +958,18 @@ internal fun LiveStreamHeader(
             Modifier
                 .align(Alignment.Center)
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (chips.isEmpty()) {
                 Text("Waiting for stream", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
             } else {
-                chips.forEach { chip -> LiveStreamChipView(chip) }
+                chips.forEachIndexed { index, chip ->
+                    if (index > 0) {
+                        Text("·", color = TextSecondary.copy(alpha = 0.4f), fontSize = 11.sp)
+                    }
+                    LiveStreamChipView(chip)
+                }
             }
         }
         if (onTerminalToggle != null) {
@@ -983,23 +985,17 @@ internal fun LiveStreamHeader(
 
 @Composable
 private fun LiveStreamChipView(chip: LiveStreamChip) {
-    val accent = when (chip.tone) {
+    val color = when (chip.tone) {
         LiveStreamChipTone.Neutral -> TextSecondary
         LiveStreamChipTone.Active -> Green
         LiveStreamChipTone.Warning -> Rust
     }
-    val shape = RoundedCornerShape(AndyRadius.Control)
     Text(
         chip.label,
-        color = if (chip.tone == LiveStreamChipTone.Neutral) TextSecondary else TextPrimary,
+        color = color,
         fontFamily = FontFamily.Monospace,
-        fontSize = 10.sp,
+        fontSize = 11.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .clip(shape)
-            .background(AndyColors.Neutral850.copy(alpha = 0.92f))
-            .border(1.dp, accent.copy(alpha = if (chip.tone == LiveStreamChipTone.Neutral) 0.22f else 0.48f), shape)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
     )
 }

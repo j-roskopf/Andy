@@ -56,7 +56,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.rememberCopyText
+import app.andy.ui.components.DataTableHeader
 import app.andy.ui.components.HeaderCell
+import app.andy.ui.components.HeaderTrailingLabel
 import app.andy.domain.*
 import app.andy.model.AndroidDevice
 import app.andy.model.NetworkDiagnosis
@@ -828,13 +830,17 @@ internal fun NetworkScreen(
                     onClear = { state.focusedPaths = emptySet() },
                 )
             }
-            Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                HeaderCell("TRAFFIC", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(160f, 2400f) }
-                HeaderCell("STATUS", state.statusWidth.dp) { state.statusWidth = it.coerceIn(50f, 150f) }
-                HeaderCell("TYPE", state.typeWidth.dp) { state.typeWidth = it.coerceIn(80f, 250f) }
-                HeaderCell("SIZE", state.sizeWidth.dp) { state.sizeWidth = it.coerceIn(50f, 150f) }
-                HeaderCell("MS", state.msWidth.dp) { state.msWidth = it.coerceIn(50f, 150f) }
-                Text("RULE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(horizontal = 4.dp))
+            DataTableHeader {
+                HeaderCell("traffic", state.trafficWidth.dp) { state.trafficWidth = it.coerceIn(160f, 2400f) }
+                HeaderCell("status", state.statusWidth.dp, showLeadingDivider = true) { state.statusWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("type", state.typeWidth.dp, showLeadingDivider = true) { state.typeWidth = it.coerceIn(80f, 250f) }
+                HeaderCell("size", state.sizeWidth.dp, showLeadingDivider = true) { state.sizeWidth = it.coerceIn(50f, 150f) }
+                HeaderCell("ms", state.msWidth.dp, showLeadingDivider = true) { state.msWidth = it.coerceIn(50f, 150f) }
+                HeaderTrailingLabel(
+                    "rule",
+                    modifier = Modifier.weight(1f).padding(end = 4.dp),
+                    showLeadingDivider = true,
+                )
             }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(visibleTrafficRows, key = { row -> row.key }) { row ->

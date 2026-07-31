@@ -43,8 +43,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.components.AndyHorizontalDivider
+import app.andy.ui.components.DataTableHeader
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.HeaderCell
+import app.andy.ui.components.HeaderTrailingLabel
+import app.andy.ui.components.LogLevelBadge
+import app.andy.ui.components.logLevelForeground
 import app.andy.model.LogLevel
 import app.andy.model.LogcatEntry
 import app.andy.model.LogcatTab
@@ -389,7 +393,7 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
                 if (atBottom) stickToBottom = true
             }
     }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         if (!compact) {
             ResizableLogcatHeader(
                 timeWidth = timeWidth,
@@ -406,11 +410,27 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
                     if (compact) {
                         Text("${entry.time} ${entry.pid ?: "-"} ${entry.level.name.take(1)}/${entry.tag}: ${entry.message}", color = levelColor(entry.level), fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     } else {
-                        Row(Modifier.fillMaxWidth().heightIn(min = 24.dp), verticalAlignment = Alignment.Top) {
-                            MonoCell(entry.time, timeWidth.dp, TextSecondary)
-                            MonoCell(entry.level.name.take(1), levelWidth.dp, levelColor(entry.level))
-                            MonoCell(entry.tag, tagWidth.dp, levelColor(entry.level))
-                            Text(entry.message, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 22.dp)
+                                .padding(vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            MonoCell(entry.time, timeWidth.dp, TextSecondary, compact = true)
+                            Box(Modifier.width(levelWidth.dp), contentAlignment = Alignment.CenterStart) {
+                                LogLevelBadge(entry.level)
+                            }
+                            MonoCell(entry.tag, tagWidth.dp, logLevelForeground(entry.level), compact = true)
+                            Text(
+                                entry.message,
+                                color = TextPrimary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
                 }
@@ -432,20 +452,17 @@ internal fun ResizableLogcatHeader(
     onLevelWidth: (Float) -> Unit,
     onTagWidth: (Float) -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        HeaderCell("TIME", timeWidth.dp, onTimeWidth)
-        HeaderCell("L", levelWidth.dp, onLevelWidth)
-        HeaderCell("TAG", tagWidth.dp, onTagWidth)
-        Text("MESSAGE", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f))
+    DataTableHeader {
+        HeaderCell("line", timeWidth.dp, onWidthChange = onTimeWidth)
+        HeaderCell("lv", levelWidth.dp, showLeadingDivider = true, onWidthChange = onLevelWidth)
+        HeaderCell("tag", tagWidth.dp, showLeadingDivider = true, onWidthChange = onTagWidth)
+        HeaderTrailingLabel(
+            "msg",
+            modifier = Modifier.weight(1f).padding(end = 4.dp),
+            showLeadingDivider = true,
+        )
     }
 }
 
 @Composable
-internal fun levelColor(level: LogLevel): Color = when (level) {
-    LogLevel.Verbose -> TextSecondary
-    LogLevel.Debug -> Cyan
-    LogLevel.Info -> Green
-    LogLevel.Warn -> Yellow
-    LogLevel.Error, LogLevel.Fatal -> Red
-    LogLevel.Silent -> TextSecondary
-}
+internal fun levelColor(level: LogLevel): Color = logLevelForeground(level)

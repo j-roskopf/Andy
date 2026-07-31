@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -134,7 +135,6 @@ internal fun Sidebar(
             .width(sidebarWidth)
             .fillMaxHeight()
             .background(AndyColors.SidebarBg)
-            .rightBorder(Border)
             .padding(horizontal = horizontalPadding, vertical = AndySpace.Space3),
     ) {
         Row(
@@ -177,20 +177,33 @@ internal fun Sidebar(
             destinations.forEach { item ->
                 val disabledForIos = iosSelectionActive && !item.availableWithIosTarget()
                 val active = item == current
-                Row(
+                Box(
                     Modifier.fillMaxWidth()
                         .height(AndyLayout.SidebarRowHeight)
+                        .clip(RoundedCornerShape(AndyRadius.Control))
                         .background(
                             if (active) AndyColors.SurfaceSelected else Color.Transparent,
-                            RoundedCornerShape(AndyRadius.Control),
                         )
                         .clickable(enabled = !disabledForIos) {
                             if (disabledForIos) onSelect(AndyDestination.Live) else onSelect(item)
-                        }
-                        .padding(horizontal = AndySpace.Space3),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
+                        },
                 ) {
+                    if (active) {
+                        Box(
+                            Modifier
+                                .align(Alignment.CenterStart)
+                                .width(AndyLayout.NavAccentBar)
+                                .height(AndyLayout.SidebarRowHeight - 8.dp)
+                                .background(Rust, RoundedCornerShape(AndyRadius.Pill)),
+                        )
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = AndySpace.Space3),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
+                    ) {
                     Text(
                         navMark(item),
                         color = when {
@@ -255,6 +268,7 @@ internal fun Sidebar(
                                 ProjectActivityIndicator(20.dp)
                             }
                         }
+                    }
                     }
                 }
             }

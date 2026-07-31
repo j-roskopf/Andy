@@ -54,7 +54,7 @@ import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
-import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -277,8 +277,8 @@ internal fun DesignScreen(
             ) {
                 Box(
                     Modifier
-                        .background(Rust.copy(alpha = 0.18f), RoundedCornerShape(AndyRadius.Pill))
-                        .border(1.dp, Rust.copy(alpha = 0.45f), RoundedCornerShape(AndyRadius.Pill))
+                        .background(Rust.copy(alpha = 0.18f), AndyShape.Interactive)
+                        .border(1.dp, Rust.copy(alpha = 0.45f), AndyShape.Interactive)
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(pickerToast.orEmpty(), color = Rust, fontFamily = FontFamily.Monospace, fontSize = 12.sp)

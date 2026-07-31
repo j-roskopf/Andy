@@ -93,6 +93,7 @@ import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
@@ -657,8 +658,8 @@ private fun hostFileIconForPath(path: String, isDirectory: Boolean): HostFileIco
 private fun SearchModePill(text: String, shortcut: String, selected: Boolean, color: Color, onClick: () -> Unit) {
     Row(
         Modifier.height(32.dp)
-            .background(if (selected) color.copy(alpha = 0.16f) else AndyColors.Neutral900.copy(alpha = 0.35f), RoundedCornerShape(AndyRadius.Pill))
-            .border(1.dp, color.copy(alpha = if (selected) 0.52f else 0.22f), RoundedCornerShape(AndyRadius.Pill))
+            .background(if (selected) color.copy(alpha = 0.16f) else AndyColors.Neutral900.copy(alpha = 0.35f), AndyShape.Interactive)
+            .border(1.dp, color.copy(alpha = if (selected) 0.52f else 0.22f), AndyShape.Interactive)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

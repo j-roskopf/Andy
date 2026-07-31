@@ -81,7 +81,7 @@ internal fun LocationControlSection(
             return
         }
         scope.launch {
-            val result = devices.sendGeoFix(serial!!, GeoFix(la, lo, alt.toDoubleOrNull()))
+            val result = devices.sendGeoFix(serial, GeoFix(la, lo, alt.toDoubleOrNull()))
             onStatus(result.stdout.ifBlank { result.stderr })
         }
     }
@@ -108,7 +108,7 @@ internal fun LocationControlSection(
                         alt = preset.fix.altitudeMeters?.let { formatGeoCoordinate(it) } ?: ""
                         if (enabled) {
                             scope.launch {
-                                val result = devices.sendGeoFix(serial!!, preset.fix)
+                                val result = devices.sendGeoFix(serial, preset.fix)
                                 onStatus("${preset.label}: ${result.stdout.ifBlank { result.stderr }}")
                             }
                         }
@@ -156,7 +156,7 @@ internal fun LocationControlSection(
                 }
                 playJob?.cancel()
                 playJob = scope.launch {
-                    devices.playRoute(serial!!, route, intervalMs.toLongOrNull() ?: 1000L)
+                    devices.playRoute(serial, route, intervalMs.toLongOrNull() ?: 1000L)
                         .catch { onStatus("Route playback failed: ${it.message}") }
                         .collect { idx ->
                             routeIndex = idx
@@ -259,7 +259,7 @@ internal fun SensorControlSection(
                     return@StateValueTile
                 }
                 scope.launch {
-                    val result = devices.setSensor(serial!!, selected, listOf(v))
+                    val result = devices.setSensor(serial, selected, listOf(v))
                     onStatus(result.stdout.ifBlank { result.stderr })
                 }
             }
@@ -283,7 +283,7 @@ internal fun SensorControlSection(
                         return@Button
                     }
                     scope.launch {
-                        val result = devices.setSensor(serial!!, selected, listOf(xv, yv, zv))
+                        val result = devices.setSensor(serial, selected, listOf(xv, yv, zv))
                         onStatus(result.stdout.ifBlank { result.stderr })
                     }
                 },
@@ -302,7 +302,7 @@ internal fun SensorControlSection(
                         z = formatSensorValue(ACCEL_PRESET_FLAT[2])
                         if (enabled) {
                             scope.launch {
-                                val result = devices.setSensor(serial!!, EmulatorSensor.Accelerometer, ACCEL_PRESET_FLAT)
+                                val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_FLAT)
                                 onStatus("Flat: ${result.stdout.ifBlank { result.stderr }}")
                             }
                         }
@@ -317,7 +317,7 @@ internal fun SensorControlSection(
                         z = formatSensorValue(ACCEL_PRESET_PORTRAIT[2])
                         if (enabled) {
                             scope.launch {
-                                val result = devices.setSensor(serial!!, EmulatorSensor.Accelerometer, ACCEL_PRESET_PORTRAIT)
+                                val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_PORTRAIT)
                                 onStatus("Portrait: ${result.stdout.ifBlank { result.stderr }}")
                             }
                         }
@@ -358,7 +358,7 @@ internal fun BatteryControlSection(
                 return@StateValueTile
             }
             scope.launch {
-                val result = devices.setBatteryLevel(serial!!, pct)
+                val result = devices.setBatteryLevel(serial, pct)
                 onStatus(result.stdout.ifBlank { result.stderr })
             }
         }
@@ -371,7 +371,7 @@ internal fun BatteryControlSection(
                     return@StateCommandTile
                 }
                 scope.launch {
-                    val result = devices.setBatteryCharging(serial!!, true)
+                    val result = devices.setBatteryCharging(serial, true)
                     onStatus(result.stdout.ifBlank { result.stderr })
                 }
             },
@@ -382,7 +382,7 @@ internal fun BatteryControlSection(
                     return@StateCommandTile
                 }
                 scope.launch {
-                    val result = devices.setBatteryCharging(serial!!, false)
+                    val result = devices.setBatteryCharging(serial, false)
                     onStatus(result.stdout.ifBlank { result.stderr })
                 }
             },
@@ -394,7 +394,7 @@ internal fun BatteryControlSection(
                     onClick = {
                         if (enabled) {
                             scope.launch {
-                                val result = devices.setBatteryHealth(serial!!, h)
+                                val result = devices.setBatteryHealth(serial, h)
                                 onStatus(result.stdout.ifBlank { result.stderr })
                             }
                         }
@@ -413,7 +413,7 @@ internal fun BatteryControlSection(
                     return@Button
                 }
                 scope.launch {
-                    val result = devices.resetBattery(serial!!)
+                    val result = devices.resetBattery(serial)
                     onStatus(result.stdout.ifBlank { result.stderr })
                 }
             },
@@ -433,7 +433,7 @@ internal fun BatteryControlSection(
                         onClick = {
                             if (enabled) {
                                 scope.launch {
-                                    val result = devices.setThermalStatus(serial!!, t.code)
+                                    val result = devices.setThermalStatus(serial, t.code)
                                     onStatus(result.stdout.ifBlank { result.stderr })
                                 }
                             }
@@ -477,7 +477,7 @@ internal fun TelephonyControlSection(
                 return@StateValueTile
             }
             scope.launch {
-                val result = devices.simulateIncomingCall(serial!!, number)
+                val result = devices.simulateIncomingCall(serial, number)
                 onStatus(result.stdout.ifBlank { result.stderr })
             }
         }
@@ -486,7 +486,7 @@ internal fun TelephonyControlSection(
                 onClick = {
                     if (!enabled) return@Button
                     scope.launch {
-                        val result = devices.acceptCall(serial!!, number)
+                        val result = devices.acceptCall(serial, number)
                         onStatus(result.stdout.ifBlank { result.stderr })
                     }
                 },
@@ -497,7 +497,7 @@ internal fun TelephonyControlSection(
                 onClick = {
                     if (!enabled) return@OutlinedButton
                     scope.launch {
-                        val result = devices.cancelCall(serial!!, number)
+                        val result = devices.cancelCall(serial, number)
                         onStatus(result.stdout.ifBlank { result.stderr })
                     }
                 },
@@ -511,7 +511,7 @@ internal fun TelephonyControlSection(
                 return@StateValueTile
             }
             scope.launch {
-                val result = devices.sendSms(serial!!, number, message)
+                val result = devices.sendSms(serial, number, message)
                 onStatus(result.stdout.ifBlank { result.stderr })
             }
         }
@@ -522,7 +522,7 @@ internal fun TelephonyControlSection(
                     onClick = {
                         if (!enabled) return@OutlinedButton
                         scope.launch {
-                            val result = devices.setNetworkType(serial!!, type)
+                            val result = devices.setNetworkType(serial, type)
                             onStatus(result.stdout.ifBlank { result.stderr })
                         }
                     },
@@ -544,7 +544,7 @@ internal fun TelephonyControlSection(
                 return@StateValueTile
             }
             scope.launch {
-                val result = devices.setSignalStrength(serial!!, bars)
+                val result = devices.setSignalStrength(serial, bars)
                 onStatus(result.stdout.ifBlank { result.stderr })
             }
         }
@@ -581,7 +581,7 @@ internal fun LocaleControlSection(
             }
             scope.launch {
                 val change = devices.setDeviceLocale(
-                    serial!!,
+                    serial,
                     tag,
                     apps = apps,
                     allowFrameworkRestart = allowRestart,
@@ -606,7 +606,7 @@ internal fun LocaleControlSection(
                         if (enabled) {
                             scope.launch {
                                 val change = devices.setDeviceLocale(
-                                    serial!!,
+                                    serial,
                                     pseudo,
                                     apps = apps,
                                     allowFrameworkRestart = allowRestart,

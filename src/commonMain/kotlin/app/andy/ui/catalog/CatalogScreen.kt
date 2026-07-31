@@ -60,7 +60,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
-import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -182,8 +182,8 @@ internal fun CatalogScreen(avd: AvdService) {
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                     )
-                    TableHeader(listOf("API" to 70.dp, "Variant" to 340.dp, "ABI" to 130.dp, "State" to 120.dp, "Action" to 100.dp, "Package" to 1.dp))
-                    LazyColumn {
+                    TableHeader(listOf("API" to 70.dp, "Variant" to 340.dp, "ABI" to 130.dp, "State" to 120.dp, "Action" to 116.dp, "Package" to 1.dp))
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(filtered.take(240)) { image ->
                             TableRow {
                                 MonoCell(image.api, 70.dp, TextPrimary)
@@ -193,7 +193,7 @@ internal fun CatalogScreen(avd: AvdService) {
                                 }
                                 MonoCell(image.abi, 130.dp, TextSecondary)
                                 MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
-                                Box(Modifier.width(100.dp)) {
+                                Box(Modifier.width(116.dp), contentAlignment = Alignment.CenterStart) {
                                     if (image.installed) {
                                         OutlinedButton(
                                             onClick = {
@@ -210,8 +210,7 @@ internal fun CatalogScreen(avd: AvdService) {
                                                     }
                                                 }
                                             },
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        ) { Text("Delete", fontSize = 11.sp) }
+                                        ) { Text("Delete", fontSize = 12.sp) }
                                     } else {
                                         Button(
                                             onClick = {
@@ -222,9 +221,8 @@ internal fun CatalogScreen(avd: AvdService) {
                                                     refresh()
                                                 }
                                             },
-                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                                             colors = primaryButtonColors(),
-                                        ) { Text("Download", fontSize = 11.sp) }
+                                        ) { Text("Download", fontSize = 12.sp) }
                                     }
                                 }
                                 MonoCell(image.packageId, 1.dp, TextSecondary, Modifier.weight(1f))
@@ -251,8 +249,8 @@ private fun SystemImageBadgeChip(badge: SystemImageBadge) {
     }
     Box(
         Modifier.height(18.dp)
-            .background(color.copy(alpha = 0.22f), RoundedCornerShape(AndyRadius.Pill))
-            .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(AndyRadius.Pill))
+            .background(color.copy(alpha = 0.22f), AndyShape.Interactive)
+            .border(1.dp, color.copy(alpha = 0.55f), AndyShape.Interactive)
             .padding(horizontal = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -277,8 +275,8 @@ private fun CatalogFilterSidebar(
 ) {
     Column(
         Modifier.width(240.dp).fillMaxHeight()
-            .background(Panel, RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .background(Panel, AndyShape.Interactive)
+            .border(1.dp, Border, AndyShape.Interactive)
             .padding(12.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),

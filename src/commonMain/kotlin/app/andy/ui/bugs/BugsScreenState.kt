@@ -27,7 +27,7 @@ internal class BugsScreenState(
     var playbackStartFrameIndex by mutableStateOf(0)
     var isInspectingPlayback by mutableStateOf(false)
     var status by mutableStateOf("")
-    var timelinePaneWidth by mutableStateOf(280f)
+    var timelinePaneWidth by mutableStateOf(420f)
     var bugDetailsPaneWidth by mutableStateOf(240f)
     val expandedEventIds = mutableStateMapOf<String, Boolean>()
 
