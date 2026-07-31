@@ -23,17 +23,16 @@ class ClaudeCodexSessionIdsTest {
 
     @Test
     fun claudeEncodesProjectPath() {
-        assertEquals(
-            "-Users-joer-Code-Andy-Andy",
-            ClaudeSessionIds.encodeProjectPath("/Users/joer/Code/Andy/Andy"),
-        )
+        val path = File("andy-claude-encode-test").absoluteFile.normalize().path
+        val expected = path.replace(Regex("""[/\\]"""), "-")
+        assertEquals(expected, ClaudeSessionIds.encodeProjectPath(path))
     }
 
     @Test
     fun claudeFindsSessionByPromptInProjectJsonl() {
         val home = kotlin.io.path.createTempDirectory("andy-claude-home").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-claude-cwd").toFile().absolutePath
         try {
-            val cwd = "/tmp/andy-claude-test"
             val encoded = ClaudeSessionIds.encodeProjectPath(cwd)!!
             val project = File(home, ".claude/projects/$encoded")
             project.mkdirs()
@@ -48,14 +47,15 @@ class ClaudeCodexSessionIdsTest {
             assertTrue(ClaudeSessionIds.sessionContainsPrompt(sessionId, "build the feature flag", cwd, home))
         } finally {
             home.deleteRecursively()
+            File(cwd).deleteRecursively()
         }
     }
 
     @Test
     fun claudeResolveForTaskBackfillsFromDisk() {
         val home = kotlin.io.path.createTempDirectory("andy-claude-resolve").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-claude-resolve-cwd").toFile().absolutePath
         try {
-            val cwd = "/tmp/andy-claude-resolve"
             val encoded = ClaudeSessionIds.encodeProjectPath(cwd)!!
             val project = File(home, ".claude/projects/$encoded")
             project.mkdirs()
@@ -75,6 +75,7 @@ class ClaudeCodexSessionIdsTest {
             assertEquals(sessionId, resolved)
         } finally {
             home.deleteRecursively()
+            File(cwd).deleteRecursively()
         }
     }
 
@@ -91,8 +92,8 @@ class ClaudeCodexSessionIdsTest {
     @Test
     fun codexFindsSessionByPromptInRollout() {
         val home = kotlin.io.path.createTempDirectory("andy-codex-home").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-codex-cwd").toFile().absolutePath
         try {
-            val cwd = "/tmp/andy-codex-test"
             val sessionId = "33333333-3333-3333-3333-333333333333"
             val rollout = File(home, ".codex/sessions/2026/07/31/rollout-test-$sessionId.jsonl")
             rollout.parentFile.mkdirs()
@@ -106,14 +107,15 @@ class ClaudeCodexSessionIdsTest {
             assertEquals(sessionId, found)
         } finally {
             home.deleteRecursively()
+            File(cwd).deleteRecursively()
         }
     }
 
     @Test
     fun codexResolveForTaskUsesStoredIdWhenPromptMatches() {
         val home = kotlin.io.path.createTempDirectory("andy-codex-resolve").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-codex-resolve-cwd").toFile().absolutePath
         try {
-            val cwd = "/tmp/andy-codex-resolve"
             val sessionId = "44444444-4444-4444-4444-444444444444"
             val rollout = File(home, ".codex/sessions/2026/07/31/rollout-x-$sessionId.jsonl")
             rollout.parentFile.mkdirs()
@@ -139,6 +141,7 @@ class ClaudeCodexSessionIdsTest {
             )
         } finally {
             home.deleteRecursively()
+            File(cwd).deleteRecursively()
         }
     }
 }
