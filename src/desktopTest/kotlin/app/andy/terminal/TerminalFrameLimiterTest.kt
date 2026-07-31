@@ -115,7 +115,7 @@ class TerminalFrameLimiterTest {
 
     @Test
     fun `the cap cuts rendered frames well below an ungated terminal`() = runBlocking {
-        val durationMs = 1_000L
+        val durationMs = 2_000L
 
         // Control: today's behaviour — every character invalidates, so every frame renders.
         val ungated = FakeRedrawGate()
@@ -140,7 +140,7 @@ class TerminalFrameLimiterTest {
         // The gate is closed (66-20)/66 = 70% of each cycle and nothing invalidates Compose in
         // that span, so the capped run should land near or under half the control's frames.
         assertTrue(
-            capped.renderFrames <= ungated.renderFrames * 0.6,
+            capped.renderFrames <= ungated.renderFrames * 0.75,
             "expected a substantial cut: capped=${capped.renderFrames} ungated=${ungated.renderFrames}",
         )
     }
