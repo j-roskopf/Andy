@@ -82,23 +82,32 @@ class AgentCliLocator {
 
     private fun probeKnownLocations(kind: AgentKind): String? {
         val home = System.getProperty("user.home")
-        val candidates = buildList {
-            addAll(
-                listOf(
-                    "/opt/homebrew/bin/${kind.cliName}",
-                    "/usr/local/bin/${kind.cliName}",
-                    "$home/.local/bin/${kind.cliName}",
-                    "$home/.npm-global/bin/${kind.cliName}",
-                ),
-            )
-            if (kind == AgentKind.Cursor) {
-                val root = File(home, ".local/share/cursor-agent/versions")
-                root.listFiles().orEmpty()
-                    .sortedByDescending { it.name }
-                    .mapTo(this) { File(it, kind.cliName).path }
+        val common = listOf(
+            "/opt/homebrew/bin/${kind.cliName}",
+            "/usr/local/bin/${kind.cliName}",
+            "$home/.local/bin/${kind.cliName}",
+            "$home/.npm-global/bin/${kind.cliName}",
+        )
+        val specific = when (kind) {
+            AgentKind.ClaudeCode -> listOfNotNull(newestClaudeDesktopBinary(home))
+            AgentKind.Codex -> listOf("/Applications/ChatGPT.app/Contents/Resources/codex")
+            AgentKind.Cursor -> listOf("$home/.local/share/cursor-agent/versions").flatMap { root ->
+                File(root).listFiles().orEmpty().sortedByDescending { it.name }.map { "${it.path}/cursor-agent" }
             }
+            AgentKind.Antigravity -> emptyList()
         }
-        return candidates.firstOrNull { File(it).canExecute() }
+        return (common + specific).firstOrNull { File(it).canExecute() }
+    }
+
+    /** The Claude desktop app manages versioned claude-code installs; pick the newest. */
+    private fun newestClaudeDesktopBinary(home: String): String? {
+        val root = File(home, "Library/Application Support/Claude/claude-code")
+        val versions = root.listFiles { file -> file.isDirectory }.orEmpty()
+        return versions
+            .sortedWith { a, b -> compareVersionNames(b.name, a.name) }
+            .map { File(it, "claude.app/Contents/MacOS/claude") }
+            .firstOrNull { it.canExecute() }
+            ?.path
     }
 
     private fun probeVersion(binary: String): String? = runCatching {
@@ -127,4 +136,14 @@ class AgentCliLocator {
         reader.join(1_000)
         return output.toString()
     }
+}
+
+internal fun compareVersionNames(a: String, b: String): Int {
+    val left = a.split('.').map { it.toIntOrNull() ?: -1 }
+    val right = b.split('.').map { it.toIntOrNull() ?: -1 }
+    for (index in 0 until maxOf(left.size, right.size)) {
+        val diff = (left.getOrElse(index) { 0 }).compareTo(right.getOrElse(index) { 0 })
+        if (diff != 0) return diff
+    }
+    return 0
 }

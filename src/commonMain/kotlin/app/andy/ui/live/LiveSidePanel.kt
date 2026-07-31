@@ -264,11 +264,12 @@ private fun LiveInfoTabContent(
             WorkspaceSectionLabel("Stream quality")
             val presetOptions = listOf("720", "1080", "1440", "Native")
             val presetValues = listOf("720", "1080", "1440", "0")
+            val presetBitRates = listOf("4", "8", "12", "16")
             val selectedPreset = presetValues.indexOf(maxSize).coerceAtLeast(0)
             SegmentedControl(
                 options = presetOptions,
                 selectedIndex = selectedPreset,
-                onSelect = { index -> onApplyPreset(presetValues[index], bitRateMbps) },
+                onSelect = { index -> onApplyPreset(presetValues[index], presetBitRates[index]) },
             )
 
             if (acceleratedMirror) {

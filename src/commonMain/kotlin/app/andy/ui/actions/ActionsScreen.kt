@@ -436,6 +436,7 @@ private fun ProjectCockpit(
                             ProjectSessionGroup(
                                 project = item,
                                 nowMillis = nowMillis,
+                                hasUnread = item.id in unreadProjectIds,
                                 sessions = when {
                                     entry.searchSessions != null -> entry.searchSessions
                                     sessionsCollapsed -> emptyList()
@@ -1154,6 +1155,7 @@ private fun ProjectsSidebarFooter() {
 private fun ProjectSessionGroup(
     project: ActionProject,
     nowMillis: Long,
+    hasUnread: Boolean,
     sessions: List<AgentTask>,
     selectedSessionId: String?,
     sessionsCollapsed: Boolean,
@@ -1198,11 +1200,11 @@ private fun ProjectSessionGroup(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (hovered) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (hovered) {
                     if (project.source != ConfigSource.Repo) {
                         Text(
                             "edit",
@@ -1214,6 +1216,7 @@ private fun ProjectSessionGroup(
                     }
                     NewProjectChatButton(onClick = onNewChat, size = 13.dp)
                 }
+                if (hasUnread) UnreadDot()
             }
         }
         AnimatedVisibility(
