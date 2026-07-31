@@ -81,7 +81,7 @@ internal class DesktopDhuService(
             !serial.isNullOrBlank() &&
             !sdk.adbPath.isNullOrBlank()
         ) {
-            probeHeadUnitServerListening(sdk.adbPath!!, serial)
+            probeHeadUnitServerListening(sdk.adbPath, serial)
         } else {
             null
         }

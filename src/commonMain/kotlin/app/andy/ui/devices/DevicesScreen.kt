@@ -73,6 +73,7 @@ import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
+import app.andy.ui.components.TabBar
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
@@ -241,13 +242,12 @@ internal fun DevicesScreen(
             }
         }
         if (allowIosManagement) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                DevicesPlatformTab.entries.forEach { tab ->
-                    FilterPill(tab.label, state.platformTab == tab, if (state.platformTab == tab) Rust else Cyan) {
-                        state.platformTab = tab
-                    }
-                }
-            }
+            TabBar(
+                tabs = DevicesPlatformTab.entries,
+                selected = state.platformTab,
+                onSelect = { state.platformTab = it },
+                label = { it.label },
+            )
         }
         if (sdk.issues.isNotEmpty() && state.platformTab == DevicesPlatformTab.Android) {
             PanelCard {

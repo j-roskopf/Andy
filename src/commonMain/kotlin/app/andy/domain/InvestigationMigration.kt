@@ -91,7 +91,6 @@ fun InvestigationEvent.toBugActionOrNull(): BugAction? {
         InvestigationEventKind.Action -> "action"
         InvestigationEventKind.ScreenTransition -> "screen"
         InvestigationEventKind.UserMarker -> "note"
-        else -> "action"
     }
     return BugAction(
         id = id,

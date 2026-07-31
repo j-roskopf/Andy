@@ -258,14 +258,14 @@ class DesktopIosMirrorEngine(
      */
     private suspend fun resumeSimulatorAfterHandoff(serial: String) {
         if (IosTargetRegistry.target(serial)?.kind == IosTargetKind.Physical) return
-        val devices = iosDevices
-        val liveTarget = devices?.listTargets()?.firstOrNull { it.udid == serial }
+        val devices = iosDevices ?: return
+        val liveTarget = devices.listTargets().firstOrNull { it.udid == serial }
         val wasShutdown = liveTarget?.state == IosTargetState.Shutdown
-        if (wasShutdown && devices != null) {
+        if (wasShutdown) {
             devices.boot(serial).takeIf { !it.isSuccess }?.let { return }
             if (!waitForSimulatorBoot(serial)) return
         }
-        devices?.prepareEmbeddedMirror(serial)
+        devices.prepareEmbeddedMirror(serial)
         if (wasShutdown || !NativeIosSimJni.isCaptureHealthy()) {
             NativeIosSimJni.disconnect()
             val size = NativeIosSimJni.connect(serial) ?: return

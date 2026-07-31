@@ -1,9 +1,9 @@
 package app.andy.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -26,51 +26,118 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.horizontalResizeCursor
+import app.andy.model.LogLevel
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
-import app.andy.ui.theme.Rust
+import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
+
+@Composable
+internal fun DataTableHeader(
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Column(modifier) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Border.copy(alpha = 0.35f)),
+        )
+    }
+}
 
 @Composable
 internal fun TableHeader(columns: List<Pair<String, androidx.compose.ui.unit.Dp>>) {
-    Row(Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    DataTableHeader {
         columns.forEach { (title, width) ->
-            Text(title.lowercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Medium, fontSize = 10.sp, modifier = if (width.value == 1f) Modifier.weight(1f) else Modifier.width(width))
+            Text(
+                title.lowercase(),
+                color = TextSecondary.copy(alpha = 0.72f),
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 10.sp,
+                letterSpacing = 0.4.sp,
+                modifier = if (width.value == 1f) Modifier.weight(1f) else Modifier.width(width),
+            )
         }
     }
 }
 
 @Composable
-internal fun TableRow(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+internal fun TableRow(
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    content: @Composable RowScope.() -> Unit,
+) {
     Row(
-        modifier.fillMaxWidth()
-            .heightIn(min = 32.dp)
-            .background(AndyColors.Neutral900.copy(alpha = 0.72f))
-            .border(1.dp, Color.White.copy(alpha = 0.05f))
-            .padding(horizontal = 4.dp),
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 28.dp)
+            .background(
+                when {
+                    selected -> AndyColors.SurfaceSelected
+                    else -> Color.Transparent
+                },
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
     )
 }
 
 @Composable
-internal fun MonoCell(text: String, width: androidx.compose.ui.unit.Dp, color: Color, modifier: Modifier = Modifier) {
-    Text(text, color = color, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = if (modifier != Modifier) modifier else Modifier.width(width))
+internal fun MonoCell(
+    text: String,
+    width: androidx.compose.ui.unit.Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    Text(
+        text,
+        color = color,
+        fontFamily = MonoFont,
+        fontSize = if (compact) 11.sp else 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = if (modifier != Modifier) modifier else Modifier.width(width),
+    )
 }
 
 @Composable
-internal fun HeaderCell(title: String, width: androidx.compose.ui.unit.Dp, onWidthChange: (Float) -> Unit) {
+internal fun HeaderCell(
+    title: String,
+    width: androidx.compose.ui.unit.Dp,
+    showLeadingDivider: Boolean = false,
+    onWidthChange: (Float) -> Unit,
+) {
     val latestOnWidthChange by rememberUpdatedState(onWidthChange)
     val latestWidthValue by rememberUpdatedState(width.value)
     val density = LocalDensity.current.density
     var dragStartWidth by remember { mutableStateOf(0f) }
     var dragDelta by remember { mutableStateOf(0f) }
     Row(
-        Modifier.width(width).fillMaxHeight()
+        Modifier
+            .width(width)
+            .fillMaxHeight()
             .horizontalResizeCursor()
             .pointerInput(Unit) {
                 detectDragGestures(
@@ -85,11 +152,117 @@ internal fun HeaderCell(title: String, width: androidx.compose.ui.unit.Dp, onWid
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp, modifier = Modifier.weight(1f))
-        Box(
-            Modifier.width(14.dp).fillMaxHeight(),
-        ) {
-            Box(Modifier.align(Alignment.Center).width(3.dp).fillMaxHeight().background(Rust.copy(alpha = 0.75f), RoundedCornerShape(2.dp)))
+        if (showLeadingDivider) {
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .fillMaxHeight(0.55f)
+                    .background(Border.copy(alpha = 0.45f)),
+            )
+            Box(Modifier.width(6.dp))
         }
+        Text(
+            title.lowercase(),
+            color = TextSecondary.copy(alpha = 0.72f),
+            fontWeight = FontWeight.Medium,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            letterSpacing = 0.4.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
+}
+
+@Composable
+internal fun HeaderTrailingLabel(
+    title: String,
+    modifier: Modifier = Modifier,
+    showLeadingDivider: Boolean = true,
+) {
+    Row(
+        modifier.fillMaxHeight(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showLeadingDivider) {
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .fillMaxHeight(0.55f)
+                    .background(Border.copy(alpha = 0.45f)),
+            )
+            Box(Modifier.width(6.dp))
+        }
+        Text(
+            title.lowercase(),
+            color = TextSecondary.copy(alpha = 0.72f),
+            fontWeight = FontWeight.Medium,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            letterSpacing = 0.4.sp,
+        )
+    }
+}
+
+@Composable
+internal fun LogLevelBadge(level: LogLevel, modifier: Modifier = Modifier) {
+    val foreground = logLevelForeground(level)
+    val background = foreground.copy(alpha = 0.16f)
+    Box(
+        modifier
+            .background(background, RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            logLevelLabel(level),
+            color = foreground,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+internal fun StatusBadge(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .background(color.copy(alpha = 0.14f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            color = color,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+internal fun logLevelForeground(level: LogLevel): Color = when (level) {
+    LogLevel.Verbose -> TextSecondary
+    LogLevel.Debug -> Cyan
+    LogLevel.Info -> Green
+    LogLevel.Warn -> Yellow
+    LogLevel.Error, LogLevel.Fatal -> Red
+    LogLevel.Silent -> TextSecondary
+}
+
+private fun logLevelLabel(level: LogLevel): String = when (level) {
+    LogLevel.Verbose -> "V"
+    LogLevel.Debug -> "D"
+    LogLevel.Info -> "I"
+    LogLevel.Warn -> "W"
+    LogLevel.Error -> "E"
+    LogLevel.Fatal -> "F"
+    LogLevel.Silent -> "S"
 }

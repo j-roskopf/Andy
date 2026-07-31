@@ -473,7 +473,7 @@ internal fun LiveScreen(
         }
     }
     LaunchedEffect(androidAutoEnabled, serial, mirroredElsewhere) {
-        if (!showAndroidAuto || !androidAutoEnabled || serial == null || mirroredElsewhere) {
+        if (!showAndroidAuto || !androidAutoEnabled || mirroredElsewhere) {
             services.dhu.stop()
             return@LaunchedEffect
         }
@@ -582,7 +582,7 @@ internal fun LiveScreen(
         }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    Row(Modifier.weight(1f).fillMaxWidth()) {
+    Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             val dialogsOpen = bugDialogVisible || clipDialogVisible || completedRecording != null || screenshotEditorBytes != null
             val devicePaneModifier = if (iosSinglePane) {
@@ -729,7 +729,7 @@ internal fun LiveScreen(
                             readiness = dhuReadiness,
                             onRetry = {
                                 scope.launch {
-                                    if (serial != null) services.dhu.start(serial)
+                                    services.dhu.start(serial)
                                 }
                             },
                             onStop = {

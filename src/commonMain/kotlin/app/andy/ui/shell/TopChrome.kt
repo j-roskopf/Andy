@@ -51,6 +51,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.hardware_pop_out
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
@@ -105,7 +106,6 @@ internal fun TopChrome(
             .fillMaxWidth()
             .height(AndyLayout.ToolbarHeight)
             .background(AndyColors.ContentBg)
-            .bottomBorder(Border)
             .padding(horizontal = AndySpace.Space5),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -155,7 +155,7 @@ internal fun TopChrome(
             OutlinedButton(
                 onClick = { onStopEmulator(selectedDevice) },
                 enabled = stoppingEmulatorSerial != selectedDevice.serial,
-                shape = RoundedCornerShape(AndyRadius.Row),
+                shape = AndyShape.Interactive,
                 contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
             ) {
                 Text(
@@ -169,7 +169,7 @@ internal fun TopChrome(
         Button(
             onClick = onRefresh,
             colors = secondaryButtonColors(),
-            shape = RoundedCornerShape(AndyRadius.Row),
+            shape = AndyShape.Interactive,
             contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) {
             Text("Refresh", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
@@ -196,7 +196,7 @@ private fun ProxyToolbarIndicator() {
     Row(
         Modifier
             .height(AndyLayout.ControlHeightMd)
-            .background(AndyColors.SurfaceHover, RoundedCornerShape(AndyRadius.Control))
+            .background(AndyColors.SurfaceHover, AndyShape.Interactive)
             .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -240,7 +240,7 @@ private fun ActionRunnerSelector(
             Button(
                 onClick = { onProjectExpandedChange(true) },
                 colors = secondaryButtonColors(),
-                shape = RoundedCornerShape(AndyRadius.Control),
+                shape = AndyShape.Interactive,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
                 modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
             ) {
@@ -272,7 +272,7 @@ private fun ActionRunnerSelector(
                 onClick = { onActionExpandedChange(true) },
                 enabled = project?.actions?.isNotEmpty() == true,
                 colors = secondaryButtonColors(),
-                shape = RoundedCornerShape(AndyRadius.Control),
+                shape = AndyShape.Interactive,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
                 modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
             ) {
@@ -310,10 +310,10 @@ private fun ActionRunnerSelector(
             },
             enabled = project != null && action != null,
             colors = primaryButtonColors(),
-            shape = RoundedCornerShape(AndyRadius.Row),
+            shape = AndyShape.Interactive,
             contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) {
-            Text("Run", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text("Run", fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -342,7 +342,7 @@ private fun DevicePicker(
         Button(
             onClick = { onExpandedChange(true) },
             colors = secondaryButtonColors(),
-            shape = RoundedCornerShape(AndyRadius.Control),
+            shape = AndyShape.Interactive,
             contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) {
             Text("•", color = Green, fontSize = 16.sp)

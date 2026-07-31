@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,7 +72,7 @@ import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.DetailRow
 import app.andy.ui.components.DetailSection
 import app.andy.ui.components.EmptyState
-import app.andy.ui.components.FilterPill
+import app.andy.ui.components.TabBar
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
@@ -339,7 +340,7 @@ internal fun BugsScreen(
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val paneGuttersWidth = AndySpace.Space4 * 2 + AndyStroke.PaneHandleHitWidth * 2
                     val minimumVideoWidth = 260.dp
-                    val minimumStepsWidth = 220.dp
+                    val minimumStepsWidth = 280.dp
                     val minimumDetailsWidth = 220.dp
                     val availableForSidePanes = maxWidth - paneGuttersWidth - minimumVideoWidth
                     val maximumStepsWidth = (availableForSidePanes - minimumDetailsWidth).coerceAtLeast(minimumStepsWidth)
@@ -458,11 +459,13 @@ internal fun BugsScreen(
                                 .coerceIn(minimumDetailsWidth.value, maxDetails)
                         },
                     )
-                    PanelCard(Modifier.width(displayDetailsWidth.dp).fillMaxHeight()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterPill("Details", state.selectedTab == "Details", Rust) { state.selectedTab = "Details" }
-                            FilterPill("Logcat", state.selectedTab == "Logcat", Rust) { state.selectedTab = "Logcat" }
-                        }
+                    Column(Modifier.width(displayDetailsWidth.dp).fillMaxHeight()) {
+                        TabBar(
+                            tabs = listOf("Details", "Logcat"),
+                            selectedIndex = if (state.selectedTab == "Logcat") 1 else 0,
+                            onSelect = { state.selectedTab = if (it == 1) "Logcat" else "Details" },
+                        )
+                        Spacer(Modifier.height(12.dp))
                         if (state.selectedTab == "Details") {
                             DetailSection("APP")
                             DetailRow("Package", report.appIdentity?.packageName)
@@ -516,10 +519,10 @@ internal fun BugsScreen(
                             BugLogcatView(state.logcat, Modifier.fillMaxSize())
                         }
                     }
-                    }
                 }
             }
         }
+    }
     }
     ContextualAiActionHost(services, contextualActions)
     }

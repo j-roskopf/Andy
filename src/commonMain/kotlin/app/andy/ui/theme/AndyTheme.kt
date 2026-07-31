@@ -19,10 +19,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Design DNA — Minimal Native macOS.
+ * Design DNA — Soft Minimal.
  *
- * Surfaces stay neutral; accent is punctuation. Dark and light palettes are
- * tuned independently (not inverted copies of each other).
+ * Deep charcoal surfaces, generous rounding, and tonal hierarchy over borders.
+ * Accent is punctuation. Dark and light palettes are tuned independently.
  */
 internal enum class AndyTint(val id: String, val label: String, val color: Color) {
     Default("andy-blue", "Andy blue", Color(0xFF78A9FF)),
@@ -144,23 +144,23 @@ private data class AndyTonalPalette(
          */
         fun tinted(tint: Color): AndyTonalPalette {
             val hsl = tint.toHsl()
-            val surfaceSaturation = hsl.saturation.coerceIn(0.18f, 0.38f)
+            val surfaceSaturation = hsl.saturation.coerceIn(0.10f, 0.28f)
             fun surface(lightness: Float, saturation: Float = surfaceSaturation) =
                 hslColor(hsl.hue, saturation.coerceAtMost(surfaceSaturation), lightness)
-            val window = surface(0.090f, 0.30f)
-            val content = surface(0.078f, 0.32f)
-            val pane = surface(0.105f, 0.28f)
-            val sidebar = surface(0.125f, 0.26f)
-            val raised = surface(0.145f, 0.24f)
-            val hover = surface(0.165f, 0.22f)
-            val selected = surface(0.220f, 0.20f)
-            val border = hslColor(hsl.hue + 180f, 0.16f, 0.62f).copy(alpha = 0.14f)
+            val window = surface(0.040f, 0.22f)
+            val content = surface(0.040f, 0.24f)
+            val pane = surface(0.060f, 0.20f)
+            val sidebar = surface(0.068f, 0.18f)
+            val raised = surface(0.095f, 0.16f)
+            val hover = surface(0.105f, 0.14f)
+            val selected = surface(0.125f, 0.12f)
+            val border = hslColor(hsl.hue + 180f, 0.10f, 0.62f).copy(alpha = 0.10f)
             return AndyTonalPalette(
-                neutral100 = Color.White.copy(alpha = 0.94f),
-                neutral200 = Color.White.copy(alpha = 0.94f),
-                neutral300 = Color.White.copy(alpha = 0.70f),
-                neutral400 = Color.White.copy(alpha = 0.46f),
-                neutral500 = Color.White.copy(alpha = 0.28f),
+                neutral100 = Color.White.copy(alpha = 0.92f),
+                neutral200 = Color.White.copy(alpha = 0.92f),
+                neutral300 = Color.White.copy(alpha = 0.68f),
+                neutral400 = Color.White.copy(alpha = 0.44f),
+                neutral500 = Color.White.copy(alpha = 0.26f),
                 neutral600 = hover,
                 neutral700 = raised,
                 neutral750 = sidebar,
@@ -168,7 +168,7 @@ private data class AndyTonalPalette(
                 neutral850 = content,
                 neutral900 = window,
                 border = border,
-                borderMedium = border.copy(alpha = 0.20f),
+                borderMedium = border.copy(alpha = 0.14f),
                 windowBg = window,
                 sidebarBg = sidebar,
                 paneBg = pane,
@@ -176,69 +176,69 @@ private data class AndyTonalPalette(
                 surfaceHover = hover,
                 surfaceSelected = selected,
                 surfaceRaised = raised,
-                textPrimary = Color.White.copy(alpha = 0.94f),
-                textSecondary = Color.White.copy(alpha = 0.70f),
-                textTertiary = Color.White.copy(alpha = 0.46f),
-                textDisabled = Color.White.copy(alpha = 0.28f),
+                textPrimary = Color.White.copy(alpha = 0.92f),
+                textSecondary = Color.White.copy(alpha = 0.68f),
+                textTertiary = Color.White.copy(alpha = 0.44f),
+                textDisabled = Color.White.copy(alpha = 0.26f),
             )
         }
 
-        /** Exact DNA dark palette. Neutrals map so existing Ink/Panel call sites stay coherent. */
+        /** Soft minimal dark palette — deep charcoal with tonal separation. */
         fun dark() = AndyTonalPalette(
             // Text ladder (bright → muted)
-            neutral100 = Color.White.copy(alpha = 0.94f),
-            neutral200 = Color.White.copy(alpha = 0.94f),
-            neutral300 = Color.White.copy(alpha = 0.70f),
-            neutral400 = Color.White.copy(alpha = 0.46f),
-            neutral500 = Color.White.copy(alpha = 0.28f),
+            neutral100 = Color.White.copy(alpha = 0.92f),
+            neutral200 = Color.White.copy(alpha = 0.92f),
+            neutral300 = Color.White.copy(alpha = 0.68f),
+            neutral400 = Color.White.copy(alpha = 0.44f),
+            neutral500 = Color.White.copy(alpha = 0.26f),
             // Surface ladder (raised → deep)
-            neutral600 = Color(0xFF23292E), // surface-hover
-            neutral700 = Color(0xFF20262B), // surface-raised
-            neutral750 = Color(0xFF1C2125), // sidebar-bg
-            neutral800 = Color(0xFF181C20), // pane-bg
-            neutral850 = Color(0xFF14171A), // content-bg
-            neutral900 = Color(0xFF15181B), // window-bg
-            border = Color.White.copy(alpha = 0.07f),
-            borderMedium = Color.White.copy(alpha = 0.11f),
-            windowBg = Color(0xFF15181B),
-            sidebarBg = Color(0xFF1C2125),
-            paneBg = Color(0xFF181C20),
-            contentBg = Color(0xFF14171A),
-            surfaceHover = Color(0xFF23292E),
-            surfaceSelected = Color(0xFF30383F),
-            surfaceRaised = Color(0xFF20262B),
-            textPrimary = Color.White.copy(alpha = 0.94f),
-            textSecondary = Color.White.copy(alpha = 0.70f),
-            textTertiary = Color.White.copy(alpha = 0.46f),
-            textDisabled = Color.White.copy(alpha = 0.28f),
+            neutral600 = Color(0xFF1A1A1A), // surface-hover
+            neutral700 = Color(0xFF171717), // surface-raised
+            neutral750 = Color(0xFF111111), // sidebar-bg
+            neutral800 = Color(0xFF0F0F0F), // pane-bg
+            neutral850 = Color(0xFF0A0A0A), // content-bg
+            neutral900 = Color(0xFF0A0A0A), // window-bg
+            border = Color.White.copy(alpha = 0.05f),
+            borderMedium = Color.White.copy(alpha = 0.08f),
+            windowBg = Color(0xFF0A0A0A),
+            sidebarBg = Color(0xFF111111),
+            paneBg = Color(0xFF0F0F0F),
+            contentBg = Color(0xFF0A0A0A),
+            surfaceHover = Color(0xFF1A1A1A),
+            surfaceSelected = Color(0xFF1F1F1F),
+            surfaceRaised = Color(0xFF171717),
+            textPrimary = Color.White.copy(alpha = 0.92f),
+            textSecondary = Color.White.copy(alpha = 0.68f),
+            textTertiary = Color.White.copy(alpha = 0.44f),
+            textDisabled = Color.White.copy(alpha = 0.26f),
         )
 
-        /** Exact DNA light palette — tuned independently, not an inversion of dark. */
+        /** Soft minimal light palette — warm neutrals, tuned independently. */
         fun light() = AndyTonalPalette(
-            neutral100 = Color.Black.copy(alpha = 0.90f),
-            neutral200 = Color.Black.copy(alpha = 0.90f),
-            neutral300 = Color.Black.copy(alpha = 0.64f),
-            neutral400 = Color.Black.copy(alpha = 0.44f),
-            neutral500 = Color.Black.copy(alpha = 0.26f),
-            neutral600 = Color(0xFFE9EAEC), // surface-hover
+            neutral100 = Color.Black.copy(alpha = 0.88f),
+            neutral200 = Color.Black.copy(alpha = 0.88f),
+            neutral300 = Color.Black.copy(alpha = 0.62f),
+            neutral400 = Color.Black.copy(alpha = 0.42f),
+            neutral500 = Color.Black.copy(alpha = 0.24f),
+            neutral600 = Color(0xFFE8E8E8), // surface-hover
             neutral700 = Color(0xFFFFFFFF), // surface-raised
-            neutral750 = Color(0xFFECEDEF), // sidebar-bg
-            neutral800 = Color(0xFFF7F7F8), // pane-bg
+            neutral750 = Color(0xFFEDEDED), // sidebar-bg
+            neutral800 = Color(0xFFFAFAFA), // pane-bg
             neutral850 = Color(0xFFFFFFFF), // content-bg
-            neutral900 = Color(0xFFF4F4F5), // window-bg
-            border = Color.Black.copy(alpha = 0.07f),
-            borderMedium = Color.Black.copy(alpha = 0.12f),
-            windowBg = Color(0xFFF4F4F5),
-            sidebarBg = Color(0xFFECEDEF),
-            paneBg = Color(0xFFF7F7F8),
+            neutral900 = Color(0xFFF5F5F5), // window-bg
+            border = Color.Black.copy(alpha = 0.06f),
+            borderMedium = Color.Black.copy(alpha = 0.10f),
+            windowBg = Color(0xFFF5F5F5),
+            sidebarBg = Color(0xFFEDEDED),
+            paneBg = Color(0xFFFAFAFA),
             contentBg = Color(0xFFFFFFFF),
-            surfaceHover = Color(0xFFE9EAEC),
-            surfaceSelected = Color(0xFFDDE1E5),
+            surfaceHover = Color(0xFFE8E8E8),
+            surfaceSelected = Color(0xFFDCDCDC),
             surfaceRaised = Color(0xFFFFFFFF),
-            textPrimary = Color.Black.copy(alpha = 0.90f),
-            textSecondary = Color.Black.copy(alpha = 0.64f),
-            textTertiary = Color.Black.copy(alpha = 0.44f),
-            textDisabled = Color.Black.copy(alpha = 0.26f),
+            textPrimary = Color.Black.copy(alpha = 0.88f),
+            textSecondary = Color.Black.copy(alpha = 0.62f),
+            textTertiary = Color.Black.copy(alpha = 0.42f),
+            textDisabled = Color.Black.copy(alpha = 0.24f),
         )
     }
 }
@@ -315,46 +315,60 @@ internal object AndyOverlay {
     val Strong = 0.90f
 }
 
-/** DNA spacing scale. */
+/** Soft minimal spacing scale — slightly more generous than the prior DNA. */
 internal object AndySpace {
     val Space1 = 4.dp
     val Space2 = 6.dp
-    val Space3 = 8.dp
-    val Space4 = 12.dp
-    val Space5 = 16.dp
-    val Space6 = 20.dp
-    val Space7 = 24.dp
-    val Space8 = 32.dp
+    val Space3 = 10.dp
+    val Space4 = 14.dp
+    val Space5 = 18.dp
+    val Space6 = 24.dp
+    val Space7 = 28.dp
+    val Space8 = 36.dp
 }
 
-/** DNA radius system — rounding communicates object type. */
+/** Soft radius system — generous rounding communicates approachability. */
 internal object AndyRadius {
-    val Control = 6.dp
-    val Row = 7.dp
-    val Menu = 10.dp
-    val Sheet = 12.dp
-    val Window = 14.dp
+    /** Buttons, fields, pills, segmented controls — squarish-rounded like toolbar chrome. */
+    val Interactive = 12.dp
+    val Control = 10.dp
+    val Row = Interactive
+    val Menu = 14.dp
+    val Sheet = 16.dp
+    val Window = 20.dp
+    /** Reserved for dots, progress fills, and circular indicators only. */
     val Pill = 999.dp
 }
 
-/** DNA layout + control metrics. */
+/** Shared corner shapes — prefer these over ad-hoc [RoundedCornerShape] at call sites. */
+internal object AndyShape {
+    val Interactive = RoundedCornerShape(AndyRadius.Interactive)
+    val Row = RoundedCornerShape(AndyRadius.Row)
+    val Menu = RoundedCornerShape(AndyRadius.Menu)
+    val Sheet = RoundedCornerShape(AndyRadius.Sheet)
+    val Window = RoundedCornerShape(AndyRadius.Window)
+}
+
+/** Soft minimal layout + control metrics. */
 internal object AndyLayout {
-    val ToolbarHeight = 50.dp
-    val SidebarWidth = 210.dp
+    val ToolbarHeight = 52.dp
+    val SidebarWidth = 220.dp
     val SidebarCollapsedWidth = 52.dp
-    val ListWidth = 260.dp
-    val SidebarRowHeight = 30.dp
-    val ControlHeightXs = 24.dp
-    val ControlHeightSm = 28.dp
-    val ControlHeightMd = 30.dp
-    /** Compact single-line text field — denser than Material, readable at a glance. */
-    val FieldHeight = 28.dp
-    val ToolbarButtonSize = 28.dp
+    val ListWidth = 272.dp
+    val SidebarRowHeight = 34.dp
+    val ControlHeightXs = 26.dp
+    val ControlHeightSm = 30.dp
+    val ControlHeightMd = 32.dp
+    /** Compact single-line text field — squarish-rounded, readable at a glance. */
+    val FieldHeight = 32.dp
+    val ToolbarButtonSize = 30.dp
     val IconSm = 13.dp
     val IconMd = 15.dp
     val IconLg = 17.dp
-    val IconHitArea = 28.dp
+    val IconHitArea = 30.dp
     val ContentMaxWidth = 760.dp
+    /** Leading accent bar width for active navigation rows. */
+    val NavAccentBar = 3.dp
 }
 
 /** DNA motion timing. */
@@ -436,17 +450,17 @@ fun AndyTheme(
         typography = Typography(
             displayLarge = LocalTextStyle.current.copy(
                 fontFamily = DisplayFont,
-                fontSize = 24.sp,
-                lineHeight = 30.sp,
+                fontSize = 26.sp,
+                lineHeight = 32.sp,
                 fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.3).sp,
+                letterSpacing = (-0.4).sp,
             ),
             headlineLarge = LocalTextStyle.current.copy(
                 fontFamily = DisplayFont,
                 fontSize = 20.sp,
-                lineHeight = 26.sp,
+                lineHeight = 28.sp,
                 fontWeight = FontWeight.SemiBold,
-                letterSpacing = (-0.2).sp,
+                letterSpacing = (-0.3).sp,
             ),
             titleMedium = LocalTextStyle.current.copy(
                 fontFamily = DisplayFont,
@@ -463,7 +477,7 @@ fun AndyTheme(
             bodySmall = LocalTextStyle.current.copy(
                 fontFamily = DisplayFont,
                 fontSize = 12.sp,
-                lineHeight = 16.sp,
+                lineHeight = 17.sp,
                 fontWeight = FontWeight.Normal,
             ),
             labelMedium = LocalTextStyle.current.copy(
@@ -475,7 +489,7 @@ fun AndyTheme(
             labelSmall = LocalTextStyle.current.copy(
                 fontFamily = DisplayFont,
                 fontSize = 11.sp,
-                lineHeight = 14.sp,
+                lineHeight = 15.sp,
                 fontWeight = FontWeight.Medium,
             ),
         ),

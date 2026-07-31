@@ -404,7 +404,6 @@ internal fun AgentTranscript(
                 Button(
                     onClick = ::jumpToLatest,
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                    shape = RoundedCornerShape(AndyRadius.Pill),
                 ) {
                     Text(
                         if (isActive) "↓  follow live" else "↓  latest",

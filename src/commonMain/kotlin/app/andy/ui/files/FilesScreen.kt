@@ -52,6 +52,7 @@ import app.andy.transfer.LocalDropKind
 import app.andy.transfer.classifyLocalPaths
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
+import app.andy.ui.components.TabBar
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TableHeader
@@ -80,17 +81,11 @@ internal fun FilesScreen(
     onSelectedTabChange: (FilesTab) -> Unit,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterPill("Files", selectedTab == FilesTab.Files, Rust) {
-                onSelectedTabChange(FilesTab.Files)
-            }
-            FilterPill("Shared Preferences", selectedTab == FilesTab.SharedPreferences, Rust) {
-                onSelectedTabChange(FilesTab.SharedPreferences)
-            }
-            FilterPill("Database", selectedTab == FilesTab.Database, Rust) {
-                onSelectedTabChange(FilesTab.Database)
-            }
-        }
+        TabBar(
+            tabs = listOf("Files", "Shared Preferences", "Database"),
+            selectedIndex = FilesTab.entries.indexOf(selectedTab).coerceAtLeast(0),
+            onSelect = { onSelectedTabChange(FilesTab.entries[it]) },
+        )
         when (selectedTab) {
             FilesTab.Files -> DeviceFilesBrowser(
                 files = files,

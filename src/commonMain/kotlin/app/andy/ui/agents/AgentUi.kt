@@ -6,13 +6,28 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,9 +45,13 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
+import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
+import app.andy.ui.theme.TextPrimary
+import app.andy.ui.theme.TextSecondary
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -139,6 +158,97 @@ internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
         animate = true,
         contentDescription = "Working",
     )
+}
+
+internal fun sessionActivityMillis(task: AgentTask): Long =
+    task.finishedAtMillis ?: task.startedAtMillis ?: task.createdAtMillis
+
+internal fun formatSessionAge(timestampMillis: Long, nowMillis: Long): String {
+    val elapsedSec = ((nowMillis - timestampMillis).coerceAtLeast(0)) / 1000
+    return when {
+        elapsedSec < 60 -> "${elapsedSec.coerceAtLeast(1)}s"
+        elapsedSec < 3600 -> "${elapsedSec / 60}m"
+        elapsedSec < 86400 -> "${elapsedSec / 3600}h"
+        else -> "${elapsedSec / 86400}d"
+    }
+}
+
+@Composable
+internal fun ChatSessionSidebarRow(
+    task: AgentTask,
+    selected: Boolean,
+    nowMillis: Long,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                when {
+                    selected -> AndyColors.SurfaceSelected
+                    hovered -> AndyColors.SurfaceHover
+                    else -> Color.Transparent
+                },
+            )
+            .hoverable(interactionSource)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                task.title,
+                color = when {
+                    selected || task.unread -> TextPrimary
+                    else -> TextPrimary.copy(alpha = 0.9f)
+                },
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            when {
+                isSessionWorking(task) -> ProjectActivityIndicator(12.dp)
+                trailing != null -> trailing()
+                else -> Text(
+                    formatSessionAge(sessionActivityMillis(task), nowMillis),
+                    color = TextSecondary.copy(alpha = 0.62f),
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                )
+            }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AgentPillIcon(task.agent, Modifier.size(12.dp))
+            Text(
+                task.agent.label,
+                color = TextSecondary.copy(alpha = 0.72f),
+                fontFamily = DisplayFont,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (task.unread && !selected) {
+                UnreadDot()
+            }
+        }
+    }
 }
 
 internal fun formatElapsed(startMillis: Long?, endMillis: Long?, nowMillis: Long): String? {

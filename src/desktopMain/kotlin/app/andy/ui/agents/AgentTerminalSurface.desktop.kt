@@ -510,7 +510,6 @@ actual fun AgentTerminalSurface(
                 Button(
                     onClick = { openLiveHistoryPeek(3.0) },
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(AndyRadius.Pill),
                 ) {
                     Text(
                         "↑  history",
@@ -529,7 +528,6 @@ actual fun AgentTerminalSurface(
                 Button(
                     onClick = ::returnToLiveTerminal,
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                    shape = RoundedCornerShape(AndyRadius.Pill),
                 ) {
                     Text(
                         "↓  follow live",

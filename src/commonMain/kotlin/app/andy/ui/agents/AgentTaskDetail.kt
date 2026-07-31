@@ -81,12 +81,14 @@ import app.andy.model.parseAgentGoalCommand
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.shell.LocalOpenInvestigation
 import app.andy.ui.components.StatusTag
+import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
@@ -436,159 +438,156 @@ internal fun AgentTaskDetail(
         if (showFollowUpComposer) {
             PanelCard(
                 modifier = Modifier.fillMaxWidth(),
-                background = AndyColors.Neutral850,
-                borderColor = Border,
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                background = AndyColors.SurfaceRaised,
+                borderColor = if (followUpImageDragActive) Cyan else null,
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (task.userInputRequest == null) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            task.goal?.let { goal ->
-                                OutlinedButton(
-                                    onClick = { goalEditorOpen = !goalEditorOpen },
-                                    modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp),
-                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp),
-                                ) {
-                                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                        Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-                                        Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-                                }
-                            }
-                            if (goalEditorOpen) {
-                                PanelCard(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    background = AndyColors.Neutral900,
-                                    borderColor = Green.copy(alpha = 0.4f),
-                                    contentPadding = PaddingValues(8.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Text("persistent task goal", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                                    TextField(
-                                        goalEditorText,
-                                        { goalEditorText = it },
-                                        singleLine = false,
-                                        minLines = 2,
-                                        maxLines = 4,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp),
-                                        colors = fieldColors(),
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Button(
-                                            onClick = {
-                                                services.agentRuns.updateGoal(task.id, goalEditorText)
-                                                goalEditorOpen = false
-                                            },
-                                            enabled = goalEditorText.isNotBlank(),
-                                            modifier = Modifier.height(28.dp),
-                                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
-                                        ) { Text("save goal", fontSize = 10.sp) }
-                                        OutlinedButton(
-                                            onClick = { services.agentRuns.updateGoal(task.id, null) },
-                                            modifier = Modifier.height(28.dp),
-                                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
-                                        ) { Text("clear goal", fontSize = 10.sp) }
-                                    }
-                                }
-                            }
-                            Box(Modifier.fillMaxWidth()) {
-                            TextField(
-                                followUp,
-                                {
-                                    followUp = it
-                                    skillMenuDismissed = false
-                                },
-                                singleLine = false,
-                                minLines = 2,
-                                maxLines = 8,
-                                modifier = Modifier.fillMaxWidth()
-                                    .heightIn(min = 54.dp, max = 160.dp)
-                                    .onPreviewKeyEvent { event ->
-                                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                        if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
-                                            matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(matchingSkills.first())
-                                            return@onPreviewKeyEvent true
-                                        }
-                                        if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
-                                        if (event.isShiftPressed) return@onPreviewKeyEvent false
-                                        if (canSendFollowUp) submitFollowUp()
-                                        true
-                                    }
-                                    .onImageFilesDropped(
-                                        onFiles = { dropped -> followUpImagePaths = (followUpImagePaths + dropped).distinct() },
-                                        onDragActiveChange = { active -> followUpImageDragActive = active },
-                                    )
-                                    .border(
-                                        if (followUpImageDragActive) 2.dp else 1.dp,
-                                        if (followUpImageDragActive) Cyan else Border,
-                                        RoundedCornerShape(AndyRadius.Control),
-                                    ),
-                                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
-                                colors = fieldColors(),
-                                visualTransformation = slashHighlight,
-                                placeholder = {
-                                    Text(
-                                        when {
-                                            followUpImageDragActive -> "release to attach image"
-                                            terminalSessionActive && followUpImagePaths.isNotEmpty() ->
-                                                "add a message — staged images send with it, enter to submit"
-                                            else ->
-                                                "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
-                                        },
-                                        color = if (followUpImageDragActive) Cyan else TextSecondary,
-                                        fontFamily = MonoFont,
-                                        fontSize = 12.sp,
-                                    )
-                                },
-                            )
-                            DropdownMenu(
-                                expanded = slashCommand != null && !skillMenuDismissed,
-                                onDismissRequest = { skillMenuDismissed = true },
-                                modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
-                                properties = PopupProperties(focusable = false),
-                            ) {
-                                Text(
-                                    if (matchingCommands.isEmpty() && matchingSkills.isEmpty()) {
-                                        "no ${task.agent.label} commands or skills matching /${slashCommand?.query.orEmpty()}"
-                                    } else {
-                                        "${task.agent.label} commands and skills matching /${slashCommand?.query.orEmpty()}"
-                                    },
-                                    color = TextSecondary,
-                                    fontFamily = MonoFont,
-                                    fontSize = 10.sp,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                                )
-                                matchingCommands.forEach { command ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                                Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                            }
-                                        },
-                                        onClick = { selectCommand(command) },
-                                    )
-                                }
-                                matchingSkills.forEach { skill ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                                skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                                    Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                                }
-                                            }
-                                        },
-                                        onClick = { selectSkill(skill) },
-                                    )
-                                }
+                if (task.userInputRequest == null) {
+                    task.goal?.let { goal ->
+                        OutlinedButton(
+                            onClick = { goalEditorOpen = !goalEditorOpen },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp),
+                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp),
+                        ) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
-                        if (selectedSkills.isNotEmpty()) {
-                            Text("selected skills", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                    }
+                    if (goalEditorOpen) {
+                        PanelCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            background = AndyColors.Neutral900,
+                            borderColor = Green.copy(alpha = 0.4f),
+                            contentPadding = PaddingValues(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("persistent task goal", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            TextField(
+                                goalEditorText,
+                                { goalEditorText = it },
+                                singleLine = false,
+                                minLines = 2,
+                                maxLines = 4,
+                                modifier = Modifier.fillMaxWidth(),
+                                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp),
+                                colors = fieldColors(),
+                            )
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Button(
+                                    onClick = {
+                                        services.agentRuns.updateGoal(task.id, goalEditorText)
+                                        goalEditorOpen = false
+                                    },
+                                    enabled = goalEditorText.isNotBlank(),
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
+                                ) { Text("save goal", fontSize = 10.sp) }
+                                OutlinedButton(
+                                    onClick = { services.agentRuns.updateGoal(task.id, null) },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
+                                ) { Text("clear goal", fontSize = 10.sp) }
+                            }
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth()) {
+                        TextField(
+                            followUp,
+                            {
+                                followUp = it
+                                skillMenuDismissed = false
+                            },
+                            singleLine = false,
+                            minLines = 3,
+                            maxLines = 8,
+                            modifier = Modifier.fillMaxWidth()
+                                .heightIn(min = 94.dp, max = 180.dp)
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                    if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
+                                        matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(matchingSkills.first())
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                    if (event.isShiftPressed) return@onPreviewKeyEvent false
+                                    if (canSendFollowUp) submitFollowUp()
+                                    true
+                                }
+                                .onImageFilesDropped(
+                                    onFiles = { dropped -> followUpImagePaths = (followUpImagePaths + dropped).distinct() },
+                                    onDragActiveChange = { active -> followUpImageDragActive = active },
+                                ),
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
+                            colors = fieldColors(),
+                            chromeStyle = FieldChromeStyle.Borderless,
+                            visualTransformation = slashHighlight,
+                            placeholder = {
+                                Text(
+                                    when {
+                                        followUpImageDragActive -> "release to attach image"
+                                        terminalSessionActive && followUpImagePaths.isNotEmpty() ->
+                                            "add a message — staged images send with it, enter to submit"
+                                        else ->
+                                            "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
+                                    },
+                                    color = if (followUpImageDragActive) Cyan else TextSecondary,
+                                    fontFamily = MonoFont,
+                                    fontSize = 13.sp,
+                                )
+                            },
+                        )
+                        DropdownMenu(
+                            expanded = slashCommand != null && !skillMenuDismissed,
+                            onDismissRequest = { skillMenuDismissed = true },
+                            modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                            properties = PopupProperties(focusable = false),
+                        ) {
+                            Text(
+                                if (matchingCommands.isEmpty() && matchingSkills.isEmpty()) {
+                                    "no ${task.agent.label} commands or skills matching /${slashCommand?.query.orEmpty()}"
+                                } else {
+                                    "${task.agent.label} commands and skills matching /${slashCommand?.query.orEmpty()}"
+                                },
+                                color = TextSecondary,
+                                fontFamily = MonoFont,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            )
+                            matchingCommands.forEach { command ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                            Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    },
+                                    onClick = { selectCommand(command) },
+                                )
+                            }
+                            matchingSkills.forEach { skill ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                            skill.description.takeIf { it.isNotBlank() }?.let { description ->
+                                                Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        }
+                                    },
+                                    onClick = { selectSkill(skill) },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (task.userInputRequest == null && (selectedSkills.isNotEmpty() || followUpImagePaths.isNotEmpty())) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (selectedSkills.isNotEmpty()) {
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 selectedSkills.forEach { skill ->
                                     FilterPill("/${skill.name} ×", true, Cyan) {
                                         followUp = followUp.removeSelectedSkill(skill)
@@ -596,17 +595,23 @@ internal fun AgentTaskDetail(
                                 }
                             }
                         }
+                        if (followUpImagePaths.isNotEmpty()) {
+                            ChatAttachedImages(
+                                paths = followUpImagePaths,
+                                onRemove = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
+                                maxWidth = 140.dp,
+                                maxHeight = 100.dp,
+                            )
                         }
-                        Button(
-                            onClick = { submitFollowUp() },
-                            enabled = canSendFollowUp,
-                            colors = primaryButtonColors(),
-                            modifier = Modifier.height(36.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                        ) { Text("send", fontSize = 11.sp) }
-                    } else {
-                        Spacer(Modifier.weight(1f))
                     }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spacer(Modifier.weight(1f))
                     OutlinedButton(
                         onClick = {
                             services.agentRuns.interactiveResumeCommand(task.id)?.let {
@@ -615,17 +620,10 @@ internal fun AgentTaskDetail(
                             }
                             scope.launch { services.agentRuns.openInTerminal(task.id) }
                         },
-                        modifier = Modifier.height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                    ) { Text(if (copiedHint) "opened" else "terminal", fontSize = 11.sp) }
-                }
-                if (followUpImagePaths.isNotEmpty()) {
-                    ChatAttachedImages(
-                        paths = followUpImagePaths,
-                        onRemove = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
-                        maxWidth = 120.dp,
-                        maxHeight = 84.dp,
-                    )
+                    ) { Text(if (copiedHint) "opened" else "terminal") }
+                    if (task.userInputRequest == null) {
+                        ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
+                    }
                 }
             }
         }

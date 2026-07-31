@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
@@ -48,9 +49,14 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 
 /**
- * Compact native-style field (~28dp single-line). Call sites should not force
- * larger heights for search/filter/form inputs; only multiline editors grow.
+ * Compact field (~32dp single-line). Multiline fields use softer corner radii;
+ * use [FieldChromeStyle.Borderless] when the parent container supplies the chrome.
  */
+internal enum class FieldChromeStyle {
+    Standard,
+    Borderless,
+}
+
 @Composable
 internal fun TextField(
     value: String,
@@ -64,22 +70,30 @@ internal fun TextField(
     minLines: Int = 1,
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.Control),
+    shape: androidx.compose.ui.graphics.Shape? = null,
+    chromeStyle: FieldChromeStyle = FieldChromeStyle.Standard,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val retainedColorsForCallSiteCompatibility = colors
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    val effectiveShape = shape ?: AndyShape.Interactive
 
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.andyFieldChrome(
-            enabled = enabled,
-            focused = focused,
-            singleLine = singleLine,
-            shape = shape,
+        modifier = modifier.then(
+            if (chromeStyle == FieldChromeStyle.Standard) {
+                Modifier.andyFieldChrome(
+                    enabled = enabled,
+                    focused = focused,
+                    singleLine = singleLine,
+                    shape = effectiveShape,
+                )
+            } else {
+                Modifier
+            },
         ),
         enabled = enabled,
         readOnly = readOnly,
@@ -101,7 +115,6 @@ internal fun TextField(
     )
 }
 
-/** Variant for callers that need to preserve or set the caret position explicitly. */
 @Composable
 internal fun TextField(
     value: TextFieldValue,
@@ -115,22 +128,30 @@ internal fun TextField(
     minLines: Int = 1,
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.Control),
+    shape: androidx.compose.ui.graphics.Shape? = null,
+    chromeStyle: FieldChromeStyle = FieldChromeStyle.Standard,
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val retainedColorsForCallSiteCompatibility = colors
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    val effectiveShape = shape ?: AndyShape.Interactive
 
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.andyFieldChrome(
-            enabled = enabled,
-            focused = focused,
-            singleLine = singleLine,
-            shape = shape,
+        modifier = modifier.then(
+            if (chromeStyle == FieldChromeStyle.Standard) {
+                Modifier.andyFieldChrome(
+                    enabled = enabled,
+                    focused = focused,
+                    singleLine = singleLine,
+                    shape = effectiveShape,
+                )
+            } else {
+                Modifier
+            },
         ),
         enabled = enabled,
         readOnly = readOnly,
@@ -183,14 +204,14 @@ private fun Modifier.andyFieldChrome(
     shape: androidx.compose.ui.graphics.Shape,
 ): Modifier {
     val borderColor = when {
-        !enabled -> Border.copy(alpha = 0.55f)
+        !enabled -> Color.Transparent
         focused -> AndyColors.OrangeBorder
-        else -> Border
+        else -> Color.Transparent
     }
     val container = when {
         !enabled -> AndyColors.PaneBg.copy(alpha = 0.55f)
         focused -> AndyColors.SurfaceRaised
-        else -> AndyColors.PaneBg
+        else -> AndyColors.SurfaceHover
     }
     return this
         .then(
@@ -201,7 +222,10 @@ private fun Modifier.andyFieldChrome(
             },
         )
         .background(container, shape)
-        .border(1.dp, borderColor, shape)
+        .then(
+            if (borderColor != Color.Transparent) Modifier.border(1.dp, borderColor, shape)
+            else Modifier,
+        )
 }
 
 @Composable
@@ -215,8 +239,8 @@ private fun FieldDecoration(
         Modifier
             .fillMaxWidth()
             .padding(
-                horizontal = AndySpace.Space3,
-                vertical = if (singleLine) 5.dp else AndySpace.Space2,
+                horizontal = AndySpace.Space4,
+                vertical = if (singleLine) 6.dp else AndySpace.Space3,
             ),
         contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
     ) {

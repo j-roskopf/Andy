@@ -200,6 +200,10 @@ kotlin {
             }
         }
     }
+
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
 }
 
 // Use the developer or CI machine's Node installation. Besides avoiding a redundant

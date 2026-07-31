@@ -288,7 +288,7 @@ private fun AgentInboxRow(
                         isSessionWorking(task) -> ProjectActivityIndicator(16.dp)
                         task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
                         task.unread -> UnreadDot()
-                        task.status != null -> StatusDot(task.status!!)
+                        task.status != null -> StatusDot(task.status)
                     }
                 }
             },

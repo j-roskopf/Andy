@@ -1,7 +1,6 @@
 package app.andy.ui.network
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,6 +49,7 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.PanelCard
+import app.andy.ui.components.StatusBadge
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.Green
@@ -81,29 +81,19 @@ internal fun NetworkTrafficRowItem(
     onAddRule: (NetworkExchange) -> Unit,
 ) {
     val latest = row.latest
-    val flashColor by animateColorAsState(
-        targetValue = when {
-            focused -> AndyColors.Orange.copy(alpha = 0.18f)
-            flashing -> Rust.copy(alpha = 0.24f)
-            else -> AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium)
-        },
-    )
-    val selectedColor = if (row.exchange != null) AndyColors.Neutral800.copy(alpha = AndyOverlay.Strong) else flashColor
+    val selectedColor = when {
+        focused -> AndyColors.Orange.copy(alpha = 0.14f)
+        flashing -> Rust.copy(alpha = 0.18f)
+        row.exchange != null -> AndyColors.SurfaceSelected.copy(alpha = 0.85f)
+        else -> Color.Transparent
+    }
     var showMenu by remember { mutableStateOf(false) }
 
     Box {
         Row(
             Modifier.fillMaxWidth()
-                .heightIn(min = 32.dp)
+                .heightIn(min = 24.dp)
                 .background(selectedColor)
-                .border(
-                    1.dp,
-                    when {
-                        focused -> AndyColors.Orange.copy(alpha = 0.55f)
-                        flashing -> Rust.copy(alpha = 0.55f)
-                        else -> Color.White.copy(alpha = 0.05f)
-                    },
-                )
                 .clickable {
                     row.exchange?.let(onSelect) ?: onToggle()
                 }
@@ -124,10 +114,10 @@ internal fun NetworkTrafficRowItem(
                         }
                     }
                 }
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 1.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(Modifier.width(trafficWidth.dp).padding(start = (row.depth * 16).dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.width(trafficWidth.dp).padding(start = (row.depth * 14).dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {
                         row.exchange != null -> "•"
@@ -135,35 +125,37 @@ internal fun NetworkTrafficRowItem(
                         row.hasChildren -> ">"
                         else -> " "
                     },
-                    color = if (row.exchange != null) Rust else TextSecondary,
+                    color = if (row.exchange != null) Rust else TextSecondary.copy(alpha = 0.7f),
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(18.dp),
+                    fontSize = 11.sp,
+                    modifier = Modifier.width(16.dp),
                 )
                 Text(
                     if (row.exchange != null) "${latest?.method ?: "-"}  ${row.label}" else "${row.label}  (${row.count})",
-                    color = if (row.exchange != null) TextPrimary else AndyColors.Neutral100,
+                    color = if (row.exchange != null) TextPrimary else AndyColors.Neutral100.copy(alpha = 0.9f),
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
             val response = row.exchange
             val isPassthrough = response?.tlsStatus == "passthrough" || response?.method == "PASS"
-            MonoCell(
-                when {
-                    response == null -> ""
-                    isPassthrough -> "PASS"
-                    else -> response.statusCode?.toString() ?: "-"
-                },
-                statusWidth.dp,
-                when {
-                    isPassthrough -> Yellow
-                    (response?.statusCode ?: 200) >= 400 -> Red
-                    else -> TextSecondary
-                },
-            )
+            val statusText = when {
+                response == null -> ""
+                isPassthrough -> "PASS"
+                else -> response.statusCode?.toString() ?: "-"
+            }
+            val statusColor = when {
+                isPassthrough -> Yellow
+                (response?.statusCode ?: 200) >= 400 -> Red
+                else -> TextSecondary
+            }
+            Box(Modifier.width(statusWidth.dp), contentAlignment = Alignment.CenterStart) {
+                if (statusText.isNotBlank()) {
+                    StatusBadge(statusText, statusColor)
+                }
+            }
             MonoCell(
                 when {
                     response == null -> ""
@@ -172,15 +164,16 @@ internal fun NetworkTrafficRowItem(
                 },
                 typeWidth.dp,
                 if (isPassthrough) Yellow else TextSecondary,
+                compact = true,
             )
-            MonoCell(if (response != null) response.sizeBytes?.toString() ?: "-" else "", sizeWidth.dp, TextSecondary)
-            MonoCell(if (response != null) response.durationMillis?.toString() ?: "-" else "", msWidth.dp, TextSecondary)
+            MonoCell(if (response != null) response.sizeBytes?.toString() ?: "-" else "", sizeWidth.dp, TextSecondary, compact = true)
+            MonoCell(if (response != null) response.durationMillis?.toString() ?: "-" else "", msWidth.dp, TextSecondary, compact = true)
             Box(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                 Text(
                     if (response != null) response.matchedRuleId ?: "-" else "",
-                    color = if (response?.matchedRuleId != null) Green else TextSecondary,
+                    color = if (response?.matchedRuleId != null) Green else TextSecondary.copy(alpha = 0.75f),
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

@@ -79,11 +79,13 @@ import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
+import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.Cyan
@@ -509,10 +511,10 @@ private fun AgentChatComposer(
 
     PanelCard(
         modifier = Modifier.fillMaxWidth(),
-        background = Panel,
-        borderColor = if (state.imageDragActive) Cyan else Border,
-        contentPadding = PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        background = AndyColors.SurfaceRaised,
+        borderColor = if (state.imageDragActive) Cyan else null,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(Modifier.fillMaxWidth()) {
             TextField(
@@ -543,6 +545,7 @@ private fun AgentChatComposer(
                     ),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
                 colors = fieldColors(),
+                chromeStyle = FieldChromeStyle.Borderless,
                 visualTransformation = slashHighlight,
                 placeholder = {
                     Text(
@@ -768,9 +771,7 @@ private fun AgentChatComposer(
             onCancel?.let { cancel ->
                 OutlinedButton(onClick = cancel) { Text("cancel", fontSize = 11.sp) }
             }
-            Button(onClick = onSubmit, enabled = canSubmit, colors = primaryButtonColors()) {
-                Text("start", fontSize = 11.sp)
-            }
+            ChatSendButton(onClick = onSubmit, enabled = canSubmit)
         }
     }
 }

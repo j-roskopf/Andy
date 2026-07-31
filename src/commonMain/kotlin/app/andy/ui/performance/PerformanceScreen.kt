@@ -50,7 +50,7 @@ import app.andy.model.PerformanceTab
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
-import app.andy.ui.components.FilterPill
+import app.andy.ui.components.TabBar
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PackageSelector
@@ -97,17 +97,11 @@ internal fun PerformanceScreen(
     onTracingLibraryPaneHeightChange: (Float) -> Unit,
 ) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterPill("Metrics", selectedTab == PerformanceTab.Metrics, Rust) {
-                onSelectedTabChange(PerformanceTab.Metrics)
-            }
-            FilterPill("Tracing", selectedTab == PerformanceTab.Tracing, Rust) {
-                onSelectedTabChange(PerformanceTab.Tracing)
-            }
-            FilterPill("Memory", selectedTab == PerformanceTab.Memory, Rust) {
-                onSelectedTabChange(PerformanceTab.Memory)
-            }
-        }
+        TabBar(
+            tabs = listOf("Metrics", "Tracing", "Memory"),
+            selectedIndex = PerformanceTab.entries.indexOf(selectedTab).coerceAtLeast(0),
+            onSelect = { onSelectedTabChange(PerformanceTab.entries[it]) },
+        )
         Box(Modifier.fillMaxSize().weight(1f)) {
             // Compose only the active tab. Tracing must not realize a heavyweight editor
             // while Metrics is showing (screenshot tests / occlusion).
