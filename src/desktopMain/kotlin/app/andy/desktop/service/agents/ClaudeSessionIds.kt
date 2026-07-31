@@ -20,7 +20,7 @@ internal object ClaudeSessionIds {
 
     fun encodeProjectPath(cwd: String?): String? {
         val workspace = VendorSessionMatching.normalizeWorkspace(cwd) ?: return null
-        return workspace.replace(Regex("""[/\\]"""), "-")
+        return workspace.replace(Regex("""[/\\:]"""), "-")
     }
 
     fun projectDir(cwd: String?, home: File = File(System.getProperty("user.home"))): File? {

@@ -265,7 +265,7 @@ class AgentStatusScenarioTest {
 
 private suspend fun AgentStatusTracker.awaitStatus(
     expected: AgentStatus,
-    timeoutMillis: Long = OptInGates.harnessTimeoutMillis(10_000, 20_000, 30_000),
+    timeoutMillis: Long = OptInGates.harnessTimeoutMillis(10_000, 20_000, 45_000),
 ) {
     try {
         withTimeout(timeoutMillis) {

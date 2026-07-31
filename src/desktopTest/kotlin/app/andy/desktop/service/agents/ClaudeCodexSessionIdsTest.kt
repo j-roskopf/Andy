@@ -24,7 +24,7 @@ class ClaudeCodexSessionIdsTest {
     @Test
     fun claudeEncodesProjectPath() {
         val path = File("andy-claude-encode-test").absoluteFile.normalize().path
-        val expected = path.replace(Regex("""[/\\]"""), "-")
+        val expected = path.replace(Regex("""[/\\:]"""), "-")
         assertEquals(expected, ClaudeSessionIds.encodeProjectPath(path))
     }
 
