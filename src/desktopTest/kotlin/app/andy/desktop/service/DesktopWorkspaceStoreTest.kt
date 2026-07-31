@@ -24,6 +24,9 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
 
+        DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
+        assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
+
         val withIntents = saved.copy(
             savedIntents = listOf(
                 IntentDraft(

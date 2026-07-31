@@ -24,4 +24,34 @@ class SkillRootsTest {
             skillRootsFor(AgentKind.Cursor, workspace, home, codexHome),
         )
     }
+
+    @Test
+    fun openCodeIncludesProjectAndClaudeFallbackRoots() {
+        val home = File("/test/home")
+        val workspace = File("/test/workspace")
+        assertEquals(
+            listOf(
+                File(workspace, ".opencode/skills"),
+                File(workspace, ".claude/skills"),
+                File(home, ".config/opencode/skills"),
+                File(home, ".opencode/skills"),
+            ),
+            skillRootsFor(AgentKind.OpenCode, workspace, home),
+        )
+    }
+
+    @Test
+    fun piIncludesProjectAndGlobalRoots() {
+        val home = File("/test/home")
+        val workspace = File("/test/workspace")
+        assertEquals(
+            listOf(
+                File(workspace, ".pi/skills"),
+                File(workspace, ".agents/skills"),
+                File(home, ".pi/agent/skills"),
+                File(home, ".agents/skills"),
+            ),
+            skillRootsFor(AgentKind.Pi, workspace, home),
+        )
+    }
 }

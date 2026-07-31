@@ -137,6 +137,7 @@ class DesktopWorkspaceStore(
             agentOsNotificationsEnabled = props.getProperty("agentOsNotificationsEnabled")?.toBooleanStrictOrNull() ?: true,
             agentNotificationSoundEnabled = props.getProperty("agentNotificationSoundEnabled")?.toBooleanStrictOrNull() ?: true,
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
+            keepAgentSessionsOnShutdown = props.getProperty("keepAgentSessionsOnShutdown")?.toBooleanStrictOrNull() ?: false,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
@@ -225,6 +226,7 @@ class DesktopWorkspaceStore(
             setProperty("agentOsNotificationsEnabled", state.agentOsNotificationsEnabled.toString())
             setProperty("agentNotificationSoundEnabled", state.agentNotificationSoundEnabled.toString())
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
+            setProperty("keepAgentSessionsOnShutdown", state.keepAgentSessionsOnShutdown.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))

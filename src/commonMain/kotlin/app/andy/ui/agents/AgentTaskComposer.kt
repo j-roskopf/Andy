@@ -235,7 +235,8 @@ private class AgentTaskComposerFormState(
     }
 
     fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()) {
-        val savedModel = defaults?.model
+        // Pi model ids are always provider/model; drop sticky bare provider names from bad probes.
+        val savedModel = defaults?.model?.takeUnless { agent == AgentKind.Pi && '/' !in it }
         val catalogModel = AgentModelCatalog.option(agent, savedModel, discovered)
         modelId = when {
             savedModel == null -> null

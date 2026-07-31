@@ -36,10 +36,14 @@ import app.andy.service.EncodedVideoAccessUnit
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MetricsService
+import app.andy.service.MirrorBackend
+import app.andy.service.MirrorBackendKind
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
+import app.andy.service.MirrorRendererMode
+import app.andy.service.MirrorStats
 import app.andy.service.MirrorVideoConfig
 import app.andy.service.ProxyService
 import app.andy.service.UnavailableAppService
@@ -52,8 +56,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -656,7 +662,118 @@ class DesktopBugServiceTest {
 
         service.stopCapture()
     }
+
+    @Test
+    fun mirrorSessionObserverStartsCaptureWhenAndroidSessionAppears() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-session-start-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val devices = FakeListDevicesService(
+            AndroidDevice(
+                serial = "emulator-5554",
+                displayName = "Pixel",
+                kind = DeviceKind.Emulator,
+                state = DeviceConnectionState.Online,
+            ),
+        )
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, devices)
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        withTimeout(15_000) {
+            service.status.first { it.active && it.deviceSerial == "emulator-5554" }
+        }
+
+        service.recordAction("input", "Tap from Design")
+        assertTrue(service.status.value.actionCount >= 1)
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun mirrorSessionObserverStopsCaptureWhenSessionCleared() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-session-stop-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        withTimeout(15_000) {
+            service.status.first { it.active }
+        }
+
+        mirror.session.value = null
+        withTimeout(15_000) {
+            service.status.first { !it.active }
+        }
+        assertEquals("Bug capture idle", service.status.value.message)
+    }
+
+    @Test
+    fun mirrorSessionStatsUpdatesDoNotRestartCapture() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-session-stats-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        withTimeout(15_000) {
+            service.status.first { it.active }
+        }
+        service.recordAction("input", "Keep me")
+        val actionsBefore = service.status.value.actionCount
+
+        // Stats-only session copies must not restart capture (distinctUntilChanged on serial).
+        mirror.session.value = androidMirrorSession(
+            "emulator-5554",
+            stats = MirrorStats(displayedFps = 60f, framesPresented = 120),
+        )
+        delay(200)
+
+        assertTrue(service.status.value.active, "capture should stay active across stats updates")
+        assertEquals(
+            actionsBefore,
+            service.status.value.actionCount,
+            "restarting capture would clear the rolling action ring",
+        )
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun mirrorSessionObserverDoesNotStopDuringExplicitRecording() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-session-recording-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        withTimeout(15_000) {
+            service.status.first { it.active }
+        }
+        service.beginRecording()
+        assertTrue(
+            service.status.value.message.startsWith("Recording screen"),
+            "beginRecording should switch status into durable Record mode",
+        )
+
+        mirror.session.value = null
+        delay(300)
+
+        assertTrue(service.status.value.active, "explicit Record mode must survive transient mirror teardown")
+        assertTrue(
+            service.status.value.message.startsWith("Recording screen"),
+            "auto-stop must not clear an in-progress Record session",
+        )
+
+        service.stopCapture()
+    }
 }
+
+private fun androidMirrorSession(
+    serial: String,
+    stats: MirrorStats = MirrorStats(),
+): MirrorSession = MirrorSession(
+    serial = serial,
+    requestedMode = MirrorRendererMode.Accelerated,
+    backend = MirrorBackend(MirrorBackendKind.NativeHardware),
+    stats = stats,
+)
 
 internal class FakeMirrorEngine : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
@@ -759,6 +876,18 @@ private class FakeForegroundDeviceService : DeviceService {
             else -> CommandResult.success()
         }
     }
+    override suspend fun pair(host: String, port: Int, code: String): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun connect(host: String, port: Int): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun disconnect(serial: String): CommandResult = CommandResult.failure("Not supported")
+    override suspend fun listMdnsServices(): List<app.andy.model.MdnsService> = emptyList()
+    override suspend fun mdnsAvailable(): Boolean = false
+    override suspend fun generatePairingQr(content: String): ByteArray? = null
+}
+
+private class FakeListDevicesService(private vararg val devices: AndroidDevice) : DeviceService {
+    override suspend fun discoverSdk(): SdkDiscovery = SdkDiscovery(null, null, null, null, null)
+    override suspend fun listDevices(): List<AndroidDevice> = devices.toList()
+    override suspend fun shell(serial: String, command: List<String>): CommandResult = CommandResult.success()
     override suspend fun pair(host: String, port: Int, code: String): CommandResult = CommandResult.failure("Not supported")
     override suspend fun connect(host: String, port: Int): CommandResult = CommandResult.failure("Not supported")
     override suspend fun disconnect(serial: String): CommandResult = CommandResult.failure("Not supported")

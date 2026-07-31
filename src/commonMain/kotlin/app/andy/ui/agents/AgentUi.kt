@@ -36,6 +36,8 @@ import app.andy.andy.generated.resources.agent_antigravity
 import app.andy.andy.generated.resources.agent_claude
 import app.andy.andy.generated.resources.agent_codex
 import app.andy.andy.generated.resources.agent_cursor
+import app.andy.andy.generated.resources.agent_opencode
+import app.andy.andy.generated.resources.agent_pi
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
@@ -52,6 +54,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -62,13 +65,19 @@ private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
     AgentKind.Codex -> Res.drawable.agent_codex
     AgentKind.Cursor -> Res.drawable.agent_cursor
     AgentKind.Antigravity -> Res.drawable.agent_antigravity
+    AgentKind.OpenCode -> Res.drawable.agent_opencode
+    AgentKind.Pi -> Res.drawable.agent_pi
 }
+
+private val PiViolet = Color(0xFFA78BFA)
 
 internal fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.ClaudeCode -> Rust
     AgentKind.Codex -> Cyan
     AgentKind.Cursor -> Green
     AgentKind.Antigravity -> Red
+    AgentKind.OpenCode -> Yellow
+    AgentKind.Pi -> PiViolet
 }
 
 internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
@@ -166,7 +175,7 @@ internal fun sessionActivityMillis(task: AgentTask): Long =
 internal fun formatSessionAge(timestampMillis: Long, nowMillis: Long): String {
     val elapsedSec = ((nowMillis - timestampMillis).coerceAtLeast(0)) / 1000
     return when {
-        elapsedSec < 60 -> "${elapsedSec.coerceAtLeast(1)}s"
+        elapsedSec < 60 -> "Now"
         elapsedSec < 3600 -> "${elapsedSec / 60}m"
         elapsedSec < 86400 -> "${elapsedSec / 3600}h"
         else -> "${elapsedSec / 86400}d"

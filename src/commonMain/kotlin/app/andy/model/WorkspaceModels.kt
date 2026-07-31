@@ -96,6 +96,8 @@ data class WorkspaceState(
     val agentOsNotificationsEnabled: Boolean = true,
     val agentNotificationSoundEnabled: Boolean = true,
     val agentIconBadgeEnabled: Boolean = true,
+    /** When false (default), quitting Andy kills all `tmux -L andy` agent sessions. */
+    val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */

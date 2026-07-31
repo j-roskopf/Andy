@@ -27,6 +27,7 @@ import app.andy.service.BugService
 import app.andy.service.CommandResult
 import app.andy.service.CrashInspectorService
 import app.andy.service.DeviceService
+import app.andy.service.IosTargetRegistry
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MetricsService
@@ -43,9 +44,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -104,9 +107,40 @@ class DesktopBugService(
     private var metricsJob: Job? = null
     private var crashJob: Job? = null
     @Volatile private var lastFrameSampledAtMillis: Long = 0L
+    /** Last Android serial observed on [mirror.session]; used to avoid stopping on the idle initial emission. */
+    @Volatile private var lastAndroidMirrorSerial: String? = null
 
     private val bugsDir: File get() = File(homeDir, ".andy/bugs")
     private val exportsDir: File get() = File(homeDir, ".andy/exports")
+
+    init {
+        // Tie the rolling 30s buffer to the mirror session (any page that keeps the stream
+        // warm) instead of LiveScreen composition, so Design → Live still has the window.
+        scope.launch {
+            mirror.session
+                .map { it?.serial }
+                .distinctUntilChanged()
+                .collect { serial -> syncCaptureToMirrorSession(serial) }
+        }
+    }
+
+    private suspend fun syncCaptureToMirrorSession(serial: String?) {
+        val androidSerial = serial?.takeUnless { IosTargetRegistry.isIosTarget(it) }
+        when {
+            androidSerial != null -> {
+                lastAndroidMirrorSerial = androidSerial
+                val device = devices?.listDevices()?.firstOrNull { it.serial == androidSerial }
+                startCapture(androidSerial, device)
+            }
+            // Only tear down when an Android mirror session actually ended (or switched to iOS).
+            // Ignoring the idle initial emission avoids racing MCP/manual startCapture.
+            lastAndroidMirrorSerial != null -> {
+                lastAndroidMirrorSerial = null
+                val recording = synchronized(lock) { recordingActive }
+                if (!recording) stopCapture()
+            }
+        }
+    }
 
     override suspend fun startCapture(serial: String, device: AndroidDevice?) {
         if (captureSerial == serial && status.value.active) return

@@ -49,6 +49,7 @@ import app.andy.model.followUpPromptForLiveTerminal
 import app.andy.model.promptForCli
 import app.andy.model.providerDefaults
 import app.andy.desktop.service.DesktopWorkspaceStore
+import app.andy.desktop.service.McpClientConfig
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.toTerminalAppearance
 import app.andy.terminal.TmuxAndy
@@ -103,6 +104,11 @@ class DesktopAgentRunService(
     private val enableProbes: Boolean = true,
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
     artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
+    /**
+     * False for the GUI attach bridge in daemon-client mode — that process must not
+     * kill `tmux -L andy` sessions owned by a running `andyd`.
+     */
+    private val ownsAgentSessions: Boolean = true,
     /** Managed evidence bundle root (§4), mirroring [app.andy.desktop.service.DesktopInvestigationEvidenceService]. */
     private val evidenceRootDir: File = File(System.getProperty("user.home"), ".andy/evidence"),
 ) : AgentRunService, ProjectWorkflowService {
@@ -181,8 +187,7 @@ class DesktopAgentRunService(
         Runtime.getRuntime().addShutdownHook(Thread {
             // Best-effort: never let a shutdown-time persist failure (e.g. the store
             // already torn down) throw uncaught out of the shutdown thread.
-            runCatching { snapshotActiveTasksBeforeShutdown() }
-            handles.keys.toList().forEach(terminals::stop)
+            shutdownForProcessExit()
         })
         scope.launch {
             val state = store.load()
@@ -1156,18 +1161,9 @@ class DesktopAgentRunService(
     }
 
     private fun resumeTaskForReattach(task: AgentTask): AgentTask? {
-        val adapter = adapters[task.agent] ?: return null
-        val taskForResume = when (task.agent) {
-            AgentKind.Antigravity -> {
-                val resolved = AntigravityConversationIds.resolveForTask(task) ?: return null
-                if (resolved != task.vendorSessionId) task.copy(vendorSessionId = resolved) else task
-            }
-            else -> {
-                if (task.vendorSessionId.isNullOrBlank()) return null
-                task
-            }
-        }
-        val binary = binaryFor(task.agent) ?: return null
+        val taskForResume = enrichTaskWithVendorSession(task) ?: return null
+        val adapter = adapters[taskForResume.agent] ?: return null
+        val binary = binaryFor(taskForResume.agent) ?: return null
         return runCatching {
             adapter.buildInteractiveResumeCommand(
                 binary,
@@ -1177,6 +1173,29 @@ class DesktopAgentRunService(
                 followUpImagePaths = emptyList(),
             )
         }.getOrNull()?.let { taskForResume }
+    }
+
+    /**
+     * Resolve a provider session id from Andy's store or the vendor's on-disk cache.
+     * Persists newly discovered ids so CLI/GUI reattach works after tmux is torn down.
+     */
+    private fun enrichTaskWithVendorSession(task: AgentTask): AgentTask? {
+        val resolvedId = when (task.agent) {
+            AgentKind.Antigravity -> AntigravityConversationIds.resolveForTask(task)
+            AgentKind.ClaudeCode -> ClaudeSessionIds.resolveForTask(task)
+            AgentKind.Codex -> CodexSessionIds.resolveForTask(task)
+            else -> task.vendorSessionId?.takeIf { it.isNotBlank() }
+        } ?: return null
+        val enriched = if (resolvedId != task.vendorSessionId) {
+            task.copy(vendorSessionId = resolvedId)
+        } else {
+            task
+        }
+        if (enriched != task) {
+            upsertTask(enriched)
+            scope.launch { persist() }
+        }
+        return enriched
     }
 
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
@@ -1477,7 +1496,9 @@ class DesktopAgentRunService(
         }
 
         val mcpUrl = if (taskForLaunch.attachAndyMcp) {
-            runCatching { prepareMcp(taskForLaunch.agent) }.getOrElse { error ->
+            runCatching {
+                prepareMcp(taskForLaunch.agent, taskForLaunch.cwd?.let(::File))
+            }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
                 return
             }
@@ -1491,7 +1512,11 @@ class DesktopAgentRunService(
         val projectEnv = taskForLaunch.projectId?.let { projectId ->
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
-        val env = buildAgentLaunchEnvironment(projectEnv)
+        val env = buildAgentLaunchEnvironment(projectEnv) + buildMap {
+            if (mcpUrl != null && taskForLaunch.agent == AgentKind.Pi) {
+                put(AndyPiExtensionInstaller.MCP_URL_ENV, mcpUrl)
+            }
+        }
 
         updateTask(taskId) { it.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis()) }
         persist()
@@ -1514,6 +1539,32 @@ class DesktopAgentRunService(
         } else {
             null
         }
+        val openCodeBeforeSessionId = if (launchTask.agent == AgentKind.OpenCode) {
+            launchTask.vendorSessionId
+                ?: OpenCodeSessionIds.findNewestSession(binary, launchTask.cwd)
+        } else {
+            null
+        }
+        val piBeforeSessionId = if (launchTask.agent == AgentKind.Pi) {
+            launchTask.vendorSessionId
+                ?: PiSessionIds.findNewestSession(launchTask.cwd)
+        } else {
+            null
+        }
+        val claudeBeforeSessionId = if (launchTask.agent == AgentKind.ClaudeCode) {
+            launchTask.vendorSessionId
+                ?: ClaudeSessionIds.findNewestSession(launchTask.cwd)
+        } else {
+            null
+        }
+        val codexBeforeSessionId = if (launchTask.agent == AgentKind.Codex) {
+            launchTask.vendorSessionId
+                ?: CodexSessionIds.findNewestSession(launchTask.cwd)
+        } else {
+            null
+        }
+        val sessionCaptureStartedAt = System.currentTimeMillis()
+        val trailingPrompt = promptFromArgv(argv, binary)
 
         val terminalHandle = runCatching {
             terminals.start(
@@ -1537,6 +1588,50 @@ class DesktopAgentRunService(
                     before = agyBeforeConversationId,
                     launchedPrompt = agyLaunchedPrompt,
                     startedAtMillis = agyLaunchStartedAt,
+                )
+            }
+        }
+        if (launchTask.agent == AgentKind.OpenCode) {
+            scope.launch(Dispatchers.IO) {
+                captureOpenCodeSessionId(
+                    taskId = taskId,
+                    binary = binary,
+                    cwd = launchTask.cwd,
+                    before = openCodeBeforeSessionId,
+                    launchedPrompt = trailingPrompt,
+                )
+            }
+        }
+        if (launchTask.agent == AgentKind.Pi) {
+            scope.launch(Dispatchers.IO) {
+                capturePiSessionId(
+                    taskId = taskId,
+                    cwd = launchTask.cwd,
+                    before = piBeforeSessionId,
+                    launchedPrompt = trailingPrompt,
+                    startedAtMillis = sessionCaptureStartedAt,
+                )
+            }
+        }
+        if (launchTask.agent == AgentKind.ClaudeCode) {
+            scope.launch(Dispatchers.IO) {
+                captureClaudeSessionId(
+                    taskId = taskId,
+                    cwd = launchTask.cwd,
+                    before = claudeBeforeSessionId,
+                    launchedPrompt = trailingPrompt,
+                    startedAtMillis = sessionCaptureStartedAt,
+                )
+            }
+        }
+        if (launchTask.agent == AgentKind.Codex) {
+            scope.launch(Dispatchers.IO) {
+                captureCodexSessionId(
+                    taskId = taskId,
+                    cwd = launchTask.cwd,
+                    before = codexBeforeSessionId,
+                    launchedPrompt = trailingPrompt,
+                    startedAtMillis = sessionCaptureStartedAt,
                 )
             }
         }
@@ -1742,6 +1837,28 @@ class DesktopAgentRunService(
         return argv[idx + 1].trim().takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Best-effort extraction of the launched prompt from provider argv.
+     * Prefer flagged forms (`--prompt`, `--prompt-interactive`); fall back to a
+     * trailing positional only when it is not a known flag value.
+     */
+    private fun promptFromArgv(argv: List<String>, binary: String): String? {
+        promptFromInteractiveArgv(argv)?.let { return it }
+        val promptFlag = argv.indexOfFirst { it == "--prompt" }
+        if (promptFlag >= 0 && promptFlag + 1 < argv.size) {
+            return argv[promptFlag + 1].trim().takeIf { it.isNotBlank() }
+        }
+        val flagValueIndexes = argv.indices.filter { index ->
+            index > 0 && argv[index - 1].startsWith("-")
+        }.toSet()
+        return argv.withIndex().lastOrNull { (index, value) ->
+            index > 0 &&
+                index !in flagValueIndexes &&
+                !value.startsWith("-") &&
+                File(value).name != File(binary).name
+        }?.value?.trim()?.takeIf { it.isNotBlank() }
+    }
+
     private fun captureAntigravityConversationId(
         taskId: String,
         cwd: String?,
@@ -1762,6 +1879,102 @@ class DesktopAgentRunService(
         appendLaunchDiagnostics(
             taskId,
             "vendorSessionId=$captured before=${before.orEmpty()} launchedPrompt=${launchedPrompt?.take(80).orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun captureOpenCodeSessionId(
+        taskId: String,
+        binary: String,
+        cwd: String?,
+        before: String?,
+        launchedPrompt: String?,
+    ) {
+        val captured = OpenCodeSessionIds.awaitNewSessionId(
+            binary = binary,
+            cwd = cwd,
+            before = before,
+            launchedPrompt = launchedPrompt,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=opencode before=${before.orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun capturePiSessionId(
+        taskId: String,
+        cwd: String?,
+        before: String?,
+        launchedPrompt: String?,
+        startedAtMillis: Long,
+    ) {
+        val captured = PiSessionIds.awaitNewSessionId(
+            cwd = cwd,
+            before = before,
+            launchedPrompt = launchedPrompt,
+            startedAtMillis = startedAtMillis,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=pi before=${before.orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun captureClaudeSessionId(
+        taskId: String,
+        cwd: String?,
+        before: String?,
+        launchedPrompt: String?,
+        startedAtMillis: Long,
+    ) {
+        val captured = ClaudeSessionIds.awaitNewSessionId(
+            cwd = cwd,
+            before = before,
+            launchedPrompt = launchedPrompt,
+            startedAtMillis = startedAtMillis,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=claude before=${before.orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun captureCodexSessionId(
+        taskId: String,
+        cwd: String?,
+        before: String?,
+        launchedPrompt: String?,
+        startedAtMillis: Long,
+    ) {
+        val captured = CodexSessionIds.awaitNewSessionId(
+            cwd = cwd,
+            before = before,
+            launchedPrompt = launchedPrompt,
+            startedAtMillis = startedAtMillis,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=codex before=${before.orEmpty()}\n",
         )
         scope.launch { persist() }
     }
@@ -2106,7 +2319,7 @@ class DesktopAgentRunService(
         }
     }
 
-    private suspend fun prepareMcp(agent: AgentKind): String? = mcpMutex.withLock {
+    private suspend fun prepareMcp(agent: AgentKind, cwd: File? = null): String? = mcpMutex.withLock {
         val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
@@ -2117,7 +2330,7 @@ class DesktopAgentRunService(
             // Per-invocation wiring, no config file edits.
             AgentKind.ClaudeCode -> "http://127.0.0.1:$port/mcp-http"
             AgentKind.Codex -> "http://127.0.0.1:$port/mcp"
-            // These two only support config-file registration; write it and pass no URL.
+            // These only support config-file registration; write it and pass no URL.
             AgentKind.Cursor -> {
                 mcp.writeConfig("Cursor", port)
                 null
@@ -2125,6 +2338,15 @@ class DesktopAgentRunService(
             AgentKind.Antigravity -> {
                 mcp.writeConfig("Antigravity", port)
                 null
+            }
+            AgentKind.OpenCode -> {
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenCode, port, cwd)
+                null
+            }
+            // Pi has no native MCP config; URL is passed via ANDY_MCP_URL + Pi extension.
+            AgentKind.Pi -> {
+                AndyPiExtensionInstaller.ensureInstalled()
+                "http://127.0.0.1:$port/mcp-http"
             }
         }
     }
@@ -2192,8 +2414,22 @@ class DesktopAgentRunService(
     private suspend fun projectDirectory(projectId: String): String? = projectContextDir(projectId)
 
     fun close() {
-        terminals.stopAll()
-        handles.values.forEach { it.job?.cancel() }
+        shutdownForProcessExit()
+    }
+
+    /** Persist state and tear down owned tmux sessions on JVM exit or explicit close. */
+    fun shutdownForProcessExit() {
+        runCatching { snapshotActiveTasksBeforeShutdown() }
+        val activeTaskIds = handles.keys.toList()
+        val jobs = handles.values.map { it.job }
+        AgentSessionShutdown.onProcessExit(
+            terminals = terminals,
+            activeTaskIds = activeTaskIds,
+            workspaceStore = workspaceStore,
+            ownsAgentSessions = ownsAgentSessions,
+        )
+        handles.clear()
+        jobs.forEach { it?.cancel() }
     }
 
     private fun projectTask(taskId: String): ProjectTask? =

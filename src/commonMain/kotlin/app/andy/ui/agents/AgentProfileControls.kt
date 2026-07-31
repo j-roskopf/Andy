@@ -177,6 +177,8 @@ internal fun AgentProviderModelProfileControls(
                 when (profile.agent) {
                     AgentKind.Cursor -> "Cursor receives the selected provider variant. Availability follows your Cursor account."
                     AgentKind.Antigravity -> "Antigravity receives its model slug plus effort as one variant from the live CLI model list."
+                    AgentKind.OpenCode -> "OpenCode receives provider/model slugs (for example anthropic/claude-sonnet-5). Availability follows your configured providers."
+                    AgentKind.Pi -> "Pi receives provider/model ids; thinking effort is passed via --thinking."
                     else -> "The selected model and reasoning level are passed directly to the ${profile.agent.label} CLI."
                 },
                 color = TextSecondary,

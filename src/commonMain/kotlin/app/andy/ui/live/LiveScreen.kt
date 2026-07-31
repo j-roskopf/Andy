@@ -429,24 +429,16 @@ internal fun LiveScreen(
         recordingState = LiveRecordingState.Idle
         recordingStartedAtMillis = null
         recordingElapsedMillis = 0L
+        // Bug capture is owned by DesktopBugService's mirror.session observer so the rolling
+        // 30s buffer survives Live ↔ Design (and other mirror pages) without clearing on leave.
         if (mirrorReady && serial != null && !mirroredElsewhere) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
             if (result.isSuccess) {
-                if (!isIosTarget) {
-                    try {
-                        services.bugs.startCapture(serial, device)
-                    } catch (error: kotlinx.coroutines.CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        connectResult = "$connectResult\nBug capture unavailable: ${error.message ?: error}"
-                    }
-                }
                 try {
                     awaitCancellation()
                 } finally {
                     withContext(NonCancellable) {
-                        services.bugs.stopCapture()
                         // USB AOA prep for DHU briefly drops ADB/mirror; keep DHU if AA stays on.
                         if (!androidAutoEnabled) {
                             services.dhu.stop()
@@ -459,7 +451,6 @@ internal fun LiveScreen(
             // iOS Simulator handoff / shared-primary pop-outs keep Live's session warm; Android
             // pop-outs of the Live device take over that engine into the pop-out pool instead.
             withContext(NonCancellable) {
-                services.bugs.stopCapture()
                 if (!androidAutoEnabled) {
                     services.dhu.stop()
                 }

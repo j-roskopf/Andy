@@ -355,6 +355,7 @@ class ScrapeStatusSource(
             val screen = detectionInput().screen
             if (terminalBufferLooksReadyForInput(screen)) return true
             if (agent == AgentKind.Cursor && cursorChromeLooksIdle(screen)) return true
+            if (agent == AgentKind.OpenCode && openCodeChromeLooksIdle(screen)) return true
             return false
         }
         return false
@@ -513,6 +514,7 @@ internal fun bufferLooksIdle(agent: AgentKind, input: DetectionInput): Boolean {
     if (match.idleFallback) {
         if (terminalBufferLooksReadyForInput(input.screen)) return true
         if (agent == AgentKind.Cursor && cursorChromeLooksIdle(input.screen)) return true
+        if (agent == AgentKind.OpenCode && openCodeChromeLooksIdle(input.screen)) return true
     }
     return false
 }
@@ -523,6 +525,15 @@ internal fun cursorChromeLooksIdle(screen: String): Boolean {
     if (tail.isBlank() || "ctrl+c to stop" in tail) return false
     return "→ add a follow-up" in tail ||
         Regex("""cursor .+ · \d""").containsMatchIn(tail)
+}
+
+/** OpenCode TUI at rest: leader-key footer without busy interrupt chrome. */
+internal fun openCodeChromeLooksIdle(screen: String): Boolean {
+    val tail = bottomNonEmptyLines(screen, 10).lowercase()
+    if (tail.isBlank()) return false
+    if ("interrupt" in tail) return false
+    return "ctrl+x" in tail ||
+        Regex("""[>›❯]\s*$""").containsMatchIn(tail)
 }
 
 /**

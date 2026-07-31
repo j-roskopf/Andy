@@ -5,6 +5,8 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentModelOption
 import app.andy.model.parseAntigravityModels
 import app.andy.model.parseCursorModels
+import app.andy.model.parseOpenCodeModels
+import app.andy.model.parsePiModels
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -19,6 +21,9 @@ internal class ProviderModelProbe {
     fun query(agent: AgentKind, binary: String): List<AgentModelOption>? = when (agent) {
         AgentKind.Antigravity -> runModelsCommand(binary, listOf("models"))?.let(::parseAntigravityModels)?.takeIf { it.isNotEmpty() }
         AgentKind.Cursor -> runModelsCommand(binary, listOf("models"))?.let(::parseCursorModels)?.takeIf { it.isNotEmpty() }
+        AgentKind.OpenCode -> runModelsCommand(binary, listOf("models"))?.let(::parseOpenCodeModels)?.takeIf { it.isNotEmpty() }
+            ?: runModelsCommand(binary, listOf("stats", "--models"))?.let(::parseOpenCodeModels)?.takeIf { it.isNotEmpty() }
+        AgentKind.Pi -> runModelsCommand(binary, listOf("--list-models"))?.let(::parsePiModels)?.takeIf { it.isNotEmpty() }
         AgentKind.ClaudeCode, AgentKind.Codex -> null
     }
 

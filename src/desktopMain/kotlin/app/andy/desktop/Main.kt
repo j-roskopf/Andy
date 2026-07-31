@@ -70,6 +70,7 @@ fun main() {
     // out from under live components would strand whatever they had already queued.
     app.andy.terminal.TerminalRepaintThrottle.ensureInstalled()
     runCatching { app.andy.desktop.service.agents.AndyStatusHookInstaller.ensureInstalled() }
+    runCatching { app.andy.desktop.service.agents.AndyPiExtensionInstaller.ensureInstalled() }
     installRuntimeAppIcon()
     application {
         val runtime = remember { createDesktopRuntime() }

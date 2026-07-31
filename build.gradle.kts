@@ -848,8 +848,24 @@ tasks.register<Copy>("installAndyCli") {
         hookDest.writeText(hookSrc.readText())
         hookDest.setExecutable(true, false)
 
+        val piExtSrc = file("scripts/pi-andy-extension.ts")
+        check(piExtSrc.isFile) { "missing ${piExtSrc.path}" }
+        val piExtDest = file("${System.getProperty("user.home")}/.andy/pi/andy-extension.ts")
+        piExtDest.parentFile.mkdirs()
+        piExtDest.writeText(piExtSrc.readText())
+
+        val ocPluginSrc = file("scripts/opencode-andy-status.js")
+        check(ocPluginSrc.isFile) { "missing ${ocPluginSrc.path}" }
+        // Canonical copy next to the status hook for reference; projects get a
+        // fresh install from AndyOpenCodePluginInstaller on session start.
+        val ocPluginDest = file("${System.getProperty("user.home")}/.andy/opencode/andy-status.js")
+        ocPluginDest.parentFile.mkdirs()
+        ocPluginDest.writeText(ocPluginSrc.readText())
+
         println("Installed ${dest.absolutePath}")
         println("Installed ${hookDest.absolutePath}")
+        println("Installed ${piExtDest.absolutePath}")
+        println("Installed ${ocPluginDest.absolutePath}")
         println("Add ~/.andy/bin to PATH permanently if needed:")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")

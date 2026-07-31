@@ -95,6 +95,14 @@ class AgentCliLocator {
                 File(root).listFiles().orEmpty().sortedByDescending { it.name }.map { "${it.path}/cursor-agent" }
             }
             AgentKind.Antigravity -> emptyList()
+            AgentKind.OpenCode -> listOf(
+                "$home/.opencode/bin/opencode",
+                "$home/.config/opencode/bin/opencode",
+            )
+            AgentKind.Pi -> listOf(
+                "$home/.pi/bin/pi",
+                "$home/.local/share/pi/bin/pi",
+            )
         }
         return (common + specific).firstOrNull { File(it).canExecute() }
     }

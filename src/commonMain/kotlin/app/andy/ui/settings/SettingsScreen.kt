@@ -150,6 +150,7 @@ internal fun SettingsScreen(
                 destinations = services.capabilities.destinations,
             )
             DesktopSettingsCategory.Agents -> {
+                AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -630,6 +631,35 @@ private fun OnboardingPanel(
     }
 }
 
+
+@Composable
+private fun AgentSessionsPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Sessions",
+            description = "What happens to running agent CLIs when you quit Andy or stop andyd.",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = workspace.keepAgentSessionsOnShutdown,
+                onCheckedChange = { value -> update { it.copy(keepAgentSessionsOnShutdown = value) } },
+            )
+            Text(
+                "Keep agent sessions alive after quit",
+                color = TextPrimary,
+                fontSize = 13.sp,
+            )
+        }
+        Text(
+            "When off, Andy stops all tmux agent sessions on quit so claude, codex, and agy processes do not linger.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+    }
+}
 
 @Composable
 private fun AgentNotificationsPanel(

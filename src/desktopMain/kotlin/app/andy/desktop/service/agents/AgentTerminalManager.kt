@@ -615,7 +615,14 @@ class AgentTerminalManager(
                     onStatusSnapshot(snapshot)
                 }
             }
-            onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            // Andy launches with a prompt (argv-embedded or typed). Arm the turn so
+            // suppressPrematureIdle cannot trap providers whose working chrome Andy
+            // does not yet recognize (notably OpenCode) at permanent Working.
+            if (task.prompt.isNotBlank() || argvHasEmbeddedPrompt(argv)) {
+                tracker.markUserWorking()
+            } else {
+                onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            }
             handle
         }
     }
@@ -1288,4 +1295,20 @@ fun buildAgentLaunchEnvironment(projectEnv: Map<String, String>): Map<String, St
 
 internal fun scrubInheritedAgentEnvironment(env: MutableMap<String, String>) {
     app.andy.terminal.scrubInheritedTerminalEnvironment(env)
+}
+
+/** True when argv already carries the first-turn prompt (so Andy will not PTY-type it). */
+internal fun argvHasEmbeddedPrompt(argv: List<String>): Boolean {
+    val promptFlags = setOf("--prompt", "--prompt-interactive", "-i")
+    for (index in argv.indices) {
+        if (argv[index] in promptFlags && index + 1 < argv.size && argv[index + 1].isNotBlank()) {
+            return true
+        }
+    }
+    // Providers that accept a trailing positional prompt (Codex / Claude / Pi / Cursor).
+    // OpenCode's positional is a directory — never treat a bare path-looking tail as a prompt.
+    val last = argv.lastOrNull()?.takeIf { it.isNotBlank() && !it.startsWith("-") } ?: return false
+    val previous = argv.getOrNull(argv.lastIndex - 1)
+    if (previous != null && previous.startsWith("-")) return false
+    return true
 }

@@ -71,6 +71,110 @@ fun parseCursorModels(output: String): List<AgentModelOption> {
     return groupProviderModelVariants(rows)
 }
 
+/**
+ * OpenCode prints `provider/model` slugs (optionally with labels). Keep the full
+ * `provider/model` id so `--model` receives a valid OpenCode selector.
+ */
+fun parseOpenCodeModels(output: String): List<AgentModelOption> {
+    val rows = output.lineSequence().mapNotNull { line ->
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() ||
+            trimmed.startsWith("Available") ||
+            trimmed.startsWith("Tip:") ||
+            trimmed.startsWith("{") ||
+            trimmed.startsWith("[")
+        ) {
+            return@mapNotNull null
+        }
+        val slug = when {
+            trimmed.contains(" - ") -> trimmed.substringBefore(" - ").trim()
+            trimmed.contains('\t') -> trimmed.substringBefore('\t').trim()
+            else -> trimmed.takeWhile { !it.isWhitespace() }
+        }
+        if (slug.isEmpty() || !slug.contains('/')) return@mapNotNull null
+        val label = if (trimmed.contains(" - ")) {
+            trimmed.substringAfter(" - ").trim().ifBlank { humanizeProviderModel(slug) }
+        } else {
+            humanizeProviderModel(slug)
+        }
+        slug to label
+    }.toList()
+    return groupProviderModelVariants(rows)
+}
+
+/**
+ * Pi `--list-models` prints a whitespace table:
+ * ```
+ * provider      model                context  max-out  thinking  images
+ * openai-codex  gpt-5.4              272K     128K     yes       yes
+ * ```
+ * Andy stores/passes `--model provider/model` (e.g. `openai-codex/gpt-5.4`).
+ * Also accepts legacy `provider/id` one-slug-per-line output.
+ */
+fun parsePiModels(output: String): List<AgentModelOption> {
+    val PiThinkingEfforts = listOf(
+        AgentReasoningEffort.None,
+        AgentReasoningEffort.Minimal,
+        AgentReasoningEffort.Low,
+        AgentReasoningEffort.Medium,
+        AgentReasoningEffort.High,
+        AgentReasoningEffort.ExtraHigh,
+        AgentReasoningEffort.Max,
+    )
+    data class Row(val slug: String, val label: String, val thinking: Boolean)
+    val rows = output.lineSequence().mapNotNull { line ->
+        val trimmed = line.trim().trimStart('-', '*', '•', ' ')
+        if (trimmed.isEmpty() ||
+            trimmed.startsWith("Available") ||
+            trimmed.startsWith("Tip:") ||
+            trimmed.startsWith("Provider:") ||
+            trimmed.equals("provider", ignoreCase = true) ||
+            trimmed.lowercase().startsWith("provider ") && trimmed.lowercase().contains("model")
+        ) {
+            return@mapNotNull null
+        }
+        // Table row: provider  model  context  max-out  thinking  images
+        val cols = trimmed.split(Regex("""\s{2,}|\t+""")).map { it.trim() }.filter { it.isNotEmpty() }
+        if (cols.size >= 2 && !cols[0].contains('/') && cols[1].isNotBlank() &&
+            !cols[1].equals("model", ignoreCase = true)
+        ) {
+            val provider = cols[0]
+            val model = cols[1].takeWhile { !it.isWhitespace() }
+            if (provider.isBlank() || model.isBlank()) return@mapNotNull null
+            // Skip header leftovers like "context"
+            if (model.equals("context", ignoreCase = true) || model.equals("max-out", ignoreCase = true)) {
+                return@mapNotNull null
+            }
+            val slug = "$provider/$model"
+            val thinking = cols.getOrNull(4)?.equals("yes", ignoreCase = true) == true
+            return@mapNotNull Row(slug, humanizeProviderModel(slug), thinking = thinking)
+        }
+        // Legacy / alternate: provider/id on one line
+        val slug = trimmed.takeWhile { !it.isWhitespace() && it != ',' }
+        if (slug.isEmpty() || slug.length < 2 || !slug.contains('/')) return@mapNotNull null
+        Row(slug, humanizeProviderModel(slug), thinking = true)
+    }.toList()
+
+    return rows.map { row ->
+        AgentModelOption(
+            id = row.slug,
+            label = row.label,
+            efforts = if (row.thinking) PiThinkingEfforts else emptyList(),
+        )
+    }.distinctBy { it.id }
+}
+
+private fun humanizeProviderModel(slug: String): String {
+    val model = slug.substringAfterLast('/')
+    val provider = slug.substringBefore('/', missingDelimiterValue = "").takeIf { it.isNotBlank() && it != model }
+    val modelLabel = humanizeModelSlug(model.replace('_', '-'))
+    return if (provider != null) {
+        "$modelLabel (${provider.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }})"
+    } else {
+        modelLabel
+    }
+}
+
 private fun cursorBaseLabel(slug: String, variantLabel: String): String {
     val base = stripProviderModelVariant(slug).baseId
     val cleaned = variantLabel
@@ -156,7 +260,16 @@ fun AgentModelOption.modelFamily(): AgentModelFamily = modelFamilyForId(id)
 
 fun modelFamilyForId(modelId: String): AgentModelFamily {
     val id = modelId.trim().lowercase()
+    val provider = id.substringBefore('/', missingDelimiterValue = "")
+    val model = id.substringAfter('/', missingDelimiterValue = id)
     return when {
+        provider == "openai" || provider == "openai-codex" ||
+            (provider == "opencode" && model.startsWith("gpt")) -> AgentModelFamily.OpenAI
+        provider == "anthropic" -> AgentModelFamily.Anthropic
+        provider == "google" -> AgentModelFamily.Google
+        provider == "xai" -> AgentModelFamily.XAI
+        provider == "moonshot" -> AgentModelFamily.Moonshot
+        provider == "zhipu" -> AgentModelFamily.Zhipu
         id == "auto" || id.startsWith("composer-") || id.startsWith("cursor-") -> AgentModelFamily.Cursor
         id.startsWith("gpt-") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") -> AgentModelFamily.OpenAI
         id.startsWith("claude-") || id.startsWith("anthropic-") -> AgentModelFamily.Anthropic

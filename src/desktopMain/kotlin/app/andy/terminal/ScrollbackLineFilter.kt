@@ -109,6 +109,8 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     if (lower.startsWith("tip:")) return true
     if (lower.startsWith("cursor agent")) return true
     if (lower.startsWith("antigravity cli")) return true
+    if (lower.startsWith("opencode") && trimmed.length < 40) return true
+    if (lower == "pi" || lower.startsWith("pi coding") || lower.startsWith("pi agent")) return true
     if (VersionBannerLine.matches(lower)) return true
     if (ToolProgressLine.containsMatchIn(trimmed)) return true
     if (EditedSummaryLine.containsMatchIn(trimmed)) return true
