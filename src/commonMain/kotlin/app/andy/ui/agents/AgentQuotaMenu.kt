@@ -193,6 +193,7 @@ private fun ProviderUsagePanel(
                     AgentKind.ClaudeCode -> "Refreshed with the Claude OAuth credential you explicitly allowed Andy to use."
                     AgentKind.Cursor -> "Refreshed with Cursor.app's local sign-in credential; browser cookies are never read."
                     AgentKind.Antigravity -> "Refreshed from the running local Antigravity session."
+                    AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> "Account-limit probes are not available for this provider yet."
                 }
             } else {
                 "Local activity comes from Andy task history. Account-limit access is always opt-in per provider."
@@ -224,6 +225,7 @@ private fun AccountAccessPrompt(agent: AgentKind, onEnable: () -> Unit) {
                 AgentKind.Cursor -> "Allow Andy to use Cursor.app's local sign-in credential to ask Cursor for plan limits. It never reads browser cookies."
                 AgentKind.Antigravity -> "Allow Andy to query an already-running local Antigravity session. It will not open a login flow or read browser cookies."
                 AgentKind.Codex -> "Codex limits are read directly from the installed Codex app server."
+                AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> "This provider does not expose a stable account-limit API Andy can query yet."
             },
             color = TextSecondary,
             fontFamily = MonoFont,

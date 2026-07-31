@@ -45,6 +45,9 @@ fun installStatusSignals(
         AgentKind.Cursor -> installCursorStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Codex -> installCodexStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Antigravity -> installAntigravityStatusHooks(worktreeOrCwd, artifactDir)
+        AgentKind.OpenCode -> installOpenCodeStatusHooks(worktreeOrCwd, artifactDir)
+        AgentKind.Pi -> installPiStatusHooks(worktreeOrCwd, artifactDir)
+        AgentKind.Hermes, AgentKind.OpenClaw -> Unit
     }
 }
 
@@ -357,6 +360,25 @@ internal fun mergeAntigravityHooks(hooksFile: File, andyHook: JsonObject): JsonO
     val root = mutableJsonMap(existingRoot)
     root[ANTIGRAVITY_HOOK_NAME] = andyHook
     return JsonObject(root)
+}
+
+/**
+ * OpenCode: project plugin `.opencode/plugins/andy-status.js`.
+ * working ← session.start / tool.execute; done ← session.idle; blocked ← permission.
+ */
+fun installOpenCodeStatusHooks(worktreeOrCwd: File, artifactDir: File) {
+    if (shouldSkipProjectHooks(worktreeOrCwd)) return
+    prepareStatusHooks(artifactDir)
+    AndyOpenCodePluginInstaller.ensureInstalled(worktreeOrCwd)
+}
+
+/**
+ * Pi: global Andy extension loaded via `-e` (see [AndyPiExtensionInstaller]).
+ * Still writes `.andy/active-task` so the hook script can resolve the task.
+ */
+fun installPiStatusHooks(worktreeOrCwd: File, artifactDir: File) {
+    prepareStatusHooks(artifactDir)
+    AndyPiExtensionInstaller.ensureInstalled()
 }
 
 private sealed interface HooksFileRead {

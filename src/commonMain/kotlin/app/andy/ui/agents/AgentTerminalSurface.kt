@@ -5,7 +5,7 @@ import androidx.compose.ui.Modifier
 import app.andy.service.AndyServices
 
 /**
- * Embedded agent CLI terminal (PTY). Desktop hosts KetraTerm; other targets no-op.
+ * Embedded agent CLI terminal (PTY). Desktop hosts BossTerm; other targets no-op.
  *
  * [sessionActive] is decided by the caller via [isChatTerminalInteractive]: true while
  * Andy is launching this chat and while this app run owns its live session. Everything

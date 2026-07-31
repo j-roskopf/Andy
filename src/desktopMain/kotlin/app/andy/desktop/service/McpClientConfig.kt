@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.agents.AndyPiExtensionInstaller
 import java.io.File
 import kotlinx.serialization.json.*
 
@@ -10,6 +11,10 @@ object McpClientConfig {
         Codex("Codex"),
         ClaudeDesktop("Claude Desktop"),
         Antigravity("Antigravity"),
+        OpenCode("OpenCode"),
+        Pi("Pi"),
+        Hermes("Hermes"),
+        OpenClaw("OpenClaw"),
         VSCode("VS Code"),
         Windsurf("Windsurf")
     }
@@ -28,6 +33,33 @@ object McpClientConfig {
                 }
                 """.trimIndent()
             }
+            ClientType.OpenCode -> {
+                """
+                {
+                  "mcp": {
+                    "andy": {
+                      "type": "remote",
+                      "url": "http://127.0.0.1:$port/mcp-http"
+                    }
+                  }
+                }
+                """.trimIndent()
+            }
+            ClientType.Pi -> {
+                """
+                # Pi has no native MCP config file. Andy sets ANDY_MCP_URL and loads
+                # ~/.andy/pi/andy-extension.ts via `pi -e` when MCP attach is enabled.
+                ANDY_MCP_URL=http://127.0.0.1:$port/mcp-http
+                """.trimIndent()
+            }
+            ClientType.Hermes -> """
+                mcp_servers:
+                  andy:
+                    url: "http://127.0.0.1:$port/mcp-http"
+            """.trimIndent()
+            ClientType.OpenClaw -> """
+                { "mcp": { "andy": { "transport": "streamable-http", "url": "http://127.0.0.1:$port/mcp-http" } } }
+            """.trimIndent()
             ClientType.Codex -> {
                 """
                 [mcp_servers.andy]
@@ -70,6 +102,9 @@ object McpClientConfig {
             ClientType.Codex -> File(home, ".codex/config.toml")
             // Antigravity (IDE and agy CLI) reads MCP servers from this file.
             ClientType.Antigravity -> File(home, ".gemini/config/mcp_config.json")
+            ClientType.OpenCode -> File(home, ".config/opencode/opencode.json")
+            ClientType.Hermes -> File(home, ".hermes/config.yaml")
+            ClientType.OpenClaw -> File(home, ".openclaw/openclaw.json")
             ClientType.ClaudeDesktop -> {
                 val osName = System.getProperty("os.name")?.lowercase().orEmpty()
                 if (osName.contains("win")) {
@@ -84,8 +119,19 @@ object McpClientConfig {
         }
     }
 
-    fun writeConfig(client: ClientType, port: Int): Boolean {
-        val file = getConfigFile(client) ?: return false
+    /** Project-local OpenCode config, preferred over the user-global file when launching in a repo. */
+    fun getOpenCodeProjectConfig(cwd: File?): File? =
+        cwd?.takeIf { it.isDirectory }?.let { File(it, "opencode.json") }
+
+    fun writeConfig(client: ClientType, port: Int, cwd: File? = null): Boolean {
+        if (client == ClientType.Pi) {
+            AndyPiExtensionInstaller.ensureInstalled()
+            return writePiMcpConfig(port)
+        }
+        val file = when (client) {
+            ClientType.OpenCode -> getOpenCodeProjectConfig(cwd) ?: getConfigFile(client)
+            else -> getConfigFile(client)
+        } ?: return false
         try {
             file.parentFile?.mkdirs()
             val currentContent = if (file.exists()) file.readText() else ""
@@ -100,6 +146,10 @@ object McpClientConfig {
                 ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop, ClientType.Antigravity -> {
                     mergeJson(client, currentContent, port)
                 }
+                ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port)
+                    ?: return false
+                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port)
+                ClientType.Hermes -> mergeHermesYaml(currentContent, port)
                 ClientType.Codex -> {
                     mergeToml(currentContent, port)
                 }
@@ -127,6 +177,94 @@ object McpClientConfig {
         }
         val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun mergeOpenCodeJson(content: String, port: Int): String? {
+        val json = if (content.isBlank()) {
+            JsonObject(emptyMap())
+        } else {
+            runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: return null
+        }
+        val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        mcp["andy"] = buildJsonObject {
+            put("type", "remote")
+            put("url", "http://127.0.0.1:$port/mcp-http")
+        }
+        val updated = json.toMutableMap().apply {
+            this["mcp"] = JsonObject(mcp)
+            if (!containsKey("${'$'}schema")) {
+                this["${'$'}schema"] = JsonPrimitive("https://opencode.ai/config.json")
+            }
+        }
+        val prettyJson = Json { prettyPrint = true }
+        return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun writePiMcpConfig(port: Int): Boolean {
+        val file = File(System.getProperty("user.home"), ".pi/mcp.json")
+        return try {
+            file.parentFile?.mkdirs()
+            val currentContent = if (file.exists()) file.readText() else ""
+            if (file.exists() && currentContent.isNotBlank()) {
+                File(file.absolutePath + ".bak").writeText(currentContent)
+            }
+            val merged = mergePiMcpJson(currentContent, port) ?: return false
+            file.writeText(merged)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    internal fun mergePiMcpJson(content: String, port: Int): String? {
+        val json = if (content.isBlank()) {
+            JsonObject(emptyMap())
+        } else {
+            runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: return null
+        }
+        val servers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        servers["andy"] = buildJsonObject {
+            put("type", "streamable-http")
+            put("url", "http://127.0.0.1:$port/mcp-http")
+            put("lifecycle", "eager")
+        }
+        val updated = json.toMutableMap().apply {
+            this["mcpServers"] = JsonObject(servers)
+        }
+        val prettyJson = Json { prettyPrint = true }
+        return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun mergeOpenClawJson(content: String, port: Int): String {
+        val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
+        val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        mcp["andy"] = buildJsonObject {
+            put("transport", "streamable-http")
+            put("url", "http://127.0.0.1:$port/mcp-http")
+        }
+        val pretty = Json { prettyPrint = true }
+        return pretty.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
+    }
+
+    internal fun mergeHermesYaml(content: String, port: Int): String {
+        val lines = content.lines().toMutableList()
+        val url = "    url: \"http://127.0.0.1:$port/mcp-http\""
+        val root = lines.indexOfFirst { it.trim() == "mcp_servers:" }
+        if (root < 0) {
+            if (lines.isNotEmpty() && lines.last().isNotBlank()) lines.add("")
+            lines.addAll(listOf("mcp_servers:", "  andy:", url))
+            return lines.joinToString("\n").trimEnd() + "\n"
+        }
+        val andy = (root + 1 until lines.size).firstOrNull { lines[it].trim() == "andy:" }
+        if (andy != null) {
+            var end = andy + 1
+            while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) end++
+            lines.subList(andy, end).clear()
+        }
+        val insert = (andy ?: (root + 1)).coerceAtMost(lines.size)
+        lines.addAll(insert, listOf("  andy:", url))
+        return lines.joinToString("\n").trimEnd() + "\n"
     }
 
     private fun mergeToml(content: String, port: Int): String {

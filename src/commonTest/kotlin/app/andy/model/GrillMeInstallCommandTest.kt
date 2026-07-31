@@ -23,6 +23,14 @@ class GrillMeInstallCommandTest {
             "npx skills add mattpocock/skills --skill grill-me --skill grilling --global --agent antigravity-cli",
             AgentKind.Antigravity.grillMeInstallCommand(),
         )
+        assertEquals(
+            "npx skills add mattpocock/skills --skill grill-me --skill grilling --global --agent opencode",
+            AgentKind.OpenCode.grillMeInstallCommand(),
+        )
+        assertEquals(
+            "npx skills add mattpocock/skills --skill grill-me --skill grilling --global --agent pi",
+            AgentKind.Pi.grillMeInstallCommand(),
+        )
     }
 
     @Test

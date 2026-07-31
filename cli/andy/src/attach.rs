@@ -37,6 +37,21 @@ pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("cannot reattach");
+        if err.contains("missing vendor session") {
+            client
+                .call_tool(
+                    "chat.resume",
+                    json!({ "taskId": task_id, "followUp": "continue" }),
+                )
+                .await
+                .context("chat.resume after reattach failure")?;
+            match wait_for_tmux(client, task_id, AbortOnTerminalStatus::No).await? {
+                WaitOutcome::Ready if !tmux::session_looks_broken(task_id) => {
+                    return tmux::attach(task_id);
+                }
+                WaitOutcome::Ready | WaitOutcome::TimedOut | WaitOutcome::TerminalStatus => {}
+            }
+        }
         bail!("{err}\nHint: andy chat resume {task_id} \"continue\"");
     }
 

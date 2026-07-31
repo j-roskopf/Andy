@@ -4,8 +4,10 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.TerminalAppearanceSnapshot
-import app.andy.terminal.KetraTermBackend
+import app.andy.terminal.AndyTerminalView
+import app.andy.terminal.BossTermBackend
 import app.andy.terminal.SCROLLBACK_SESSION_SEPARATOR
+import app.andy.terminal.combineCommittedAndDerivedScrollback
 import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalMode
 import app.andy.terminal.TerminalSession
@@ -17,22 +19,27 @@ import app.andy.terminal.RawScrollbackFile
 import app.andy.terminal.ScrollbackAnsiCursor
 import app.andy.terminal.ScrollbackAnsiSnapshot
 import app.andy.terminal.ScrollbackAccumulator
+import app.andy.terminal.ScrollbackGridSize
 import app.andy.terminal.ScrollbackReplayCapture
 import app.andy.terminal.inferScrollbackGridSize
 import app.andy.terminal.replayCaptureStyledRows
 import app.andy.terminal.StyledTerminalRow
 import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
+import app.andy.terminal.collapseRepeatedScrollbackLines
 import app.andy.terminal.compactRepeatedProviderStartupText
-import app.andy.terminal.createScrollbackReplayTerminal
+import app.andy.terminal.createScrollbackReplayView
 import app.andy.terminal.formatLegacyScrollbackForReplay
 import app.andy.terminal.formatScrollbackForDisplay
 import app.andy.terminal.isScrollbackDisplayNoise
+import app.andy.terminal.looksLikeBrokenPlainScrollback
 import app.andy.terminal.looksLikeRawAnsiTee
 import app.andy.terminal.resolveScrollbackForReplay
+import app.andy.terminal.scrollbackReplayColumns
 import app.andy.terminal.stripAnsi
 import app.andy.terminal.styledRowsFromAnsiText
-import io.github.ketraterm.ui.swing.api.SwingTerminal
+import app.andy.terminal.trimLegacyTmuxCopyModeOutput
+import app.andy.terminal.toTerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,7 +54,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.awt.Component
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -55,7 +61,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * How agent CLIs are hosted.
  *
- * - [TmuxWithAttach]: create `tmux -L andy` session + KetraTerm attach (GUI default)
+ * - [TmuxWithAttach]: create `tmux -L andy` session + BossTerm attach (GUI default)
  * - [TmuxHeadless]: create tmux session only (daemon)
  * - [DirectPty]: legacy Pty4J spawn (tests / fallback when tmux unavailable)
  */
@@ -67,7 +73,7 @@ enum class AgentTerminalMode {
 
 /**
  * Owns embedded agent [TerminalSession]s. Agents run in tmux by default; the GUI
- * attaches via KetraTerm for rendering.
+ * attaches via BossTerm for rendering.
  */
 class AgentTerminalManager(
     private val scope: CoroutineScope,
@@ -81,7 +87,6 @@ class AgentTerminalManager(
     data class Handle(
         val taskId: String,
         val session: TerminalSession,
-        val widget: SwingTerminal?,
         val artifacts: AgentWorkflowArtifacts,
         val statusTracker: AgentStatusTracker,
         val artifactDir: File,
@@ -106,8 +111,21 @@ class AgentTerminalManager(
     private val handles = ConcurrentHashMap<String, Handle>()
 
     /** One derivation of `scrollback.raw`, valid while the file is untouched. */
-    private data class DerivedRawTranscript(val size: Long, val modified: Long, val text: String) {
-        fun matches(file: File): Boolean = size == file.length() && modified == file.lastModified()
+    private data class DerivedRawTranscript(
+        val size: Long,
+        val modified: Long,
+        val text: String,
+        val columns: Int,
+        val rows: Int,
+    ) {
+        /** Cheap hit: size + mtime only — do not read or scan the raw file. */
+        fun matchesFile(file: File): Boolean =
+            size == file.length() && modified == file.lastModified()
+
+        fun matches(file: File, grid: ScrollbackGridSize): Boolean =
+            matchesFile(file) &&
+                columns == grid.columns &&
+                rows == grid.rows
     }
 
     private data class DerivedRawRows(
@@ -118,6 +136,23 @@ class AgentTerminalManager(
 
     /** Memoizes [derivedRawReplayText] so reopening unchanged history costs nothing. */
     private val derivedRawCache = ConcurrentHashMap<String, DerivedRawTranscript>()
+
+    /** One-shot repair of legacy plain/duplicated `.ansi` from `.raw`. */
+    private data class RepairedAnsiTranscript(
+        val rawSize: Long,
+        val rawModified: Long,
+        val ansiSize: Long,
+        val ansiModified: Long,
+        val text: String,
+    ) {
+        fun matches(raw: File): Boolean =
+            rawSize == raw.length() && rawModified == raw.lastModified()
+
+        fun matchesAnsi(ansi: File): Boolean =
+            ansi.isFile && ansiSize == ansi.length() && ansiModified == ansi.lastModified()
+    }
+
+    private val repairedAnsiCache = ConcurrentHashMap<String, RepairedAnsiTranscript>()
 
     /** Per-chat attach serialization; see [start] and [attachExisting]. */
     private val attachLocks = ConcurrentHashMap<String, Mutex>()
@@ -134,13 +169,13 @@ class AgentTerminalManager(
 
     /**
      * Bumped whenever a session starts or stops so Compose can re-query
-     * [terminalWidget] — the widget is created asynchronously after createAndStart returns.
+     * [terminalView] — the view is created asynchronously after createAndStart returns.
      */
     private val _sessionsRevision = MutableStateFlow(0L)
     val sessionsRevision: StateFlow<Long> = _sessionsRevision.asStateFlow()
 
     private val _attachedTaskIds = MutableStateFlow<Set<String>>(emptySet())
-    /** Task ids that currently have an attachable terminal widget. */
+    /** Task ids that currently have an attachable terminal view. */
     val attachedTaskIds: StateFlow<Set<String>> = _attachedTaskIds.asStateFlow()
 
     private val _interactiveTaskIds = MutableStateFlow<Set<String>>(emptySet())
@@ -155,23 +190,21 @@ class AgentTerminalManager(
 
     fun get(taskId: String): Handle? = handles[taskId]
 
-    fun terminalWidget(taskId: String): SwingTerminal? {
+    fun terminalView(taskId: String): AndyTerminalView? {
         val handle = handles[taskId] ?: return null
         val session = handle.session
-        if (session is TmuxAttachBackend && !session.isViewerAlive) {
-            return null
-        }
+        if (session is TmuxAttachBackend && !session.isViewerAlive) return null
         return when (session) {
-            is KetraTermBackend -> session.swingTerminal()
-            is TmuxAttachBackend -> session.swingTerminal()
+            is BossTermBackend -> session.toTerminalView()
+            is TmuxAttachBackend -> session.terminalView()
             else -> null
         }
     }
 
     /**
-     * Drop the local KetraTerm viewer while keeping a live tmux session (or DirectPty
+     * Drop the local BossTerm viewer while keeping a live tmux session (or DirectPty
      * process) running. Called when the Compose surface unmounts so the next open can
-     * [attachExisting] instead of reusing a disposed Swing widget.
+     * [attachExisting] instead of reusing a disposed terminal view.
      */
     fun releaseViewerOnly(taskId: String) {
         val handle = handles[taskId] ?: return
@@ -218,8 +251,6 @@ class AgentTerminalManager(
             }
         }
     }
-
-    fun terminalComponent(taskId: String): Component? = terminalWidget(taskId)
 
     fun isViewerAlive(taskId: String): Boolean {
         val handle = handles[taskId] ?: return false
@@ -268,10 +299,16 @@ class AgentTerminalManager(
         // received since the timer's last tick; the append is delta-only and normally tiny.
         handles[taskId]?.let { handle -> runCatching { flushScrollback(handle) } }
         derivedRawReplayText(taskId)?.let { return it }
+
         val file = scrollbackFile(taskId)
         if (!file.isFile || file.length() == 0L) return null
         val content = runCatching { file.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
         if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(content))) return null
+
+        // BossTerm migration left some chats with plain, heavily duplicated .ansi while
+        // scrollback.raw still has the true stream. Repair once, then serve the file.
+        repairBrokenAnsiFromRawIfNeeded(taskId, content)?.let { return it }
+
         val replay = when {
             looksLikeRawAnsiTee(content) -> cleanedScrollbackText(content)
             content.contains('\u001B') -> content.trimEnd().takeIf { it.isNotBlank() }
@@ -279,7 +316,49 @@ class AgentTerminalManager(
         }
         return replay
             ?.let(::compactRepeatedProviderStartupText)
+            ?.let(::collapseRepeatedScrollbackLines)
             ?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * One-shot rewrite of a broken plain/duplicated `scrollback.ansi` from its raw tee.
+     * Returns the repaired transcript when repair ran; null when the file is already fine
+     * or no raw source exists.
+     */
+    private fun repairBrokenAnsiFromRawIfNeeded(taskId: String, ansiContent: String): String? {
+        if (!looksLikeBrokenPlainScrollback(ansiContent)) return null
+        val raw = rawScrollbackFile(taskId)
+        if (!raw.isFile || raw.length() == 0L) {
+            return compactRepeatedProviderStartupText(ansiContent)
+                .let(::collapseRepeatedScrollbackLines)
+                .takeIf { it.isNotBlank() }
+        }
+        repairedAnsiCache[taskId]?.let { cached ->
+            if (cached.matches(raw) && cached.matchesAnsi(scrollbackFile(taskId))) return cached.text
+        }
+        val rawContent = runCatching { raw.readText() }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return null
+        val derived = runCatching { replayCaptureStyledRows(rawContent) }.getOrNull()
+            ?.joinToString("\n") { it.ansi }
+            ?.trimEnd()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        val repaired = compactRepeatedProviderStartupText(derived)
+            .let(::collapseRepeatedScrollbackLines)
+            .takeIf { it.isNotBlank() }
+            ?: return null
+        if (TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(repaired))) return null
+        val ansiFile = scrollbackFile(taskId)
+        atomicWriteText(ansiFile, capScrollbackSize(repaired))
+        derivedRawCache.remove(taskId)
+        repairedAnsiCache[taskId] = RepairedAnsiTranscript(
+            rawSize = raw.length(),
+            rawModified = raw.lastModified(),
+            ansiSize = ansiFile.length(),
+            ansiModified = ansiFile.lastModified(),
+            text = repaired,
+        )
+        return repaired
     }
 
     /**
@@ -312,23 +391,40 @@ class AgentTerminalManager(
         }
         if (committedFresh) return null
 
+        // Hit the cache before reading/scanning multi‑MB raw tees. A warm peek used to
+        // re-read the whole file and run CUP/grid inference just to confirm the cache key.
         derivedRawCache[taskId]?.let { cached ->
-            if (cached.matches(raw)) return cached.text
+            if (cached.matchesFile(raw)) return cached.text
         }
-        val rawRows = deriveRawRows(raw, handle) ?: return null
+
+        val content = runCatching { raw.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        val replayableContent = trimLegacyTmuxCopyModeOutput(content)
+        val grid = inferScrollbackGridSize(replayableContent)
+        val rawRows = deriveRawRows(raw, handle, replayableContent) ?: return null
         val derived = rawRows.rows.joinToString("\n") { it.ansi }
             .trimEnd()
             .takeIf { it.isNotBlank() }
             ?: return null
 
-        // Earlier runs of this chat were committed when their sessions ended; raw holds only
-        // the current run, so put the committed transcript back in front of it.
+        // `.ansi` may hold prior finished runs *or* a partial mid-run commit (history
+        // bridge). Overlap-merge collapses the same-run prefix; true prior sessions append.
         val committed = runCatching {
             if (committedFile.isFile) committedFile.readText().trimEnd() else ""
         }.getOrDefault("")
-        val combined = if (committed.isBlank()) derived else committed + SCROLLBACK_SESSION_SEPARATOR + derived
+        val combined = combineCommittedAndDerivedScrollback(committed, derived)
         val replay = compactRepeatedProviderStartupText(combined).takeIf { it.isNotBlank() } ?: return null
-        derivedRawCache[taskId] = DerivedRawTranscript(rawRows.size, rawRows.modified, replay)
+        // A historical task has no live writer. Publish the compatibility repair once so
+        // later opens use the compact committed transcript instead of replaying legacy raw.
+        if (handle == null && !TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(replay))) {
+            atomicWriteText(committedFile, capScrollbackSize(replay))
+        }
+        derivedRawCache[taskId] = DerivedRawTranscript(
+            size = rawRows.size,
+            modified = rawRows.modified,
+            text = replay,
+            columns = grid.columns,
+            rows = grid.rows,
+        )
         return replay
     }
 
@@ -340,11 +436,8 @@ class AgentTerminalManager(
      * offset and emulates only newly appended output. No replay session is retained for a
      * finished chat with no live handle.
      */
-    private fun deriveRawRows(raw: File, handle: Handle?): DerivedRawRows? {
+    private fun deriveRawRows(raw: File, handle: Handle?, content: String): DerivedRawRows? {
         fun derive(): DerivedRawRows? {
-            val content = runCatching { raw.readText() }.getOrNull()
-                ?.takeIf { it.isNotBlank() }
-                ?: return null
             val rows = runCatching {
                 if (handle == null) {
                     replayCaptureStyledRows(content)
@@ -362,8 +455,19 @@ class AgentTerminalManager(
     }
 
     private fun replayRawHistory(handle: Handle, content: String): List<StyledTerminalRow> {
-        val replay = handle.rawHistoryReplay ?: inferScrollbackGridSize(content).let { grid ->
-            ScrollbackReplayCapture(cols = grid.columns, rows = grid.rows).also {
+        val grid = inferScrollbackGridSize(content)
+        var replay = handle.rawHistoryReplay
+        val existing = replay?.gridSize()
+        if (
+            replay == null ||
+            existing == null ||
+            existing.columns < grid.columns ||
+            existing.rows < grid.rows
+        ) {
+            // Grid grew (or first peek): rebuild so a prior 120x32 capture cannot keep
+            // duplicating a taller live TUI for the rest of the session.
+            runCatching { replay?.close() }
+            replay = ScrollbackReplayCapture(cols = grid.columns, rows = grid.rows).also {
                 handle.rawHistoryReplay = it
             }
         }
@@ -388,13 +492,14 @@ class AgentTerminalManager(
     }
 
     /**
-     * Build a read-only KetraTerm widget that replays [scrollback.ansi] for viewing
+     * Build a read-only BossTerm view that replays [scrollback.ansi] for viewing
      * finished chats. Caller owns dispose. Returns null when no history is available.
      */
-    fun openScrollbackReplay(taskId: String): SwingTerminal? {
+    fun openScrollbackReplay(taskId: String): AndyTerminalView? {
         val text = scrollbackReplayText(taskId) ?: return null
-        return createScrollbackReplayTerminal(
+        return createScrollbackReplayView(
             content = text,
+            cols = scrollbackReplayColumns(text),
             appearance = terminalAppearance(),
         )
     }
@@ -404,7 +509,7 @@ class AgentTerminalManager(
         val appearance = terminalAppearance()
         handles.values.forEach { handle ->
             when (val session = handle.session) {
-                is KetraTermBackend -> session.updateAppearance(appearance)
+                is BossTermBackend -> session.updateAppearance(appearance)
                 is TmuxAttachBackend -> session.updateAppearance(appearance)
             }
         }
@@ -413,7 +518,7 @@ class AgentTerminalManager(
     private fun bumpSessionsRevision() {
         _sessionsRevision.value = _sessionsRevision.value + 1
         _attachedTaskIds.value = handles.keys.filterTo(mutableSetOf()) { id ->
-            terminalWidget(id) != null
+            terminalView(id) != null
         }
         _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
     }
@@ -551,14 +656,14 @@ class AgentTerminalManager(
                 }
             }
 
-            val widget = when (session) {
-                is KetraTermBackend -> session.swingTerminal()
-                is TmuxAttachBackend -> session.swingTerminal()
+            val view = when (session) {
+                is BossTermBackend -> session.toTerminalView()
+                is TmuxAttachBackend -> session.terminalView()
                 else -> null
             }
             if (resolvedMode == AgentTerminalMode.TmuxWithAttach || resolvedMode == AgentTerminalMode.DirectPty) {
-                check(widget != null) {
-                    "terminal widget missing after start (backend=${session::class.simpleName}, mode=$resolvedMode)"
+                check(view != null) {
+                    "terminal view missing after start (backend=${session::class.simpleName}, mode=$resolvedMode)"
                 }
             }
 
@@ -584,13 +689,13 @@ class AgentTerminalManager(
             tracker.start()
             val scrollbackPath = scrollbackFile(task.id)
             derivedRawCache.remove(task.id)
+            repairedAnsiCache.remove(task.id)
             // Hard-kill durability: a prior run may exist only in scrollback.raw because
             // finalize never derived scrollback.ansi. Commit it before startNewRun deletes it.
             commitSurvivingRawScrollback(task.id)
             val handle = Handle(
                 taskId = task.id,
                 session = session,
-                widget = widget,
                 artifacts = artifacts,
                 statusTracker = tracker,
                 artifactDir = artifactDir,
@@ -605,7 +710,7 @@ class AgentTerminalManager(
             // StateFlow conflates the identical value the Main-dispatched bump below recomputes.
             _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
             handle.scrollbackJob = launchScrollbackJob(handle)
-            // Publish once on Main after the EDT widget exists so Compose collectors see it
+            // Publish once on Main after the terminal view exists so Compose collectors see it
             // without a second IO-thread bump (that forced an extra terminal recomposition).
             scope.launch(Dispatchers.Main.immediate) {
                 bumpSessionsRevision()
@@ -615,13 +720,20 @@ class AgentTerminalManager(
                     onStatusSnapshot(snapshot)
                 }
             }
-            onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            // Andy launches with a prompt (argv-embedded or typed). Arm the turn so
+            // suppressPrematureIdle cannot trap providers whose working chrome Andy
+            // does not yet recognize (notably OpenCode) at permanent Working.
+            if (task.prompt.isNotBlank() || argvHasEmbeddedPrompt(argv)) {
+                tracker.markUserWorking()
+            } else {
+                onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            }
             handle
         }
     }
 
     /**
-     * Attach a KetraTerm viewer to an existing tmux session (GUI reattach after restart,
+     * Attach a BossTerm viewer to an existing tmux session (GUI reattach after restart,
      * or remount after [releaseViewerOnly] when switching chat windows).
      * No-op if already attached or session missing.
      *
@@ -640,7 +752,7 @@ class AgentTerminalManager(
         if (!TmuxAndy.isAvailable()) return@withContext null
 
         // Serialized per chat with [start]: overlapping callers that both got past the
-        // "already attached?" check would each spawn a tmux client and a KetraTerm
+        // "already attached?" check would each spawn a tmux client and a BossTerm
         // emulator, with only the second reachable through [handles].
         //
         // waitForSession must run *outside* the lock — [start] holds the same mutex while
@@ -695,8 +807,9 @@ class AgentTerminalManager(
                 if (!TmuxAndy.hasSession(taskId)) return@withLock null
                 val attachSnap = stripAnsi(session.bufferSnapshot().trim())
                 if (TmuxAndy.paneContentLooksLikeFailedAttach(attachSnap)) return@withLock null
-                val widget = session.swingTerminal()
-                    ?: error("terminal widget missing after tmux attach")
+                check(session.terminalView() != null) {
+                    "terminal view missing after tmux attach"
+                }
                 // Prefer the dir the live session already used, then the task cwd, then scratch.
                 val artifactDir = retainedArtifactDir
                     ?: AgentWorkflowArtifacts.dirFor(
@@ -730,7 +843,6 @@ class AgentTerminalManager(
                 val handle = Handle(
                     taskId = taskId,
                     session = session,
-                    widget = widget,
                     artifacts = artifacts,
                     statusTracker = tracker,
                     artifactDir = artifactDir,
@@ -751,7 +863,7 @@ class AgentTerminalManager(
                 handle
             } finally {
                 if (!registered) {
-                    // Cancelled, or the widget never materialised. Drop the viewer and its
+                    // Cancelled, or the view never materialised. Drop the viewer and its
                     // threads; the tmux session keeps running so the agent is unaffected.
                     runCatching { session.abandonLocalResources() }
                 }
@@ -772,7 +884,7 @@ class AgentTerminalManager(
             existing.foreground.set(true)
             session.reattachViewer(terminalAppearance())
             resumeBackgroundPolling(existing)
-            // Single Main publish — a second IO-thread bump forced an extra SwingPanel
+            // Single Main publish — a second IO-thread bump forced an extra terminal
             // recomposition for every chat that collected sessionsRevision.
             scope.launch(Dispatchers.Main.immediate) { bumpSessionsRevision() }
             return existing
@@ -944,7 +1056,7 @@ class AgentTerminalManager(
     }
 
     /**
-     * Drop Andy's local KetraTerm viewer without tearing down a detached tmux session.
+     * Drop Andy's local BossTerm viewer without tearing down a detached tmux session.
      * [TmuxAttachBackend.close] honors [killTmuxOnClose] and must not be used here.
      */
     private fun releaseSessionViewer(session: TerminalSession) {
@@ -1018,42 +1130,27 @@ class AgentTerminalManager(
      * [scrollbackReplayText], both reached only when a viewer opens history), so it moved to
      * [finalizeScrollback] and on-demand derivation instead.
      *
-     * Exception: the first flush after a tmux viewer attach still runs [flushHistoryBridge]
-     * so output produced while Andy had no viewer is not permanently omitted.
+     * tmux sessions are intentionally different: their attached-client stream includes
+     * copy-mode navigation, so [flushScrollback] captures the pane model instead.
      */
     private fun flushScrollback(handle: Handle) {
-        val session = handle.session
-        if (session is TmuxAttachBackend && session.isHistoryBridgePending()) {
-            flushHistoryBridge(handle)
-            return
-        }
-        if (!appendTeeDelta(handle)) {
+        when (val session = handle.session) {
+            is TmuxAttachBackend -> {
+                val historyLines = if (session.consumeHistoryBridge()) -1 else null
+                runCatching { persistScrollback(handle, historyLines) }
+                // Legacy builds may have left attached-client bytes behind. Once the pane
+                // itself has been captured they are redundant and unsafe to derive.
+                handle.rawScrollback.startNewRun()
+                handle.committedRawCursor = null
+                handle.rawHistoryReplay = null
+                derivedRawCache.remove(handle.taskId)
+            }
+            is TmuxAgentBackend -> runCatching { persistScrollback(handle) }
+            else -> if (!appendTeeDelta(handle)) {
             // No raw tee to mirror (headless tmux with no local viewer). Such sessions are
             // captured a bounded screen at a time, which was never the expensive path.
-            runCatching { persistScrollback(handle) }
-        }
-    }
-
-    /**
-     * First flush after a tmux viewer attach.
-     *
-     * The new KetraTerm tee only holds what has painted since attach, while output that
-     * scrolled during [releaseViewerOnly] (or before Andy reattached) lives in tmux.
-     * Commit any pre-attach raw mirror, fold that tmux gap via [persistScrollback], then
-     * start a fresh raw run for this viewer's tee so history derivation does not duplicate
-     * the committed prefix.
-     */
-    private fun flushHistoryBridge(handle: Handle) {
-        runCatching {
-            if (handle.rawScrollback.wroteAnything) {
-                persistRawScrollback(handle)
+                runCatching { persistScrollback(handle) }
             }
-            persistScrollback(handle)
-            handle.rawScrollback.startNewRun()
-            handle.committedRawCursor = null
-            handle.rawHistoryReplay = null
-            derivedRawCache.remove(handle.taskId)
-            appendTeeDelta(handle)
         }
     }
 
@@ -1067,7 +1164,8 @@ class AgentTerminalManager(
         if (!raw.isFile || raw.length() == 0L) return
         if (committedFile.isFile && committedFile.lastModified() >= raw.lastModified()) return
         val content = runCatching { raw.readText() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return
-        val derived = runCatching { replayCaptureStyledRows(content) }.getOrNull()
+        val replayableContent = trimLegacyTmuxCopyModeOutput(content)
+        val derived = runCatching { replayCaptureStyledRows(replayableContent) }.getOrNull()
             ?.joinToString("\n") { it.ansi }
             ?.trimEnd()
             ?.takeIf { it.isNotBlank() }
@@ -1079,10 +1177,15 @@ class AgentTerminalManager(
         val combined = if (prior.isBlank()) derived else prior + SCROLLBACK_SESSION_SEPARATOR + derived
         atomicWriteText(committedFile, capScrollbackSize(combined))
         derivedRawCache.remove(taskId)
+        repairedAnsiCache.remove(taskId)
     }
 
     /** Flush the remaining bytes and derive `scrollback.ansi` once, at end of session. */
     private fun finalizeScrollback(handle: Handle) {
+        if (handle.session is TmuxAttachBackend || handle.session is TmuxAgentBackend) {
+            runCatching { persistScrollback(handle, historyLinesOverride = -1) }
+            return
+        }
         if (appendTeeDelta(handle)) {
             runCatching { persistRawScrollback(handle) }
         } else {
@@ -1108,8 +1211,7 @@ class AgentTerminalManager(
         cursor: ScrollbackAnsiCursor? = null,
     ): app.andy.terminal.ScrollbackAnsiSnapshot? =
         when (session) {
-            is TmuxAttachBackend -> session.scrollbackAnsiSnapshot(cursor)
-            is KetraTermBackend -> session.scrollbackAnsiSnapshot(cursor)
+            is BossTermBackend -> session.scrollbackAnsiSnapshot(cursor)
             else -> null
         }
 
@@ -1132,42 +1234,24 @@ class AgentTerminalManager(
     }
 
     /**
-     * Snapshot the terminal and fold it into this run's transcript.
-     *
-     * An attached viewer is the capture source: with `status off` on the Andy tmux server
-     * its screen is the pane and nothing else, so it carries the same styled rows
-     * `capture-pane -e` returns without forking one every flush. tmux still supplies the
-     * first capture after an attach ([TmuxAttachBackend.consumeHistoryBridge]) — a new
-     * viewer has no scrollback for output produced while Andy was detached — and every
-     * capture for a chat with no viewer at all.
+     * Snapshot the authoritative terminal model and fold it into this run's transcript.
+     * tmux sessions always come from `capture-pane -e`; attached-client bytes include
+     * copy-mode navigation and are never valid history records.
      */
-    private fun persistScrollback(handle: Handle): Unit = synchronized(handle.scrollbackLock) {
+    private fun persistScrollback(
+        handle: Handle,
+        historyLinesOverride: Int? = null,
+    ): Unit = synchronized(handle.scrollbackLock) {
         val captureRows = if (handle.foreground.get()) {
-            KetraTermBackend.SCROLLBACK_CAPTURE_ROWS
+            BossTermBackend.SCROLLBACK_CAPTURE_ROWS
         } else {
-            KetraTermBackend.SCROLLBACK_BACKGROUND_CAPTURE_ROWS
+            BossTermBackend.SCROLLBACK_BACKGROUND_CAPTURE_ROWS
         }
         val snapshot = when (val session = handle.session) {
-            is TmuxAttachBackend ->
-                if (session.isViewerAlive && !session.consumeHistoryBridge()) {
-                    // Replay the viewer's complete raw tee rather than polling its current
-                    // screen: the alt screen has no scrollback, so a live poll can never see
-                    // more than one screen's worth, and a fast model can scroll several
-                    // screens' worth past between two polls. See replayCaptureStyledRows.
-                    replayCapture(handle, session.scrollbackAnsiSnapshot()).ifEmpty {
-                        session.captureStyledRows(captureRows).ifEmpty {
-                            captureTmuxRows(handle.taskId, captureRows)
-                        }
-                    }
-                } else {
-                    captureTmuxRows(handle.taskId, captureRows).ifEmpty {
-                        session.captureStyledRows(captureRows)
-                    }
-                }
-            is KetraTermBackend ->
-                replayCapture(handle, session.scrollbackAnsiSnapshot()).ifEmpty {
-                    session.captureStyledRows(captureRows)
-                }
+            is TmuxAttachBackend, is TmuxAgentBackend ->
+                captureTmuxRows(handle.taskId, historyLinesOverride ?: captureRows)
+            is BossTermBackend ->
+                replayCapture(handle, session.scrollbackAnsiSnapshot())
             else -> captureTmuxRows(handle.taskId, captureRows)
         }
         commitScrollback(handle, snapshot)
@@ -1204,15 +1288,18 @@ class AgentTerminalManager(
     private fun bindSessionForeground(session: TerminalSession, foreground: AtomicBoolean) {
         when (session) {
             // Reaches the inner viewer too: TmuxAttachBackend hands its own flag down to
-            // whichever KetraTermBackend is currently attached.
+            // whichever BossTermBackend is currently attached.
             is TmuxAttachBackend -> session.foreground = foreground
-            is KetraTermBackend -> session.foregroundProvider = { foreground.get() }
+            is BossTermBackend -> session.foregroundProvider = { foreground.get() }
             else -> Unit
         }
     }
 
-    private fun scrollbackFlushDelay(handle: Handle): Long =
-        if (handle.foreground.get()) SCROLLBACK_FLUSH_MILLIS else SCROLLBACK_BACKGROUND_MILLIS
+    private fun scrollbackFlushDelay(handle: Handle): Long = when (handle.session) {
+        is TmuxAttachBackend, is TmuxAgentBackend ->
+            if (handle.foreground.get()) TMUX_SCROLLBACK_FLUSH_MILLIS else TMUX_SCROLLBACK_BACKGROUND_MILLIS
+        else -> if (handle.foreground.get()) SCROLLBACK_FLUSH_MILLIS else SCROLLBACK_BACKGROUND_MILLIS
+    }
 
     /**
      * Start this chat's transcript from what is already on disk, keeping earlier runs
@@ -1245,6 +1332,8 @@ class AgentTerminalManager(
     companion object {
         private const val SCROLLBACK_FLUSH_MILLIS = 2_000L
         private const val SCROLLBACK_BACKGROUND_MILLIS = 15_000L
+        private const val TMUX_SCROLLBACK_FLUSH_MILLIS = 10_000L
+        private const val TMUX_SCROLLBACK_BACKGROUND_MILLIS = 30_000L
 
         /** Raw PTY mirror written on the live path; `scrollback.ansi` is derived from it. */
         private const val RAW_SCROLLBACK_NAME = "scrollback.raw"
@@ -1259,7 +1348,7 @@ class AgentTerminalManager(
 
         /**
          * How long a dead Direct PTY may go without publishing an exit code before
-         * [awaitDirectPtyExit] gives up. Publishing needs [KetraTermBackend]'s own wait
+         * [awaitDirectPtyExit] gives up. Publishing needs [BossTermBackend]'s own wait
          * coroutine — parked in a blocking `pty.waitFor()` on its own internal scope,
          * independent of this process's dispatcher — to actually get scheduled and observe
          * the reap. 2s proved too tight under real scheduler/GC jitter (a shared CI runner,
@@ -1270,7 +1359,7 @@ class AgentTerminalManager(
         private const val EXIT_CODE_GRACE_MS = 8_000L
 
         /** Returned when a session ends without ever reporting a status. */
-        const val UNKNOWN_EXIT_CODE = KetraTermBackend.CLOSED_EXIT_CODE
+        const val UNKNOWN_EXIT_CODE = BossTermBackend.CLOSED_EXIT_CODE
         internal const val SUBMIT_KEY_GAP_MS = 80L
 
         fun defaultMode(): AgentTerminalMode =
@@ -1288,4 +1377,20 @@ fun buildAgentLaunchEnvironment(projectEnv: Map<String, String>): Map<String, St
 
 internal fun scrubInheritedAgentEnvironment(env: MutableMap<String, String>) {
     app.andy.terminal.scrubInheritedTerminalEnvironment(env)
+}
+
+/** True when argv already carries the first-turn prompt (so Andy will not PTY-type it). */
+internal fun argvHasEmbeddedPrompt(argv: List<String>): Boolean {
+    val promptFlags = setOf("--prompt", "--prompt-interactive", "-i")
+    for (index in argv.indices) {
+        if (argv[index] in promptFlags && index + 1 < argv.size && argv[index + 1].isNotBlank()) {
+            return true
+        }
+    }
+    // Providers that accept a trailing positional prompt (Codex / Claude / Pi / Cursor).
+    // OpenCode's positional is a directory — never treat a bare path-looking tail as a prompt.
+    val last = argv.lastOrNull()?.takeIf { it.isNotBlank() && !it.startsWith("-") } ?: return false
+    val previous = argv.getOrNull(argv.lastIndex - 1)
+    if (previous != null && previous.startsWith("-")) return false
+    return true
 }

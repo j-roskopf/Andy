@@ -7,6 +7,70 @@ import kotlin.test.assertTrue
 
 class ProviderModelParsingTest {
     @Test
+    fun parsesHermesAndOpenClawJsonModelLists() {
+        val hermes = parseHermesModels("{\"models\":[{\"id\":\"anthropic/claude-sonnet-4\",\"label\":\"Sonnet\"}]}")
+        val openClaw = parseOpenClawModels("[{\"model\":\"openai/gpt-5.6-sol\"}]")
+        assertEquals("anthropic/claude-sonnet-4", hermes.single().id)
+        assertEquals("Sonnet", hermes.single().label)
+        assertEquals("openai/gpt-5.6-sol", openClaw.single().id)
+    }
+    @Test
+    fun parsesOpenCodeProviderModelSlugs() {
+        val options = parseOpenCodeModels(
+            """
+            anthropic/claude-sonnet-5 - Claude Sonnet 5
+            openai/gpt-5.5 - GPT-5.5
+            google/gemini-3.1-pro
+            Tip: use --model provider/id
+            """.trimIndent(),
+        )
+        assertEquals("anthropic/claude-sonnet-5", options.single { it.id == "anthropic/claude-sonnet-5" }.id)
+        assertEquals("Claude Sonnet 5", options.single { it.id == "anthropic/claude-sonnet-5" }.label)
+        assertEquals(AgentModelFamily.Anthropic, options.single { it.id == "anthropic/claude-sonnet-5" }.modelFamily())
+        assertEquals(AgentModelFamily.OpenAI, options.single { it.id == "openai/gpt-5.5" }.modelFamily())
+        assertEquals(AgentModelFamily.Google, options.single { it.id == "google/gemini-3.1-pro" }.modelFamily())
+    }
+
+    @Test
+    fun parsesPiListModelsTable() {
+        val options = parsePiModels(
+            """
+            provider      model                context  max-out  thinking  images
+            openai-codex  gpt-5.3-codex-spark  128K     128K     yes       no
+            openai-codex  gpt-5.4              272K     128K     yes       yes
+            openai-codex  gpt-5.5              272K     128K     yes       yes
+            """.trimIndent(),
+        )
+        assertEquals(
+            listOf(
+                "openai-codex/gpt-5.3-codex-spark",
+                "openai-codex/gpt-5.4",
+                "openai-codex/gpt-5.5",
+            ),
+            options.map { it.id },
+        )
+        // Must never treat the provider column alone as a model id.
+        assertTrue(options.none { it.id == "openai-codex" })
+        assertTrue(options.single { it.id == "openai-codex/gpt-5.5" }.efforts.isNotEmpty())
+    }
+
+    @Test
+    fun parsesPiListModelsLegacySlugs() {
+        val options = parsePiModels(
+            """
+            Provider: anthropic
+            anthropic/claude-sonnet-4-5
+            anthropic/claude-opus-4
+            Provider: openai
+            openai/gpt-5
+            """.trimIndent(),
+        )
+        assertTrue(options.any { it.id == "anthropic/claude-sonnet-4-5" })
+        assertTrue(options.any { it.id == "openai/gpt-5" })
+        assertEquals(AgentModelFamily.Anthropic, options.single { it.id == "anthropic/claude-sonnet-4-5" }.modelFamily())
+    }
+
+    @Test
     fun parsesAntigravitySlugsIntoBaseModelsWithEfforts() {
         val options = parseAntigravityModels(
             """
@@ -100,6 +164,22 @@ class ProviderModelParsingTest {
             createdAtMillis = 0,
         )
         assertEquals("gemini-3.6-flash-medium", task.modelForCli())
+    }
+
+    @Test
+    fun piModelForCliRequiresProviderSlashModel() {
+        val bare = AgentTask(
+            id = "1",
+            title = "t",
+            prompt = "p",
+            agent = AgentKind.Pi,
+            model = "openai-codex",
+            createdAtMillis = 0,
+        )
+        assertEquals(null, bare.modelForCli())
+
+        val full = bare.copy(model = "openai-codex/gpt-5.5")
+        assertEquals("openai-codex/gpt-5.5", full.modelForCli())
     }
 
     @Test

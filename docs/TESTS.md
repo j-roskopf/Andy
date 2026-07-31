@@ -92,7 +92,7 @@ ANDY_DEVICE_NATIVE_SMOKE=1 ./gradlew desktopTest --tests '*DesktopNativeMirrorDe
 
 | | |
 | --- | --- |
-| **Why gated** | Talks to real vendor CLIs (Claude Code / Codex / Antigravity); costs subscription usage and needs each CLI installed + logged in for headless use. |
+| **Why gated** | Talks to real vendor CLIs (Claude Code / Codex / Antigravity / OpenCode / Pi); costs subscription usage and needs each CLI installed + logged in for headless use. |
 | **CI** | **Off** (no secrets / no spend on PRs). |
 | **Tests** | `app.andy.desktop.service.agents.AgentRunEndToEndTest` |
 

@@ -191,6 +191,39 @@ class ClaudeCodeInteractiveAdapterTest {
     }
 }
 
+class HermesOpenClawAdapterTest {
+    @Test
+    fun hermesUsesInteractiveChatAndMapsModelSkillsAndYolo() {
+        val hermes = HermesAdapter()
+        val argv = hermes.buildInteractiveCommand(
+            "/bin/hermes",
+            task(AgentKind.Hermes, autonomy = AgentAutonomy.Full).copy(
+                model = "openai/gpt-5.5",
+                skills = listOf(app.andy.model.AgentSkill("grill-me", "", "/tmp/SKILL.md")),
+            ),
+            null,
+        )
+        assertEquals(listOf("/bin/hermes", "chat"), argv.take(2))
+        assertTrue("--model" in argv && "openai/gpt-5.5" in argv)
+        assertTrue("-s" in argv && "grill-me" in argv)
+        assertTrue("--yolo" in argv)
+        assertTrue(!hermes.embedsInitialPrompt)
+    }
+
+    @Test
+    fun openClawEmbedsMessageAndSessionOnResume() {
+        val openClaw = OpenClawAdapter()
+        val fresh = openClaw.buildInteractiveCommand("/bin/openclaw", task(AgentKind.OpenClaw), null)
+        assertEquals(listOf("/bin/openclaw", "chat"), fresh.take(2))
+        assertTrue("--message" in fresh && "do the thing" in fresh)
+        val resumed = openClaw.buildInteractiveResumeCommand(
+            "/bin/openclaw", task(AgentKind.OpenClaw, sessionId = "agent:main:incident-42"), null, "continue", emptyList(),
+        )
+        assertTrue("--session" in resumed && "agent:main:incident-42" in resumed)
+        assertTrue("--message" in resumed && "continue" in resumed)
+    }
+}
+
 class CodexInteractiveAdapterTest {
     private val adapter = CodexAdapter()
 
@@ -490,5 +523,126 @@ class AntigravityInteractiveAdapterTest {
         // Unverified stored ids must not appear in the escape-hatch one-liner.
         assertTrue("--conversation" !in quoted)
         assertTrue("--continue" !in quoted)
+    }
+}
+
+class OpenCodeInteractiveAdapterTest {
+    private val adapter = OpenCodeAdapter()
+
+    @Test
+    fun interactiveCommandEmbedsPromptAndModel() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(model = "anthropic/claude-sonnet-5"),
+            mcpUrl = null,
+        )
+        assertEquals("/bin/opencode", argv.first())
+        assertTrue("--model" in argv && "anthropic/claude-sonnet-5" in argv)
+        assertTrue("--prompt" in argv)
+        assertEquals("do the thing", argv[argv.indexOf("--prompt") + 1])
+        // Bare positional args are directories for OpenCode — never put the prompt there.
+        assertTrue("do the thing" !in argv.filterIndexed { index, _ ->
+            index > 0 && argv[index - 1] !in setOf("--prompt", "--model", "--agent", "--file", "--session")
+        })
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun planModeSelectsPlanAgent() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(planMode = true),
+            mcpUrl = null,
+        )
+        assertTrue("--agent" in argv && "plan" in argv)
+        assertTrue("--auto" !in argv)
+    }
+
+    @Test
+    fun fullAutonomyAddsAuto() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode, autonomy = AgentAutonomy.Full).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--auto" in argv)
+    }
+
+    @Test
+    fun resumeUsesSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode, sessionId = "sess-1"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" in argv!!)
+        assertTrue("sess-1" in argv)
+        assertTrue("--prompt" in argv)
+        assertEquals("hello again", argv[argv.indexOf("--prompt") + 1])
+    }
+
+    @Test
+    fun resumeWithoutSessionReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "follow up",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" !in argv!!)
+        assertTrue("--prompt" in argv)
+        val embedded = argv[argv.indexOf("--prompt") + 1]
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("follow up"), embedded)
+    }
+}
+
+class PiInteractiveAdapterTest {
+    private val adapter = PiAdapter()
+
+    @Test
+    fun interactiveCommandEmbedsPromptModelAndThinking() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/pi",
+            task(AgentKind.Pi).copy(
+                model = "anthropic/claude-sonnet-4-5",
+                reasoningEffort = AgentReasoningEffort.High,
+            ),
+            mcpUrl = null,
+        )
+        assertEquals("/bin/pi", argv.first())
+        assertTrue("--model" in argv && "anthropic/claude-sonnet-4-5" in argv)
+        assertTrue("--thinking" in argv && "high" in argv)
+        assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun readOnlyModeAddsPlanAddendum() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/pi",
+            task(AgentKind.Pi).copy(planMode = true),
+            mcpUrl = null,
+        )
+        val prompt = argv.last()
+        assertTrue(prompt.contains("do the thing"), prompt)
+        assertTrue(prompt.contains("read-only"), prompt.lowercase())
+    }
+
+    @Test
+    fun resumeUsesSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/pi",
+            task(AgentKind.Pi, sessionId = "pi-sess"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" in argv!!)
+        assertTrue("pi-sess" in argv)
+        assertEquals("continue", argv.last())
     }
 }

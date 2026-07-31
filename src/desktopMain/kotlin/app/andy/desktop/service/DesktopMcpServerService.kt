@@ -205,7 +205,11 @@ class DesktopMcpServerService(
             McpClientConfig.ClientType.Cursor,
             McpClientConfig.ClientType.Codex,
             McpClientConfig.ClientType.ClaudeDesktop,
-            McpClientConfig.ClientType.Antigravity
+            McpClientConfig.ClientType.Antigravity,
+            McpClientConfig.ClientType.OpenCode,
+            McpClientConfig.ClientType.Pi,
+            McpClientConfig.ClientType.Hermes,
+            McpClientConfig.ClientType.OpenClaw,
         )
     }
 

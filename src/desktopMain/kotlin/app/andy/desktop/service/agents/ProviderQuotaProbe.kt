@@ -32,6 +32,8 @@ internal class ProviderQuotaProbe {
         // Antigravity's quota surface is an internal local language-server protocol.
         // Its opt-in is stored now; the probe intentionally waits for a stable versioned endpoint.
         AgentKind.Antigravity -> null
+        // Multi-provider auth; no stable single-account probe yet.
+        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> null
     }
 
     fun clearAccountAccess(agent: AgentKind) {

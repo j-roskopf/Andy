@@ -133,9 +133,9 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
-                implementation("io.github.ketraterm:ketraterm-ui-swing:0.2.1")
-                implementation("io.github.ketraterm:ketraterm-pty:0.2.1")
-                implementation("io.github.ketraterm:ketraterm-workspace:0.2.1")
+                // Compose-native terminal (replaces KetraTerm Swing embed).
+                implementation("com.risaboss:bossterm-compose:1.2.143")
+                implementation("com.risaboss:bossterm-core:1.2.143")
                 // Explicit pin so macOS release notarization can locate pty4j-*.jar.
                 implementation("org.jetbrains.pty4j:pty4j:0.13.12")
                 implementation("com.google.zxing:core:3.5.3")
@@ -848,8 +848,24 @@ tasks.register<Copy>("installAndyCli") {
         hookDest.writeText(hookSrc.readText())
         hookDest.setExecutable(true, false)
 
+        val piExtSrc = file("scripts/pi-andy-extension.ts")
+        check(piExtSrc.isFile) { "missing ${piExtSrc.path}" }
+        val piExtDest = file("${System.getProperty("user.home")}/.andy/pi/andy-extension.ts")
+        piExtDest.parentFile.mkdirs()
+        piExtDest.writeText(piExtSrc.readText())
+
+        val ocPluginSrc = file("scripts/opencode-andy-status.js")
+        check(ocPluginSrc.isFile) { "missing ${ocPluginSrc.path}" }
+        // Canonical copy next to the status hook for reference; projects get a
+        // fresh install from AndyOpenCodePluginInstaller on session start.
+        val ocPluginDest = file("${System.getProperty("user.home")}/.andy/opencode/andy-status.js")
+        ocPluginDest.parentFile.mkdirs()
+        ocPluginDest.writeText(ocPluginSrc.readText())
+
         println("Installed ${dest.absolutePath}")
         println("Installed ${hookDest.absolutePath}")
+        println("Installed ${piExtDest.absolutePath}")
+        println("Installed ${ocPluginDest.absolutePath}")
         println("Add ~/.andy/bin to PATH permanently if needed:")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")

@@ -22,9 +22,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import java.nio.file.Files
 
-class KetraTermScrollbackTest {
+class BossTermScrollbackTest {
     @Test
     fun capScrollbackSizeDropsOldestLines() {
         val content = (1..200).joinToString("") { idx -> "line-$idx-xxxxxxxx\n" }
@@ -63,7 +62,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun exportScrollbackAnsiContainsEchoOutput() = runBlocking {
-        AndyKetraTermConfig.ensureInitialized()
         val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
         val argv = if (isWindows) {
             listOf("cmd", "/c", "echo", "andy-scrollback-ok")
@@ -75,7 +73,7 @@ class KetraTermScrollbackTest {
                 sessionId = "scrollback-export-test",
                 argv = argv,
             ),
-        ) as KetraTermBackend
+        ) as BossTermBackend
         try {
             withTimeout(15_000) { session.exitCode.first { it != null } }
             delay(200)
@@ -104,6 +102,60 @@ class KetraTermScrollbackTest {
     }
 
     @Test
+    fun legacyTmuxCopyModeFramesAreExcludedFromRawHistory() {
+        val realOutput = "answer line one\r\nanswer line two\r\n"
+        val copyMode = buildString {
+            append("\u001B[30m\u001B[43m13:21 [10/97]")
+            append("\u001B[Hhistorical viewport ten")
+            append("\u001B[30m\u001B[43m13:21 [9/97]")
+            append("\u001B[Hhistorical viewport nine")
+        }
+
+        assertEquals(realOutput.trimEnd(), trimLegacyTmuxCopyModeOutput(realOutput + copyMode))
+        assertEquals(realOutput, trimLegacyTmuxCopyModeOutput(realOutput))
+    }
+
+    @Test
+    fun historicalRawCopyModeRecordingIsRepairedAndCommittedOnce() {
+        val dir = File.createTempFile("andy-tmux-copy-mode-repair", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "copy-mode-history"
+            val taskDir = File(dir, taskId).also { it.mkdirs() }
+            val ansi = File(taskDir, "scrollback.ansi").also {
+                it.writeText("stale startup\n")
+            }
+            val raw = File(taskDir, "scrollback.raw").also {
+                it.writeText(
+                    "final answer line one\r\nfinal answer line two\r\n" +
+                        "\u001B[30m\u001B[43m13:21 [97/97]" +
+                        "\u001B[Hduplicated historical viewport",
+                )
+            }
+            ansi.setLastModified(raw.lastModified() - 2_000)
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+
+            val replay = assertNotNull(manager.scrollbackReplayText(taskId))
+
+            assertTrue(replay.contains("final answer line one"), replay)
+            assertFalse(replay.contains("97/97"), replay)
+            assertFalse(replay.contains("duplicated historical viewport"), replay)
+            assertTrue(ansi.readText().contains("final answer line two"), ansi.readText())
+            assertTrue(ansi.lastModified() >= raw.lastModified())
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun scrollbackReplayColumnsFitWidestVisibleRow() {
         val content = "\u001b[32m" + "x".repeat(180) + "\u001b[0m\nshort\n"
         assertTrue(scrollbackReplayColumns(content) >= 181)
@@ -113,7 +165,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun resolveScrollbackForReplayCollapsesSpinnerRedraws() {
-        AndyKetraTermConfig.ensureInitialized()
         val noisy = buildString {
             repeat(40) {
                 append("\r\u001b[2A\u001b[0G⣾  \u001b[90mWorking\u001b[0m")
@@ -128,7 +179,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun resolveScrollbackForReplayRepairsLegacyCursorTuiSnippet() {
-        AndyKetraTermConfig.ensureInitialized()
         val legacy = buildString {
             repeat(25) {
                 append("\u001b[?25l\r\u001b[2A\u001b[0G⣾  \u001b[90mWorking\u001b[0m")
@@ -146,7 +196,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun resolveScrollbackForReplayRepairsRealCursorAgentFile() {
-        AndyKetraTermConfig.ensureInitialized()
         val file = java.io.File(System.getProperty("user.home"), ".andy/agents/task-7a20497d5e/scrollback.ansi")
         if (!file.isFile) return
         val raw = file.readText()
@@ -163,7 +212,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsKeepsContentLongerThanTheReplayGrid() {
-        AndyKetraTermConfig.ensureInitialized()
         // More lines than the replay buffer is tall (REPLAY_ROWS = 200): if capture only
         // read the final screen, everything before the last ~200 lines would be gone —
         // exactly the "fast model outdistances any poll" loss this function exists to fix.
@@ -180,7 +228,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsSamplesShortLinesBeforeTheyOutrunTheReplayGrid() {
-        AndyKetraTermConfig.ensureInitialized()
         // This stays well below the byte limit but exceeds the 200-row replay grid.
         val raw = buildString {
             append("\u001b[?1049h\u001b[H")
@@ -205,7 +252,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayUsesRecordedLiveGridForRightEdgeContent() {
-        AndyKetraTermConfig.ensureInitialized()
         val raw = buildString {
             append(scrollbackLayoutMarker(columns = 164, rows = 54))
             append("\u001B[2J\u001B[54;163Hok")
@@ -220,7 +266,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun scrollbackReplayCaptureProcessesOnlyNewTeeContent() {
-        AndyKetraTermConfig.ensureInitialized()
         val replay = ScrollbackReplayCapture()
         try {
             val first = "first line\\r\\n"
@@ -242,7 +287,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun oneShotDerivationStitchesRepaintsAtLeastAsCleanlyAsIncrementalCapture() {
-        AndyKetraTermConfig.ensureInitialized()
         // Persistence now mirrors raw PTY bytes and derives the transcript once, on demand,
         // instead of re-deriving it every 2s from whatever had arrived so far. Deriving in one
         // pass is strictly better: replayCaptureChunks keeps each full redraw atomic, whereas
@@ -288,7 +332,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsKeepsEverySectionOfALongAlternateScreenAnswer() {
-        AndyKetraTermConfig.ensureInitialized()
         // Claude/Codex-style TUIs use the alternate screen, so there is no native terminal
         // history once earlier rows scroll off. This is deliberately much longer than one
         // screen and includes repeated prose; both are normal in a detailed plan.
@@ -318,7 +361,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsStitchesRedrawnTuiWindowsIntoOneTranscript() {
-        AndyKetraTermConfig.ensureInitialized()
         val raw = buildString {
             append("\u001b[?1049h")
             for (latestStep in 1..20) {
@@ -349,7 +391,6 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsDoesNotDropRepeatedText() {
-        AndyKetraTermConfig.ensureInitialized()
         val raw = "\u001b[?1049h" + buildString {
             repeat(3) { append("same intentional line\r\n") }
         }
@@ -361,11 +402,103 @@ class KetraTermScrollbackTest {
 
     @Test
     fun replayCaptureStyledRowsPreservesStyling() {
-        AndyKetraTermConfig.ensureInitialized()
-        val raw = "[31mred line[0m\r\n"
+        val raw = "\u001b[31mred line\u001b[0m\r\n"
         val rows = replayCaptureStyledRows(raw)
-        assertTrue(rows.any { it.plain.contains("red line") })
-        assertTrue(rows.any { it.ansi.contains("[") }, "expected styling kept in the ansi field")
+        val styled = assertNotNull(rows.firstOrNull { it.plain.contains("red line") })
+        assertEquals("red line", styled.plain.trim())
+        assertTrue(
+            styled.ansi.contains("\u001b[") && styled.ansi.contains("red line"),
+            "ansi should keep SGR around the glyph, got=${styled.ansi}",
+        )
+        assertFalse(styled.plain.contains("\u001b"), "plain must be stripped")
+    }
+
+    @Test
+    fun looksLikeBrokenPlainScrollbackDetectsDuplicatedBanners() {
+        val duped = (1..20).joinToString("\n") { "Welcome to the Antigravity CLI. You are currently not signed in." }
+        assertTrue(looksLikeBrokenPlainScrollback(duped))
+        assertFalse(looksLikeBrokenPlainScrollback("\u001b[31monce\u001b[0m\nunique line here\n"))
+    }
+
+    @Test
+    fun collapseRepeatedScrollbackLinesKeepsOneCopy() {
+        val input = "a\na\na\nb\nb\nc\n"
+        assertEquals("a\nb\nc", collapseRepeatedScrollbackLines(input))
+    }
+
+    @Test
+    fun scrollbackReplayRepairsBrokenAnsiFromRawOnce() = runBlocking {
+        val dir = File.createTempFile("andy-scrollback-repair", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "repair-task"
+            val taskDir = File(dir, taskId).also { it.mkdirs() }
+            val raw = File(taskDir, "scrollback.raw")
+            val ansi = File(taskDir, "scrollback.ansi")
+            // Raw tee with real SGR; derive should keep color and a single banner.
+            raw.writeText(
+                buildString {
+                    append(scrollbackLayoutMarker(columns = 80, rows = 24))
+                    append("\u001b[31mWelcome to the Antigravity CLI. You are currently not signed in.\u001b[0m\r\n")
+                    append("unique follow-up line\r\n")
+                },
+            )
+            // Broken plain/duplicated .ansi that is fresher than raw so open prefers the file.
+            val banner = "Welcome to the Antigravity CLI. You are currently not signed in."
+            ansi.writeText((1..12).joinToString("\n") { banner } + "\nunique follow-up line\n")
+            ansi.setLastModified(raw.lastModified() + 2_000)
+
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            val first = assertNotNull(manager.scrollbackReplayText(taskId))
+            assertEquals(1, Regex(Regex.escape(banner)).findAll(first).count(), first.take(400))
+            assertTrue(first.contains("unique follow-up line"), first.take(400))
+            assertTrue(first.contains("\u001b["), "repaired transcript should keep SGR")
+            val rewritten = ansi.readText()
+            assertTrue(rewritten.contains("\u001b["), "disk .ansi should be rewritten with SGR")
+            assertFalse(looksLikeBrokenPlainScrollback(rewritten))
+
+            val second = assertNotNull(manager.scrollbackReplayText(taskId))
+            assertEquals(first, second)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun derivedRawReplayTextCachesSecondOpen() = runBlocking {
+        val dir = File.createTempFile("andy-scrollback-cache", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val taskId = "cache-task"
+            val taskDir = File(dir, taskId).also { it.mkdirs() }
+            File(taskDir, "scrollback.raw").writeText(
+                "\u001b[32mcached-green\u001b[0m\r\nsecond-line\r\n",
+            )
+            // No committed .ansi => open derives from raw and caches.
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.DirectPty,
+            )
+            val first = assertNotNull(manager.scrollbackReplayText(taskId))
+            assertTrue(first.contains("cached-green"), first.take(300))
+            val second = assertNotNull(manager.scrollbackReplayText(taskId))
+            assertEquals(first, second)
+        } finally {
+            scope.cancel()
+            dir.deleteRecursively()
+        }
     }
 
     @Test
@@ -464,10 +597,15 @@ class KetraTermScrollbackTest {
 
             val file = File(dir, "$taskId/scrollback.ansi")
             awaitScrollbackContains(file, "red-line")
+            val saved = file.readText()
+            assertTrue(
+                saved.contains("\u001b[") && saved.contains("red-line"),
+                "new sessions should persist SGR into scrollback.ansi: ${saved.take(300)}",
+            )
             val replay = manager.scrollbackReplayText(taskId)
             assertNotNull(replay)
             assertTrue(replay.contains("red-line"), "missing output: ${replay.take(300)}")
-            assertTrue(replay.contains("\u001b["), "styling was stripped: ${replay.take(300)}")
+            assertTrue(replay.contains("\u001b["), "replay should keep SGR")
             assertTrue(
                 replay.lines().any { it.contains("    indented-line") },
                 "indentation was trimmed: ${replay.take(300)}",
@@ -547,12 +685,10 @@ class KetraTermScrollbackTest {
             )
             assertTrue(manager.hasScrollback(taskId))
             assertTrue(scrollback.isFile)
-            val widget = manager.openScrollbackReplay(taskId)
-            assertNotNull(widget)
-            // READ-ONLY history must not take keyboard focus / accept typing.
-            assertFalse(widget.isFocusable)
-            assertTrue(widget.mouseWheelListeners.isNotEmpty(), "scrollback replay must handle wheel without focus")
-            disposeScrollbackReplayTerminal(widget)
+            val view = manager.openScrollbackReplay(taskId)
+            assertNotNull(view)
+            assertTrue(view.readOnly, "scrollback replay must be read-only")
+            disposeScrollbackReplayView(view)
         } finally {
             scope.cancel()
             dir.deleteRecursively()
@@ -603,102 +739,158 @@ class KetraTermScrollbackTest {
     }
 
     @Test
-    fun replayGridIsAsWideAsTheLiveAlternateScreen() {
-        val appearance = TerminalAppearanceSnapshot()
-        // Sweep widths: the normal buffer's extra chrome only costs a column at some sizes,
-        // and one lost column is enough to wrap the right border off every saved row.
-        for (width in 900..1400 step 37) {
-            val pixels = java.awt.Dimension(width, 640)
-            val live = altScreenGridSize(appearance, pixels)
-            val replay = createScrollbackReplayTerminal("history", cols = 120, rows = 32, appearance = appearance)
-            try {
-                val grid = onSwingEdt {
-                    replay.setSize(pixels)
-                    replay.doLayout()
-                    replay.visibleGridSize()
-                }
-                assertEquals(
-                    live.width,
-                    grid.width,
-                    "replay lost columns to normal-buffer chrome at ${pixels.width}px, so saved rows wrap",
-                )
-            } finally {
-                disposeScrollbackReplayTerminal(replay)
-            }
-        }
-    }
-
-    /** Grid an agent CLI draws into: a live terminal on the alternate screen. */
-    private fun altScreenGridSize(
-        appearance: TerminalAppearanceSnapshot,
-        pixels: java.awt.Dimension,
-    ): java.awt.Dimension = onSwingEdt {
-        val buffer = io.github.ketraterm.core.TerminalBuffers.create(width = 120, height = 32, maxHistory = 100)
-        val session = io.github.ketraterm.session.TerminalSession.create(
-            terminal = buffer,
-            connector = ParkedTerminalConnector(),
-        )
-        session.start(120, 32)
-        val altScreen = "\u001b[?1049h".toByteArray()
-        session.onBytes(altScreen, 0, altScreen.size)
-        val widget = io.github.ketraterm.ui.swing.api.SwingTerminal(
-            settingsProvider = { appearance.toSwingSettings(columns = 120, rows = 32) },
-        )
-        widget.bind(session)
-        widget.setSize(pixels)
-        widget.doLayout()
-        widget.visibleGridSize().also {
-            widget.dispose()
-            session.close()
-        }
-    }
-
-    @Test
-    fun appearanceMapsToSwingSettings() {
+    fun appearanceMapsToBossTermSettings() {
         val settings = TerminalAppearanceSnapshot(
             ketraThemeId = TerminalThemePreset.Nord.id,
             fontSize = 16f,
-        ).toSwingSettings(columns = 80, rows = 24)
-        assertEquals(80, settings.columns)
-        assertEquals(24, settings.rows)
-        assertEquals(16, settings.font.size)
+        ).toBossTermSettingsOverride()
+        assertEquals(16f, settings.fontSize)
+        assertEquals("nord", settings.activeThemeId)
+        assertEquals(true, settings.enableMouseReporting)
+        assertEquals(true, settings.simulateMouseScrollInAlternateScreen)
+
+        val agent = TerminalAppearanceSnapshot().toBossTermSettingsOverride(agentCliMode = true)
+        assertEquals(false, agent.enableMouseReporting)
+        assertEquals(true, agent.forceActionOnMouseReporting)
+        assertEquals(true, agent.simulateMouseScrollInAlternateScreen)
+        assertEquals(true, agent.scrollbarAlwaysVisible)
+
+        val tmuxAttach = TerminalAppearanceSnapshot().toBossTermSettingsOverride(
+            agentCliMode = true,
+            forwardMouseToApplication = true,
+        )
+        assertEquals(true, tmuxAttach.enableMouseReporting)
+        assertEquals(false, tmuxAttach.forceActionOnMouseReporting)
+        assertEquals(0f, tmuxAttach.mouseScrollThreshold)
+        assertEquals(false, tmuxAttach.simulateMouseScrollInAlternateScreen)
     }
 
     @Test
-    fun configForceEnablesHistoryAndNotificationsUnderAndyHome() {
-        val previousHome = System.getProperty("user.home")
-        val previousConfig = System.getProperty("ketraterm.config.path")
-        val tempHome = Files.createTempDirectory("andy-ketraterm-home")
+    fun createScrollbackReplayViewIsReadOnly() {
+        val view = createScrollbackReplayView("hello from finished chat\n")
         try {
-            System.setProperty("user.home", tempHome.toString())
-            AndyKetraTermConfig.resetForTests()
-            AndyKetraTermConfig.ensureInitialized()
-            val configPath = AndyKetraTermPaths.configFile()
-            assertTrue(Files.isRegularFile(configPath), "expected config at $configPath")
-            assertTrue(configPath.toString().contains(".andy${File.separator}ketraterm") ||
-                configPath.toString().contains(".andy/ketraterm"))
-            assertEquals(
-                configPath.toAbsolutePath().toString(),
-                System.getProperty("ketraterm.config.path"),
-            )
-            val reloaded = io.github.ketraterm.workspace.config.TerminalWorkspaceConfigManager(configPath).load()
-            assertTrue(reloaded.desktopNotificationsEnabled)
-            assertTrue(reloaded.persistentCommandHistoryEnabled)
-            assertEquals(AndyKetraTermPaths.commandHistoryFile(), AndyKetraTermPaths.root().resolve("command-history-v1.tsv"))
+            assertTrue(view.readOnly)
         } finally {
-            AndyKetraTermConfig.resetForTests()
-            if (previousHome != null) {
-                System.setProperty("user.home", previousHome)
-            } else {
-                System.clearProperty("user.home")
-            }
-            if (previousConfig != null) {
-                System.setProperty("ketraterm.config.path", previousConfig)
-            } else {
-                System.clearProperty("ketraterm.config.path")
-            }
-            tempHome.toFile().deleteRecursively()
+            disposeScrollbackReplayView(view)
         }
+    }
+
+    @Test
+    fun inferScrollbackGridSizePrefersCupEnvelopeOverStaleSmallMarker() {
+        val raw = buildString {
+            append(scrollbackLayoutMarker(columns = 120, rows = 32))
+            append("\u001b[?1049h")
+            append("\u001b[50;146Hok")
+        }
+        // CUP col 146 + 2-cell payload => envelope width 147; rows from CUP row 50.
+        assertEquals(ScrollbackGridSize(columns = 147, rows = 50), inferScrollbackGridSize(raw))
+    }
+
+    @Test
+    fun replayCaptureStyledRowsDoesNotDuplicateHomeRepaintsOnTallTui() {
+        // Stale 120x32 marker + a 50-row home-repaint TUI used to emit the greeting hundreds
+        // of times. The stream-wide CUP envelope must win so merge sees one screen.
+        val raw = buildString {
+            append(scrollbackLayoutMarker(columns = 120, rows = 32))
+            append("\u001b[?1049h")
+            repeat(40) {
+                append("\u001b[H")
+                for (row in 1..50) {
+                    append("\u001b[${row};1H")
+                    append("row-$row stable greeting line\u001b[K")
+                }
+            }
+            append("\u001b[50;1Hfinal answer ready\u001b[K")
+        }
+        val rows = replayCaptureStyledRows(raw)
+        val plain = rows.joinToString("\n") { it.plain }
+        val greetingCount = Regex("stable greeting line").findAll(plain).count()
+        assertTrue(
+            greetingCount in 1..60,
+            "expected one screen of greetings, got $greetingCount in ${rows.size} rows",
+        )
+        assertTrue(plain.contains("final answer ready"), plain.take(500))
+    }
+
+    @Test
+    fun replayCaptureStyledRowsDedupsRealAntigravityHomeRepaintStream() {
+        val file = java.io.File(System.getProperty("user.home"), ".andy/agents/task-54c06066a4/scrollback.raw")
+        if (!file.isFile || file.length() < 100_000L) return
+        val rows = replayCaptureStyledRows(file.readText())
+        val plain = rows.joinToString("\n") { it.plain }
+        val hello = Regex("Hello! How can I help you today with your project\\?").findAll(plain).count()
+        assertTrue(
+            hello in 1..3,
+            "expected greeting once (or a couple after resumes), got $hello in ${rows.size} rows",
+        )
+        assertTrue(rows.size < 2_000, "expected compact transcript, got ${rows.size} rows")
+    }
+
+    @Test
+    fun combineCommittedAndDerivedCollapsesPartialBootPrefix() {
+        val committed = """
+            ▄▀▀▄
+            Welcome to the Antigravity CLI. You are currently not signed in.
+              Signing in...
+        """.trimIndent()
+        val derived = """
+            ▄▀▀▄
+            Welcome to the Antigravity CLI.
+            Antigravity CLI 1.1.9
+            user@example.com
+            > analyzer the current code base
+            Analyzing Feature Gaps
+        """.trimIndent()
+        val combined = compactRepeatedProviderStartupText(
+            combineCommittedAndDerivedScrollback(committed, derived),
+        )
+        assertEquals(1, Regex("Welcome to the Antigravity CLI").findAll(combined).count(), combined)
+        assertTrue(combined.contains("Analyzing Feature Gaps"), combined)
+        assertTrue(combined.contains("analyzer the current code base"), combined)
+        assertFalse(combined.contains("Signing in"), combined)
+    }
+
+    @Test
+    fun homeRepaintMergeReplacesViewportInsteadOfAppending() {
+        val acc = ScrollbackAccumulator()
+        val screen1 = (1..20).map { idx ->
+            val text = if (idx == 1) "Analyzing Feature Gaps" else "section-a-line-$idx"
+            StyledTerminalRow(text, text)
+        }
+        val screen2 = (1..20).map { idx ->
+            val text = when (idx) {
+                1 -> "Analyzing Feature Gaps"
+                in 2..10 -> "section-a-line-$idx"
+                else -> "section-b-line-$idx"
+            }
+            StyledTerminalRow(text, text)
+        }
+        acc.merge(screen1)
+        acc.merge(screen2)
+        val plain = acc.snapshot().joinToString("\n") { it.plain }
+        assertEquals(1, Regex("Analyzing Feature Gaps").findAll(plain).count(), plain)
+        assertTrue(plain.contains("section-b-line-20"), plain)
+    }
+
+    @Test
+    fun probeLatestAntigravityTaskDerive() {
+        val dir = java.io.File(System.getProperty("user.home"), ".andy/agents/task-e2acffce8a")
+        val rawFile = java.io.File(dir, "scrollback.raw")
+        if (!rawFile.isFile || rawFile.length() < 100_000L) return
+        val content = rawFile.readText()
+        val started = System.nanoTime()
+        val rows = replayCaptureStyledRows(content)
+        val ms = (System.nanoTime() - started) / 1_000_000
+        val plain = rows.joinToString("\n") { it.plain }
+        val gaps = Regex("Analyzing Feature Gaps").findAll(plain).count()
+        val welcome = Regex("Welcome to the Antigravity CLI").findAll(plain).count()
+        val ansi = java.io.File(dir, "scrollback.ansi").takeIf { it.isFile }?.readText().orEmpty()
+        val combined = combineCommittedAndDerivedScrollback(ansi, rows.joinToString("\n") { it.ansi })
+        val combinedWelcome = Regex("Welcome to the Antigravity CLI").findAll(combined).count()
+        assertTrue(ms < 15_000, "derive too slow: ${ms}ms")
+        assertTrue(gaps in 0..3, "Analyzing Feature Gaps duplicated: $gaps in ${rows.size} rows")
+        assertTrue(welcome <= 1, "welcome frames kept: $welcome")
+        assertTrue(combinedWelcome <= 1, "committed+derived duplicates boot: $combinedWelcome")
     }
 
     private suspend fun awaitScrollbackContains(file: File, text: String, timeoutMs: Long = 30_000) {

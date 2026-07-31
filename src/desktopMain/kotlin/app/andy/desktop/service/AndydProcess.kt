@@ -15,7 +15,7 @@ internal object AndydProcess {
     /**
      * True when a standalone `andyd` (pidfile + live unix socket) is already running.
      * The GUI does not spawn `andyd` for itself — it uses [RuntimeMode.EmbeddedDaemon]
-     * with KetraTerm unless an external daemon is present (launchd / `runAndyd`).
+     * with the terminal embed unless an external daemon is present (launchd / `runAndyd`).
      */
     fun isExternalDaemonLive(
         socketPath: File = socketPath(),

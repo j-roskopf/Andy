@@ -223,6 +223,10 @@ internal fun screenManifestFor(agent: AgentKind): List<ScreenRule> = when (agent
     AgentKind.Codex -> CodexScreenManifest
     AgentKind.Cursor -> CursorScreenManifest
     AgentKind.Antigravity -> AntigravityScreenManifest
+    AgentKind.OpenCode -> OpenCodeScreenManifest
+    AgentKind.Pi -> PiScreenManifest
+    AgentKind.Hermes -> HermesScreenManifest
+    AgentKind.OpenClaw -> OpenClawScreenManifest
 }
 
 // region Ported Herdr manifests (+ Andy extras)
@@ -742,6 +746,155 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
             ),
         ),
     ),
+)
+
+private val OpenCodeScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule(
+        id = "permission_prompt",
+        state = ScreenState.Blocked,
+        priority = 300,
+        region = ScreenRegion.BottomNonEmpty(12),
+        visibleBlocker = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(contains = listOf("allow this")),
+                ScreenGate(contains = listOf("do you want to proceed")),
+                ScreenGate(
+                    // Prefer concrete permission chrome over the bare word "permission",
+                    // which often appears in assistant prose.
+                    all = listOf(
+                        ScreenGate(contains = listOf("permission")),
+                        ScreenGate(
+                            any = listOf(
+                                ScreenGate(contains = listOf("(y")),
+                                ScreenGate(contains = listOf("allow")),
+                                ScreenGate(contains = listOf("deny")),
+                                ScreenGate(contains = listOf("ask")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "spinner_working",
+        state = ScreenState.Working,
+        priority = 100,
+        region = ScreenRegion.BottomNonEmpty(10),
+        visibleWorking = true,
+        gate = ScreenGate(
+            any = listOf(
+                // OpenCode busy footer: "esc interrupt" / "esc again to interrupt"
+                ScreenGate(contains = listOf("interrupt")),
+                ScreenGate(contains = listOf("esc to interrupt")),
+                ScreenGate(contains = listOf("ctrl+c to stop")),
+                ScreenGate(lineRegex = listOf(Regex("""^\s*[\u2800-\u28FF]+\s+\p{L}+\w*ing\b"""))),
+                ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Generating|Executing|Running|Building)\b"""))),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "andy_prompt_idle",
+        state = ScreenState.Idle,
+        priority = 50,
+        region = ScreenRegion.BottomNonEmpty(8),
+        visibleIdle = true,
+        gate = ScreenGate(
+            // OpenCode always shows ctrl+x as the leader key — require idle companions
+            // and exclude busy interrupt chrome.
+            not = listOf(
+                ScreenGate(contains = listOf("interrupt")),
+                ScreenGate(contains = listOf("esc to interrupt")),
+            ),
+            any = listOf(
+                ScreenGate(lineRegex = listOf(Regex(""">\s*$"""))),
+                ScreenGate(lineRegex = listOf(Regex("""›\s*$"""))),
+                ScreenGate(lineRegex = listOf(Regex("""❯\s*$"""))),
+                ScreenGate(
+                    all = listOf(
+                        ScreenGate(contains = listOf("ctrl+x")),
+                        ScreenGate(
+                            any = listOf(
+                                ScreenGate(contains = listOf("build")),
+                                ScreenGate(contains = listOf("agent")),
+                                ScreenGate(contains = listOf("open")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+private val PiScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule(
+        id = "permission_prompt",
+        state = ScreenState.Blocked,
+        priority = 300,
+        region = ScreenRegion.WholeRecent,
+        visibleBlocker = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(contains = listOf("trust this project")),
+                ScreenGate(contains = listOf("project trust")),
+                ScreenGate(contains = listOf("allow this")),
+                ScreenGate(contains = listOf("confirm")),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "spinner_working",
+        state = ScreenState.Working,
+        priority = 100,
+        region = ScreenRegion.BottomNonEmpty(8),
+        visibleWorking = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(lineRegex = listOf(Regex("""^\s*[\u2800-\u28FF]+\s+\p{L}+\w*ing\b"""))),
+                ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Generating|Executing|Running|Building)\b"""))),
+                ScreenGate(contains = listOf("esc to interrupt")),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "andy_prompt_idle",
+        state = ScreenState.Idle,
+        priority = 50,
+        region = ScreenRegion.BottomNonEmpty(4),
+        visibleIdle = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(lineRegex = listOf(Regex(""">\s*$"""))),
+                ScreenGate(lineRegex = listOf(Regex("""›\s*$"""))),
+                ScreenGate(lineRegex = listOf(Regex("""❯\s*$"""))),
+                ScreenGate(contains = listOf("/hotkeys")),
+            ),
+        ),
+    ),
+)
+
+private val HermesScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule("approval_prompt", ScreenState.Blocked, 300, ScreenRegion.BottomNonEmpty(12), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("approve")), ScreenGate(contains = listOf("allow")), ScreenGate(contains = listOf("deny")),
+    )), visibleBlocker = true),
+    ScreenRule("working_feed", ScreenState.Working, 100, ScreenRegion.BottomNonEmpty(10), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("pondering")), ScreenGate(contains = listOf("contemplating")), ScreenGate(contains = listOf("┊ 💻")), ScreenGate(contains = listOf("┊ 🔍")),
+    )), visibleWorking = true),
+    ScreenRule("prompt_idle", ScreenState.Idle, 50, ScreenRegion.BottomNonEmpty(5), ScreenGate(lineRegex = listOf(Regex("""^\s*❯\s*$"""))), visibleIdle = true),
+)
+
+private val OpenClawScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule("approval_prompt", ScreenState.Blocked, 300, ScreenRegion.BottomNonEmpty(12), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("approval")), ScreenGate(contains = listOf("approve")), ScreenGate(contains = listOf("tool consent")),
+    )), visibleBlocker = true),
+    ScreenRule("working_feed", ScreenState.Working, 100, ScreenRegion.BottomNonEmpty(10), ScreenGate(any = listOf(
+        ScreenGate(contains = listOf("thinking")), ScreenGate(contains = listOf("running")), ScreenGate(contains = listOf("interrupt")),
+    )), visibleWorking = true),
+    ScreenRule("prompt_idle", ScreenState.Idle, 50, ScreenRegion.BottomNonEmpty(5), ScreenGate(any = listOf(
+        ScreenGate(lineRegex = listOf(Regex("""^\s*[❯›>]\s*$"""))), ScreenGate(contains = listOf("send a message")),
+    )), visibleIdle = true),
 )
 
 // endregion

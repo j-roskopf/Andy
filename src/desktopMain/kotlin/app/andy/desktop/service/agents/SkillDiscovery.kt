@@ -73,4 +73,22 @@ internal fun skillRootsFor(
         workspace?.let { File(it, ".agents/skills") },
         File(home, ".gemini/antigravity-cli/skills"),
     )
+    AgentKind.OpenCode -> listOfNotNull(
+        workspace?.let { File(it, ".opencode/skills") },
+        workspace?.let { File(it, ".claude/skills") },
+        File(home, ".config/opencode/skills"),
+        File(home, ".opencode/skills"),
+    )
+    AgentKind.Pi -> listOfNotNull(
+        workspace?.let { File(it, ".pi/skills") },
+        workspace?.let { File(it, ".agents/skills") },
+        File(home, ".pi/agent/skills"),
+        File(home, ".agents/skills"),
+    )
+    AgentKind.Hermes -> listOfNotNull(workspace?.let { File(it, ".hermes/skills") }, File(home, ".hermes/skills"))
+    AgentKind.OpenClaw -> listOfNotNull(
+        workspace?.let { File(it, ".openclaw/skills") },
+        workspace?.let { File(it, "skills") },
+        File(home, ".openclaw/skills"),
+    )
 }

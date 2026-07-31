@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.model.AgentChangeSummary
@@ -65,11 +66,12 @@ import java.util.concurrent.atomic.AtomicLong
  * calling tools on `andyd` over a Unix domain socket.
  *
  * Terminal attach is bridged to a local [DesktopAgentRunService] in TmuxWithAttach mode
- * so the Compose GUI can still embed KetraTerm.
+ * so the Compose GUI can still embed BossTerm.
  */
 class McpAgentRunClient(
     private val scope: CoroutineScope,
     private val socketPath: File,
+    private val cliLocator: AgentCliLocator = AgentCliLocator(),
 ) : AgentRunService, ProjectWorkflowService {
     private val json = Json { ignoreUnknownKeys = true }
     private val idSeq = AtomicLong(1)
@@ -136,7 +138,7 @@ class McpAgentRunClient(
     private var localBridge: DesktopAgentRunService? = null
 
     private val _interactiveTerminalTaskIds = MutableStateFlow<Set<String>>(emptySet())
-    /** Mirrors the local terminal bridge, which owns the KetraTerm viewers this GUI hosts. */
+    /** Mirrors the local terminal bridge, which owns the BossTerm viewers this GUI hosts. */
     override val interactiveTerminalTaskIds: StateFlow<Set<String>> =
         _interactiveTerminalTaskIds.asStateFlow()
 
@@ -163,7 +165,7 @@ class McpAgentRunClient(
         }
     }
 
-    /** Local KetraTerm/tmux-attach host used by [app.andy.ui.agents.AgentTerminalSurface]. */
+    /** Local BossTerm/tmux-attach host used by [app.andy.ui.agents.AgentTerminalSurface]. */
     fun terminalHost(): DesktopAgentRunService? = localBridge
 
     internal fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
@@ -286,38 +288,48 @@ class McpAgentRunClient(
         val raw = runCatching { callTool("chat.composer_options", emptyMap()) }.getOrNull() ?: return
         val root = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return
         val agents = root["agents"]?.jsonArray ?: return
-        _cliStatuses.value = agents.mapNotNull { element ->
-            val obj = element.jsonObject
-            val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val kind = AgentKind.entries.firstOrNull { it.name == id } ?: return@mapNotNull null
-            val available = obj["available"]?.jsonPrimitive?.booleanOrNull
-                ?: obj["available"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-                ?: false
-            val ready = obj["ready"]?.jsonPrimitive?.booleanOrNull
-                ?: obj["ready"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
-                ?: false
-            val version = obj["version"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            val issueTitle = obj["issue"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            AgentCliStatus(
-                kind = kind,
-                // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
-                binaryPath = if (ready) kind.cliName else if (available) null else null,
-                version = version,
-                issue = when {
-                    issueTitle != null -> AgentCliIssue(
-                        title = issueTitle,
-                        detail = issueTitle,
-                        blocksTasks = !ready,
-                    )
-                    available && !ready -> AgentCliIssue(
-                        title = "${kind.label} unavailable on daemon",
-                        detail = "Install or repair ${kind.cliName} where andyd is running.",
-                        blocksTasks = true,
-                    )
-                    else -> null
-                },
-            )
+        val fromDaemon = agents.mapNotNull(::parseDaemonAgentStatus).associateBy { it.kind }
+        val localByKind = if (fromDaemon.keys.containsAll(AgentKind.entries)) {
+            emptyMap()
+        } else {
+            withContext(Dispatchers.IO) { cliLocator.locateAll(emptyMap()).associateBy { it.kind } }
         }
+        _cliStatuses.value = AgentKind.entries.map { kind ->
+            fromDaemon[kind] ?: statusForDaemonUnknownAgent(kind, localByKind[kind])
+        }
+    }
+
+    private fun parseDaemonAgentStatus(element: kotlinx.serialization.json.JsonElement): AgentCliStatus? {
+        val obj = element.jsonObject
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val kind = AgentKind.entries.firstOrNull { it.name == id } ?: return null
+        val available = obj["available"]?.jsonPrimitive?.booleanOrNull
+            ?: obj["available"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: false
+        val ready = obj["ready"]?.jsonPrimitive?.booleanOrNull
+            ?: obj["ready"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: false
+        val version = obj["version"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val issueTitle = obj["issue"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        return AgentCliStatus(
+            kind = kind,
+            // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
+            binaryPath = if (ready) kind.cliName else null,
+            version = version,
+            issue = when {
+                issueTitle != null -> AgentCliIssue(
+                    title = issueTitle,
+                    detail = issueTitle,
+                    blocksTasks = !ready,
+                )
+                available && !ready -> AgentCliIssue(
+                    title = "${kind.label} unavailable on daemon",
+                    detail = "Install or repair ${kind.cliName} where andyd is running.",
+                    blocksTasks = true,
+                )
+                else -> null
+            },
+        )
     }
 
     private suspend fun callTool(name: String, arguments: Map<String, kotlinx.serialization.json.JsonElement>): String =
@@ -711,4 +723,20 @@ class McpAgentRunClient(
     override suspend fun startRecoveryReview(buildTaskId: String): String? = null
     override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
     override suspend fun deleteProject(projectId: String) = Unit
+}
+
+/** GUI-only fallback when a newer build knows about a provider the running `andyd` does not. */
+internal fun statusForDaemonUnknownAgent(kind: AgentKind, local: AgentCliStatus?): AgentCliStatus {
+    if (local?.available == true) {
+        return AgentCliStatus(
+            kind = kind,
+            version = local.version,
+            issue = AgentCliIssue(
+                title = "Restart andyd",
+                detail = "${kind.label} is installed at ${local.binaryPath}, but the running andyd predates it. Restart with ./gradlew runAndyd.",
+                blocksTasks = true,
+            ),
+        )
+    }
+    return AgentCliStatus(kind = kind)
 }

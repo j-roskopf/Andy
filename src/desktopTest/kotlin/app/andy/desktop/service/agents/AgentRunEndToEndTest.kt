@@ -208,7 +208,7 @@ class AgentRetryTest {
             assertNull(retried.totalCostUsd)
             assertFalse(store.taskDir(task.id).resolve("legacy-artifact.txt").exists())
         } finally {
-            // The service's terminal sessions (KetraTermBackend) run their PTY wait/scrape
+            // The service's terminal sessions (BossTermBackend) run their PTY wait/scrape
             // loops on their own internal scope, independent of the outer test scope above —
             // scope.cancel() alone never reaches them. Left open, those loops keep polling
             // pty.waitFor() for the rest of the (single-JVM, sequential) suite run, competing

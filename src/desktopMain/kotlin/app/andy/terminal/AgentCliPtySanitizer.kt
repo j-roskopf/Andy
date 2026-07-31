@@ -3,7 +3,7 @@ package app.andy.terminal
 /**
  * DECSET 25h — show cursor. Agent TUIs hide the hardware cursor (`\e[?25l`) and draw their
  * own prompt block; they still emit 25h on spinner redraws, which flashes the emulator
- * cursor at the grid tail. Keep hide sequences so KetraTerm stays cursorless.
+ * cursor at the grid tail. Keep hide sequences so the embed stays cursorless.
  *
  * Matched as raw bytes (`ESC [ ? 2 5 h`) so sanitizing never UTF-8-decodes a PTY chunk.
  * A String round-trip would replace incomplete multi-byte glyphs at chunk boundaries with
@@ -15,7 +15,7 @@ private val ShowCursorCsiBytes = byteArrayOf(
 )
 
 /**
- * Strip PTY bytes that make embedded agent TUIs flicker when replayed through KetraTerm.
+ * Strip PTY bytes that make embedded agent TUIs flicker when replayed through the embed.
  * Returns the original slice when nothing was removed.
  */
 internal fun sanitizeAgentCliPtyChunk(bytes: ByteArray, offset: Int, length: Int): Triple<ByteArray, Int, Int> {

@@ -5,6 +5,10 @@ enum class AgentKind(val label: String, val cliName: String) {
     Codex("Codex", "codex"),
     Cursor("Cursor", "cursor-agent"),
     Antigravity("Antigravity", "agy"),
+    OpenCode("OpenCode", "opencode"),
+    Pi("Pi", "pi"),
+    Hermes("Hermes", "hermes"),
+    OpenClaw("OpenClaw", "openclaw"),
 }
 
 /** Unified autonomy dial; each adapter maps it to vendor-specific flags. */
@@ -32,7 +36,8 @@ fun AgentAutonomy.defaultSandboxMode(): AgentSandboxMode = when (this) {
 
 fun AgentKind.sandboxControlLabel(): String = when (this) {
     AgentKind.Codex, AgentKind.Cursor -> "sandbox"
-    AgentKind.ClaudeCode, AgentKind.Antigravity -> "permissions"
+    AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
+    AgentKind.Hermes, AgentKind.OpenClaw -> "approvals"
 }
 
 fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
@@ -51,6 +56,26 @@ fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.ReadOnly -> "plan + sandbox"
         AgentSandboxMode.WorkspaceWrite -> "accept edits"
         AgentSandboxMode.None -> "skip permissions"
+    }
+    AgentKind.OpenCode -> when (this) {
+        AgentSandboxMode.ReadOnly -> "plan"
+        AgentSandboxMode.WorkspaceWrite -> "ask on tools"
+        AgentSandboxMode.None -> "auto-approve"
+    }
+    AgentKind.Pi -> when (this) {
+        AgentSandboxMode.ReadOnly -> "read-only prompt"
+        AgentSandboxMode.WorkspaceWrite -> "standard"
+        AgentSandboxMode.None -> "unrestricted"
+    }
+    AgentKind.Hermes -> when (this) {
+        AgentSandboxMode.ReadOnly -> "read-only prompt"
+        AgentSandboxMode.WorkspaceWrite -> "standard"
+        AgentSandboxMode.None -> "yolo"
+    }
+    AgentKind.OpenClaw -> when (this) {
+        AgentSandboxMode.ReadOnly -> "approval prompt"
+        AgentSandboxMode.WorkspaceWrite -> "ask on tools"
+        AgentSandboxMode.None -> "auto-approve where allowed"
     }
 }
 
@@ -74,6 +99,26 @@ fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.ReadOnly -> "Antigravity runs in plan mode with terminal sandboxing enabled."
         AgentSandboxMode.WorkspaceWrite -> "Antigravity accepts edits without its plan-mode sandbox."
         AgentSandboxMode.None -> "Antigravity skips its permission checks."
+    }
+    AgentKind.OpenCode -> when (this) {
+        AgentSandboxMode.ReadOnly -> "OpenCode runs its plan agent and keeps edit tools restricted."
+        AgentSandboxMode.WorkspaceWrite -> "OpenCode asks before running tools that change the workspace."
+        AgentSandboxMode.None -> "OpenCode auto-approves tool use (yolo / --auto)."
+    }
+    AgentKind.Pi -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Pi has no native sandbox; Andy asks it to inspect only and write a plan."
+        AgentSandboxMode.WorkspaceWrite -> "Pi runs with its default tools (read, write, edit, bash)."
+        AgentSandboxMode.None -> "Pi runs unrestricted; there is no native permission UI to skip."
+    }
+    AgentKind.Hermes -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Hermes receives a read-only instruction and restricted toolsets."
+        AgentSandboxMode.WorkspaceWrite -> "Hermes uses its standard toolsets and approval behavior."
+        AgentSandboxMode.None -> "Hermes runs with --yolo; provider-side safeguards still apply."
+    }
+    AgentKind.OpenClaw -> when (this) {
+        AgentSandboxMode.ReadOnly -> "OpenClaw receives a read-only instruction."
+        AgentSandboxMode.WorkspaceWrite -> "OpenClaw keeps its native approval prompts."
+        AgentSandboxMode.None -> "OpenClaw auto-approves where local mode allows; it does not silently bypass safeguards."
     }
 }
 
@@ -166,6 +211,63 @@ object AgentModelCatalog {
             AgentModelOption("claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
             AgentModelOption("claude-opus-4-6-thinking", "Claude Opus 4.6", emptyList()),
             AgentModelOption("gpt-oss-120b", "GPT-OSS 120B", listOf(AgentReasoningEffort.Medium)),
+        )
+        AgentKind.OpenCode -> listOf(
+            AgentModelOption("opencode/gpt-5.4-mini", "GPT-5.4 Mini (Zen)", emptyList()),
+            AgentModelOption("anthropic/claude-sonnet-5", "Claude Sonnet 5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("anthropic/claude-opus-4-8", "Claude Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("google/gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
+        )
+        AgentKind.Pi -> listOf(
+            AgentModelOption(
+                "openai-codex/gpt-5.5",
+                "GPT-5.5 (openai-codex)",
+                listOf(
+                    AgentReasoningEffort.None,
+                    AgentReasoningEffort.Minimal,
+                    AgentReasoningEffort.Low,
+                    AgentReasoningEffort.Medium,
+                    AgentReasoningEffort.High,
+                    AgentReasoningEffort.ExtraHigh,
+                    AgentReasoningEffort.Max,
+                ),
+            ),
+            AgentModelOption(
+                "openai-codex/gpt-5.6-sol",
+                "GPT-5.6 Sol (openai-codex)",
+                listOf(
+                    AgentReasoningEffort.None,
+                    AgentReasoningEffort.Minimal,
+                    AgentReasoningEffort.Low,
+                    AgentReasoningEffort.Medium,
+                    AgentReasoningEffort.High,
+                    AgentReasoningEffort.ExtraHigh,
+                    AgentReasoningEffort.Max,
+                ),
+            ),
+            AgentModelOption(
+                "anthropic/claude-sonnet-4-5",
+                "Claude Sonnet 4.5",
+                listOf(
+                    AgentReasoningEffort.None,
+                    AgentReasoningEffort.Minimal,
+                    AgentReasoningEffort.Low,
+                    AgentReasoningEffort.Medium,
+                    AgentReasoningEffort.High,
+                    AgentReasoningEffort.ExtraHigh,
+                    AgentReasoningEffort.Max,
+                ),
+            ),
+            AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
+        )
+        AgentKind.Hermes -> listOf(
+            AgentModelOption("anthropic/claude-sonnet-4", "Claude Sonnet 4", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+        )
+        AgentKind.OpenClaw -> listOf(
+            AgentModelOption("openai/gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
         )
     }
 
@@ -417,10 +519,12 @@ data class AgentQuotaAccess(
         AgentKind.ClaudeCode -> claudeAccountAccess
         AgentKind.Cursor -> cursorAccountAccess
         AgentKind.Antigravity -> antigravityAccountAccess
+        // Multi-provider auth; no stable quota probe yet.
+        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
     fun withAccess(agent: AgentKind, enabled: Boolean): AgentQuotaAccess = when (agent) {
-        AgentKind.Codex -> this
+        AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> this
         AgentKind.ClaudeCode -> copy(claudeAccountAccess = enabled)
         AgentKind.Cursor -> copy(cursorAccountAccess = enabled)
         AgentKind.Antigravity -> copy(antigravityAccountAccess = enabled)
@@ -666,6 +770,9 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
                 else -> "$base-${catalog?.effortToken(effort) ?: effort.cliValue}"
             }
         }
+        // Pi requires provider/model (e.g. openai-codex/gpt-5.5). A bare provider
+        // column from a bad --list-models parse must not be passed as --model.
+        AgentKind.Pi -> selected.takeIf { '/' in it }
         else -> selected
     }
 }
@@ -816,8 +923,9 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
                 TokenPrice(inputUsdPerMillion = 1.25, outputUsdPerMillion = 10.0)
             else -> null
         }
-        // Claude Code reports its billed total; Antigravity currently reports no token usage.
-        AgentKind.ClaudeCode, AgentKind.Antigravity -> null
+        // Claude Code reports its billed total; these providers currently report no token usage.
+        AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
+        AgentKind.Hermes, AgentKind.OpenClaw -> null
     } ?: return null
     return ((inputTokens ?: 0) * price.inputUsdPerMillion + (outputTokens ?: 0) * price.outputUsdPerMillion) / 1_000_000.0
 }

@@ -49,7 +49,7 @@ data class WorkspaceState(
     val tintId: String = "andy-blue",
     val surfaceModeId: String = "tinted",
     val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,
-    /** KetraTerm built-in theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
+    /** Terminal theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
     val terminalThemeId: String = TerminalThemePreset.Default.id,
     /** Legacy per-role hex fields — retained for properties compatibility; ignored at runtime. */
     val terminalForegroundHex: String = "#ABB2BF",
@@ -96,6 +96,8 @@ data class WorkspaceState(
     val agentOsNotificationsEnabled: Boolean = true,
     val agentNotificationSoundEnabled: Boolean = true,
     val agentIconBadgeEnabled: Boolean = true,
+    /** When false (default), quitting Andy kills all `tmux -L andy` agent sessions. */
+    val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */

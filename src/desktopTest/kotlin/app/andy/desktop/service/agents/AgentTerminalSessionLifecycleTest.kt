@@ -3,7 +3,6 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
-import app.andy.terminal.AndyKetraTermConfig
 import app.andy.terminal.TmuxAndy
 import java.io.File
 import kotlin.test.BeforeTest
@@ -39,7 +38,6 @@ class AgentTerminalSessionLifecycleTest {
     @Test
     fun sessionStaysInteractiveUntilStoppedThenReplaysReadOnlyAfterRestart() = runBlocking {
         if (isWindows) return@runBlocking // DirectPty scrollback lifecycle is covered on Unix CI
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val scrollbackFile = { id: String -> File(dir, "$id/scrollback.ansi") }
@@ -90,7 +88,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val scrollbackFile = { id: String -> File(dir, "$id/scrollback.ansi") }
@@ -114,7 +111,7 @@ class AgentTerminalSessionLifecycleTest {
             assertNotNull(reattached)
             assertTrue(TmuxAndy.hasSession(taskId), "reattach must not kill tmux")
             assertTrue(manager.isInteractive(taskId))
-            assertNotNull(manager.terminalWidget(taskId))
+            assertNotNull(manager.terminalView(taskId))
 
             // Simulate switching chats several times: release viewer, then reopen.
             repeat(4) {
@@ -124,7 +121,7 @@ class AgentTerminalSessionLifecycleTest {
                 val again = manager.attachExisting(taskId, cwd = dir.absolutePath)
                 assertNotNull(again, "reattach should succeed on switch $it")
                 assertSame(reattached, again, "handle should be reused on switch $it")
-                assertNotNull(manager.terminalWidget(taskId), "widget should mount on switch $it")
+                assertNotNull(manager.terminalView(taskId), "widget should mount on switch $it")
             }
         } finally {
             runCatching { TmuxAndy.killSession(taskId) }
@@ -148,7 +145,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val taskId = "reattach-then-stop-task"
@@ -195,7 +191,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val gone = tempDir()
         val deletedPath = gone.absolutePath
         assertTrue(gone.deleteRecursively())
@@ -249,7 +244,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val scrollRoot = tempDir()
         val taskId = "broken-attach-task"
@@ -286,7 +280,6 @@ class AgentTerminalSessionLifecycleTest {
 
     @Test
     fun exitingTheProcessEndsInteractivity() = runBlocking {
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
@@ -321,7 +314,7 @@ class AgentTerminalSessionLifecycleTest {
      * revision — which a successful attach bumps — so attaching cancelled and restarted its
      * own coroutine while `attach()` was already spawning a tmux client. Overlapping calls
      * then each built a viewer, only the last of which was reachable through the manager;
-     * the rest kept a tmux client, a KetraTerm emulator and a render worker alive for the
+     * the rest kept a tmux client, a BossTerm emulator and a render worker alive for the
      * life of the process. tmux's own client list is the check that catches that.
      */
     @Test
@@ -330,7 +323,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val taskId = "overlap-attach-task"
@@ -380,7 +372,6 @@ class AgentTerminalSessionLifecycleTest {
             println("SKIP: tmux not installed")
             return@runBlocking
         }
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val taskId = "start-attach-race-task"
@@ -424,7 +415,6 @@ class AgentTerminalSessionLifecycleTest {
      */
     @Test
     fun stoppingALiveSessionWakesAnInFlightAwaitExit() = runBlocking {
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val taskId = "await-exit-stop-task"
@@ -462,7 +452,6 @@ class AgentTerminalSessionLifecycleTest {
     @Test
     fun awaitExitReportsTheRealProcessExitCode() = runBlocking {
         if (isWindows) return@runBlocking // /bin/sh exit codes; Unix CI covers this path
-        AndyKetraTermConfig.ensureInitialized()
         val dir = tempDir()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val taskId = "await-exit-code-task"

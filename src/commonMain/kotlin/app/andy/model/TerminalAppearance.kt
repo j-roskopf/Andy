@@ -1,8 +1,8 @@
 package app.andy.model
 
 /**
- * Built-in KetraTerm color themes. Ids match KetraTerm config theme strings
- * (`one-dark`, `nord`, …).
+ * Built-in terminal color themes. Ids match BossTerm theme strings
+ * (`one-dark`, `nord`, …); Campbell/Everforest map to the closest built-in.
  */
 enum class TerminalThemePreset(val id: String, val label: String) {
     Campbell("campbell", "Campbell"),
@@ -21,7 +21,7 @@ enum class TerminalThemePreset(val id: String, val label: String) {
         fun fromId(id: String): TerminalThemePreset {
             val normalized = id.trim().lowercase()
             entries.firstOrNull { it.id == normalized }?.let { return it }
-            // Legacy Andy hex-theme ids collapse to KetraTerm default.
+            // Legacy Andy hex-theme ids collapse to the default theme.
             return when (normalized) {
                 "nord" -> Nord
                 "one-dark", "onedark" -> OneDark
@@ -51,7 +51,7 @@ enum class TerminalFontFamily(val id: String, val label: String, val awtName: St
     }
 }
 
-/** Snapshot of terminal appearance prefs used when constructing a KetraTerm SwingTerminal. */
+/** Snapshot of terminal appearance prefs used when constructing a BossTerm embed. */
 data class TerminalAppearanceSnapshot(
     val ketraThemeId: String = TerminalThemePreset.Default.id,
     val fontFamily: TerminalFontFamily = TerminalFontFamily.Default,
