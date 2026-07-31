@@ -2,6 +2,8 @@ package app.andy.desktop.service.agents
 
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class OpenCodePiHooksTest {
@@ -58,14 +60,34 @@ class OpenCodePiHooksTest {
             """.trimIndent(),
             port = 8565,
         )
-        assertTrue(merged.contains("\"andy\""))
+        assertTrue(merged!!.contains("\"andy\""))
         assertTrue(merged.contains("http://127.0.0.1:8565/mcp-http"))
         assertTrue(merged.contains("playwright"))
+    }
+
+    @Test
+    fun openCodePluginDoesNotOverwriteUnrelatedExistingFile() {
+        val project = kotlin.io.path.createTempDirectory("andy-oc-project").toFile()
+        try {
+            val plugin = AndyOpenCodePluginInstaller.pluginFile(project)
+            plugin.parentFile.mkdirs()
+            plugin.writeText("// user custom plugin\n")
+            AndyOpenCodePluginInstaller.ensureInstalled(project)
+            assertEquals("// user custom plugin\n", plugin.readText())
+        } finally {
+            project.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun openCodeMergeAbortsOnInvalidJson() {
+        val merged = McpClientConfigCompat.merge("""{ "model": "x", // comment }""", port = 8565)
+        assertNull(merged)
     }
 }
 
 /** Test-facing wrapper so we can call internal merge without widening production API. */
 private object McpClientConfigCompat {
-    fun merge(content: String, port: Int): String =
+    fun merge(content: String, port: Int): String? =
         app.andy.desktop.service.McpClientConfig.mergeOpenCodeJson(content, port)
 }

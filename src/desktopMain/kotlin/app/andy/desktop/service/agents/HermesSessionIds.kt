@@ -14,6 +14,20 @@ internal object HermesSessionIds {
     internal fun parseSessionListOutput(output: String): List<String> = runCatching {
         Json.parseToJsonElement(output).jsonArray.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.content }
     }.getOrElse { banner.findAll(output).map { it.groupValues[1] }.toList().distinct() }
+    fun awaitNewSessionId(
+        binary: String?,
+        cwd: String?,
+        before: String?,
+        attempts: Int = 40,
+        delayMs: Long = 250,
+    ): String? {
+        repeat(attempts) {
+            findNewestSession(binary, cwd)?.takeIf { it != before }?.let { return it }
+            Thread.sleep(delayMs)
+        }
+        return findNewestSession(binary, cwd)?.takeIf { it != before }
+    }
+
     fun findNewestSession(binary: String?, cwd: String?): String? = runCatching {
         if (binary.isNullOrBlank() || !File(binary).canExecute()) return null
         val process = ProcessBuilder(binary, "sessions", "list", "--json").directory(cwd?.let(::File)).start()

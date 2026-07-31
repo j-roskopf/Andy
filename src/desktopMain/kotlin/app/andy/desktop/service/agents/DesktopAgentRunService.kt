@@ -1574,8 +1574,18 @@ class DesktopAgentRunService(
         } else {
             null
         }
-        val hermesBeforeSessionId = if (launchTask.agent == AgentKind.Hermes) HermesSessionIds.findNewestSession(binary, launchTask.cwd) else null
-        val openClawBeforeSessionId = if (launchTask.agent == AgentKind.OpenClaw) OpenClawSessionIds.findNewestSession(binary, launchTask.cwd) else null
+        val hermesBeforeSessionId = if (launchTask.agent == AgentKind.Hermes) {
+            launchTask.vendorSessionId
+                ?: HermesSessionIds.findNewestSession(binary, launchTask.cwd)
+        } else {
+            null
+        }
+        val openClawBeforeSessionId = if (launchTask.agent == AgentKind.OpenClaw) {
+            launchTask.vendorSessionId
+                ?: OpenClawSessionIds.findNewestSession(binary, launchTask.cwd)
+        } else {
+            null
+        }
         val sessionCaptureStartedAt = System.currentTimeMillis()
         val trailingPrompt = promptFromArgv(argv, binary)
 
@@ -1650,18 +1660,22 @@ class DesktopAgentRunService(
         }
         if (launchTask.agent == AgentKind.Hermes) {
             scope.launch(Dispatchers.IO) {
-                HermesSessionIds.findNewestSession(binary, launchTask.cwd)?.takeIf { it != hermesBeforeSessionId }?.let { captured ->
-                    updateTask(taskId) { task -> task.copy(vendorSessionId = captured) }
-                    persist()
-                }
+                captureHermesSessionId(
+                    taskId = taskId,
+                    binary = binary,
+                    cwd = launchTask.cwd,
+                    before = hermesBeforeSessionId,
+                )
             }
         }
         if (launchTask.agent == AgentKind.OpenClaw) {
             scope.launch(Dispatchers.IO) {
-                OpenClawSessionIds.findNewestSession(binary, launchTask.cwd)?.takeIf { it != openClawBeforeSessionId }?.let { captured ->
-                    updateTask(taskId) { task -> task.copy(vendorSessionId = captured) }
-                    persist()
-                }
+                captureOpenClawSessionId(
+                    taskId = taskId,
+                    binary = binary,
+                    cwd = launchTask.cwd,
+                    before = openClawBeforeSessionId,
+                )
             }
         }
 
@@ -2004,6 +2018,50 @@ class DesktopAgentRunService(
         appendLaunchDiagnostics(
             taskId,
             "vendorSessionId=$captured source=codex before=${before.orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun captureHermesSessionId(
+        taskId: String,
+        binary: String,
+        cwd: String?,
+        before: String?,
+    ) {
+        val captured = HermesSessionIds.awaitNewSessionId(
+            binary = binary,
+            cwd = cwd,
+            before = before,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=hermes before=${before.orEmpty()}\n",
+        )
+        scope.launch { persist() }
+    }
+
+    private fun captureOpenClawSessionId(
+        taskId: String,
+        binary: String,
+        cwd: String?,
+        before: String?,
+    ) {
+        val captured = OpenClawSessionIds.awaitNewSessionId(
+            binary = binary,
+            cwd = cwd,
+            before = before,
+        ) ?: return
+        if (captured.isBlank() || captured == before) return
+        updateTask(taskId) { task ->
+            if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "vendorSessionId=$captured source=openclaw before=${before.orEmpty()}\n",
         )
         scope.launch { persist() }
     }
@@ -2372,9 +2430,10 @@ class DesktopAgentRunService(
                 McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenCode, port, cwd)
                 null
             }
-            // Pi has no native MCP config; URL is passed via ANDY_MCP_URL + Pi extension.
+            // Pi has no native MCP config; wire ~/.pi/mcp.json for pi-mcp-compatible extensions
+            // and pass ANDY_MCP_URL to Andy's Pi extension.
             AgentKind.Pi -> {
-                AndyPiExtensionInstaller.ensureInstalled()
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Pi, port, cwd)
                 "http://127.0.0.1:$port/mcp-http"
             }
             AgentKind.Hermes -> {

@@ -20,6 +20,20 @@ internal object OpenClawSessionIds {
     }.getOrElse {
         output.lineSequence().map { it.trim() }.filter { it.isNotBlank() && (it.startsWith("agent:") || !it.contains(' ')) }.toList().distinct()
     }
+    fun awaitNewSessionId(
+        binary: String?,
+        cwd: String?,
+        before: String?,
+        attempts: Int = 40,
+        delayMs: Long = 250,
+    ): String? {
+        repeat(attempts) {
+            findNewestSession(binary, cwd)?.takeIf { it != before }?.let { return it }
+            Thread.sleep(delayMs)
+        }
+        return findNewestSession(binary, cwd)?.takeIf { it != before }
+    }
+
     fun findNewestSession(binary: String?, cwd: String?): String? = runCatching {
         if (binary.isNullOrBlank() || !File(binary).canExecute()) return null
         val process = ProcessBuilder(binary, "sessions", "list", "--json").directory(cwd?.let(::File)).start()

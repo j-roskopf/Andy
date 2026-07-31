@@ -92,8 +92,10 @@ object AndyOpenCodePluginInstaller {
         val dest = pluginFile(worktreeOrCwd)
         dest.parentFile?.mkdirs()
         val existing = dest.takeIf { it.isFile }?.readText()
-        if (existing == null || existing.contains(MARKER) || existing != pluginContent) {
-            dest.writeText(pluginContent)
+        if (existing == null || existing.contains(MARKER)) {
+            if (existing != pluginContent) {
+                dest.writeText(pluginContent)
+            }
         }
         return dest
     }

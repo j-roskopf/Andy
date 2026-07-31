@@ -126,7 +126,7 @@ object McpClientConfig {
     fun writeConfig(client: ClientType, port: Int, cwd: File? = null): Boolean {
         if (client == ClientType.Pi) {
             AndyPiExtensionInstaller.ensureInstalled()
-            return true
+            return writePiMcpConfig(port)
         }
         val file = when (client) {
             ClientType.OpenCode -> getOpenCodeProjectConfig(cwd) ?: getConfigFile(client)
@@ -147,6 +147,7 @@ object McpClientConfig {
                     mergeJson(client, currentContent, port)
                 }
                 ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port)
+                    ?: return false
                 ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port)
                 ClientType.Hermes -> mergeHermesYaml(currentContent, port)
                 ClientType.Codex -> {
@@ -178,8 +179,12 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun mergeOpenCodeJson(content: String, port: Int): String {
-        val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
+    internal fun mergeOpenCodeJson(content: String, port: Int): String? {
+        val json = if (content.isBlank()) {
+            JsonObject(emptyMap())
+        } else {
+            runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: return null
+        }
         val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         mcp["andy"] = buildJsonObject {
             put("type", "remote")
@@ -190,6 +195,42 @@ object McpClientConfig {
             if (!containsKey("${'$'}schema")) {
                 this["${'$'}schema"] = JsonPrimitive("https://opencode.ai/config.json")
             }
+        }
+        val prettyJson = Json { prettyPrint = true }
+        return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun writePiMcpConfig(port: Int): Boolean {
+        val file = File(System.getProperty("user.home"), ".pi/mcp.json")
+        return try {
+            file.parentFile?.mkdirs()
+            val currentContent = if (file.exists()) file.readText() else ""
+            if (file.exists() && currentContent.isNotBlank()) {
+                File(file.absolutePath + ".bak").writeText(currentContent)
+            }
+            val merged = mergePiMcpJson(currentContent, port) ?: return false
+            file.writeText(merged)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    internal fun mergePiMcpJson(content: String, port: Int): String? {
+        val json = if (content.isBlank()) {
+            JsonObject(emptyMap())
+        } else {
+            runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: return null
+        }
+        val servers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        servers["andy"] = buildJsonObject {
+            put("type", "streamable-http")
+            put("url", "http://127.0.0.1:$port/mcp-http")
+            put("lifecycle", "eager")
+        }
+        val updated = json.toMutableMap().apply {
+            this["mcpServers"] = JsonObject(servers)
         }
         val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
