@@ -275,6 +275,7 @@ class BossTermBackend(
         frameLimiter = TerminalFrameLimiter(
             display = display,
             foregroundProvider = { foregroundProvider() },
+            churningProvider = { scrollbackTee.isOutputChurning(OUTPUT_CHURN_WINDOW_MS) },
         ).also { it.start() }
     }
 
@@ -297,5 +298,7 @@ class BossTermBackend(
         const val DEFAULT_MAX_HISTORY: Int = 10_000
         const val SCROLLBACK_CAPTURE_ROWS: Int = 500
         const val SCROLLBACK_BACKGROUND_CAPTURE_ROWS: Int = 80
+        /** Hold the redraw gate only while PTY output is actively arriving. */
+        private const val OUTPUT_CHURN_WINDOW_MS = 500L
     }
 }

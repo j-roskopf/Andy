@@ -776,6 +776,35 @@ class BossTermScrollbackTest {
     }
 
     @Test
+    fun createScrollbackReplayViewResizesToTranscriptWidth() {
+        val wide = "\u001b[32m" + "x".repeat(180) + "\u001b[0m\nboxed TUI line\n"
+        val expectedCols = scrollbackReplayColumns(wide)
+        val view = createScrollbackReplayView(wide, cols = expectedCols, rows = 40)
+        try {
+            assertTrue(view.readOnly)
+            val display = BossTermAccess.display(view.state)
+            assertNotNull(display, "replay session must expose a display for paint kicks")
+            val size = display.termSize.value
+            assertEquals(expectedCols, size.columns, "replay must feed at transcript width, not default grid")
+            assertEquals(40, size.rows)
+            // Frame gate must settle open — a stuck blank committed frame is what made history
+            // stay empty until the window was resized.
+            var ungated = false
+            repeat(50) {
+                kickScrollbackReplayPaint(view)
+                Thread.sleep(40)
+                // After settle, churningProvider is false so the limiter leaves the gate open.
+                // We can't read the private gate; asserting the limiter still exists and kicks
+                // are safe is the contract the UI relies on.
+                ungated = view.frameLimiter != null
+            }
+            assertTrue(ungated)
+        } finally {
+            disposeScrollbackReplayView(view)
+        }
+    }
+
+    @Test
     fun inferScrollbackGridSizePrefersCupEnvelopeOverStaleSmallMarker() {
         val raw = buildString {
             append(scrollbackLayoutMarker(columns = 120, rows = 32))

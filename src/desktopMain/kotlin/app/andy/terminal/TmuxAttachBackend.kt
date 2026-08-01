@@ -99,6 +99,7 @@ class TmuxAttachBackend(
             "tmux session ${TmuxAndy.sessionName(sessionId)} does not exist; create it before attaching"
         }
         TmuxAndy.ensureServerConfigured()
+        TmuxAndy.exitCopyModeIfActive(sessionId)
         val attachCwd = resolveTerminalWorkingDirectory(cwd)
         inner.start(TmuxAndy.attachArgv(sessionId), cwd = attachCwd, env = emptyMap())
         observeViewer(inner)
@@ -117,6 +118,11 @@ class TmuxAttachBackend(
 
     override fun bufferSnapshot(): String {
         if (inner.isAlive) {
+            if (TmuxAndy.isPaneInCopyMode(sessionId)) {
+                val probe = TmuxAndy.probePane(sessionId, historyLines = 0)
+                markAlive(probe.alive)
+                if (probe.alive) return probe.content.trimEnd()
+            }
             val snap = inner.bufferSnapshot().trimEnd()
             if (snap.isNotBlank()) {
                 markAlive(true)
@@ -133,6 +139,7 @@ class TmuxAttachBackend(
     fun releaseViewer() {
         viewerJob?.cancel()
         viewerJob = null
+        TmuxAndy.exitCopyModeIfActive(sessionId)
         inner.close()
     }
 
@@ -143,6 +150,7 @@ class TmuxAttachBackend(
             "tmux session ${TmuxAndy.sessionName(sessionId)} does not exist; create it before reattaching"
         }
         TmuxAndy.ensureServerConfigured()
+        TmuxAndy.exitCopyModeIfActive(sessionId)
         runCatching { inner.close() }
         inner = newInner(appearance)
         inner.start(TmuxAndy.attachArgv(sessionId), cwd = resolveTerminalWorkingDirectory(null), env = emptyMap())
@@ -179,7 +187,11 @@ class TmuxAttachBackend(
             launch {
                 viewer.bufferSnapshots.collect { snap ->
                     markAlive(true)
-                    val trimmed = snap.trimEnd()
+                    val trimmed = if (TmuxAndy.isPaneInCopyMode(sessionId)) {
+                        TmuxAndy.probePane(sessionId, historyLines = 0).content.trimEnd()
+                    } else {
+                        snap.trimEnd()
+                    }
                     if (trimmed != lastSnapshot) {
                         lastSnapshot = trimmed
                         _bufferSnapshots.emit(trimmed)

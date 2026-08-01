@@ -170,16 +170,38 @@ class TmuxAndyTest {
             val wheel = TmuxWheelInput { bytes -> BossTermAccess.writeBytes(view.state, bytes) }
             assertTrue(wheel.onScroll(-1f))
             Thread.sleep(200)
-            val paneModeAfterRawSgr = ProcessBuilder(
+            assertTrue(TmuxAndy.isPaneInCopyMode(taskId), "wheel-up should enter tmux copy mode")
+        } finally {
+            backend.close()
+            TmuxAndy.killSession(taskId)
+        }
+    }
+
+    @Test
+    fun releaseViewerExitsCopyMode() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        val taskId = "release-copy-mode-" + UUID.randomUUID().toString().take(8)
+        val backend = TmuxAttachBackend(sessionId = taskId)
+        try {
+            TmuxAndy.newSession(
+                taskId = taskId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf("/bin/sh", "-c", "printf 'live\\n'; sleep 30"),
+            )
+            backend.attach()
+            val enterCopyMode = ProcessBuilder(
                 TmuxAndy.tmuxBinary(), "-L", TmuxAndy.SERVER,
-                "display-message", "-p", "-t", TmuxAndy.sessionName(taskId), "#{pane_in_mode}",
-            ).redirectErrorStream(true).start().let { process ->
-                val output = process.inputStream.bufferedReader().readText().trim()
-                assertTrue(process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
-                assertEquals(0, process.exitValue(), output)
-                output
-            }
-            assertEquals("1", paneModeAfterRawSgr, "raw SGR wheel event did not enter tmux copy mode")
+                "copy-mode", "-e", "-t", TmuxAndy.sessionName(taskId),
+            ).redirectErrorStream(true).start()
+            assertTrue(enterCopyMode.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(0, enterCopyMode.exitValue())
+            assertTrue(TmuxAndy.isPaneInCopyMode(taskId))
+
+            backend.releaseViewer()
+            assertFalse(TmuxAndy.isPaneInCopyMode(taskId), "leaving chat should exit copy mode")
         } finally {
             backend.close()
             TmuxAndy.killSession(taskId)
@@ -199,6 +221,34 @@ class TmuxAndyTest {
         writes.clear()
         assertTrue(wheel.onScroll(1f))
         assertTrue(writes.joinToString("").contains("\u001B[<65;1;1M"))
+    }
+
+    @Test
+    fun exitCopyModeIfActiveReturnsPaneToLiveView() {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return
+        }
+        val taskId = "copy-mode-exit-" + UUID.randomUUID().toString().take(8)
+        try {
+            TmuxAndy.newSession(
+                taskId = taskId,
+                cwd = System.getProperty("user.dir"),
+                argv = listOf("/bin/sh", "-c", "printf 'live-line\\n'; sleep 30"),
+            )
+            val enterCopyMode = ProcessBuilder(
+                TmuxAndy.tmuxBinary(), "-L", TmuxAndy.SERVER,
+                "copy-mode", "-e", "-t", TmuxAndy.sessionName(taskId),
+            ).redirectErrorStream(true).start()
+            assertTrue(enterCopyMode.waitFor(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(0, enterCopyMode.exitValue())
+            assertTrue(TmuxAndy.isPaneInCopyMode(taskId))
+
+            TmuxAndy.exitCopyModeIfActive(taskId)
+            assertFalse(TmuxAndy.isPaneInCopyMode(taskId))
+        } finally {
+            TmuxAndy.killSession(taskId)
+        }
     }
 
     @Test

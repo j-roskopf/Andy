@@ -91,10 +91,12 @@ class TerminalFrameLimiterTest {
         gate: SynchronizedUpdateGate,
         intervalMs: Long = 25L,
         foreground: () -> Boolean = { true },
+        churning: () -> Boolean = { true },
         renderWindowMs: Long = 5L,
     ) = TerminalFrameLimiter(
         gate = gate,
         foregroundProvider = foreground,
+        churningProvider = churning,
         foregroundIntervalMillis = intervalMs,
         backgroundIntervalMillis = intervalMs * 10,
         renderWindowMillis = renderWindowMs,
@@ -231,6 +233,18 @@ class TerminalFrameLimiterTest {
         assertFalse(gate.isGated)
         gate.requestRedraw()
         assertEquals(1, gate.redraws.get(), "an uncapped terminal renders every request")
+    }
+
+    @Test
+    fun `the gate stays open while output is idle so caret blink can repaint`() = runBlocking {
+        val gate = FakeRedrawGate()
+        val loop = driveLoop(limiter(gate, intervalMs = 20L, churning = { false }))
+
+        Thread.sleep(150)
+        assertFalse(gate.isGated, "idle sessions must not hold the redraw gate closed")
+        assertEquals(0, gate.redraws.get(), "idle bypass should not force redraws")
+
+        loop.cancel()
     }
 
     @Test

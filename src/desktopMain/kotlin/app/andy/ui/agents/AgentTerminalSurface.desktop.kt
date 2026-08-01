@@ -42,13 +42,16 @@ import app.andy.terminal.AndyTerminalView
 import app.andy.terminal.BossTermAccess
 import app.andy.terminal.TmuxWheelInput
 import app.andy.terminal.disposeScrollbackReplayView
+import app.andy.terminal.kickScrollbackReplayPaint
 import app.andy.terminal.panelBackgroundArgb
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withContext
 
 private val NoSessionsRevision = MutableStateFlow(0L)
 private val NoWorkspace = MutableStateFlow(WorkspaceState())
@@ -98,7 +101,11 @@ actual fun AgentTerminalSurface(
         suspend fun openHistoryIfAvailable() {
             if (historyTerminal != null) return
             if (agentRuns?.hasScrollback(taskId) != true) return
-            historyTerminal = agentRuns.openScrollbackReplay(taskId)
+            // Replay init waits briefly for the BossTerm tab and resizes before feeding;
+            // keep that off Main so the UI thread is not parked on Thread.sleep.
+            historyTerminal = withContext(Dispatchers.Default) {
+                agentRuns.openScrollbackReplay(taskId)
+            }
         }
 
         if (!effectiveSessionActive) {
@@ -143,9 +150,11 @@ actual fun AgentTerminalSurface(
     }
 
     val historyToDispose = rememberUpdatedState(historyTerminal)
+    val releaseViewerOnDispose = rememberUpdatedState(releaseViewer)
     DisposableEffect(taskId) {
         onDispose {
             historyToDispose.value?.let(::disposeScrollbackReplayView)
+            releaseViewerOnDispose.value?.invoke(taskId)
         }
     }
     val displayTerminal = liveTerminal ?: historyTerminal
@@ -156,6 +165,17 @@ actual fun AgentTerminalSurface(
         }
     }
     var imageDragActive by remember(taskId) { mutableStateOf(false) }
+
+    // History feeds before EmbeddableTerminal mounts; without an ungated redraw after layout
+    // ProperTerminal can keep the blank first committed bitmap until the window is resized.
+    LaunchedEffect(historyTerminal?.state, liveTerminal?.state) {
+        val history = historyTerminal ?: return@LaunchedEffect
+        if (liveTerminal != null) return@LaunchedEffect
+        repeat(8) {
+            kickScrollbackReplayPaint(history)
+            delay(100)
+        }
+    }
 
     LaunchedEffect(taskId, effectiveSessionActive) {
         if (!effectiveSessionActive) imageDragActive = false

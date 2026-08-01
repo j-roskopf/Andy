@@ -61,6 +61,10 @@ class ScrollbackAnsiTee(
     @Volatile
     private var bytesSeen: Long = 0L
 
+    /** Wall clock of the most recent [append]; `0` until the first PTY chunk arrives. */
+    @Volatile
+    private var lastOutputAtMillis: Long = 0L
+
     /** Absolute character offsets of the retained raw-PTY window. */
     private var retainedStartOffset: Long = 0L
 
@@ -79,6 +83,14 @@ class ScrollbackAnsiTee(
     /** Monotonic counter of bytes read from the host. See [bytesSeen]. */
     fun outputGeneration(): Long = bytesSeen
 
+    fun lastOutputAtMillis(): Long = lastOutputAtMillis
+
+    /** True when a PTY chunk arrived within [windowMillis] (never true before the first byte). */
+    fun isOutputChurning(windowMillis: Long): Boolean {
+        val last = lastOutputAtMillis
+        return last != 0L && System.currentTimeMillis() - last < windowMillis
+    }
+
     fun append(bytes: ByteArray, offset: Int, length: Int) {
         if (length <= 0) return
         synchronized(lock) {
@@ -89,6 +101,7 @@ class ScrollbackAnsiTee(
                 trimToCap()
             }
             bytesSeen += length
+            lastOutputAtMillis = System.currentTimeMillis()
         }
     }
 

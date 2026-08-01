@@ -5,6 +5,7 @@ import ai.rever.bossterm.compose.PlatformServices
 import ai.rever.bossterm.compose.getPlatformServices
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * BossTerm [PlatformServices] that spawn Andy's exact argv (tmux attach / DirectPty),
@@ -102,17 +103,26 @@ private class TeeingProcessHandle(
 /**
  * Read-only process handle that feeds [payload] once, then stays alive until [kill]
  * so BossTerm can render scrollback replay without a real shell.
+ *
+ * [feedGate] delays the one-shot payload until the emulator has been resized to the
+ * transcript width — feeding at BossTerm's default grid hard-wraps boxed TUI lines and
+ * is the main source of "shattered" historical formatting.
  */
 internal class ReplayProcessService(
     private val payload: String,
+    private val feedGate: CompletableDeferred<Unit>? = null,
+    private val onPayloadDelivered: (() -> Unit)? = null,
 ) : PlatformServices.ProcessService {
     override suspend fun spawnProcess(
         config: PlatformServices.ProcessService.ProcessConfig,
-    ): PlatformServices.ProcessService.ProcessHandle = ReplayProcessHandle(payload)
+    ): PlatformServices.ProcessService.ProcessHandle =
+        ReplayProcessHandle(payload, feedGate, onPayloadDelivered)
 }
 
 private class ReplayProcessHandle(
     payload: String,
+    private val feedGate: CompletableDeferred<Unit>? = null,
+    private val onPayloadDelivered: (() -> Unit)? = null,
 ) : PlatformServices.ProcessService.ProcessHandle {
     private val remaining = AtomicReference(payload)
     @Volatile private var alive = true
@@ -122,8 +132,13 @@ private class ReplayProcessHandle(
 
     override suspend fun read(): String? {
         if (!alive) return null
+        feedGate?.await()
+        if (!alive) return null
         val next = remaining.getAndSet(null)
-        if (next != null) return next
+        if (next != null) {
+            onPayloadDelivered?.invoke()
+            return next
+        }
         // Park until killed so the emulator session stays Connected.
         while (alive) {
             kotlinx.coroutines.delay(250)
@@ -135,6 +150,8 @@ private class ReplayProcessHandle(
 
     override suspend fun kill() {
         alive = false
+        // Unblock a parked reader without CancellationException noise on dispose.
+        feedGate?.complete(Unit)
     }
 
     override suspend fun waitFor(): Int {
@@ -150,7 +167,9 @@ private class ReplayProcessHandle(
 
 internal class ReplayPlatformServices(
     payload: String,
+    feedGate: CompletableDeferred<Unit>? = null,
+    onPayloadDelivered: (() -> Unit)? = null,
 ) : PlatformServices by getPlatformServices() {
-    private val processService = ReplayProcessService(payload)
+    private val processService = ReplayProcessService(payload, feedGate, onPayloadDelivered)
     override fun getProcessService(): PlatformServices.ProcessService = processService
 }

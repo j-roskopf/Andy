@@ -74,6 +74,14 @@ fun interface SynchronizedUpdateGate {
  * the gate immediately, preserving the old throttle's "sparse updates are never delayed"
  * property. The gate re-arms on the loop's next tick.
  *
+ * ### Cursor blink
+ *
+ * BossTerm's caret blink toggles a Compose `MutableState` on a timer — it does **not** call
+ * `requestRedraw()`. While the gate is closed with no pending damage, `captureStableRenderFrame`
+ * hands back the last committed bitmap and the caret appears frozen. The gate therefore stays
+ * open whenever [churningProvider] reports no recent PTY output; streaming sessions still
+ * engage the cap for the per-character storm.
+ *
  * ### Interaction with applications that drive DEC 2026 themselves
  *
  * The flag is a single boolean with no nesting count, so a CLI emitting BSU/ESU interleaves
@@ -84,6 +92,8 @@ class TerminalFrameLimiter(
     private val gate: SynchronizedUpdateGate,
     /** Backgrounded sessions render to nothing; they only need the request churn suppressed. */
     private val foregroundProvider: () -> Boolean = { true },
+    /** When false the gate stays open so BossTerm's caret-blink Compose state can repaint. */
+    private val churningProvider: () -> Boolean = { true },
     private val foregroundIntervalMillis: Long = defaultForegroundIntervalMillis(),
     private val backgroundIntervalMillis: Long = DEFAULT_BACKGROUND_INTERVAL_MS,
     /** How long the gate stays open so the flushed frame can actually compose. */
@@ -92,7 +102,12 @@ class TerminalFrameLimiter(
     constructor(
         display: ComposeTerminalDisplay,
         foregroundProvider: () -> Boolean = { true },
-    ) : this(SynchronizedUpdateGate(display::setSynchronizedUpdate), foregroundProvider)
+        churningProvider: () -> Boolean = { true },
+    ) : this(
+        SynchronizedUpdateGate(display::setSynchronizedUpdate),
+        foregroundProvider,
+        churningProvider,
+    )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -111,6 +126,12 @@ class TerminalFrameLimiter(
     internal suspend fun gateLoop() {
         while (coroutineContext.isActive) {
             val interval = if (foregroundProvider()) foregroundIntervalMillis else backgroundIntervalMillis
+            if (!churningProvider()) {
+                // Idle: caret blink is Compose-driven and never sets the pending-redraw flag.
+                gate.setSynchronizedUpdate(false)
+                delay(interval)
+                continue
+            }
             gate.setSynchronizedUpdate(true)
             // Absorb the per-character storm. Nothing invalidates Compose for this whole span.
             delay((interval - renderWindowMillis).coerceAtLeast(1L))

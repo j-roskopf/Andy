@@ -40,9 +40,6 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
         aiAssistantsEnabled = false,
         disableLineSpacingInAlternateBuffer = true,
         performanceMode = if (agentCliMode) "latency" else "balanced",
-        // A tmux attach client owns the alternate screen and its pane scrollback. Let it
-        // receive wheel events directly instead of asking BossTerm to scroll an empty outer
-        // alternate buffer or translating the wheel into cursor keys.
         enableMouseReporting = forwardMouseToApplication || !agentCliMode,
         forceActionOnMouseReporting = agentCliMode && !forwardMouseToApplication,
         // BossTerm 1.2.143 accumulates fractional deltas only on its local-history path.

@@ -79,14 +79,25 @@ internal object BossTermAccess {
     }
 
     fun resize(state: EmbeddableTerminalState, cols: Int, rows: Int, scope: CoroutineScope) {
-        val tab = tab(state) ?: return
-        runCatching {
-            tab.terminal.resize(TermSize(cols, rows), RequestOrigin.User)
-        }
-        val handle = tab.processHandle.value ?: return
+        resizeTerminal(state, cols, rows)
+        val handle = tab(state)?.processHandle?.value ?: return
         scope.launch(Dispatchers.IO) {
             runCatching { handle.resize(cols, rows) }
         }
+    }
+
+    /** Resize the emulator grid only (no PTY notify). Used before scrollback replay feed. */
+    fun resizeTerminal(state: EmbeddableTerminalState, cols: Int, rows: Int) {
+        val tab = tab(state) ?: return
+        if (cols <= 0 || rows <= 0) return
+        runCatching {
+            tab.terminal.resize(TermSize(cols, rows), RequestOrigin.User)
+        }
+    }
+
+    /** Force a Compose invalidation; used after history replay settles under the frame gate. */
+    fun requestRedraw(state: EmbeddableTerminalState) {
+        runCatching { display(state)?.requestRedraw() }
     }
 
     fun isProcessAlive(state: EmbeddableTerminalState): Boolean {

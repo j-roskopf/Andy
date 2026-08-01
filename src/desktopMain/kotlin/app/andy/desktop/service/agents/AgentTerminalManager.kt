@@ -222,32 +222,49 @@ class AgentTerminalManager(
     /** Mark [taskId] as the only chat receiving foreground scrape cadence. */
     fun setOnlyForeground(taskId: String) {
         handles.forEach { (id, handle) ->
-            val foreground = id == taskId
-            handle.foreground.set(foreground)
-            if (foreground && isViewerAlive(id)) {
-                resumeBackgroundPolling(handle)
-            } else if (!isViewerAlive(id)) {
-                pauseBackgroundPolling(handle)
+            if (id == taskId) {
+                handle.foreground.set(true)
+                if (isViewerAlive(id)) {
+                    resumeBackgroundPolling(handle)
+                }
+            } else if (isViewerAlive(id) && handle.session is TmuxAttachBackend) {
+                releaseViewerOnly(id)
+            } else {
+                handle.foreground.set(false)
+                if (!isViewerAlive(id)) {
+                    pauseBackgroundPolling(handle)
+                }
             }
         }
     }
 
     fun setForeground(taskId: String, foreground: Boolean) {
         handles[taskId]?.let { handle ->
-            handle.foreground.set(foreground)
-            if (foreground && isViewerAlive(taskId)) {
-                resumeBackgroundPolling(handle)
-            } else if (!isViewerAlive(taskId)) {
-                pauseBackgroundPolling(handle)
+            if (foreground) {
+                handle.foreground.set(true)
+                if (isViewerAlive(taskId)) {
+                    resumeBackgroundPolling(handle)
+                }
+            } else if (isViewerAlive(taskId) && handle.session is TmuxAttachBackend) {
+                releaseViewerOnly(taskId)
+            } else {
+                handle.foreground.set(false)
+                if (!isViewerAlive(taskId)) {
+                    pauseBackgroundPolling(handle)
+                }
             }
         }
     }
 
     fun clearForeground() {
-        handles.values.forEach { handle ->
-            handle.foreground.set(false)
-            if (!isViewerAlive(handle.taskId)) {
-                pauseBackgroundPolling(handle)
+        handles.forEach { (id, handle) ->
+            if (isViewerAlive(id) && handle.session is TmuxAttachBackend) {
+                releaseViewerOnly(id)
+            } else {
+                handle.foreground.set(false)
+                if (!isViewerAlive(id)) {
+                    pauseBackgroundPolling(handle)
+                }
             }
         }
     }
@@ -878,7 +895,13 @@ class AgentTerminalManager(
      */
     private fun liveOrReattachHandle(taskId: String): Handle? {
         val existing = get(taskId) ?: return null
-        if (isViewerAlive(taskId)) return existing
+        if (isViewerAlive(taskId)) {
+            existing.foreground.set(true)
+            if (existing.session is TmuxAttachBackend) {
+                TmuxAndy.exitCopyModeIfActive(taskId)
+            }
+            return existing
+        }
         val session = existing.session
         if (session is TmuxAttachBackend && TmuxAndy.hasSession(taskId)) {
             existing.foreground.set(true)
