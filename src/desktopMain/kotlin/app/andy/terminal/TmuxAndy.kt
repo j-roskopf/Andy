@@ -53,15 +53,14 @@ object TmuxAndy {
         "set-option", "-g", "exit-empty", "off", ";",
         // Interactive agent TUIs need a real terminal type (Cursor hosts often use TERM=dumb).
         "set-option", "-g", "default-terminal", "xterm-256color", ";",
-        // tmux owns durable pane history while the attached client occupies BossTerm's
-        // alternate buffer. Mouse wheel events enter copy mode and scroll that history.
+        // Agent TUIs use the alternate screen — BossTerm has no line scrollback for them.
+        // Wheel-up enters tmux copy mode so the user can browse pane history. Andy exits
+        // copy mode when the viewer detaches so chat switches always reopen on the live screen.
         "set-option", "-g", "mouse", "on", ";",
         "set-option", "-g", "history-limit", "10000", ";",
         "set-option", "-g", "status", "off", ";",
         // tmux's default binding forwards WheelUpPane whenever alternate_on is true,
         // which hands the gesture to agent TUIs instead of revealing pane history.
-        // Enter copy mode on the first upward wheel; copy-mode's native wheel bindings
-        // preserve position as output arrives and `-e` exits when scrolling to the bottom.
         "bind-key", "-n", "WheelUpPane", "if-shell", "-F", "#{pane_in_mode}",
         "send-keys -M", "copy-mode -e", ";",
         // CLI attach has no chrome — prefix-free ways back to `andy tui`.
@@ -396,6 +395,30 @@ object TmuxAndy {
 
     /** Liveness + title + pane text from a single tmux invocation. See [probePane]. */
     data class PaneProbe(val alive: Boolean, val title: String, val content: String)
+
+    /** True when the pane is in copy mode (user scrolled into tmux history). */
+    fun isPaneInCopyMode(taskId: String): Boolean {
+        val result = run(
+            listOf(
+                tmuxBinary(), "-L", SERVER,
+                "display-message", "-p", "-t", sessionName(taskId), "#{pane_in_mode}",
+            ),
+            checkExit = false,
+        )
+        return result.exitCode == 0 && result.stdout.trim() == "1"
+    }
+
+    /** Return the live alternate-screen view after wheel scroll or a detached reattach. */
+    fun exitCopyModeIfActive(taskId: String) {
+        if (!isPaneInCopyMode(taskId)) return
+        run(
+            listOf(
+                tmuxBinary(), "-L", SERVER,
+                "copy-mode", "-q", "-t", sessionName(taskId),
+            ),
+            checkExit = false,
+        )
+    }
 
     /**
      * One-process pane probe: session liveness, pane title and pane text together.

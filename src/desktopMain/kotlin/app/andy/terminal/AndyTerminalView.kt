@@ -5,6 +5,17 @@ import ai.rever.bossterm.compose.PlatformServices
 import ai.rever.bossterm.compose.getPlatformServices
 import ai.rever.bossterm.compose.settings.TerminalSettingsOverride
 import app.andy.model.TerminalAppearanceSnapshot
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * Opaque handle the Compose UI mounts via [EmbeddableTerminal].
@@ -30,6 +41,9 @@ data class AndyTerminalView(
      * state, not view identity.
      */
     internal var frameLimiter: TerminalFrameLimiter? = null
+
+    /** Settles the replay frame gate / paint kicks; cancelled by [disposeScrollbackReplayView]. */
+    internal var replaySettleJob: Job? = null
 }
 
 fun BossTermBackend.toTerminalView(): AndyTerminalView = AndyTerminalView(
@@ -52,13 +66,23 @@ fun createScrollbackReplayView(
 ): AndyTerminalView {
     val display = content.trimEnd().ifBlank { "(no readable history for this chat)" }
     val columns = if (cols > 0) cols else scrollbackReplayColumns(display)
+    val replayRows = rows.coerceAtLeast(1)
     val payload = (display.replace("\r\n", "\n").replace("\n", "\r\n") + "\u001b[0m\u001b[?25l")
     val state = EmbeddableTerminalState()
     val settings = appearance.toBossTermSettings(
         scrollbackLines = BossTermBackend.DEFAULT_MAX_HISTORY,
         agentCliMode = true,
     )
-    val services = ReplayPlatformServices(payload)
+    // Hold the one-shot feed until the emulator is resized to [columns]. Feeding at BossTerm's
+    // default grid hard-wraps every boxed TUI line and is what makes history look shattered.
+    val feedGate = CompletableDeferred<Unit>()
+    val payloadDelivered = AtomicBoolean(false)
+    val replaySettled = AtomicBoolean(false)
+    val services = ReplayPlatformServices(
+        payload = payload,
+        feedGate = feedGate,
+        onPayloadDelivered = { payloadDelivered.set(true) },
+    )
     BossTermAccess.initialize(
         state = state,
         settings = settings,
@@ -69,6 +93,12 @@ fun createScrollbackReplayView(
         onExit = null,
         platformServices = services,
     )
+    // initializeSession spawns on a BossTerm coroutine; wait briefly so resize/display exist.
+    awaitReplayTab(state, timeoutMs = 5_000)
+    BossTermAccess.resizeTerminal(state, columns, replayRows)
+    feedGate.complete(Unit)
+
+    val settleScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     return AndyTerminalView(
         state = state,
         settingsOverride = appearance.toBossTermSettingsOverride(
@@ -84,15 +114,94 @@ fun createScrollbackReplayView(
     ).also { view ->
         // The whole transcript is replayed as one payload and parsed character by character,
         // so an ungated replay asks for thousands of full-grid renders to reach a screen that
-        // never changes again. Cap it like a live session.
-        BossTermAccess.display(state)?.let { display ->
-            view.frameLimiter = TerminalFrameLimiter(display).also { it.start() }
+        // never changes again. Cap it while feeding, then leave the gate open and force a paint —
+        // cursor is hidden for replay, so caret-blink cannot recover a stuck blank frame.
+        val termDisplay = BossTermAccess.display(state)
+        if (termDisplay != null) {
+            val limiter = TerminalFrameLimiter(
+                display = termDisplay,
+                churningProvider = { !replaySettled.get() },
+            ).also { it.start() }
+            view.frameLimiter = limiter
+            view.replaySettleJob = settleScope.launch {
+                settleScrollbackReplayPaint(
+                    state = state,
+                    payloadDelivered = payloadDelivered,
+                    replaySettled = replaySettled,
+                    limiter = limiter,
+                    payloadChars = payload.length,
+                )
+            }.also { job ->
+                job.invokeOnCompletion { settleScope.cancel() }
+            }
+        } else {
+            settleScope.cancel()
         }
     }
 }
 
 fun disposeScrollbackReplayView(view: AndyTerminalView) {
+    runCatching { view.replaySettleJob?.cancel() }
+    view.replaySettleJob = null
     runCatching { view.frameLimiter?.close() }
     view.frameLimiter = null
     runCatching { view.state.dispose() }
+}
+
+/**
+ * Kick the history surface until a committed frame can capture real buffer content.
+ * Safe to call repeatedly; no-op when the session has already been disposed.
+ */
+internal fun kickScrollbackReplayPaint(view: AndyTerminalView) {
+    if (view.state.isDisposed) return
+    view.frameLimiter?.flushNow()
+    BossTermAccess.requestRedraw(view.state)
+}
+
+private suspend fun settleScrollbackReplayPaint(
+    state: EmbeddableTerminalState,
+    payloadDelivered: AtomicBoolean,
+    replaySettled: AtomicBoolean,
+    limiter: TerminalFrameLimiter,
+    payloadChars: Int,
+) {
+    val deliverDeadline = System.currentTimeMillis() + 10_000L
+    while (!payloadDelivered.get() && System.currentTimeMillis() < deliverDeadline) {
+        if (!coroutineContext.isActive) return
+        delay(10)
+    }
+    // Emulation of the one-shot chunk is async; budget scales with transcript size.
+    val parseBudgetMs = ((payloadChars / 40_000L) * 100L + 150L).coerceIn(150L, 8_000L)
+    var last = ""
+    var stableHits = 0
+    val parseDeadline = System.currentTimeMillis() + parseBudgetMs
+    while (System.currentTimeMillis() < parseDeadline) {
+        if (!coroutineContext.isActive) return
+        delay(40)
+        val text = BossTermAccess.screenText(state)
+        if (text.isNotBlank() && text == last) {
+            stableHits++
+            if (stableHits >= 2) break
+        } else {
+            stableHits = 0
+            last = text
+        }
+    }
+    replaySettled.set(true)
+    limiter.flushNow()
+    BossTermAccess.requestRedraw(state)
+    // Compose may mount after settle; a few ungated kicks cover the blank-until-resize race.
+    repeat(4) {
+        if (!coroutineContext.isActive) return
+        delay(120)
+        limiter.flushNow()
+        BossTermAccess.requestRedraw(state)
+    }
+}
+
+private fun awaitReplayTab(state: EmbeddableTerminalState, timeoutMs: Long) {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (BossTermAccess.tab(state) == null && System.currentTimeMillis() < deadline) {
+        Thread.sleep(25)
+    }
 }
