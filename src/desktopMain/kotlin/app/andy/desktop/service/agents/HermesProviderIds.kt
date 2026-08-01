@@ -20,10 +20,13 @@ internal object HermesProviderIds {
         return configured ?: readAuthenticatedProvider(home)
     }
 
+    internal fun normalizeYamlScalar(value: String): String =
+        value.trim().removeSurrounding("\"").removeSurrounding("'")
+
     internal fun readConfiguredProvider(home: File): String? = runCatching {
         val config = File(home, ".hermes/config.yaml")
         if (!config.isFile) return null
-        configuredProvider.find(config.readText())?.groupValues?.get(1)
+        configuredProvider.find(config.readText())?.groupValues?.get(1)?.let(::normalizeYamlScalar)
     }.getOrNull()
 
     internal fun readAuthenticatedProvider(home: File): String? = runCatching {

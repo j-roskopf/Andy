@@ -1676,6 +1676,7 @@ class DesktopAgentRunService(
                     binary = binary,
                     cwd = launchTask.cwd,
                     before = openClawBeforeSessionId,
+                    reuseMainSession = !launchTask.openClawNewSession,
                 )
             }
         }
@@ -2050,13 +2051,18 @@ class DesktopAgentRunService(
         binary: String,
         cwd: String?,
         before: String?,
+        reuseMainSession: Boolean = false,
     ) {
-        val captured = OpenClawSessionIds.awaitNewSessionId(
-            binary = binary,
-            cwd = cwd,
-            before = before,
-        ) ?: return
-        if (captured.isBlank() || captured == before) return
+        val captured = if (reuseMainSession) {
+            OpenClawSessionIds.findNewestSession(binary, cwd)
+        } else {
+            OpenClawSessionIds.awaitNewSessionId(
+                binary = binary,
+                cwd = cwd,
+                before = before,
+            )
+        } ?: return
+        if (captured.isBlank() || (!reuseMainSession && captured == before)) return
         updateTask(taskId) { task ->
             if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
         }
