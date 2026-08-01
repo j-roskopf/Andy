@@ -111,6 +111,7 @@ internal fun contextualTaskDraft(
     model = defaults?.model,
     reasoningEffort = defaults?.reasoningEffort,
     fastMode = defaults?.fastMode ?: false,
+    openClawNewSession = defaults?.openClawNewSession ?: true,
     contextBundleIds = contextBundleIds,
     provenance = request.provenance,
 )

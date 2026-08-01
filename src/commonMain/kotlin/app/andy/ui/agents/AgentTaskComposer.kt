@@ -220,6 +220,7 @@ private class AgentTaskComposerFormState(
     var customModel by mutableStateOf("")
     var reasoningEffort by mutableStateOf<AgentReasoningEffort?>(null)
     var fastMode by mutableStateOf(false)
+    var openClawNewSession by mutableStateOf(true)
     var budgetText by mutableStateOf("")
     var directoryIsGitRepo by mutableStateOf(false)
     /** Last agent whose provider defaults were seeded into this draft; avoids clobbering restored drafts. */
@@ -246,6 +247,7 @@ private class AgentTaskComposerFormState(
         customModel = if (catalogModel == null) savedModel.orEmpty() else ""
         reasoningEffort = defaults?.reasoningEffort
         fastMode = defaults?.fastMode == true
+        openClawNewSession = defaults?.openClawNewSession ?: true
         autonomy = defaults?.autonomy ?: AgentAutonomy.Standard
         // Leave the sandbox unset unless it was explicitly saved. This lets the
         // provider derive it from whichever autonomy level the user chooses.
@@ -428,6 +430,7 @@ private class AgentTaskComposerForm(
             model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
             reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
             fastMode = if (state.usesCustomModel) false else state.fastMode,
+            openClawNewSession = state.openClawNewSession,
             imagePaths = state.imagePaths,
             skills = selectedSkills,
             goal = goalCommand?.goal,
@@ -757,6 +760,13 @@ private fun AgentChatComposer(
                     }
                 }
                 FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
+                if (state.agent == AgentKind.OpenClaw) {
+                    FilterPill(
+                        if (state.openClawNewSession) "new session" else "main session",
+                        state.openClawNewSession,
+                        Cyan,
+                    ) { state.openClawNewSession = !state.openClawNewSession }
+                }
                 Box {
                     val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
                     FilterPill(sandbox.labelFor(state.agent), true, if (sandbox == AgentSandboxMode.None) Rust else Cyan) { sandboxMenuExpanded = true }
@@ -989,6 +999,23 @@ private fun AgentTaskComposerFields(
         if (state.planMode) {
             Text(
                 "Plan mode takes precedence: ${state.agent.label} analyzes and proposes changes without editing the workspace.",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+            )
+        }
+        if (state.agent == AgentKind.OpenClaw) {
+            Text("OpenClaw session", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterPill("new session", state.openClawNewSession, Cyan) { state.openClawNewSession = true }
+                FilterPill("main session", !state.openClawNewSession, Cyan) { state.openClawNewSession = false }
+            }
+            Text(
+                if (state.openClawNewSession) {
+                    "Each Andy chat gets its own OpenClaw session so prior conversations stay out of the way."
+                } else {
+                    "Reuse OpenClaw's shared main session, including history from earlier chats."
+                },
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 10.sp,

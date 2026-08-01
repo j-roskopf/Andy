@@ -103,8 +103,8 @@ class AgentUiTest {
     @Test
     fun interactiveSessionHidesComposerBeforeAttachCompletes() {
         // Resume/reattach used to wait on attachedTerminalIds before hiding the composer.
-        // That briefly stole terminal height and flashed the SwingPanel — hide as soon as
-        // the session is interactive, even while the viewer is still mounting.
+        // That briefly stole terminal height — hide as soon as the session is interactive,
+        // even while the viewer is still mounting.
         val working = task(AgentStatus.Working)
         assertTrue(isChatTerminalInteractive(working, terminalLive = false))
         assertFalse(

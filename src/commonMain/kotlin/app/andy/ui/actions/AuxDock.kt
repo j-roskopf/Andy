@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -51,8 +50,6 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.live.DeviceLivePanel
-import app.andy.ui.shell.LocalSuppressHeavyweightSurfaces
-import app.andy.ui.shell.ModalDialogRegistry
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
@@ -274,13 +271,7 @@ internal fun TerminalDockDrawer(
         if (activeRunId == null) {
             EmptyState("Run an action to open its terminal")
         } else {
-            // Right-docked SwingPanel can cover chrome menus; bottom placement cannot. Centred
-            // modal dialogs overlap either placement, so those suppress both.
-            val suppress = ModalDialogRegistry.anyOpen ||
-                (LocalSuppressHeavyweightSurfaces.current && placement == DockPlacement.Right)
-            CompositionLocalProvider(LocalSuppressHeavyweightSurfaces provides suppress) {
-                ProjectTerminalSurface(services, activeRunId, Modifier.fillMaxSize())
-            }
+            ProjectTerminalSurface(services, activeRunId, Modifier.fillMaxSize())
         }
     }
 }

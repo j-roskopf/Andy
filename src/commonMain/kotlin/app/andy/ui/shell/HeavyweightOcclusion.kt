@@ -8,10 +8,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * When true, desktop [androidx.compose.ui.awt.SwingPanel] hosts that can sit under chrome
- * menus should leave composition (not merely set child visibility) so those popups can paint.
- * Leaving an invisible Swing interop host still punches a Skia clear-hole and can keep a white
- * JPanel above the menu. Callers may narrow this (e.g. only right-docked terminals).
+ * When true, desktop [androidx.compose.ui.awt.SwingPanel] hosts (device mirror, DHU, editors)
+ * should leave composition (not merely set child visibility) so chrome menus and dialogs can
+ * paint. Leaving an invisible Swing interop host still punches a Skia clear-hole and can keep a
+ * white JPanel above the menu.
  */
 internal val LocalSuppressHeavyweightSurfaces = compositionLocalOf { false }
 
@@ -19,8 +19,8 @@ internal val LocalSuppressHeavyweightSurfaces = compositionLocalOf { false }
  * Open in-window modal dialogs, counted app-wide.
  *
  * Compose renders [androidx.compose.material3.AlertDialog] into the main window's own popup
- * layer, which still paints *below* Swing/Metal interop surfaces — a dialog opened over a chat
- * terminal or a device mirror is invisible. Dialogs register here for as long as they are
+ * layer, which still paints *below* Swing/Metal interop surfaces — a dialog opened over a device
+ * mirror is invisible. Dialogs register here for as long as they are
  * composed and the shell folds that into [LocalSuppressHeavyweightSurfaces], so the interop
  * hosts leave composition while the dialog is up.
  *

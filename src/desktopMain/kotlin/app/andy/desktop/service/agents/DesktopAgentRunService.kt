@@ -875,6 +875,7 @@ class DesktopAgentRunService(
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
+            openClawNewSession = draft.openClawNewSession,
             imagePaths = draft.imagePaths,
             skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
@@ -3654,9 +3655,8 @@ class DesktopAgentRunService(
             snapshot.status == AgentStatus.Blocked
         val statusChanged = task.status != snapshot.status
         // Confidence-only flips while Working are scrape noise. Each updateTask republishes
-        // the tasks list and recomposes the chat pane; with a live SwingPanel that re-punches
-        // the Skiko clear-hole and reads as terminal flicker. Attention only cares about
-        // confidence on Done/Blocked/Error.
+        // the tasks list and recomposes the chat pane. Attention only cares about confidence
+        // on Done/Blocked/Error.
         val confidenceChanged =
             task.statusConfident != snapshot.confident && snapshot.status != AgentStatus.Working
         if (statusChanged ||
