@@ -152,7 +152,7 @@ internal fun AgentTaskDetail(
     }
     LaunchedEffect(task.id, task.status) {
         // While the live CLI owns the pane, skip worktree diff fetches — the card is hidden
-        // then, and refetching only changed bottom height (SwingPanel flash) mid-turn.
+        // then, and refetching only changed bottom height mid-turn.
         if (task.worktreePath != null && !task.isActive) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
         }
@@ -165,7 +165,7 @@ internal fun AgentTaskDetail(
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
     // unless the user has staged images that should ship with the next composed message.
     // Gate on session interactivity only (not attachedTerminalIds): waiting on attach briefly
-    // showed the composer, stole terminal height, and the SwingPanel resize flashed on resume.
+    // showed the composer and stole terminal height on resume.
     val terminalSessionActive = isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
     val showFollowUpComposer = supportsResume &&
         showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
@@ -262,7 +262,7 @@ internal fun AgentTaskDetail(
             )
         }
         // Redundant while the live CLI is on screen — showing it steals height from the
-        // terminal and the SwingPanel resize reads as a flash on every idle↔working flip.
+        // terminal on every idle↔working flip.
         if (task.status == AgentStatus.Done && !terminalSessionActive) {
             Text(
                 "done at prompt — continue interactively to send your next message",
@@ -628,7 +628,7 @@ internal fun AgentTaskDetail(
             }
         }
 
-        // Same rule as change-summary: never steal height from a live SwingPanel.
+        // Same rule as change-summary: never steal height from a live terminal.
         if (task.worktreePath != null && !terminalSessionActive) {
             PanelCard(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 160.dp),
@@ -687,8 +687,7 @@ private fun AgentTaskHeader(
         finishedAtMillis = task.finishedAtMillis,
         task = task,
     )
-    // Clock only while the expanded header actually shows a live elapsed string — a parent
-    // 1Hz tick used to recompose the whole chat pane (and re-punch the terminal clear-hole).
+    // Clock only while the expanded header actually shows a live elapsed string.
     var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     LaunchedEffect(expanded, task.id, task.status, task.finishedAtMillis) {
         if (!expanded || !isElapsedLive(task)) return@LaunchedEffect

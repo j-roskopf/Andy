@@ -204,6 +204,9 @@ class HermesOpenClawAdapterTest {
             null,
         )
         assertEquals(listOf("/bin/hermes", "chat"), argv.take(2))
+        if (HermesProviderIds.resolveForLaunch() != null) {
+            assertTrue("--provider" in argv)
+        }
         assertTrue("--model" in argv && "openai/gpt-5.5" in argv)
         assertTrue("-s" in argv && "grill-me" in argv)
         assertTrue("--yolo" in argv)
@@ -215,7 +218,14 @@ class HermesOpenClawAdapterTest {
         val openClaw = OpenClawAdapter()
         val fresh = openClaw.buildInteractiveCommand("/bin/openclaw", task(AgentKind.OpenClaw), null)
         assertEquals(listOf("/bin/openclaw", "chat"), fresh.take(2))
+        assertTrue("--session" in fresh && "andy-${task(AgentKind.OpenClaw).id}" in fresh)
         assertTrue("--message" in fresh && "do the thing" in fresh)
+        val shared = openClaw.buildInteractiveCommand(
+            "/bin/openclaw",
+            task(AgentKind.OpenClaw).copy(openClawNewSession = false),
+            null,
+        )
+        assertTrue("--session" !in shared)
         val resumed = openClaw.buildInteractiveResumeCommand(
             "/bin/openclaw", task(AgentKind.OpenClaw, sessionId = "agent:main:incident-42"), null, "continue", emptyList(),
         )

@@ -83,7 +83,7 @@ internal fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.OpenCode -> Yellow
     AgentKind.Pi -> PiViolet
     AgentKind.Hermes -> Color(0xFF32C7B5)
-    AgentKind.OpenClaw -> Color(0xFFFF5A2D)
+    AgentKind.OpenClaw -> Color(0xFFCB3434)
 }
 
 internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
@@ -304,7 +304,7 @@ internal fun isChatRelaunching(task: AgentTask): Boolean =
  * ship with a composed message rather than be typed into the PTY.
  *
  * [interactive] should track [isChatTerminalInteractive], not viewer attach state —
- * delaying on attach briefly shows the composer and resizes the SwingPanel (a flash).
+ * delaying on attach briefly shows the composer and steals terminal height (a layout flash).
  */
 internal fun showsChatFollowUpComposer(interactive: Boolean, hasStagedImages: Boolean): Boolean =
     !interactive || hasStagedImages

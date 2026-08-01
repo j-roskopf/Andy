@@ -15,6 +15,7 @@ class OpenClawAdapter : AgentCliAdapter {
 
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> = buildList {
         add(binary); add("chat")
+        openClawLaunchSessionKey(task)?.let { add("--session"); add(it) }
         addOpenClawFlags(task)
         task.promptForCli().takeIf { it.isNotBlank() }?.let { add("--message"); add(it) }
     }
@@ -41,4 +42,9 @@ private fun MutableList<String>.addOpenClawFlags(task: AgentTask) {
     // provider model selection in the persisted config/preflight path.
     val mode = task.sandboxMode ?: task.autonomy.defaultSandboxMode()
     @Suppress("UNUSED_VARIABLE") val nativeApprovalMode = mode != AgentSandboxMode.None
+}
+
+internal fun openClawLaunchSessionKey(task: AgentTask): String? = when {
+    !task.openClawNewSession -> null
+    else -> OpenClawSessionIds.andyTaskSessionKey(task.id)
 }

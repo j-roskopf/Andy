@@ -77,7 +77,7 @@ private fun AgentCommandCenter(
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     // Keep the open chat mounted while Agents is retained-but-inactive. Forcing composing
     // tore down AgentTerminalSurface, released the tmux viewer, and caused a multi-flash
-    // reattach when returning. RetainedDestination already suppresses SwingPanels.
+    // reattach when returning.
     LaunchedEffect(active) { if (!active) pendingConfirmation = null }
     LaunchedEffect(requestedTaskId, tasks) {
         requestedTaskId?.let { id ->

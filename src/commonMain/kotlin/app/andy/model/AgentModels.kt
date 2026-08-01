@@ -415,6 +415,8 @@ data class AgentTask(
     val reasoningEffort: AgentReasoningEffort? = null,
     /** Cursor-only: request the provider's Fast variant when it has one. */
     val fastMode: Boolean = false,
+    /** OpenClaw-only: start in an Andy-scoped session instead of the shared default main session. */
+    val openClawNewSession: Boolean = true,
     /** Local images supplied with the original task prompt. */
     val imagePaths: List<String> = emptyList(),
     /** Local skills selected while composing the original prompt. */
@@ -597,6 +599,7 @@ data class AgentTaskDraft(
     val model: String? = null,
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
+    val openClawNewSession: Boolean = true,
     val imagePaths: List<String> = emptyList(),
     val skills: List<AgentSkill> = emptyList(),
     val goal: String? = null,
@@ -618,6 +621,7 @@ data class AgentProviderDefaults(
     val model: String? = null,
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
+    val openClawNewSession: Boolean = true,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
     val planMode: Boolean = false,
@@ -719,6 +723,7 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     model = model,
     reasoningEffort = reasoningEffort,
     fastMode = fastMode,
+    openClawNewSession = openClawNewSession,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
     planMode = planMode,
@@ -731,6 +736,7 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     model = model,
     reasoningEffort = reasoningEffort,
     fastMode = fastMode,
+    openClawNewSession = openClawNewSession,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
     planMode = planMode,
@@ -781,6 +787,7 @@ fun AgentTask.modelConfigurationLabel(): String = buildList {
     model?.let(::add) ?: add("provider default")
     reasoningEffort?.let { add(it.label) }
     if (fastMode) add("fast")
+    if (agent == AgentKind.OpenClaw) add(if (openClawNewSession) "new session" else "main session")
     if (planMode) add("plan")
 }.joinToString(" · ")
 

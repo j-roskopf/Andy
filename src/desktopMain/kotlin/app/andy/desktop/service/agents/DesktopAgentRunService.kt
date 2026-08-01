@@ -875,6 +875,7 @@ class DesktopAgentRunService(
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
+            openClawNewSession = draft.openClawNewSession,
             imagePaths = draft.imagePaths,
             skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
@@ -1675,6 +1676,7 @@ class DesktopAgentRunService(
                     binary = binary,
                     cwd = launchTask.cwd,
                     before = openClawBeforeSessionId,
+                    reuseMainSession = !launchTask.openClawNewSession,
                 )
             }
         }
@@ -2049,13 +2051,18 @@ class DesktopAgentRunService(
         binary: String,
         cwd: String?,
         before: String?,
+        reuseMainSession: Boolean = false,
     ) {
-        val captured = OpenClawSessionIds.awaitNewSessionId(
-            binary = binary,
-            cwd = cwd,
-            before = before,
-        ) ?: return
-        if (captured.isBlank() || captured == before) return
+        val captured = if (reuseMainSession) {
+            OpenClawSessionIds.findNewestSession(binary, cwd)
+        } else {
+            OpenClawSessionIds.awaitNewSessionId(
+                binary = binary,
+                cwd = cwd,
+                before = before,
+            )
+        } ?: return
+        if (captured.isBlank() || (!reuseMainSession && captured == before)) return
         updateTask(taskId) { task ->
             if (task.vendorSessionId == captured) task else task.copy(vendorSessionId = captured)
         }
@@ -3654,9 +3661,8 @@ class DesktopAgentRunService(
             snapshot.status == AgentStatus.Blocked
         val statusChanged = task.status != snapshot.status
         // Confidence-only flips while Working are scrape noise. Each updateTask republishes
-        // the tasks list and recomposes the chat pane; with a live SwingPanel that re-punches
-        // the Skiko clear-hole and reads as terminal flicker. Attention only cares about
-        // confidence on Done/Blocked/Error.
+        // the tasks list and recomposes the chat pane. Attention only cares about confidence
+        // on Done/Blocked/Error.
         val confidenceChanged =
             task.statusConfident != snapshot.confident && snapshot.status != AgentStatus.Working
         if (statusChanged ||

@@ -64,8 +64,7 @@ internal fun ThinkingOrb(
         while (true) {
             val phaseSec = (currentTimeMillis() % 86_400_000L) / 1000.0
             tSec = (phaseSec * eff).toFloat()
-            // ~12 fps — coarse enough to avoid the full-refresh Skiko churn that
-            // made Material CircularProgressIndicator flicker SwingPanel terminals.
+            // ~12 fps — coarse enough to avoid full-refresh Skiko churn in dense layouts.
             delay(80)
         }
     }

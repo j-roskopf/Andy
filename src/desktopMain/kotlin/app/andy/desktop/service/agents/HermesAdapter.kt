@@ -37,6 +37,7 @@ class HermesAdapter : AgentCliAdapter {
 }
 
 private fun MutableList<String>.addHermesFlags(task: AgentTask) {
+    HermesProviderIds.resolveForLaunch()?.let { add("--provider"); add(it) }
     task.modelForCli()?.let { add("--model"); add(it) }
     val mode = if (task.planMode) AgentSandboxMode.ReadOnly else task.sandboxMode ?: task.autonomy.defaultSandboxMode()
     add("--toolsets")

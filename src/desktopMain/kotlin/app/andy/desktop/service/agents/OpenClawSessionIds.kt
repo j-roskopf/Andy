@@ -9,6 +9,8 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 internal object OpenClawSessionIds {
+    fun andyTaskSessionKey(taskId: String): String = "andy-$taskId"
+
     fun resolveForTask(task: AgentTask): String? = task.vendorSessionId?.takeIf { it.isNotBlank() }
     internal fun parseSessionListOutput(output: String): List<String> = runCatching {
         val root = Json.parseToJsonElement(output)
