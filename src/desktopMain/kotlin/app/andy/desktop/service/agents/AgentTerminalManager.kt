@@ -213,7 +213,7 @@ class AgentTerminalManager(
             is TmuxAttachBackend -> runCatching { handle.session.releaseViewer() }
             else -> Unit
         }
-        if (!isViewerAlive(taskId)) {
+        if (!isAlive(taskId)) {
             pauseBackgroundPolling(handle)
         }
         bumpSessionsRevision()
@@ -231,7 +231,7 @@ class AgentTerminalManager(
                 releaseViewerOnly(id)
             } else {
                 handle.foreground.set(false)
-                if (!isViewerAlive(id)) {
+                if (!isAlive(id)) {
                     pauseBackgroundPolling(handle)
                 }
             }
@@ -249,7 +249,7 @@ class AgentTerminalManager(
                 releaseViewerOnly(taskId)
             } else {
                 handle.foreground.set(false)
-                if (!isViewerAlive(taskId)) {
+                if (!isAlive(taskId)) {
                     pauseBackgroundPolling(handle)
                 }
             }
@@ -262,7 +262,7 @@ class AgentTerminalManager(
                 releaseViewerOnly(id)
             } else {
                 handle.foreground.set(false)
-                if (!isViewerAlive(id)) {
+                if (!isAlive(id)) {
                     pauseBackgroundPolling(handle)
                 }
             }

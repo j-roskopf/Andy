@@ -103,8 +103,15 @@ actual fun AgentTerminalSurface(
             if (agentRuns?.hasScrollback(taskId) != true) return
             // Replay init waits briefly for the BossTerm tab and resizes before feeding;
             // keep that off Main so the UI thread is not parked on Thread.sleep.
-            historyTerminal = withContext(Dispatchers.Default) {
-                agentRuns.openScrollbackReplay(taskId)
+            var created: AndyTerminalView? = null
+            try {
+                val replay = withContext(Dispatchers.Default) {
+                    agentRuns.openScrollbackReplay(taskId).also { created = it }
+                }
+                historyTerminal = replay
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                created?.let(::disposeScrollbackReplayView)
+                throw e
             }
         }
 

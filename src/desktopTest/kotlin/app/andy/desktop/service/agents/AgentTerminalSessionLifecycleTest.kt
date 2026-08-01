@@ -505,9 +505,40 @@ class AgentTerminalSessionLifecycleTest {
             assertTrue(manager.isViewerAlive(foregroundId), "foreground viewer should stay mounted")
             assertFalse(manager.isViewerAlive(backgroundId), "background viewer should detach")
             assertFalse(TmuxAndy.isPaneInCopyMode(backgroundId), "background copy mode should exit on detach")
+            assertTrue(manager.isAlive(backgroundId), "background tmux session should keep running")
         } finally {
             runCatching { TmuxAndy.killSession(foregroundId) }
             runCatching { TmuxAndy.killSession(backgroundId) }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun releaseViewerOnlyKeepsBackgroundPollingForLiveSession() = runBlocking {
+        if (!TmuxAndy.isAvailable()) {
+            println("SKIP: tmux not installed")
+            return@runBlocking
+        }
+        val dir = tempDir()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val taskId = "release-polling"
+        try {
+            val manager = AgentTerminalManager(
+                scope = scope,
+                scrollbackFile = { id -> File(dir, "$id/scrollback.ansi") },
+                mode = AgentTerminalMode.TmuxWithAttach,
+            )
+            manager.start(task(taskId, dir), longRunningArgv(), emptyMap())
+            manager.attachExisting(taskId, cwd = dir.absolutePath)
+            assertTrue(manager.isViewerAlive(taskId))
+
+            manager.releaseViewerOnly(taskId)
+
+            assertFalse(manager.isViewerAlive(taskId), "viewer should detach")
+            assertTrue(manager.isAlive(taskId), "live tmux session must keep background polling")
+        } finally {
+            runCatching { TmuxAndy.killSession(taskId) }
             scope.cancel()
             dir.deleteRecursively()
         }
