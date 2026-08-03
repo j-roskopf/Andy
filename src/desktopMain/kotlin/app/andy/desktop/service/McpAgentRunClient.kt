@@ -2,7 +2,11 @@ package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.agents.acp.AcpTranscriptStore
+import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.discoverAgentSkills
+import app.andy.desktop.service.agents.discoverKnownAgentSkillNames
+import app.andy.desktop.service.agents.inferAgentLaneFromArtifacts
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
@@ -10,10 +14,21 @@ import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
+import app.andy.model.defaultLane
+import app.andy.model.AgentPlanEntry
+import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentToolKind
+import app.andy.model.AgentToolState
+import app.andy.model.AgentUserInputOption
+import app.andy.model.AgentUserInputOrigin
+import app.andy.model.AgentUserInputQuestion
+import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentModelOption
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaAccess
+import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -48,6 +63,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.BufferedReader
@@ -130,10 +146,19 @@ class McpAgentRunClient(
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
 
     private data class SkillScope(val agent: AgentKind, val directory: String?)
+    private data class KnownSkillScope(val directory: String?)
 
     private val skillFlows = ConcurrentHashMap<SkillScope, MutableStateFlow<List<AgentSkill>>>()
     private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
+    private val knownSkillNameFlows = ConcurrentHashMap<KnownSkillScope, MutableStateFlow<Set<String>>>()
+    private val loadedKnownSkillScopes = ConcurrentHashMap.newKeySet<KnownSkillScope>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
+    private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
+    private val eventLoads = ConcurrentHashMap.newKeySet<String>()
+    private val sharedAgentArtifactsDir = defaultAndyAgentArtifactsDir()
+    private val localTranscriptStore = AcpTranscriptStore(fileFor = { taskId ->
+        File(sharedAgentArtifactsDir, "$taskId/transcript.jsonl")
+    })
 
     private var localBridge: DesktopAgentRunService? = null
 
@@ -221,8 +246,14 @@ class McpAgentRunClient(
         return AgentTask(
             id = id,
             title = obj.string("title") ?: id,
-            prompt = "",
+            prompt = obj.string("prompt")?.takeIf { it.isNotBlank() } ?: obj.string("title").orEmpty(),
             agent = agent,
+            lane = inferAgentLaneFromArtifacts(
+                taskId = id,
+                declaredLane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") },
+                agent = agent,
+                agentsDir = sharedAgentArtifactsDir,
+            ),
             projectId = obj.string("projectId")?.takeIf { it.isNotBlank() },
             cwd = obj.string("cwd")?.takeIf { it.isNotBlank() },
             status = app.andy.model.AgentStatus.entries.firstOrNull { it.name == statusName },
@@ -231,6 +262,10 @@ class McpAgentRunClient(
             interrupted = obj.bool("interrupted"),
             statusConfident = obj.bool("statusConfident"),
             vendorSessionId = obj.string("vendorSessionId")?.takeIf { it.isNotBlank() },
+            acpSessionId = obj.string("acpSessionId")?.takeIf { it.isNotBlank() },
+            stopReason = obj.string("stopReason")?.takeIf { it.isNotBlank() },
+            errorMessage = obj.string("errorMessage")?.takeIf { it.isNotBlank() },
+            userInputRequest = parseUserInputRequest(obj["userInputRequest"] as? JsonObject),
             createdAtMillis = obj.long("createdAtMillis") ?: 0L,
             startedAtMillis = obj.long("startedAtMillis")?.takeIf { it > 0 },
             finishedAtMillis = obj.long("finishedAtMillis")?.takeIf { it > 0 },
@@ -238,6 +273,95 @@ class McpAgentRunClient(
             unread = obj.bool("unread"),
             archived = obj.bool("archived"),
         )
+    }
+
+    private fun parseUserInputRequest(obj: JsonObject?): AgentUserInputRequest? {
+        obj ?: return null
+        val questions = obj["questions"]?.jsonArray?.mapNotNull { element ->
+            val question = element.jsonObject
+            val options = question["options"]?.jsonArray?.map { option ->
+                val value = option.jsonObject
+                AgentUserInputOption(value.string("label").orEmpty(), value.string("description").orEmpty())
+            }.orEmpty()
+            AgentUserInputQuestion(
+                id = question.string("id").orEmpty(),
+                header = question.string("header").orEmpty(),
+                question = question.string("question").orEmpty(),
+                options = options,
+            )
+        }.orEmpty()
+        if (questions.isEmpty()) return null
+        return AgentUserInputRequest(
+            id = obj.string("id").orEmpty(),
+            questions = questions,
+            origin = AgentUserInputOrigin.entries.firstOrNull { it.name == obj.string("origin") }
+                ?: AgentUserInputOrigin.Artifact,
+        )
+    }
+
+    private fun parseRemoteEvent(element: kotlinx.serialization.json.JsonElement): AgentEvent? {
+        val obj = element as? JsonObject ?: return null
+        val atMillis = obj.long("atMillis") ?: return null
+        return when (obj.string("type")) {
+            "session" -> AgentEvent.SessionStarted(atMillis, obj.string("sessionId"), obj.string("model"))
+            "assistant" -> AgentEvent.AssistantText(atMillis, obj.string("text").orEmpty(), obj.bool("stream"))
+            "thinking" -> AgentEvent.Thinking(atMillis, obj.string("text").orEmpty(), obj.bool("stream"))
+            "user" -> AgentEvent.UserMessage(atMillis, obj.string("text").orEmpty(), imagePaths = obj["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty())
+            "tool" -> AgentEvent.ToolCall(
+                atMillis = atMillis,
+                toolName = obj.string("toolName").orEmpty(),
+                summary = obj.string("summary").orEmpty(),
+                detail = obj.string("detail").orEmpty(),
+                toolCallId = obj.string("toolCallId")?.takeIf { it.isNotBlank() },
+                kind = AgentToolKind.entries.firstOrNull { it.name == obj.string("kind") },
+                state = AgentToolState.entries.firstOrNull { it.name == obj.string("state") } ?: AgentToolState.Completed,
+                locations = obj["locations"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
+            )
+            "tool-result" -> AgentEvent.ToolResult(atMillis, obj.string("toolName"), obj.string("summary").orEmpty(), obj.string("detail").orEmpty(), obj.bool("isError"))
+            "error" -> AgentEvent.TaskError(atMillis, obj.string("text").orEmpty())
+            "result" -> AgentEvent.TaskResult(
+                atMillis = atMillis,
+                success = obj.bool("success"),
+                finalText = obj.string("finalText"),
+                costUsd = obj["costUsd"]?.jsonPrimitive?.doubleOrNull,
+                costIsEstimated = obj.bool("costEstimated"),
+                inputTokens = obj.long("inputTokens"),
+                outputTokens = obj.long("outputTokens"),
+                durationMs = obj.long("durationMs"),
+            )
+            "usage" -> AgentEvent.ContextUsage(atMillis, obj.long("usedTokens"), obj.long("windowTokens"))
+            "plan" -> AgentEvent.PlanUpdate(atMillis, obj["entries"]?.jsonArray?.map { entry ->
+                AgentPlanEntry(entry.jsonObject.string("content").orEmpty(), entry.jsonObject.string("status").orEmpty())
+            }.orEmpty())
+            "mode" -> AgentEvent.ModeChanged(atMillis, obj.string("modeId").orEmpty())
+            "modes" -> AgentEvent.AvailableModes(
+                atMillis = atMillis,
+                modes = obj["modes"]?.jsonArray?.map { mode ->
+                    val value = mode.jsonObject
+                    AgentSessionMode(
+                        id = value.string("id").orEmpty(),
+                        name = value.string("name").orEmpty(),
+                        description = value.string("description"),
+                    )
+                }.orEmpty(),
+                currentModeId = obj.string("currentModeId"),
+            )
+            "commands" -> AgentEvent.AvailableCommands(atMillis, obj["commands"]?.jsonArray?.map { command ->
+                AgentSlashCommand(command.jsonObject.string("name").orEmpty(), command.jsonObject.string("description").orEmpty(), command.jsonObject.string("inputHint"))
+            }.orEmpty())
+            "permission" -> AgentEvent.PermissionRequest(atMillis, obj.string("requestId").orEmpty(), obj.string("toolName").orEmpty(), obj.string("question").orEmpty(), obj["options"]?.jsonArray?.map { option ->
+                AgentUserInputOption(option.jsonObject.string("label").orEmpty(), option.jsonObject.string("description").orEmpty())
+            }.orEmpty())
+            "permission-resolved" -> AgentEvent.PermissionResolved(
+                atMillis,
+                obj.string("requestId").orEmpty(),
+                obj.string("optionId").orEmpty(),
+                obj.bool("allowed"),
+                obj.string("note"),
+            )
+            "raw" -> AgentEvent.Raw(atMillis, obj.string("line").orEmpty())
+            else -> null
+        }
     }
 
     /** Serializes provenance for `chat.start`; never includes a local filesystem path. */
@@ -315,6 +439,7 @@ class McpAgentRunClient(
             kind = kind,
             // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
             binaryPath = if (ready) kind.cliName else null,
+            acpReady = obj["acpReady"]?.jsonPrimitive?.booleanOrNull == true,
             version = version,
             issue = when {
                 issueTitle != null -> AgentCliIssue(
@@ -429,6 +554,20 @@ class McpAgentRunClient(
         return flow
     }
 
+    override fun knownSkillNames(directory: String?): StateFlow<Set<String>> {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = KnownSkillScope(normalizedDirectory)
+        val flow = knownSkillNameFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptySet()) }
+        if (loadedKnownSkillScopes.add(skillScope)) {
+            scope.launch(Dispatchers.IO) {
+                flow.value = discoverKnownAgentSkillNames(normalizedDirectory)
+            }
+        }
+        return flow
+    }
+
     override fun refreshSkills(agent: AgentKind, directory: String?) {
         val normalizedDirectory = directory
             ?.takeIf { it.isNotBlank() }
@@ -438,6 +577,8 @@ class McpAgentRunClient(
         loadedSkillScopes.add(skillScope)
         scope.launch(Dispatchers.IO) {
             flow.value = discoverAgentSkills(agent, normalizedDirectory)
+            knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
+                discoverKnownAgentSkillNames(normalizedDirectory)
         }
     }
 
@@ -474,7 +615,6 @@ class McpAgentRunClient(
             )
     }
 
-    override suspend fun startImplementation(taskId: String) = Unit
     override fun stop(taskId: String) {
         scope.launch { callTool("chat.stop", mapOf("taskId" to JsonPrimitive(taskId))) }
     }
@@ -515,6 +655,9 @@ class McpAgentRunClient(
     override fun isTerminalLive(taskId: String): Boolean =
         localBridge?.isTerminalLive(taskId) == true
 
+    override fun isLaneLive(taskId: String): Boolean =
+        localBridge?.isLaneLive(taskId) == true
+
     override fun isViewing(taskId: String): Boolean =
         appForeground && (clientViewingTaskId.get() == taskId || localBridge?.isChatOpen(taskId) == true)
 
@@ -553,6 +696,18 @@ class McpAgentRunClient(
                     "taskId" to JsonPrimitive(taskId),
                     "requestId" to JsonPrimitive(requestId),
                     "answers" to JsonObject(answers.mapValues { JsonPrimitive(it.value) }),
+                ),
+            )
+        }
+    }
+
+    override fun setAcpSessionMode(taskId: String, modeId: String) {
+        scope.launch {
+            callTool(
+                "chat.set_mode",
+                mapOf(
+                    "taskId" to JsonPrimitive(taskId),
+                    "modeId" to JsonPrimitive(modeId),
                 ),
             )
         }
@@ -646,7 +801,38 @@ class McpAgentRunClient(
         patchTask(taskId) { it.copy(archived = false) }
         callTaskMutation("chat.unarchive", taskId)
     }
-    override fun events(taskId: String): StateFlow<List<AgentEvent>> = emptyEvents
+    override fun events(taskId: String): StateFlow<List<AgentEvent>> {
+        val task = _tasks.value.firstOrNull { it.id == taskId }
+        val lane = inferAgentLaneFromArtifacts(
+            taskId = taskId,
+            declaredLane = task?.lane,
+            agent = task?.agent,
+            agentsDir = sharedAgentArtifactsDir,
+        )
+        if (lane != AgentLaneKind.Acp) return emptyEvents
+        val flow = eventFlows.computeIfAbsent(taskId) {
+            MutableStateFlow(localTranscriptStore.load(taskId))
+        }
+        if (eventLoads.add(taskId)) {
+            scope.launch {
+                try {
+                    do {
+                        runCatching {
+                            val raw = callTool("chat.events", mapOf("taskId" to JsonPrimitive(taskId)))
+                            val parsed = json.parseToJsonElement(raw).jsonArray.mapNotNull(::parseRemoteEvent)
+                            if (parsed.isNotEmpty()) {
+                                flow.value = parsed
+                            }
+                        }
+                        delay(500)
+                    } while (isActive && _tasks.value.firstOrNull { it.id == taskId }?.isActive == true)
+                } finally {
+                    eventLoads.remove(taskId)
+                }
+            }
+        }
+        return flow
+    }
 
     override fun interactiveResumeCommand(taskId: String): String? =
         "tmux -L andy attach -t ${TmuxAndy.sessionName(taskId)}"

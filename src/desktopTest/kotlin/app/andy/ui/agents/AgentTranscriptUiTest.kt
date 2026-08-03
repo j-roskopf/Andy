@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -25,6 +26,35 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class AgentTranscriptUiTest {
+    @Test
+    fun onlyUserMessagesUseChatBubbles() =
+        runTranscriptUiTest {
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "user prompt"),
+                            AgentEvent.AssistantText(atMillis = 2, text = "agent response"),
+                            AgentEvent.TaskResult(
+                                atMillis = 3,
+                                success = true,
+                                finalText = "completed response",
+                                durationMs = 125_000,
+                            ),
+                        ),
+                        isActive = false,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithTag("user-message-bubble").assertIsDisplayed()
+            assertTrue(onAllNodesWithTag("agent-message-bubble").fetchSemanticsNodes().isEmpty())
+            onNodeWithText("Worked for 2m 05s").assertIsDisplayed()
+            onNodeWithText("completed response").assertIsDisplayed()
+        }
+
     @Test
     fun firstVisitStartsAtLatestAndConversationRestoresItsOwnPosition() =
         runTranscriptUiTest {

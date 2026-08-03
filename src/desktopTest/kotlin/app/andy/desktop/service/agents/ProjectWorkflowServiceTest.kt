@@ -12,6 +12,7 @@ import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectNote
 import app.andy.model.ProjectPlanSnapshot
+import app.andy.model.ProjectPlanVersion
 import app.andy.model.ProjectReviewFindingSeverity
 import app.andy.model.ProjectReviewStatus
 import app.andy.model.ProjectSpecDraft
@@ -1041,6 +1042,78 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun repairsSpecWaitingStateWhenPlanningRunFinishedWithPlan() = runBlocking {
+        val root = File.createTempFile("andy-spec-waiting-repair", null).also { it.delete(); it.mkdirs() }
+        val projectDir = File(root, "project").apply { mkdirs() }
+        val plan = "# Cook mode\n\n- Keep screen on in cook mode"
+        val run = AgentTask(
+            id = "run-spec-done",
+            title = "Spec: Cook mode",
+            prompt = "Plan cook mode keep-awake",
+            agent = AgentKind.Codex,
+            projectId = "project-1",
+            cwd = projectDir.absolutePath,
+            originDir = projectDir.absolutePath,
+            planMode = true,
+            completedPlanText = plan,
+            status = AgentStatus.Done,
+            workflowTaskId = "spec-waiting",
+            workflowStage = ProjectWorkflowStage.Spec,
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+        )
+        val spec = app.andy.model.ProjectTask(
+            id = "spec-waiting",
+            projectId = "project-1",
+            kind = ProjectTaskKind.Spec,
+            title = "Cook mode",
+            instructions = "Plan it",
+            profile = specProfile(),
+            includeScratchpad = false,
+            state = ProjectTaskState.Waiting,
+            planVersions = listOf(ProjectPlanVersion(1, plan, run.id, 2)),
+            createdAtMillis = 1,
+            updatedAtMillis = 2,
+        )
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
+        store.save(
+            AgentStoreState(
+                tasks = listOf(run),
+                binaryOverrides = workflowBinaryOverrides(),
+                projectWorkflows = mapOf(
+                    "project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(spec)),
+                ),
+            ),
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to WorkflowAdapter()),
+                worktrees = WorktreeManager(File(root, "worktrees")),
+                mcp = WorkflowFakeMcp,
+                workspaceStore = WorkflowWorkspaceStore,
+                actionConfig = MutableActionConfig(
+                    ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
+                ),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            await {
+                service.projects.value["project-1"]?.tasks?.singleOrNull()?.state == ProjectTaskState.Completed
+            }
+            assertEquals(ProjectTaskState.Completed, service.projects.value["project-1"]?.tasks?.single()?.state)
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun restartTurnsAnInterruptedVerifierAndItsBuildIntoAttentionWithoutResuming() = runBlocking {
         val root = File.createTempFile("andy-workflow-recovery", null).also { it.delete(); it.mkdirs() }
         val projectDir = File(root, "project").apply { mkdirs() }
@@ -1248,7 +1321,9 @@ private class WorkflowAdapter(
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
         launched += task
         return if (isWindows()) {
-            writeWorkflowArtifacts(task)
+            if (stageDelayMillis == 0L && task.workflowStage != failStage) {
+                writeWorkflowArtifacts(task)
+            }
             listOf(binary, "/d", "/c", windowsCommand(task))
         } else {
             if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) {
@@ -1321,8 +1396,13 @@ private class WorkflowAdapter(
             append("exit /b 7")
             return@buildString
         }
-        if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
+        if (stageDelayMillis > 0) {
+            append("powershell -NoProfile -Command \"Start-Sleep -Milliseconds $stageDelayMillis\" & ")
+        }
         when (task.workflowStage) {
+            ProjectWorkflowStage.Spec -> {
+                if (stageDelayMillis > 0) append(windowsWriteArtifact(task, "plan.md", specPlanText()))
+            }
             ProjectWorkflowStage.Build -> {
                 if (buildKeepAliveSeconds > 0) {
                     append("timeout /t ").append(buildKeepAliveSeconds).append(" /nobreak >nul")
@@ -1330,7 +1410,34 @@ private class WorkflowAdapter(
                     append("exit /b 0")
                 }
             }
+            ProjectWorkflowStage.Review -> {
+                if (stageDelayMillis > 0) {
+                    reviewJson(reviewOutcomeKey(task))?.let { append(windowsWriteArtifact(task, "review.json", it)) }
+                }
+                append("exit /b 0")
+            }
+            ProjectWorkflowStage.Verification -> {
+                if (stageDelayMillis > 0) {
+                    verificationJson(verificationOutcomeKey(task))?.let {
+                        append(windowsWriteArtifact(task, "verification.json", it))
+                    }
+                }
+                append("exit /b 0")
+            }
             else -> append("exit /b 0")
+        }
+    }
+
+    private fun windowsWriteArtifact(task: AgentTask, name: String, content: String): String {
+        val file = File(artifactDir(task), name)
+        val dir = file.parentFile.absolutePath.replace("'", "''")
+        val path = file.absolutePath.replace("'", "''")
+        val encoded = java.util.Base64.getEncoder().encodeToString(content.toByteArray(Charsets.UTF_8))
+        return buildString {
+            append("powershell -NoProfile -Command \"")
+            append("New-Item -ItemType Directory -Force -Path '$dir' | Out-Null; ")
+            append("[IO.File]::WriteAllBytes('$path', [Convert]::FromBase64String('$encoded'))")
+            append("\" & ")
         }
     }
 

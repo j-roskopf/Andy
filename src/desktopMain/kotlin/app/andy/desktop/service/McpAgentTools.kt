@@ -6,9 +6,11 @@ import app.andy.desktop.service.agents.appendAgentStatus
 import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentContextualProvenance
+import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentUserInputRequest
 import app.andy.model.ContextualActionKind
 import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
@@ -85,6 +87,64 @@ fun Server.registerAgentProjectTools(
     fun textResult(value: String) =
         CallToolResult(content = listOf(TextContent(text = value)))
 
+    fun AgentEvent.toWire(): JsonObject = buildJsonObject {
+        put("atMillis", atMillis)
+        when (this@toWire) {
+            is AgentEvent.SessionStarted -> { put("type", "session"); put("sessionId", sessionId.orEmpty()); put("model", model.orEmpty()) }
+            is AgentEvent.AssistantText -> { put("type", "assistant"); put("text", text); put("stream", isStreamDelta) }
+            is AgentEvent.Thinking -> { put("type", "thinking"); put("text", text); put("stream", isStreamDelta) }
+            is AgentEvent.UserMessage -> { put("type", "user"); put("text", text); put("images", JsonArray(imagePaths.map(::JsonPrimitive))) }
+            is AgentEvent.ToolCall -> {
+                put("type", "tool")
+                put("toolName", toolName)
+                put("toolCallId", toolCallId.orEmpty())
+                put("summary", summary)
+                put("detail", detail)
+                put("kind", kind?.name.orEmpty())
+                put("state", state.name)
+                put("locations", JsonArray(locations.map(::JsonPrimitive)))
+            }
+            is AgentEvent.ToolResult -> {
+                put("type", "tool-result"); put("toolName", toolName.orEmpty()); put("summary", summary)
+                put("detail", detail); put("isError", isError)
+            }
+            is AgentEvent.TaskError -> { put("type", "error"); put("text", message) }
+            is AgentEvent.TaskResult -> {
+                put("type", "result"); put("success", success); put("finalText", finalText.orEmpty())
+                put("costUsd", costUsd ?: 0.0); put("costEstimated", costIsEstimated)
+                put("inputTokens", inputTokens ?: 0L); put("outputTokens", outputTokens ?: 0L)
+                put("durationMs", durationMs ?: 0L)
+            }
+            is AgentEvent.ContextUsage -> { put("type", "usage"); put("usedTokens", usedTokens ?: 0L); put("windowTokens", windowTokens ?: 0L) }
+            is AgentEvent.PlanUpdate -> {
+                put("type", "plan")
+                put("entries", buildJsonArray { entries.forEach { entry -> add(buildJsonObject { put("content", entry.content); put("status", entry.status) }) } })
+            }
+            is AgentEvent.ModeChanged -> { put("type", "mode"); put("modeId", modeId) }
+            is AgentEvent.AvailableCommands -> {
+                put("type", "commands")
+                put("commands", buildJsonArray { commands.forEach { command -> add(buildJsonObject { put("name", command.name); put("description", command.description); put("inputHint", command.inputHint.orEmpty()) }) } })
+            }
+            is AgentEvent.AvailableModes -> {
+                put("type", "modes")
+                put("currentModeId", currentModeId.orEmpty())
+                put("modes", buildJsonArray { modes.forEach { mode -> add(buildJsonObject { put("id", mode.id); put("name", mode.name); put("description", mode.description.orEmpty()) }) } })
+            }
+            is AgentEvent.PermissionRequest -> {
+                put("type", "permission"); put("requestId", requestId); put("toolName", toolName); put("question", question)
+                put("options", buildJsonArray { options.forEach { option -> add(buildJsonObject { put("label", option.label); put("description", option.description) }) } })
+            }
+            is AgentEvent.PermissionResolved -> {
+                put("type", "permission-resolved")
+                put("requestId", requestId)
+                put("optionId", optionId)
+                put("allowed", allowed)
+                note?.let { put("note", it) }
+            }
+            is AgentEvent.Raw -> { put("type", "raw"); put("line", line) }
+        }
+    }
+
     /**
      * Managed evidence bundle ids are the only way to attach investigation context over MCP
      * (§4/§5) — reject any argument that looks like it is trying to smuggle a raw filesystem
@@ -129,7 +189,9 @@ fun Server.registerAgentProjectTools(
                     buildJsonObject {
                         put("id", task.id)
                         put("title", task.title)
+                        put("prompt", task.prompt)
                         put("agent", task.agent.name)
+                        put("lane", task.lane.name)
                         put("status", task.status?.name.orEmpty())
                         put("projectId", task.projectId.orEmpty())
                         put("cwd", task.cwd.orEmpty())
@@ -144,6 +206,25 @@ fun Server.registerAgentProjectTools(
                         put("statusConfident", task.statusConfident)
                         put("exitCode", task.exitCode ?: Int.MIN_VALUE)
                         put("vendorSessionId", task.vendorSessionId.orEmpty())
+                        put("acpSessionId", task.acpSessionId.orEmpty())
+                        put("stopReason", task.stopReason.orEmpty())
+                        put("errorMessage", task.errorMessage.orEmpty())
+                        task.userInputRequest?.let { request ->
+                            put("userInputRequest", buildJsonObject {
+                                put("id", request.id)
+                                put("origin", request.origin.name)
+                                put("questions", buildJsonArray {
+                                    request.questions.forEach { question ->
+                                        add(buildJsonObject {
+                                            put("id", question.id)
+                                            put("header", question.header)
+                                            put("question", question.question)
+                                            put("options", buildJsonArray { question.options.forEach { option -> add(buildJsonObject { put("label", option.label); put("description", option.description) }) } })
+                                        })
+                                    }
+                                })
+                            })
+                        }
                         put("tmuxSession", TmuxAndy.sessionName(task.id))
                         put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(task.id))
                     },
@@ -169,6 +250,7 @@ fun Server.registerAgentProjectTools(
                         put("label", kind.label)
                         put("cliName", kind.cliName)
                         put("ready", status?.ready ?: false)
+                        put("acpReady", status?.acpReady ?: false)
                         put("available", status?.available ?: false)
                         put("version", status?.version.orEmpty())
                         put("issue", status?.issue?.title.orEmpty())
@@ -237,6 +319,19 @@ fun Server.registerAgentProjectTools(
                 put("projects", projects)
             }.toString(),
         )
+    }
+
+    register(
+        name = "chat.events",
+        description = "Read the structured transcript for an ACP chat",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val events = agentRuns.events(id).value
+        textResult(buildJsonArray { events.forEach { add(it.toWire()) } }.toString())
     }
 
     register(
@@ -483,6 +578,21 @@ fun Server.registerAgentProjectTools(
         val followUp = str(args, "followUp") ?: error("followUp required")
         agentRuns.resume(id, followUp, contextBundleIds = strList(args, "contextBundleIds"))
         textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.set_mode",
+        description = "Switch the live ACP session mode for providers that advertise modes",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "modeId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId", "modeId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val modeId = str(args, "modeId") ?: error("modeId required")
+        agentRuns.setAcpSessionMode(id, modeId)
+        textResult("""{"ok":true,"id":"$id","modeId":"$modeId"}""")
     }
 
     register(
@@ -765,6 +875,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.reconcile",
     "chat.delete",
     "chat.resume",
+    "chat.set_mode",
     "chat.respond",
     "chat.status",
     "agent_status",

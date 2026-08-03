@@ -285,7 +285,6 @@ object UnavailableAgentRunService : AgentRunService {
     override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<AgentSkill>())
     override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask = error(BrowserUnavailable)
-    override suspend fun startImplementation(taskId: String) = Unit
     override fun stop(taskId: String) = Unit
     override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit

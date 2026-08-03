@@ -11,6 +11,28 @@ enum class AgentKind(val label: String, val cliName: String) {
     OpenClaw("OpenClaw", "openclaw"),
 }
 
+/** The transport that owns a task's provider conversation. Persisted per task. */
+enum class AgentLaneKind {
+    Terminal,
+    Acp,
+}
+
+/** Providers with a first-party or registry ACP adapter. */
+val AgentKind.acpSupported: Boolean
+    get() = when (this) {
+        AgentKind.ClaudeCode,
+        AgentKind.Codex,
+        AgentKind.Cursor,
+        AgentKind.OpenCode,
+        AgentKind.Pi,
+        -> true
+        AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
+    }
+
+/** The default lane for newly-created tasks; persisted tasks never re-derive this value. */
+fun AgentKind.defaultLane(): AgentLaneKind =
+    if (acpSupported) AgentLaneKind.Acp else AgentLaneKind.Terminal
+
 /** Unified autonomy dial; each adapter maps it to vendor-specific flags. */
 enum class AgentAutonomy(val label: String) {
     ReadOnly("read-only"),
@@ -378,10 +400,16 @@ data class AgentUserInputQuestion(
     val options: List<AgentUserInputOption>,
 )
 
+enum class AgentUserInputOrigin {
+    Artifact,
+    AcpPermission,
+}
+
 /** A persisted decision checkpoint emitted by a provider-neutral agent protocol. */
 data class AgentUserInputRequest(
     val id: String,
     val questions: List<AgentUserInputQuestion>,
+    val origin: AgentUserInputOrigin = AgentUserInputOrigin.Artifact,
 )
 
 data class AgentTask(
@@ -403,10 +431,8 @@ data class AgentTask(
     val sandboxMode: AgentSandboxMode? = null,
     /** Ask the provider to inspect and propose work without making changes. */
     val planMode: Boolean = false,
-    /** Final response from a successful plan-mode run, retained for a fresh implementation handoff. */
+    /** Final response from a successful plan-mode run, retained for project workflow handoff. */
     val completedPlanText: String? = null,
-    /** Generated context used only when a completed plan starts its fresh implementation run. */
-    val implementationPrompt: String? = null,
     /** A fresh-provider continuation used only when that provider cannot resume its prior session. */
     val continuationPrompt: String? = null,
     /** Null keeps the provider's own default model. */
@@ -446,6 +472,12 @@ data class AgentTask(
      */
     val statusConfident: Boolean = false,
     val vendorSessionId: String? = null,
+    /** ACP session ids are a different namespace from vendor CLI session ids. */
+    val acpSessionId: String? = null,
+    /** Last ACP prompt stop reason, retained for diagnostics and recovery. */
+    val stopReason: String? = null,
+    /** Transport lane is fixed at creation and remains stable across resume. */
+    val lane: AgentLaneKind = AgentLaneKind.Terminal,
     val createdAtMillis: Long,
     val startedAtMillis: Long? = null,
     val finishedAtMillis: Long? = null,
@@ -614,6 +646,8 @@ data class AgentTaskDraft(
     val contextBundleIds: List<String> = emptyList(),
     /** Where this task's contextual action was triggered from, if launched from one. */
     val provenance: AgentContextualProvenance? = null,
+    /** Optional explicit lane override used by tests and rollout controls. */
+    val lane: AgentLaneKind? = null,
 )
 
 /** Last-used launch settings, stored independently for each provider. */
@@ -833,10 +867,40 @@ fun promptWithGoalHint(text: String, goal: String?): String = goal?.takeIf { it.
     "$text\n\nPersistent task goal: $activeGoal\nKeep this goal in mind throughout the task."
 } ?: text
 
-private fun promptWithPlanModeHint(text: String, planMode: Boolean): String = if (planMode) {
-    "$text\n\nPlan mode is active. Inspect and analyze the task, then return a concrete implementation plan. Do not edit files, apply patches, or run commands that modify the workspace."
-} else {
-    text
+private fun promptWithPlanModeHint(text: String, planMode: Boolean, grilling: Boolean = false): String = when {
+    !planMode -> text
+    grilling -> {
+        "$text\n\nPlan mode is active, but grill-me is in progress. Explore and analyze as needed, " +
+            "but defer the full implementation plan until shared understanding is reached. " +
+            "Do not edit files, apply patches, or run commands that modify the workspace."
+    }
+    else -> {
+        "$text\n\nPlan mode is active. Inspect and analyze the task, then return a concrete implementation plan. " +
+            "Do not edit files, apply patches, or run commands that modify the workspace."
+    }
+}
+
+private fun promptWithGrillMeHint(text: String, skills: List<AgentSkill>, taskId: String): String {
+    if (!hasGrillMeSkills(skills)) return text
+    return text + "\n\n" + grillMeChatPromptAddendum(".andy/$taskId")
+}
+
+private fun composeAgentPrompt(
+    text: String,
+    skills: List<AgentSkill>,
+    taskId: String,
+    planMode: Boolean,
+    goal: String?,
+): String {
+    val grilling = hasGrillMeSkills(skills)
+    return promptWithGrillMeHint(
+        promptWithGoalHint(
+            promptWithPlanModeHint(promptWithSkillHints(text, skills), planMode, grilling),
+            goal,
+        ),
+        skills,
+        taskId,
+    )
 }
 
 /** Andy never resolves bundle ids to paths here — that happens at launch time, per adapter/cwd. */
@@ -859,7 +923,7 @@ fun promptWithLocalEvidencePathsHint(text: String, hint: String?): String =
 fun AgentTask.promptForCli(): String = promptWithImageHints(
     promptWithLocalEvidencePathsHint(
         promptWithEvidenceHint(
-            promptWithGoalHint(promptWithPlanModeHint(promptWithSkillHints(continuationPrompt ?: implementationPrompt ?: prompt, skills), planMode), goal),
+            composeAgentPrompt(continuationPrompt ?: prompt, skills, id, planMode, goal),
             contextBundleIds,
         ),
         evidenceLocalPathsHint,
@@ -867,8 +931,12 @@ fun AgentTask.promptForCli(): String = promptWithImageHints(
     imagePaths,
 )
 
-fun AgentTask.followUpPromptForCli(text: String, imagePaths: List<String>): String = promptWithImageHints(
-    promptWithPlanModeHint(text, planMode),
+fun AgentTask.followUpPromptForCli(
+    text: String,
+    imagePaths: List<String>,
+    skills: List<AgentSkill> = this.skills,
+): String = promptWithImageHints(
+    composeAgentPrompt(text, skills, id, planMode, goal),
     imagePaths,
 )
 
@@ -887,14 +955,14 @@ fun AgentTask.followUpCliPayload(
     imagePaths: List<String>,
     skills: List<AgentSkill> = emptyList(),
 ): FollowUpCliPayload {
-    val enriched = promptWithGoalHint(promptWithSkillHints(text, skills), goal)
+    val composed = composeAgentPrompt(text, skills, id, planMode, goal)
     return when (agent) {
         AgentKind.Codex -> FollowUpCliPayload(
-            prompt = promptWithPlanModeHint(enriched, planMode),
+            prompt = composed,
             imagePaths = imagePaths,
         )
         else -> FollowUpCliPayload(
-            prompt = followUpPromptForCli(enriched, imagePaths),
+            prompt = promptWithImageHints(composed, imagePaths),
         )
     }
 }
@@ -905,10 +973,7 @@ fun AgentTask.followUpPromptForLiveTerminal(
     imagePaths: List<String>,
     skills: List<AgentSkill> = emptyList(),
 ): String = promptWithInlineImageHints(
-    followUpPromptForCli(
-        promptWithGoalHint(promptWithSkillHints(text, skills), goal),
-        emptyList(),
-    ),
+    composeAgentPrompt(text, skills, id, planMode, goal),
     imagePaths,
 )
 
@@ -961,7 +1026,16 @@ sealed interface AgentEvent {
         /** Local image paths attached with this message, shown as thumbnails in the bubble. */
         val imagePaths: List<String> = emptyList(),
     ) : AgentEvent
-    data class ToolCall(override val atMillis: Long, val toolName: String, val summary: String, val detail: String = summary) : AgentEvent
+    data class ToolCall(
+        override val atMillis: Long,
+        val toolName: String,
+        val summary: String,
+        val detail: String = summary,
+        val toolCallId: String? = null,
+        val kind: AgentToolKind? = null,
+        val state: AgentToolState = AgentToolState.Completed,
+        val locations: List<String> = emptyList(),
+    ) : AgentEvent
     data class ToolResult(
         override val atMillis: Long,
         val toolName: String?,
@@ -990,44 +1064,237 @@ sealed interface AgentEvent {
         val windowTokens: Long? = null,
     ) : AgentEvent
 
+    data class PlanUpdate(override val atMillis: Long, val entries: List<AgentPlanEntry>) : AgentEvent
+    data class ModeChanged(override val atMillis: Long, val modeId: String) : AgentEvent
+    data class AvailableCommands(override val atMillis: Long, val commands: List<AgentSlashCommand>) : AgentEvent
+    /** Emitted once when an ACP session opens, if the provider advertises switchable modes. */
+    data class AvailableModes(
+        override val atMillis: Long,
+        val modes: List<AgentSessionMode>,
+        val currentModeId: String?,
+    ) : AgentEvent
+    data class PermissionRequest(
+        override val atMillis: Long,
+        val requestId: String,
+        val toolName: String,
+        val question: String,
+        val options: List<AgentUserInputOption>,
+    ) : AgentEvent
+    data class PermissionResolved(
+        override val atMillis: Long,
+        val requestId: String,
+        val optionId: String,
+        val allowed: Boolean,
+        /** When set, Andy resolved the permission without a user prompt (policy, stop, queue). */
+        val note: String? = null,
+    ) : AgentEvent
+
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */
     data class Raw(override val atMillis: Long, val line: String) : AgentEvent
 }
 
+enum class AgentToolKind {
+    Read,
+    Edit,
+    Delete,
+    Move,
+    Search,
+    Execute,
+    Think,
+    Fetch,
+    Other,
+}
+
+enum class AgentToolState {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+data class AgentPlanEntry(
+    val content: String,
+    val status: String = "pending",
+)
+
+data class AgentSlashCommand(
+    val name: String,
+    val description: String = "",
+    val inputHint: String? = null,
+)
+
+data class AgentSessionMode(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+)
+
 /**
- * Merge consecutive stream deltas into one live message.
- * Keep the original [AgentEvent.atMillis] so transcript LazyColumn keys stay stable
- * while text grows — rewriting the timestamp every token remounts the bubble.
+ * ACP providers sometimes emit whitespace-only text chunks. Older builds stored those as
+ * [AgentEvent.Raw], which broke stream coalescing and dropped the whitespace itself.
+ */
+internal fun recoverAcpWhitespaceChunks(events: List<AgentEvent>): List<AgentEvent> {
+    val out = mutableListOf<AgentEvent>()
+    for (event in events) {
+        if (event is AgentEvent.Raw) {
+            val text = decodeAcpWhitespaceRaw(event.line) ?: run {
+                out += event
+                continue
+            }
+            val channel = out.lastOrNull { it.isStreamCoalesceTransparent().not() }
+            when (channel) {
+                is AgentEvent.Thinking ->
+                    out += AgentEvent.Thinking(event.atMillis, text, isStreamDelta = true)
+                else ->
+                    out += AgentEvent.AssistantText(event.atMillis, text, isStreamDelta = true)
+            }
+            continue
+        }
+        out += event
+    }
+    return out
+}
+
+private val AcpWhitespaceRawPattern =
+    Regex("""^Text\(text=(.*), annotations=.*\)$""")
+
+private fun decodeAcpWhitespaceRaw(line: String): String? {
+    val raw = AcpWhitespaceRawPattern.matchEntire(line.trim())?.groupValues?.getOrNull(1) ?: return null
+    val decoded = buildString {
+        var index = 0
+        while (index < raw.length) {
+            if (raw[index] == '\\' && index + 1 < raw.length) {
+                when (raw[index + 1]) {
+                    'n' -> append('\n')
+                    't' -> append('\t')
+                    'r' -> append('\r')
+                    else -> append(raw[index + 1])
+                }
+                index += 2
+            } else {
+                append(raw[index])
+                index++
+            }
+        }
+    }
+    return decoded.takeIf { it.isNotEmpty() && it.all(Char::isWhitespace) }
+}
+
+private fun AgentEvent.isStreamCoalesceTransparent(): Boolean = when (this) {
+    is AgentEvent.Raw,
+    is AgentEvent.AvailableCommands,
+    is AgentEvent.AvailableModes,
+    is AgentEvent.ContextUsage,
+    -> true
+    else -> false
+}
+
+private fun AgentEvent.isStreamCoalesceBarrier(): Boolean = when (this) {
+    is AgentEvent.UserMessage,
+    is AgentEvent.ToolCall,
+    is AgentEvent.ToolResult,
+    is AgentEvent.TaskError,
+    is AgentEvent.TaskResult,
+    is AgentEvent.SessionStarted,
+    is AgentEvent.PermissionRequest,
+    is AgentEvent.PermissionResolved,
+    is AgentEvent.PlanUpdate,
+    is AgentEvent.ModeChanged,
+    -> true
+    is AgentEvent.AssistantText -> !isStreamDelta
+    is AgentEvent.Thinking -> !isStreamDelta
+    else -> false
+}
+
+/**
+ * Prepare a persisted ACP transcript for in-memory display: recover whitespace-only
+ * provider chunks, then fold stream deltas into one row per assistant/thinking turn.
+ */
+fun coalesceAcpTranscriptEvents(events: List<AgentEvent>): List<AgentEvent> =
+    coalesceAgentStreamDeltas(emptyList(), recoverAcpWhitespaceChunks(events))
+
+/**
+ * Recover a plan-mode response from chat history when [plan.md] was never written.
+ * Prefers provider completion text, then the last substantive assistant message.
+ */
+fun planTextFromAcpTranscript(events: List<AgentEvent>): String? {
+    val display = coalesceAcpTranscriptEvents(events).filterNot { event ->
+        event is AgentEvent.AvailableCommands || event is AgentEvent.AvailableModes || event is AgentEvent.Raw
+    }
+    display.filterIsInstance<AgentEvent.TaskResult>()
+        .mapNotNull { it.finalText?.trim()?.takeIf(String::isNotBlank) }
+        .lastOrNull()
+        ?.let { return it }
+    return display.filterIndexed { index, event ->
+        val completion = display.getOrNull(index + 1) as? AgentEvent.TaskResult
+        event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
+    }
+        .filterIsInstance<AgentEvent.AssistantText>()
+        .map { it.text.trim() }
+        .lastOrNull { it.isNotBlank() }
+}
+
+/**
+ * Merge stream deltas into one live message. Transparent events such as whitespace-only ACP
+ * chunks stored as [AgentEvent.Raw] must not split a provider response into separate bubbles.
+ * Keep the original [AgentEvent.atMillis] so transcript LazyColumn keys stay stable while text
+ * grows — rewriting the timestamp every token remounts the bubble.
  */
 fun coalesceAgentStreamDeltas(
     existing: List<AgentEvent>,
     incoming: List<AgentEvent>,
 ): List<AgentEvent> = incoming.fold(existing) { transcript, event ->
-    val previous = transcript.lastOrNull()
-    val merged = when {
-        event is AgentEvent.AssistantText && event.isStreamDelta &&
-            previous is AgentEvent.AssistantText && previous.isStreamDelta -> {
-            previous.copy(text = previous.text + event.text)
-        }
-        event is AgentEvent.Thinking && event.isStreamDelta &&
-            previous is AgentEvent.Thinking && previous.isStreamDelta -> {
-            previous.copy(text = previous.text + event.text)
-        }
-        else -> null
+    when {
+        event is AgentEvent.AssistantText && event.isStreamDelta ->
+            mergeStreamDelta(transcript, event)
+        event is AgentEvent.Thinking && event.isStreamDelta ->
+            mergeStreamDelta(transcript, event)
+        else -> transcript + event
     }
-    if (merged == null) transcript + event else transcript.dropLast(1) + merged
+}
+
+private fun mergeStreamDelta(
+    transcript: List<AgentEvent>,
+    event: AgentEvent.AssistantText,
+): List<AgentEvent> {
+    val index = transcript.indexOfLast { it is AgentEvent.AssistantText && it.isStreamDelta }
+    if (index < 0) return transcript + event
+    if (transcript.subList(index + 1, transcript.size).any { it.isStreamCoalesceBarrier() }) {
+        return transcript + event
+    }
+    val previous = transcript[index] as AgentEvent.AssistantText
+    return transcript.toMutableList().also {
+        it[index] = previous.copy(text = previous.text + event.text)
+    }
+}
+
+private fun mergeStreamDelta(
+    transcript: List<AgentEvent>,
+    event: AgentEvent.Thinking,
+): List<AgentEvent> {
+    val index = transcript.indexOfLast { it is AgentEvent.Thinking && it.isStreamDelta }
+    if (index < 0) return transcript + event
+    if (transcript.subList(index + 1, transcript.size).any { it.isStreamCoalesceBarrier() }) {
+        return transcript + event
+    }
+    val previous = transcript[index] as AgentEvent.Thinking
+    return transcript.toMutableList().also {
+        it[index] = previous.copy(text = previous.text + event.text)
+    }
 }
 
 data class AgentCliStatus(
     val kind: AgentKind,
     val binaryPath: String? = null,
     val version: String? = null,
+    /** Whether the ACP lane can launch independently of the vendor CLI binary. */
+    val acpReady: Boolean = false,
     /** A setup issue detected before starting a task, phrased for the Agents UI. */
     val issue: AgentCliIssue? = null,
 ) {
     val available: Boolean get() = binaryPath != null
     /** Whether Andy can safely start a task with this CLI. */
-    val ready: Boolean get() = available && issue?.blocksTasks != true
+    val ready: Boolean get() = (available || acpReady) && (issue?.blocksTasks != true || acpReady)
 }
 
 /**

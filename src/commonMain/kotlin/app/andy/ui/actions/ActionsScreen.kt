@@ -1092,7 +1092,6 @@ private fun projectSidebarTaskMatches(query: String, task: AgentTask): Boolean {
         task.latestPrompt?.let(::add)
         task.goal?.let(::add)
         task.completedResultText?.let(::add)
-        task.implementationPrompt?.let(::add)
         task.continuationPrompt?.let(::add)
         task.completedPlanText?.let(::add)
         task.branchName?.let(::add)

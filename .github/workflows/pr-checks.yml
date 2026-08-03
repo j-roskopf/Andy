@@ -31,10 +31,10 @@ jobs:
           python3 -m unittest discover -s tools/andy-tracebox -p 'test_*.py'
           python3 tools/andy-tracebox/package_release.py --verify-manifest-only
 
-  desktop:
-    name: Desktop checks (${{ matrix.os }})
+  desktop-test:
+    name: Desktop tests (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       # Opt-in harnesses that are safe / free to run on every PR.
       ANDY_PROXY_CONFORMANCE: "1"
@@ -73,9 +73,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
 
-      - name: Run Linux checks
+      - name: Run Linux desktop tests
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
+        run: xvfb-run -a ./gradlew desktopTest "-PandyRetryTests=true"
 
       - name: Install tmux (agent terminal executor)
         if: matrix.os == 'macos'
@@ -86,35 +86,195 @@ jobs:
       # inherently flaky and has hung the job to the 60m limit. Without ANDY_IOS_SIM_SMOKE the
       # tests assumeTrue-skip. Run them locally with a booted simulator when needed.
 
-      - name: Run macOS checks
+      - name: Run macOS desktop tests
         if: matrix.os == 'macos'
-        run: ./gradlew desktopTest verifyRoborazziDesktop :web-launcher:test assemble :agent-store:build "-PandyRetryTests=true"
+        run: ./gradlew desktopTest "-PandyRetryTests=true"
 
-      - name: Build Andy Rust CLI
-        if: matrix.os == 'macos'
-        run: |
-          rustup show || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          cargo build --manifest-path cli/andy/Cargo.toml
-
-      - name: Run Windows checks
+      - name: Run Windows desktop tests
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat desktopTest verifyRoborazziDesktop :web-launcher:test assemble "-PandyRetryTests=true"
+        run: ./gradlew.bat desktopTest "-PandyRetryTests=true"
 
-      - name: Upload test reports
+      - name: Upload desktop test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-checks-${{ matrix.os }}-reports
+          name: desktop-test-${{ matrix.os }}-reports
           if-no-files-found: ignore
           path: |
             build/reports/tests/**
             build/test-results/**
+
+  desktop-screenshots:
+    name: Desktop screenshots (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Linux desktop dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+
+      - name: Verify Linux desktop screenshots
+        if: matrix.os == 'linux'
+        run: xvfb-run -a ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
+
+      - name: Verify macOS desktop screenshots
+        if: matrix.os == 'macos'
+        run: ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
+
+      - name: Verify Windows desktop screenshots
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./gradlew.bat verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
+
+      - name: Upload desktop screenshot artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-screenshots-${{ matrix.os }}-artifacts
+          if-no-files-found: ignore
+          path: |
             build/reports/roborazzi/**
             build/outputs/roborazzi/**
             build/intermediates/roborazzi/**
             build/test-results/roborazzi/**
+
+  assemble:
+    name: Desktop assemble (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-latest
+          - os: windows
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Linux desktop dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+
+      - name: Assemble Linux desktop app
+        if: matrix.os == 'linux'
+        run: xvfb-run -a ./gradlew assemble
+
+      - name: Assemble macOS desktop app
+        if: matrix.os == 'macos'
+        run: ./gradlew assemble
+
+      - name: Assemble Windows desktop app
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./gradlew.bat assemble
+
+  agent-store:
+    name: agent-store build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build agent-store
+        run: ./gradlew :agent-store:build
+
+  web-launcher-test:
+    name: Web launcher tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache Kotlin Wasm Binaryen
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/binaryen
+          key: ${{ runner.os }}-kotlin-wasm-binaryen-${{ hashFiles('build.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-wasm-binaryen-
+
+      - name: Run web launcher tests
+        run: ./gradlew :web-launcher:test
+
+  andy-cli:
+    name: Andy CLI build
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Andy Rust CLI
+        run: |
+          rustup show || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --manifest-path cli/andy/Cargo.toml
 
   web-preview-deploy:
     name: Deploy web preview to GitHub Pages

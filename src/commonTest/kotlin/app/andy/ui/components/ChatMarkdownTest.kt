@@ -16,4 +16,10 @@ class ChatMarkdownTest {
             "first paragraph\n\nsecond paragraph\n```\nval answer = 42\n```".withChatLineBreaks(),
         )
     }
+
+    @Test
+    fun providerStyleWrapsBecomeHardBreaksWhenPromotionEnabled() {
+        val wrapped = "Monday, August\n**3,**"
+        assertEquals("Monday, August  \n**3,**", wrapped.withChatLineBreaks())
+    }
 }

@@ -241,7 +241,7 @@ Stale `andyd.sock` / `andyd.pid` files left after a crash are removed automatica
 
 In addition to the existing device tools:
 
-- `chat.list` / `chat.composer_options` / `chat.start` / `chat.stop` / `chat.resume` / `chat.respond`
+- `chat.list` / `chat.events` / `chat.composer_options` / `chat.start` / `chat.stop` / `chat.resume` / `chat.respond` / `chat.set_mode`
 - `chat.status` / `chat.attach_command` / `chat.reattach`
 - `project.list`
 - `workflow.run_spec` / `workflow.start_build`
@@ -253,3 +253,17 @@ In addition to the existing device tools:
 | (default) | `TmuxWithAttach` — create tmux session + BossTerm attach |
 | `headless` | `TmuxHeadless` — daemon executor, no Swing |
 | `direct` | Legacy direct Pty4J (tests / no-tmux fallback) |
+
+## Agent transport lanes
+
+Claude Code, Codex, Cursor, OpenCode, and Pi default to the ACP stdio lane. ACP
+sessions use the official Kotlin ACP client, persist structured JSONL transcripts
+under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep their ACP session id
+separate from vendor CLI session ids. The GUI renders those events with the
+structured transcript surface and can continue a stored session after restart.
+
+Antigravity, Hermes, and OpenClaw remain on the terminal/tmux lane. If ACP
+spawn or initialization fails, Andy records the diagnostic and falls back to the
+existing terminal lane for that task. Override routing for a rollout with
+`ANDY_AGENT_LANE=terminal|acp` or the provider-specific
+`ANDY_AGENT_LANE_<AGENT_KIND>` variable.

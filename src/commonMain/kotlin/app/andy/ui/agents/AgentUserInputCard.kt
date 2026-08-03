@@ -18,8 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentUserInputRequest
 import app.andy.ui.components.Button
+import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TextField
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -29,6 +31,7 @@ import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -42,11 +45,17 @@ internal fun AgentUserInputCard(
     onSubmit: (Map<String, String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val permissionPrompt = request.origin == AgentUserInputOrigin.AcpPermission
     val selections = remember(request.id) { mutableStateMapOf<String, String>() }
     val freeformAnswers = remember(request.id) { mutableStateMapOf<String, String>() }
     val canSubmit = request.questions.all { question ->
         val selection = selections[question.id]
-        selection != null && (selection != OTHER_OPTION || !freeformAnswers[question.id].isNullOrBlank())
+        when {
+            selection == null -> false
+            permissionPrompt -> selection != OTHER_OPTION
+            selection == OTHER_OPTION -> !freeformAnswers[question.id].isNullOrBlank()
+            else -> true
+        }
     }
 
     Column(
@@ -58,8 +67,19 @@ internal fun AgentUserInputCard(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("DECISION NEEDED", color = Rust, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-            Text("Choose an option or enter your own answer.", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            Text(
+                if (permissionPrompt) "PERMISSION REQUIRED" else "DECISION NEEDED",
+                color = Rust,
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
+            )
+            Text(
+                if (permissionPrompt) "Choose whether to allow this tool call." else "Choose an option or enter your own answer.",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 10.sp,
+            )
         }
         request.questions.forEach { question ->
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -67,21 +87,52 @@ internal fun AgentUserInputCard(
                     Text(header.uppercase(), color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
                 }
                 Text(question.question, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                question.options.forEach { option ->
+                if (permissionPrompt) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        question.options.forEach { option ->
+                            val deny = option.label.lowercase().let {
+                                it.contains("deny") || it.contains("reject")
+                            }
+                            if (deny) {
+                                OutlinedButton(
+                                    onClick = { onSubmit(mapOf(question.id to option.label)) },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(option.label, color = Red, fontSize = 11.sp)
+                                }
+                            } else {
+                                Button(
+                                    onClick = { onSubmit(mapOf(question.id to option.label)) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = primaryButtonColors(),
+                                ) {
+                                    Text(option.label, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    question.options.forEach { option ->
+                        ChoiceRow(
+                            label = option.label,
+                            description = option.description,
+                            selected = selections[question.id] == option.label,
+                            onSelect = { selections[question.id] = option.label },
+                        )
+                    }
+                }
+                if (!permissionPrompt) {
                     ChoiceRow(
-                        label = option.label,
-                        description = option.description,
-                        selected = selections[question.id] == option.label,
-                        onSelect = { selections[question.id] = option.label },
+                        label = "Other",
+                        description = "Enter a different answer.",
+                        selected = selections[question.id] == OTHER_OPTION,
+                        onSelect = { selections[question.id] = OTHER_OPTION },
                     )
                 }
-                ChoiceRow(
-                    label = "Other",
-                    description = "Enter a different answer.",
-                    selected = selections[question.id] == OTHER_OPTION,
-                    onSelect = { selections[question.id] = OTHER_OPTION },
-                )
-                if (selections[question.id] == OTHER_OPTION) {
+                if (!permissionPrompt && selections[question.id] == OTHER_OPTION) {
                     TextField(
                         value = freeformAnswers[question.id].orEmpty(),
                         onValueChange = { freeformAnswers[question.id] = it },
@@ -93,18 +144,20 @@ internal fun AgentUserInputCard(
                 }
             }
         }
-        Button(
-            onClick = {
-                onSubmit(request.questions.associate { question ->
-                    question.id to when (val selection = selections[question.id]) {
-                        OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
-                        else -> selection.orEmpty()
-                    }
-                })
-            },
-            enabled = canSubmit,
-            colors = primaryButtonColors(),
-        ) { Text("Continue", fontSize = 11.sp) }
+        if (!permissionPrompt) {
+            Button(
+                onClick = {
+                    onSubmit(request.questions.associate { question ->
+                        question.id to when (val selection = selections[question.id]) {
+                            OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
+                            else -> selection.orEmpty()
+                        }
+                    })
+                },
+                enabled = canSubmit,
+                colors = primaryButtonColors(),
+            ) { Text("Continue", fontSize = 11.sp) }
+        }
     }
 }
 

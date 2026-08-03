@@ -151,6 +151,8 @@ kotlin {
 
                 // MCP and Ktor Server Dependencies
                 implementation("io.modelcontextprotocol:kotlin-sdk:0.13.0")
+                // Agent Client Protocol (LSP for coding agents); ACP is desktop/JVM-only.
+                implementation("com.agentclientprotocol:acp:0.28.1")
                 implementation("io.ktor:ktor-server-core:3.0.1")
                 implementation("io.ktor:ktor-server-cio:3.0.1")
                 implementation("io.ktor:ktor-server-netty:3.0.1")
@@ -426,6 +428,9 @@ tasks.withType<Test>().configureEach {
     // attached agent chat.
     if (name == "desktopTest") {
         environment("ANDY_TMUX_SOCKET", "andy-test")
+        // Most desktop service tests inject fake terminal adapters. Keep those fixtures
+        // on their intended lane; ACP behavior is covered by the dedicated ACP tests.
+        environment("ANDY_AGENT_LANE", "terminal")
     }
     // These desktop suites include real-subprocess agent/workflow tests and hardware-backed
     // mirror/simulator smoke tests whose timing is inherently variable on shared CI runners.
@@ -917,4 +922,3 @@ tasks.register("installAndyd") {
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")
     }
 }
-

@@ -1,13 +1,27 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
+import app.andy.model.planTextFromAcpTranscript
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class AgentTranscriptTest {
+    @Test
+    fun storedPromptIsHiddenWhenTranscriptAlreadyContainsUserTurn() {
+        assertFalse(
+            shouldDisplayOriginalPrompt(
+                events = listOf(AgentEvent.UserMessage(atMillis = 1, text = "hello")),
+                originalPrompt = "hello",
+                originalImagePaths = emptyList(),
+            ),
+        )
+    }
+
     @Test
     fun completionOwnsDuplicateFinalAssistantText() {
         val events = listOf(
@@ -26,6 +40,16 @@ class AgentTranscriptTest {
         )
 
         assertEquals(events, transcriptDisplayEvents(events))
+    }
+
+    @Test
+    fun adjacentStreamChunksRenderAsOneAssistantMessage() {
+        val first = AgentEvent.AssistantText(atMillis = 1, text = "Hey! What", isStreamDelta = true)
+        val second = AgentEvent.AssistantText(atMillis = 2, text = " are we working on today?", isStreamDelta = true)
+
+        val displayed = transcriptDisplayEvents(listOf(first, second))
+
+        assertEquals(listOf(first.copy(text = "Hey! What are we working on today?")), displayed)
     }
 
     @Test
@@ -122,6 +146,47 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun planTextFromAcpTranscriptUsesLastAssistantMessage() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "plan this"),
+            AgentEvent.AssistantText(atMillis = 2, text = "Looking at the repo...", isStreamDelta = false),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Read", summary = "README"),
+            AgentEvent.AssistantText(atMillis = 4, text = "## Plan\n\n1. First\n2. Second", isStreamDelta = true),
+        )
+
+        assertEquals("## Plan\n\n1. First\n2. Second", planTextFromAcpTranscript(events))
+    }
+
+    @Test
+    fun planTextFromAcpTranscriptPrefersTaskResultFinalText() {
+        val events = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "draft", isStreamDelta = false),
+            AgentEvent.TaskResult(atMillis = 2, success = true, finalText = "## Final plan\n\nStep one"),
+        )
+
+        assertEquals("## Final plan\n\nStep one", planTextFromAcpTranscript(events))
+    }
+
+    @Test
+    fun coalesceAcpTranscriptEventsFoldsManyStreamDeltas() {
+        val deltas = (1..4_000).map { index ->
+            AgentEvent.AssistantText(atMillis = index.toLong(), text = "x", isStreamDelta = true)
+        } + listOf(
+            AgentEvent.AssistantText(atMillis = 4_001, text = "\n\n## 1. First step", isStreamDelta = true),
+            AgentEvent.AssistantText(atMillis = 4_002, text = "\n\n## 2. Second step", isStreamDelta = true),
+            AgentEvent.AssistantText(atMillis = 4_003, text = "\n\n## 3. Third step", isStreamDelta = true),
+        )
+
+        val coalesced = coalesceAcpTranscriptEvents(deltas)
+        val assistant = coalesced.filterIsInstance<AgentEvent.AssistantText>()
+
+        assertEquals(1, assistant.size)
+        assertTrue(assistant.single().text.contains("## 1. First step"))
+        assertTrue(assistant.single().text.contains("## 3. Third step"))
+        assertEquals(1, coalesced.size)
+    }
+
+    @Test
     fun coalesceKeepsStreamStartTimestamp() {
         val merged = coalesceAgentStreamDeltas(
             existing = listOf(AgentEvent.AssistantText(atMillis = 10, text = "Hel", isStreamDelta = true)),
@@ -130,5 +195,57 @@ class AgentTranscriptTest {
         val text = assertIs<AgentEvent.AssistantText>(merged.single())
         assertEquals(10, text.atMillis)
         assertEquals("Hello", text.text)
+    }
+
+    @Test
+    fun acpWhitespaceRawChunksRecoverAndCoalesceIntoAssistantResponse() {
+        val events = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "In Minneapolis today (Monday, August", isStreamDelta = true),
+            AgentEvent.Raw(atMillis = 2, line = "Text(text= , annotations=null, _meta=null)"),
+            AgentEvent.AssistantText(atMillis = 3, text = "3,", isStreamDelta = true),
+            AgentEvent.Raw(atMillis = 4, line = "Text(text= , annotations=null, _meta=null)"),
+            AgentEvent.AssistantText(atMillis = 5, text = "2026)", isStreamDelta = true),
+            AgentEvent.Raw(atMillis = 6, line = "Text(text=\\n\\n, annotations=null, _meta=null)"),
+            AgentEvent.AssistantText(atMillis = 7, text = "- highs possibly in the", isStreamDelta = true),
+            AgentEvent.Raw(atMillis = 8, line = "Text(text= , annotations=null, _meta=null)"),
+            AgentEvent.AssistantText(atMillis = 9, text = "90s", isStreamDelta = true),
+            AgentEvent.Raw(atMillis = 10, line = "Text(text=\\n\\n, annotations=null, _meta=null)"),
+            AgentEvent.AssistantText(atMillis = 11, text = "Stay hydrated.", isStreamDelta = true),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        val assistant = displayed.filterIsInstance<AgentEvent.AssistantText>()
+
+        assertEquals(1, assistant.size)
+        assertEquals(
+            "In Minneapolis today (Monday, August 3, 2026)\n\n- highs possibly in the 90s\n\nStay hydrated.",
+            assistant.single().text,
+        )
+    }
+
+    @Test
+    fun streamCoalescingStillBreaksAcrossToolCalls() {
+        val events = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "first", isStreamDelta = true),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "search", summary = "weather"),
+            AgentEvent.AssistantText(atMillis = 3, text = "second", isStreamDelta = true),
+        )
+
+        val displayed = transcriptDisplayEvents(events).filterIsInstance<AgentEvent.AssistantText>()
+
+        assertEquals(listOf("first", "second"), displayed.map { it.text })
+    }
+
+    @Test
+    fun connectionStallErrorsAreHiddenFromTranscriptDisplay() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),
+            AgentEvent.AssistantText(atMillis = 2, text = "Error: RetriableError: Connection stalled"),
+            AgentEvent.TaskError(atMillis = 3, message = "RetriableError: Connection stalled"),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        assertIs<AgentEvent.ToolCall>(displayed.single())
     }
 }

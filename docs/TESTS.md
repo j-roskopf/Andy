@@ -1,7 +1,9 @@
 # Desktop opt-in / CI-skipped tests
 
-Default PR CI runs `./gradlew desktopTest` on Linux, macOS, and Windows (see
-`.github/workflows/pr-checks.yml`). Most unit and fixture tests always run.
+Default PR CI fans out into parallel jobs (see `.github/workflows/pr-checks.yml`):
+`desktopTest` on Linux, macOS, and Windows; `verifyRoborazziDesktop` per OS;
+`assemble` per OS; `:agent-store:build`; `:web-launcher:test`; and the Rust
+CLI build on macOS. Most unit and fixture tests always run.
 
 A smaller set of tests needs a live device, a logged-in vendor CLI, or a slow
 local mitmproxy matrix. Those are gated so a cold laptop / CI image does not
@@ -101,6 +103,18 @@ Agents whose CLI is missing or not logged in are skipped individually.
 ```sh
 ANDY_AGENT_E2E=1 ./gradlew desktopTest --tests '*AgentRunEndToEndTest*'
 ```
+
+### ACP lane focused coverage
+
+The default ACP lane is covered without starting a real provider process:
+
+```sh
+./gradlew desktopTest --tests 'app.andy.desktop.service.agents.acp.AcpLaneTest'
+```
+
+The test covers default lane routing, event reduction, JSONL transcript
+round-tripping, and confident ACP stop-reason mapping. Real provider ACP
+spawn/initialize/resume behavior still belongs to the opt-in live-agent gate.
 
 ## Permanently `@Ignore`d
 

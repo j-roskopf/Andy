@@ -66,7 +66,11 @@ import app.andy.currentTimeMillis
 import app.andy.domain.buildSplitDiffPairs
 import app.andy.domain.SplitDiffPair
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
+import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentChangeSummary
+import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
+import app.andy.model.AgentEvent
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentNativeSlashCommand
@@ -78,6 +82,7 @@ import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
+import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
@@ -116,7 +121,7 @@ internal fun AgentTaskDetail(
     task: AgentTask,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
-    @Suppress("UNUSED_PARAMETER") transcriptScrollMemory: TranscriptScrollMemory? = null,
+    transcriptScrollMemory: TranscriptScrollMemory? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -125,10 +130,14 @@ internal fun AgentTaskDetail(
     val availableSkills by remember(task.agent, skillDirectory) {
         services.agentRuns.skills(task.agent, skillDirectory)
     }.collectAsState()
+    val knownSkillNames by remember(skillDirectory) {
+        services.agentRuns.knownSkillNames(skillDirectory)
+    }.collectAsState()
     var followUp by remember(task.id) { mutableStateOf("") }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
     var changeSummary by remember(task.id) { mutableStateOf<AgentChangeSummary?>(null) }
+    var changedFilesExpanded by remember(task.id) { mutableStateOf(false) }
     var showAllChangedFiles by remember(task.id) { mutableStateOf(false) }
     var expandedDiffPath by remember(task.id) { mutableStateOf<String?>(null) }
     var loadedFileDiffs by remember(task.id) { mutableStateOf<Map<String, AgentFileDiff>>(emptyMap()) }
@@ -162,17 +171,59 @@ internal fun AgentTaskDetail(
 
     val supportsResume = true
     val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
+    val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
+    val acpSessionLive = services.agentRuns.isLaneLive(task.id)
+    val acpTask = task.lane == AgentLaneKind.Acp
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
     // unless the user has staged images that should ship with the next composed message.
     // Gate on session interactivity only (not attachedTerminalIds): waiting on attach briefly
     // showed the composer and stole terminal height on resume.
-    val terminalSessionActive = isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
-    val showFollowUpComposer = supportsResume &&
-        showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
+    val terminalSessionActive = if (acpTask) {
+        false
+    } else {
+        isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
+    }
+    val sessionActive = if (acpTask) task.isActive || acpSessionLive else terminalSessionActive
+    val showFollowUpComposer = if (acpTask) {
+        supportsResume
+    } else {
+        supportsResume && showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
+    }
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val slashCommand = findActiveSlashCommand(followUp)
+    val allowedSkillNames = remember(availableSkills) {
+        availableSkills.mapTo(linkedSetOf()) { it.name.trim().lowercase() }
+    }
+    val providerCommands = remember(transcriptEvents, knownSkillNames, allowedSkillNames) {
+        transcriptEvents.asReversed()
+            .filterIsInstance<AgentEvent.AvailableCommands>()
+            .firstOrNull()
+            ?.commands
+            .orEmpty()
+            .filter { command ->
+                val name = command.name.trim().trimStart('/', '$').lowercase()
+                name !in knownSkillNames || name in allowedSkillNames
+            }
+            .map { command -> AgentNativeSlashCommand(command.name, command.description) }
+    }
+    val availableCommands = remember(task.agent, providerCommands) {
+        (AgentNativeSlashCommands.forAgent(task.agent) + providerCommands).distinctBy { it.name }
+    }
+    val availableAcpModes = remember(transcriptEvents) {
+        transcriptEvents.asReversed().filterIsInstance<AgentEvent.AvailableModes>().firstOrNull()?.modes.orEmpty()
+    }
+    val currentAcpModeId = remember(transcriptEvents) {
+        transcriptEvents.asReversed().firstNotNullOfOrNull { event ->
+            when (event) {
+                is AgentEvent.ModeChanged -> event.modeId
+                is AgentEvent.AvailableModes -> event.currentModeId
+                else -> null
+            }
+        }
+    }
+    var modeMenuExpanded by remember(task.id) { mutableStateOf(false) }
     val matchingCommands = slashCommand?.let { command ->
-        AgentNativeSlashCommands.forAgent(task.agent).filter { nativeCommand ->
+        availableCommands.filter { nativeCommand ->
             nativeCommand.name.contains(command.query, ignoreCase = true) ||
                 nativeCommand.description.contains(command.query, ignoreCase = true)
         }
@@ -185,6 +236,9 @@ internal fun AgentTaskDetail(
     }.orEmpty()
     val selectedSkills = remember(followUp, availableSkills) {
         availableSkills.filter { skill -> followUp.referencesSkill(skill) }
+    }
+    val showConnectionStallBanner = remember(transcriptEvents, task.isActive) {
+        shouldShowConnectionStallBanner(transcriptEvents, task.isActive)
     }
     val slashHighlight = rememberComposerSlashHighlight(
         agent = task.agent,
@@ -274,7 +328,7 @@ internal fun AgentTaskDetail(
         if (showHeader) {
             AgentTaskHeader(
                 task = task,
-                terminalLive = terminalSessionActive,
+                terminalLive = sessionActive,
                 onStop = { services.agentRuns.stop(task.id) },
                 onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
@@ -315,9 +369,23 @@ internal fun AgentTaskDetail(
             }
         }
         task.userInputRequest?.let { request ->
-            AgentUserInputCard(
-                request = request,
-                onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
+            if (!acpTask) {
+                AgentUserInputCard(
+                    request = request,
+                    onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
+                )
+            }
+        }
+        if (showConnectionStallBanner) {
+            ConnectionStallBanner(
+                onRetry = {
+                    scope.launch {
+                        services.agentRuns.resume(
+                            taskId = task.id,
+                            followUp = CONNECTION_STALL_RETRY_PROMPT,
+                        )
+                    }
+                },
             )
         }
         Box(
@@ -335,17 +403,46 @@ internal fun AgentTaskDetail(
             val onImagesStaged = remember<(List<String>) -> Unit>(task.id) {
                 { staged -> imagesStagedLatest.value(staged) }
             }
-            AgentTerminalSurface(
-                services = services,
-                taskId = task.id,
-                sessionActive = terminalSessionActive,
-                onImagesStaged = onImagesStaged,
-                modifier = terminalModifier,
-            )
+            if (acpTask) {
+                val pendingPermissionId = task.userInputRequest
+                    ?.takeIf { it.origin == AgentUserInputOrigin.AcpPermission }
+                    ?.id
+                AgentTranscript(
+                    events = transcriptEvents,
+                    isActive = task.isActive,
+                    agentLabel = task.agent.cliName,
+                    originalPrompt = task.prompt.ifBlank { task.title },
+                    originalImagePaths = task.imagePaths,
+                    restoreScrollKey = task.id,
+                    scrollMemory = transcriptScrollMemory,
+                    pendingContent = task.userInputRequest?.let { request ->
+                        {
+                            AgentUserInputCard(
+                                request = request,
+                                onSubmit = { answers ->
+                                    services.agentRuns.respondToUserInput(task.id, request.id, answers)
+                                },
+                            )
+                        }
+                    },
+                    activePermissionRequestId = pendingPermissionId,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                AgentTerminalSurface(
+                    services = services,
+                    taskId = task.id,
+                    sessionActive = terminalSessionActive,
+                    onImagesStaged = onImagesStaged,
+                    modifier = terminalModifier,
+                )
+            }
         }
         changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
             AgentChangeSummaryCard(
                 summary = summary,
+                filesExpanded = changedFilesExpanded,
+                onFilesExpandedChange = { changedFilesExpanded = it },
                 showAllFiles = showAllChangedFiles,
                 onShowAllFilesChange = { showAllChangedFiles = it },
                 expandedPath = expandedDiffPath,
@@ -399,42 +496,6 @@ internal fun AgentTaskDetail(
             }
         }
 
-        if (task.status == AgentStatus.Done &&
-            task.planMode &&
-            task.workflowTaskId == null &&
-            !terminalSessionActive
-        ) {
-            PanelCard(
-                modifier = Modifier.fillMaxWidth(),
-                background = AndyColors.Neutral850,
-                borderColor = Cyan.copy(alpha = 0.6f),
-                contentPadding = PaddingValues(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text("PLAN COMPLETE", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                if (task.completedPlanText.isNullOrBlank()) {
-                    Text(
-                        "implementation unavailable — this older plan has no recoverable final response",
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                    )
-                } else {
-                    Text(
-                        "Start a fresh writable run with this plan and the original request.",
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                    )
-                    Button(
-                        onClick = { scope.launch { services.agentRuns.startImplementation(task.id) } },
-                        colors = primaryButtonColors(),
-                        modifier = Modifier.fillMaxWidth().height(36.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                    ) { Text("implement plan", fontSize = 11.sp) }
-                }
-            }
-        }
-
         if (showFollowUpComposer) {
             PanelCard(
                 modifier = Modifier.fillMaxWidth(),
@@ -443,6 +504,44 @@ internal fun AgentTaskDetail(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (acpTask && availableAcpModes.isNotEmpty()) {
+                    val currentMode = availableAcpModes.firstOrNull { it.id == currentAcpModeId } ?: availableAcpModes.first()
+                    Box {
+                        OutlinedButton(
+                            onClick = { modeMenuExpanded = true },
+                            modifier = Modifier.heightIn(min = 26.dp),
+                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 3.dp),
+                        ) {
+                            Text("mode: ${currentMode.name}", fontSize = 10.sp, fontFamily = MonoFont)
+                        }
+                        DropdownMenu(
+                            expanded = modeMenuExpanded,
+                            onDismissRequest = { modeMenuExpanded = false },
+                        ) {
+                            availableAcpModes.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(
+                                                mode.name,
+                                                color = if (mode.id == currentMode.id) Green else TextPrimary,
+                                                fontFamily = MonoFont,
+                                                fontSize = 12.sp,
+                                            )
+                                            mode.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                                Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        modeMenuExpanded = false
+                                        services.agentRuns.setAcpSessionMode(task.id, mode.id)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 if (task.userInputRequest == null) {
                     task.goal?.let { goal ->
                         OutlinedButton(
@@ -938,6 +1037,8 @@ private fun String.removeSelectedSkill(skill: AgentSkill): String =
 @Composable
 private fun AgentChangeSummaryCard(
     summary: AgentChangeSummary,
+    filesExpanded: Boolean,
+    onFilesExpandedChange: (Boolean) -> Unit,
     showAllFiles: Boolean,
     onShowAllFilesChange: (Boolean) -> Unit,
     expandedPath: String?,
@@ -958,10 +1059,21 @@ private fun AgentChangeSummaryCard(
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = AndySpace.Space4),
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = AndySpace.Space4)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .clickable { onFilesExpandedChange(!filesExpanded) },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         ) {
+            Text(
+                if (filesExpanded) "v" else ">",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                modifier = Modifier.width(10.dp),
+            )
             Text("▣", color = Cyan, fontFamily = MonoFont, fontSize = 15.sp)
             Column(Modifier.weight(1f)) {
                 Text(
@@ -976,28 +1088,30 @@ private fun AgentChangeSummaryCard(
                 }
             }
         }
-        displayedFiles.forEach { file ->
-            // This interactive row is nested in the transcript's SelectionContainer.
-            // Opt out so the file link keeps its hand cursor rather than a text cursor.
-            DisableSelection {
-                ChangedFileRow(
-                    file = file,
-                    expanded = expandedPath == file.path,
-                    loading = loadingPath == file.path,
-                    diff = diffs[file.path],
-                    viewMode = viewMode,
-                    onViewModeChange = onViewModeChange,
-                    onToggle = { onToggleFile(file.path) },
-                )
+        if (filesExpanded) {
+            displayedFiles.forEach { file ->
+                // This interactive row is nested in the transcript's SelectionContainer.
+                // Opt out so the file link keeps its hand cursor rather than a text cursor.
+                DisableSelection {
+                    ChangedFileRow(
+                        file = file,
+                        expanded = expandedPath == file.path,
+                        loading = loadingPath == file.path,
+                        diff = diffs[file.path],
+                        viewMode = viewMode,
+                        onViewModeChange = onViewModeChange,
+                        onToggle = { onToggleFile(file.path) },
+                    )
+                }
             }
-        }
-        if (remaining > 0 || showAllFiles) {
-            OutlinedButton(
-                onClick = { onShowAllFilesChange(!showAllFiles) },
-                modifier = Modifier.padding(horizontal = 8.dp).height(28.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
-            ) {
-                Text(if (showAllFiles) "show fewer files" else "show $remaining more files", fontSize = 10.sp)
+            if (remaining > 0 || showAllFiles) {
+                OutlinedButton(
+                    onClick = { onShowAllFilesChange(!showAllFiles) },
+                    modifier = Modifier.padding(horizontal = 8.dp).height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
+                ) {
+                    Text(if (showAllFiles) "show fewer files" else "show $remaining more files", fontSize = 10.sp)
+                }
             }
         }
     }
