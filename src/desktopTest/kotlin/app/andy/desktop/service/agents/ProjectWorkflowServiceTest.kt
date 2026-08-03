@@ -1321,7 +1321,9 @@ private class WorkflowAdapter(
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
         launched += task
         return if (isWindows()) {
-            writeWorkflowArtifacts(task)
+            if (stageDelayMillis == 0L && task.workflowStage != failStage) {
+                writeWorkflowArtifacts(task)
+            }
             listOf(binary, "/d", "/c", windowsCommand(task))
         } else {
             if (reviewWritesFile && task.workflowStage == ProjectWorkflowStage.Review) {
@@ -1394,8 +1396,13 @@ private class WorkflowAdapter(
             append("exit /b 7")
             return@buildString
         }
-        if (stageDelayMillis > 0) append("ping 127.0.0.1 -n 2 >NUL & ")
+        if (stageDelayMillis > 0) {
+            append("powershell -NoProfile -Command \"Start-Sleep -Milliseconds $stageDelayMillis\" & ")
+        }
         when (task.workflowStage) {
+            ProjectWorkflowStage.Spec -> {
+                if (stageDelayMillis > 0) append(windowsWriteArtifact(task, "plan.md", specPlanText()))
+            }
             ProjectWorkflowStage.Build -> {
                 if (buildKeepAliveSeconds > 0) {
                     append("timeout /t ").append(buildKeepAliveSeconds).append(" /nobreak >nul")
@@ -1403,7 +1410,34 @@ private class WorkflowAdapter(
                     append("exit /b 0")
                 }
             }
+            ProjectWorkflowStage.Review -> {
+                if (stageDelayMillis > 0) {
+                    reviewJson(reviewOutcomeKey(task))?.let { append(windowsWriteArtifact(task, "review.json", it)) }
+                }
+                append("exit /b 0")
+            }
+            ProjectWorkflowStage.Verification -> {
+                if (stageDelayMillis > 0) {
+                    verificationJson(verificationOutcomeKey(task))?.let {
+                        append(windowsWriteArtifact(task, "verification.json", it))
+                    }
+                }
+                append("exit /b 0")
+            }
             else -> append("exit /b 0")
+        }
+    }
+
+    private fun windowsWriteArtifact(task: AgentTask, name: String, content: String): String {
+        val file = File(artifactDir(task), name)
+        val dir = file.parentFile.absolutePath.replace("'", "''")
+        val path = file.absolutePath.replace("'", "''")
+        val encoded = java.util.Base64.getEncoder().encodeToString(content.toByteArray(Charsets.UTF_8))
+        return buildString {
+            append("powershell -NoProfile -Command \"")
+            append("New-Item -ItemType Directory -Force -Path '$dir' | Out-Null; ")
+            append("[IO.File]::WriteAllBytes('$path', [Convert]::FromBase64String('$encoded'))")
+            append("\" & ")
         }
     }
 
