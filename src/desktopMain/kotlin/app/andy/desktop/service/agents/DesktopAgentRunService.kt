@@ -1059,7 +1059,7 @@ class DesktopAgentRunService(
                 if (!success && currentTask(taskId)?.lane == AgentLaneKind.Acp) {
                     updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, finishedAtMillis = null) }
                     persist()
-                    resume(taskId, acpFollowUp, imagePaths, selectedSkills, contextBundleIds, provenance)
+                    resume(taskId, followUp, imagePaths, selectedSkills, contextBundleIds, provenance)
                 }
             }
             return

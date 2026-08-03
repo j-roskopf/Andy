@@ -28,6 +28,7 @@ import app.andy.model.AgentModelOption
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaAccess
+import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -333,6 +334,18 @@ class McpAgentRunClient(
                 AgentPlanEntry(entry.jsonObject.string("content").orEmpty(), entry.jsonObject.string("status").orEmpty())
             }.orEmpty())
             "mode" -> AgentEvent.ModeChanged(atMillis, obj.string("modeId").orEmpty())
+            "modes" -> AgentEvent.AvailableModes(
+                atMillis = atMillis,
+                modes = obj["modes"]?.jsonArray?.map { mode ->
+                    val value = mode.jsonObject
+                    AgentSessionMode(
+                        id = value.string("id").orEmpty(),
+                        name = value.string("name").orEmpty(),
+                        description = value.string("description"),
+                    )
+                }.orEmpty(),
+                currentModeId = obj.string("currentModeId"),
+            )
             "commands" -> AgentEvent.AvailableCommands(atMillis, obj["commands"]?.jsonArray?.map { command ->
                 AgentSlashCommand(command.jsonObject.string("name").orEmpty(), command.jsonObject.string("description").orEmpty(), command.jsonObject.string("inputHint"))
             }.orEmpty())
@@ -683,6 +696,18 @@ class McpAgentRunClient(
                     "taskId" to JsonPrimitive(taskId),
                     "requestId" to JsonPrimitive(requestId),
                     "answers" to JsonObject(answers.mapValues { JsonPrimitive(it.value) }),
+                ),
+            )
+        }
+    }
+
+    override fun setAcpSessionMode(taskId: String, modeId: String) {
+        scope.launch {
+            callTool(
+                "chat.set_mode",
+                mapOf(
+                    "taskId" to JsonPrimitive(taskId),
+                    "modeId" to JsonPrimitive(modeId),
                 ),
             )
         }

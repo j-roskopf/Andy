@@ -581,6 +581,21 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "chat.set_mode",
+        description = "Switch the live ACP session mode for providers that advertise modes",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "modeId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId", "modeId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val modeId = str(args, "modeId") ?: error("modeId required")
+        agentRuns.setAcpSessionMode(id, modeId)
+        textResult("""{"ok":true,"id":"$id","modeId":"$modeId"}""")
+    }
+
+    register(
         name = "chat.respond",
         description = "Respond to a waiting user-input request on an agent chat",
         properties = mapOf(
@@ -860,6 +875,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.reconcile",
     "chat.delete",
     "chat.resume",
+    "chat.set_mode",
     "chat.respond",
     "chat.status",
     "agent_status",

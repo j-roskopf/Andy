@@ -139,7 +139,11 @@ class AcpPermissionBridge(
             effectiveFullBypass() -> allow.firstOrNull() ?: reject.firstOrNull()
             toolCall.kind == ToolKind.READ || toolCall.kind == ToolKind.SEARCH || toolCall.kind == ToolKind.THINK ->
                 allow.firstOrNull() ?: reject.firstOrNull()
-            toolCall.kind == ToolKind.EDIT && locationsInsideWorkspace(toolCall) -> allow.firstOrNull()
+            toolCall.kind == ToolKind.EDIT &&
+                !planMode &&
+                autonomy != AgentAutonomy.ReadOnly &&
+                locationsInsideWorkspace(toolCall) ->
+                allow.firstOrNull()
             else -> null
         }
     }

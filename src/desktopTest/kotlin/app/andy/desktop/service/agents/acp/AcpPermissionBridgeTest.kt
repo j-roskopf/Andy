@@ -194,4 +194,68 @@ class AcpPermissionBridgeTest {
         assertEquals(allowOnce.optionId, selectedOptionId(response))
         assertNull(pending)
     }
+
+    @Test
+    fun planModePromptsForWorkspaceEdit() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val cwd = File.createTempFile("acp-permission", null).parentFile!!
+        val inside = File(cwd, "src/Main.kt").apply { parentFile?.mkdirs(); writeText("fun main() {}") }
+        val subject = AcpPermissionBridge(
+            taskId = "task-1",
+            autonomy = AgentAutonomy.Full,
+            planMode = true,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            cwd = cwd,
+            onPending = { pending = it },
+            onResolved = { _, _, _, _ -> },
+        )
+        val editCall = SessionUpdate.ToolCallUpdate(
+            toolCallId = ToolCallId("edit-1"),
+            title = "edit Main.kt",
+            kind = ToolKind.EDIT,
+            status = null,
+            content = null,
+            locations = listOf(com.agentclientprotocol.model.ToolCallLocation(inside.path)),
+            rawInput = null,
+            rawOutput = null,
+        )
+        coroutineScope {
+            val deferred = async { subject.request(editCall, options, null) }
+            while (pending == null) yield()
+            assertTrue(subject.respond(pending!!.request.id, rejectOnce.name))
+            assertEquals(rejectOnce.optionId, selectedOptionId(deferred.await()))
+        }
+    }
+
+    @Test
+    fun readOnlyAutonomyPromptsForWorkspaceEdit() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val cwd = File.createTempFile("acp-permission", null).parentFile!!
+        val inside = File(cwd, "src/Main.kt").apply { parentFile?.mkdirs(); writeText("fun main() {}") }
+        val subject = AcpPermissionBridge(
+            taskId = "task-1",
+            autonomy = AgentAutonomy.ReadOnly,
+            planMode = false,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            cwd = cwd,
+            onPending = { pending = it },
+            onResolved = { _, _, _, _ -> },
+        )
+        val editCall = SessionUpdate.ToolCallUpdate(
+            toolCallId = ToolCallId("edit-1"),
+            title = "edit Main.kt",
+            kind = ToolKind.EDIT,
+            status = null,
+            content = null,
+            locations = listOf(com.agentclientprotocol.model.ToolCallLocation(inside.path)),
+            rawInput = null,
+            rawOutput = null,
+        )
+        coroutineScope {
+            val deferred = async { subject.request(editCall, options, null) }
+            while (pending == null) yield()
+            assertTrue(subject.respond(pending!!.request.id, allowOnce.name))
+            assertEquals(allowOnce.optionId, selectedOptionId(deferred.await()))
+        }
+    }
 }
