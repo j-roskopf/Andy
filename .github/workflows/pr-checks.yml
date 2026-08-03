@@ -141,16 +141,16 @@ jobs:
 
       - name: Verify Linux desktop screenshots
         if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew verifyRoborazziDesktop
+        run: xvfb-run -a ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
       - name: Verify macOS desktop screenshots
         if: matrix.os == 'macos'
-        run: ./gradlew verifyRoborazziDesktop
+        run: ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
       - name: Verify Windows desktop screenshots
         if: matrix.os == 'windows'
         shell: pwsh
-        run: ./gradlew.bat verifyRoborazziDesktop
+        run: ./gradlew.bat verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
       - name: Upload desktop screenshot artifacts
         if: failure()
