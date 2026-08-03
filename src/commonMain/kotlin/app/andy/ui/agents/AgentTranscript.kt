@@ -73,13 +73,19 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
 import app.andy.model.AgentEvent
+import app.andy.model.isRetriableConnectionStallMessage
+import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.model.stripDecisionCheckpointMarkup
 import app.andy.model.AgentSkill
+import app.andy.model.coalesceAcpTranscriptEvents
+import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.ui.components.AndyMarkdownDensity
+import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
@@ -91,7 +97,6 @@ import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
-import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
@@ -138,6 +143,8 @@ internal fun AgentTranscript(
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
     pendingContent: (@Composable () -> Unit)? = null,
+    /** When set, the matching [AgentEvent.PermissionRequest] row is omitted (shown via [pendingContent]). */
+    activePermissionRequestId: String? = null,
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     completedContent: (@Composable () -> Unit)? = null,
@@ -153,7 +160,7 @@ internal fun AgentTranscript(
 ) {
     val scope = rememberCoroutineScope()
     val displayItems = remember(events) { transcriptDisplayItems(events) }
-    val originalPromptVisible = !originalPrompt.isNullOrBlank() || originalImagePaths.isNotEmpty()
+    val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths)
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
     }
@@ -176,6 +183,7 @@ internal fun AgentTranscript(
     var scrollInitialized by remember(taskId) { mutableStateOf(false) }
     var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
+    var expandedThinkingKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     // Desktop wheel/trackpad input can complete without isScrollInProgress ever becoming true.
     var userScrollGeneration by remember(taskId) { mutableStateOf(0) }
     val rowKeys = remember(
@@ -346,10 +354,15 @@ internal fun AgentTranscript(
                                 event = item.event,
                                 eventKey = transcriptEventKey(item.index, item.event),
                                 expandedToolKeys = expandedToolKeys,
+                                expandedThinkingKeys = expandedThinkingKeys,
                                 agentLabel = agentLabel,
                                 completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
+                                activePermissionRequestId = activePermissionRequestId,
                                 onToolExpandedChange = { key, expanded ->
                                     expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                },
+                                onThinkingExpandedChange = { key, expanded ->
+                                    expandedThinkingKeys = if (expanded) expandedThinkingKeys + key else expandedThinkingKeys - key
                                 },
                                 onSkillOpen = onSkillOpen,
                             )
@@ -373,13 +386,11 @@ internal fun AgentTranscript(
                     item(key = "original-prompt", contentType = "message") {
                         SelectionContainer {
                             ChatMessageBubble(
-                                author = "you",
-                                authorColor = Rust,
                                 alignEnd = true,
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                        ChatMarkdown(prompt, lineHeight = 18.sp)
+                                        ChatMarkdown(prompt, lineHeight = 18.sp, preserveLineBreaks = true)
                                     }
                                     ChatAttachedImages(originalImagePaths)
                                 }
@@ -417,6 +428,17 @@ internal fun AgentTranscript(
     }
 }
 
+/**
+ * ACP records the user turn in the transcript, while terminal tasks still need the task prompt
+ * fallback. Do not render both representations when a recorded user turn is already present.
+ */
+internal fun shouldDisplayOriginalPrompt(
+    events: List<AgentEvent>,
+    originalPrompt: String?,
+    originalImagePaths: List<String>,
+): Boolean = events.none { it is AgentEvent.UserMessage } &&
+    (!originalPrompt.isNullOrBlank() || originalImagePaths.isNotEmpty())
+
 /** Bottom is an invariant instead of a layout estimate in the reverse transcript. */
 internal fun transcriptIsAtBottom(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int): Boolean =
     firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset <= 1
@@ -431,9 +453,17 @@ private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleI
  * again in their completion record. The completion record owns that response
  * in the transcript so it is visible once, with its completed state.
  */
-internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> = events.filterIndexed { index, event ->
-    val completion = events.getOrNull(index + 1) as? AgentEvent.TaskResult
-    event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
+internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> {
+    val coalesced = coalesceAcpTranscriptEvents(events)
+    val displayable = coalesced.filterNot { event ->
+        event is AgentEvent.AvailableCommands ||
+            event is AgentEvent.Raw ||
+            event.isHiddenConnectionStallMessage()
+    }
+    return displayable.filterIndexed { index, event ->
+        val completion = displayable.getOrNull(index + 1) as? AgentEvent.TaskResult
+        event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
+    }
 }
 
 internal sealed class TranscriptDisplayItem {
@@ -491,9 +521,12 @@ private fun TranscriptEvent(
     event: AgentEvent,
     eventKey: String,
     expandedToolKeys: Set<String>,
+    expandedThinkingKeys: Set<String>,
     agentLabel: String,
     completedContent: (@Composable () -> Unit)?,
+    activePermissionRequestId: String? = null,
     onToolExpandedChange: (String, Boolean) -> Unit,
+    onThinkingExpandedChange: (String, Boolean) -> Unit,
     onSkillOpen: (AgentSkill) -> Unit,
 ) {
     when (event) {
@@ -507,24 +540,22 @@ private fun TranscriptEvent(
         }
         is AgentEvent.AssistantText -> {
             val visibleText = stripDecisionCheckpointMarkup(event.text)
-            if (visibleText.isBlank()) return
-            ChatMessageBubble(
-                author = agentLabel,
-                authorColor = Cyan,
-                alignEnd = false,
-            ) {
+            if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
+            AgentResponse {
                 ChatMarkdown(visibleText, lineHeight = 19.sp)
             }
         }
-        is AgentEvent.Thinking -> ThinkingStep(event.text)
+        is AgentEvent.Thinking -> ThinkingStep(
+            text = event.text,
+            expanded = eventKey in expandedThinkingKeys,
+            onExpandedChange = { expanded -> onThinkingExpandedChange(eventKey, expanded) },
+        )
         is AgentEvent.UserMessage -> ChatMessageBubble(
-            author = "you",
-            authorColor = Rust,
             alignEnd = true,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (event.text.isNotBlank()) {
-                    ChatMarkdown(event.text, lineHeight = 18.sp)
+                    ChatMarkdown(event.text, lineHeight = 18.sp, preserveLineBreaks = true)
                 }
                 ChatAttachedImages(event.imagePaths)
                 if (event.skills.isNotEmpty()) {
@@ -563,40 +594,69 @@ private fun TranscriptEvent(
             detail = event.detail,
             color = if (event.isError) Red else TextSecondary,
         )
-        is AgentEvent.TaskError -> Text(event.message, color = Red, fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 16.sp)
-        is AgentEvent.TaskResult -> ChatMessageBubble(
-            author = if (event.success) "completed" else "failed",
-            authorColor = if (event.success) Green else Red,
-            alignEnd = false,
-            borderColor = (if (event.success) Green else Red).copy(alpha = 0.38f),
-        ) {
+        is AgentEvent.TaskError -> {
+            if (event.message.isRetriableConnectionStallMessage()) return
+            Text(event.message, color = Red, fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        is AgentEvent.TaskResult -> AgentCompletion(
+            event = event,
+            completedContent = completedContent,
+        )
+        // The header owns this live status; a transcript row would only add noise.
+        is AgentEvent.ContextUsage -> Unit
+        is AgentEvent.PlanUpdate -> PanelCard {
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    formatCost(event.costUsd, event.costIsEstimated)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
-                    formatTokens(event.inputTokens, event.outputTokens)?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+                Text("plan", color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
+                event.entries.forEach { entry ->
+                    Text("${entry.status}  ${entry.content}", color = TextPrimary, fontSize = 12.sp)
                 }
-                event.finalText?.takeIf { it.isNotBlank() }?.let {
-                    ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
-                }
-                if (event.success) completedContent?.invoke()
             }
         }
-        // The header owns this live status; a transcript row would only add noise.
-        is AgentEvent.ContextUsage -> Unit
-        is AgentEvent.Raw -> Text(
-            event.line,
-            color = TextSecondary.copy(alpha = 0.75f),
+        is AgentEvent.ModeChanged -> Text(
+            "mode: ${event.modeId}",
+            color = TextSecondary,
             fontFamily = MonoFont,
             fontSize = 11.sp,
-            lineHeight = 14.sp,
         )
+        // Provider command metadata powers the composer; it is not conversation content.
+        is AgentEvent.AvailableCommands -> Unit
+        // Mode metadata powers the mode picker in the composer header; not conversation content.
+        is AgentEvent.AvailableModes -> Unit
+        is AgentEvent.PermissionRequest -> {
+            if (event.requestId != activePermissionRequestId) {
+                PanelCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(event.toolName.ifBlank { "permission" }, color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
+                        Text(event.question, color = TextPrimary, fontSize = 12.sp)
+                        Text(event.options.joinToString(" · ") { it.label }, color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+        is AgentEvent.PermissionResolved -> Text(
+            buildString {
+                append("permission ${if (event.allowed) "allowed" else "rejected"}: ${event.optionId}")
+                event.note?.let { append(" ($it)") }
+            },
+            color = if (event.allowed) Green else Red,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+        )
+        // Raw adapter diagnostics are retained for debugging but should never become
+        // visible chat bubbles. User-facing failures have dedicated event types.
+        is AgentEvent.Raw -> Unit
     }
 }
 
 @Composable
-private fun ThinkingStep(text: String) {
+private fun ThinkingStep(
+    text: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+) {
+    val expandable = text.lineSequence().any { it.isNotBlank() }
     // Open aside — left accent only, no filled card, so it reads lighter than chat/tool blocks.
     Row(
         Modifier
@@ -612,48 +672,128 @@ private fun ThinkingStep(text: String) {
                 .background(Cyan.copy(alpha = 0.28f), RoundedCornerShape(1.dp)),
         )
         Column(
-            Modifier.weight(1f),
+            Modifier.weight(1f).animateContentSize(),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ThinkingOrb(size = 14.dp, color = Cyan, animate = false, contentDescription = "Thinking")
-                Text("thinking", color = Cyan.copy(alpha = 0.65f), fontFamily = MonoFont, fontSize = 10.sp)
+            DisableSelection {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(if (expandable) Modifier.clickable { onExpandedChange(!expanded) } else Modifier),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (expandable) {
+                        Text(
+                            if (expanded) "v" else ">",
+                            color = Cyan.copy(alpha = 0.65f),
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            modifier = Modifier.width(10.dp),
+                        )
+                    }
+                    ThinkingOrb(size = 14.dp, color = Cyan, animate = false, contentDescription = "Thinking")
+                    Text("thinking", color = Cyan.copy(alpha = 0.65f), fontFamily = MonoFont, fontSize = 10.sp)
+                }
             }
-            ChatMarkdown(
-                text,
-                density = AndyMarkdownDensity.Thinking,
-                lineHeight = 15.sp,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 60.dp).clipToBounds(),
-            )
+            AnimatedVisibility(visible = expandable) {
+                val bodyModifier = if (expanded) {
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 60.dp)
+                        .clipToBounds()
+                }
+                ChatMarkdown(
+                    text,
+                    density = AndyMarkdownDensity.Thinking,
+                    lineHeight = 15.sp,
+                    modifier = bodyModifier,
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun ChatMessageBubble(
-    author: String,
-    authorColor: Color,
     alignEnd: Boolean,
-    borderColor: Color = Border,
     content: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxWidth()) {
         PanelCard(
             modifier = Modifier
-                .widthIn(max = if (alignEnd) 720.dp else 860.dp)
-                .fillMaxWidth()
+                .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
+                .widthIn(max = 720.dp)
+                .fillMaxWidth(if (alignEnd) 0.78f else 1f)
                 .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart),
-            background = if (alignEnd) AndyColors.OrangeSubtle.copy(alpha = AndyOverlay.Medium) else AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong),
-            borderColor = borderColor,
+            background = AndyColors.Neutral700.copy(alpha = AndyOverlay.Strong),
+            borderColor = null,
             contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            Text(author, color = authorColor, fontFamily = MonoFont, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             content()
         }
+    }
+}
+
+@Composable
+private fun AgentResponse(
+    content: @Composable () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        content = { content() },
+    )
+}
+
+@Composable
+private fun AgentCompletion(
+    event: AgentEvent.TaskResult,
+    completedContent: (@Composable () -> Unit)?,
+) {
+    val duration = event.durationMs
+        ?.takeIf { it >= 0L }
+        ?.let { formatElapsed(0L, it, 0L) }
+    val cost = formatCost(event.costUsd, event.costIsEstimated)
+    val tokens = formatTokens(event.inputTokens, event.outputTokens)
+
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        duration?.let {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (event.success) "Worked for $it" else "Failed after $it",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                )
+                Text(">", color = TextSecondary.copy(alpha = 0.72f), fontSize = 11.sp)
+            }
+            AndyHorizontalDivider(color = Border)
+        }
+        if (cost != null || tokens != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                cost?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+                tokens?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+            }
+        }
+        event.finalText?.takeIf { it.isNotBlank() }?.let {
+            AgentResponse {
+                ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
+            }
+        }
+        if (event.success) completedContent?.invoke()
     }
 }
 
@@ -1007,4 +1147,41 @@ internal fun transcriptEventKey(index: Int, event: AgentEvent): String = when (e
     is AgentEvent.ToolCall -> "tool-call-$index-${event.atMillis}-${event.toolName}"
     is AgentEvent.ToolResult -> "tool-result-$index-${event.atMillis}-${event.toolName}-${event.isError}"
     else -> "${event::class.simpleName}-$index-${event.atMillis}"
+}
+
+private fun AgentEvent.isHiddenConnectionStallMessage(): Boolean = when (this) {
+    is AgentEvent.AssistantText -> text.isRetriableConnectionStallMessage()
+    is AgentEvent.TaskError -> message.isRetriableConnectionStallMessage()
+    else -> false
+}
+
+@Composable
+internal fun ConnectionStallBanner(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    PanelCard(
+        modifier = modifier.fillMaxWidth(),
+        background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium),
+        contentPadding = PaddingValues(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        Text(
+            "Connection stalled",
+            color = Red,
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            "Andy lost the stream to Cursor before this turn finished. Retry to pick up where the agent left off.",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            OutlinedButton(onClick = onRetry) { Text("retry", fontSize = 11.sp) }
+        }
+    }
 }

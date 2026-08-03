@@ -70,7 +70,6 @@ class DesktopAgentTaskStoreTest {
             sandboxMode = AgentSandboxMode.None,
             planMode = true,
             completedPlanText = "1. Update the service\n2. Verify it",
-            implementationPrompt = "Begin implementation using the completed plan.",
             continuationPrompt = "Continue after the user picks a platform.",
             model = "gpt-5.6-sol",
             reasoningEffort = AgentReasoningEffort.ExtraHigh,

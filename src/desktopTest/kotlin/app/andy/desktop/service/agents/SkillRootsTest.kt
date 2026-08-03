@@ -36,17 +36,24 @@ class SkillRootsTest {
     }
 
     @Test
-    fun openCodeIncludesProjectAndClaudeFallbackRoots() {
+    fun providersDoNotShareClaudeAndOpenCodeWorkspaceRoots() {
         val home = File("/test/home")
         val workspace = File("/test/workspace")
         assertEquals(
             listOf(
                 File(workspace, ".opencode/skills"),
-                File(workspace, ".claude/skills"),
                 File(home, ".config/opencode/skills"),
                 File(home, ".opencode/skills"),
             ),
             skillRootsFor(AgentKind.OpenCode, workspace, home),
+        )
+        assertEquals(
+            listOf(
+                File(home, ".claude/skills"),
+                File(workspace, ".claude/skills"),
+                File(home, ".agents/skills"),
+            ),
+            skillRootsFor(AgentKind.ClaudeCode, workspace, home),
         )
     }
 

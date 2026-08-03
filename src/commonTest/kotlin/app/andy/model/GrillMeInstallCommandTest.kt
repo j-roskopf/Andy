@@ -34,12 +34,34 @@ class GrillMeInstallCommandTest {
     }
 
     @Test
-    fun interactivePromptMentionsInterviewAndPlan() {
+    fun interactivePromptMentionsInterviewPlanAndQuestionArtifact() {
         val prompt = grillMeInteractivePromptAddendum(".andy/<taskId>")
         assertTrue("interview" in prompt)
+        assertTrue("question.json" in prompt)
         assertTrue("plan.md" in prompt)
         assertTrue("even though plan mode is active" in prompt.lowercase())
         assertTrue("provider's default plan path" in prompt)
+        assertTrue("decisions so far" in prompt)
+        assertTrue("one decision question at a time" in prompt)
+    }
+
+    @Test
+    fun chatPromptAddendumRoutesDecisionsThroughQuestionArtifact() {
+        val prompt = grillMeChatPromptAddendum(".andy/task-42")
+        assertTrue("question.json" in prompt)
+        assertTrue("`.andy/task-42/question.json`" in prompt)
+        assertTrue("Do not output a full implementation plan" in prompt)
+    }
+
+    @Test
+    fun hasGrillMeSkillsDetectsPortableSkillNames() {
+        val skills = listOf(
+            AgentSkill("grill-me", "", "/tmp/grill-me/SKILL.md"),
+            AgentSkill("other", "", "/tmp/other/SKILL.md"),
+        )
+        assertTrue(hasGrillMeSkills(skills))
+        assertTrue(hasGrillMeSkills(listOf(AgentSkill("grilling", "", "/tmp/grilling/SKILL.md"))))
+        assertTrue(!hasGrillMeSkills(listOf(AgentSkill("lint", "", "/tmp/lint/SKILL.md"))))
     }
 
     @Test

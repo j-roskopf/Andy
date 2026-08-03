@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
@@ -48,6 +49,7 @@ internal fun OutlinedButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    fixedHeight: Boolean = true,
     shape: androidx.compose.ui.graphics.Shape = AndyShape.Interactive,
     colors: ButtonColors = ButtonDefaults.outlinedButtonColors(
         contentColor = TextPrimary,
@@ -57,11 +59,18 @@ internal fun OutlinedButton(
     contentPadding: PaddingValues = PaddingValues(horizontal = AndySpace.Space5, vertical = 0.dp),
     content: @Composable RowScope.() -> Unit,
 ) {
+    val heightModifier = if (fixedHeight) {
+        Modifier
+            .height(AndyLayout.ControlHeightMd)
+            .defaultMinSize(minHeight = AndyLayout.ControlHeightMd)
+    } else {
+        Modifier
+            .defaultMinSize(minHeight = AndyLayout.ControlHeightMd)
+            .heightIn(min = AndyLayout.ControlHeightMd)
+    }
     androidx.compose.material3.OutlinedButton(
         onClick = onClick,
-        modifier = modifier
-            .height(AndyLayout.ControlHeightMd)
-            .defaultMinSize(minHeight = AndyLayout.ControlHeightMd),
+        modifier = modifier.then(heightModifier),
         enabled = enabled,
         shape = shape,
         colors = colors,

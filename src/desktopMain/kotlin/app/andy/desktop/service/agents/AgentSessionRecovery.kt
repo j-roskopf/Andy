@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import java.io.File
@@ -21,6 +22,15 @@ internal fun recoverInterruptedTaskStatus(
 
     if (task.status == AgentStatus.Blocked) {
         return task
+    }
+    if (task.lane == AgentLaneKind.Acp && task.status == AgentStatus.Working) {
+        return task.copy(
+            status = AgentStatus.Error,
+            interrupted = true,
+            resumable = task.acpSessionId?.isNotBlank() == true,
+            finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
+            statusConfident = true,
+        )
     }
     // Turn already finalized but badge left on Working (stale scrape / remount noise).
     if (task.finishedAtMillis != null && task.status == AgentStatus.Working) {

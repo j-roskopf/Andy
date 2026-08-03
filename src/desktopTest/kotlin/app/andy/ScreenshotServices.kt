@@ -668,7 +668,6 @@ internal object ScreenshotServices {
         override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(listOf(AgentSkill("compose-expert", "Compose UI guidance", "/skills/compose-expert/SKILL.md")))
         override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
         override suspend fun createAndStart(draft: AgentTaskDraft) = task
-        override suspend fun startImplementation(taskId: String) = Unit
         override fun stop(taskId: String) = Unit
         override fun completeWorkflowRun(taskId: String) = Unit
         override suspend fun retry(taskId: String) = Unit

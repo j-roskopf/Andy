@@ -12,6 +12,7 @@ import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectNote
 import app.andy.model.ProjectPlanSnapshot
+import app.andy.model.ProjectPlanVersion
 import app.andy.model.ProjectReviewFindingSeverity
 import app.andy.model.ProjectReviewStatus
 import app.andy.model.ProjectSpecDraft
@@ -1037,6 +1038,78 @@ class ProjectWorkflowServiceTest {
             harness.service.deleteTask(verificationId)
             assertTrue(harness.service.projects.value.getValue("project-1").tasks.isEmpty())
             assertFalse(harness.service.tasks.value.any { it.workflowTaskId in setOf(buildId, externalBuildId, verificationId) })
+        }
+    }
+
+    @Test
+    fun repairsSpecWaitingStateWhenPlanningRunFinishedWithPlan() = runBlocking {
+        val root = File.createTempFile("andy-spec-waiting-repair", null).also { it.delete(); it.mkdirs() }
+        val projectDir = File(root, "project").apply { mkdirs() }
+        val plan = "# Cook mode\n\n- Keep screen on in cook mode"
+        val run = AgentTask(
+            id = "run-spec-done",
+            title = "Spec: Cook mode",
+            prompt = "Plan cook mode keep-awake",
+            agent = AgentKind.Codex,
+            projectId = "project-1",
+            cwd = projectDir.absolutePath,
+            originDir = projectDir.absolutePath,
+            planMode = true,
+            completedPlanText = plan,
+            status = AgentStatus.Done,
+            workflowTaskId = "spec-waiting",
+            workflowStage = ProjectWorkflowStage.Spec,
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+        )
+        val spec = app.andy.model.ProjectTask(
+            id = "spec-waiting",
+            projectId = "project-1",
+            kind = ProjectTaskKind.Spec,
+            title = "Cook mode",
+            instructions = "Plan it",
+            profile = specProfile(),
+            includeScratchpad = false,
+            state = ProjectTaskState.Waiting,
+            planVersions = listOf(ProjectPlanVersion(1, plan, run.id, 2)),
+            createdAtMillis = 1,
+            updatedAtMillis = 2,
+        )
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
+        store.save(
+            AgentStoreState(
+                tasks = listOf(run),
+                binaryOverrides = workflowBinaryOverrides(),
+                projectWorkflows = mapOf(
+                    "project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(spec)),
+                ),
+            ),
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to WorkflowAdapter()),
+                worktrees = WorktreeManager(File(root, "worktrees")),
+                mcp = WorkflowFakeMcp,
+                workspaceStore = WorkflowWorkspaceStore,
+                actionConfig = MutableActionConfig(
+                    ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
+                ),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            await {
+                service.projects.value["project-1"]?.tasks?.singleOrNull()?.state == ProjectTaskState.Completed
+            }
+            assertEquals(ProjectTaskState.Completed, service.projects.value["project-1"]?.tasks?.single()?.state)
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            root.deleteRecursively()
         }
     }
 

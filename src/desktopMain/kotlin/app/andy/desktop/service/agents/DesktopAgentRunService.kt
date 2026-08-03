@@ -6,6 +6,8 @@ import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
+import app.andy.model.defaultLane
 import app.andy.model.andyQuestionArtifactHint
 import app.andy.model.isGrillMeSkillName
 import app.andy.model.AgentModelCatalog
@@ -44,12 +46,24 @@ import app.andy.model.ProjectVerificationVerdict
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.toProjectProfile
+import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
+import app.andy.model.coalesceAcpTranscriptEvents
+import app.andy.model.coalesceAgentStreamDeltas
+import app.andy.model.hasRetriableConnectionStall
+import app.andy.model.planTextFromAcpTranscript
 import app.andy.model.followUpCliPayload
 import app.andy.model.followUpPromptForLiveTerminal
 import app.andy.model.promptForCli
 import app.andy.model.providerDefaults
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.McpClientConfig
+import app.andy.desktop.service.agents.acp.AgentAcpManager
+import app.andy.desktop.service.agents.acp.AcpRegistry
+import app.andy.desktop.service.agents.acp.AcpEventMapper
+import app.andy.desktop.service.agents.acp.AcpTranscriptStore
+import app.andy.desktop.service.agents.acp.shouldIgnoreAcpProviderHistoryReplay
+import app.andy.desktop.service.agents.acp.NodeRuntimeLocator
+import app.andy.desktop.service.agents.acp.PendingAcpPermission
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.toTerminalAppearance
 import app.andy.terminal.TmuxAndy
@@ -84,7 +98,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val MAX_EVENTS_IN_MEMORY = 3000
+/** Terminal-lane transcript cap; ACP transcripts are coalesced and bounded by disk (8 MB). */
+private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
 private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
@@ -155,12 +170,22 @@ class DesktopAgentRunService(
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects
 
     private data class SkillScope(val agent: AgentKind, val directory: String?)
+    private data class KnownSkillScope(val directory: String?)
 
     private val skillFlows = ConcurrentHashMap<SkillScope, MutableStateFlow<List<AgentSkill>>>()
     private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
+    private val knownSkillNameFlows = ConcurrentHashMap<KnownSkillScope, MutableStateFlow<Set<String>>>()
+    private val loadedKnownSkillScopes = ConcurrentHashMap.newKeySet<KnownSkillScope>()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
+    private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val queuedAcpPermissions = ConcurrentHashMap<String, ArrayDeque<PendingAcpPermission>>()
+    /** While reconnecting an ACP session, drop provider history replay into the transcript. */
+    private val acpSuppressProviderReplay = ConcurrentHashMap.newKeySet<String>()
+    private val acpProviderReplayScratch = ConcurrentHashMap<String, StringBuilder>()
+    /** One automatic resume per task turn after a provider connection stall. */
+    private val connectionStallAutoRetries = ConcurrentHashMap<String, Int>()
 
     /**
      * Window visibility/focus, pushed by the GUI. Terminal foreground cadence deliberately
@@ -173,6 +198,17 @@ class DesktopAgentRunService(
     private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
+    private val acpTranscriptStore = AcpTranscriptStore(store::transcriptFile)
+    private val acpManager = AgentAcpManager(
+        scope = scope,
+        binaryFor = ::binaryFor,
+        onEvent = ::appendAcpEvent,
+        onStatus = ::applyStatusSnapshot,
+        onPermission = ::handleAcpPermission,
+        onPermissionResolved = ::handleAcpPermissionResolved,
+        onSessionId = ::persistAcpSessionId,
+        onDiagnosticsLine = { taskId, line -> appendLaunchDiagnostics(taskId, line) },
+    )
 
     private val persistMutex = Mutex()
     private val mcpMutex = Mutex()
@@ -207,7 +243,8 @@ class DesktopAgentRunService(
                 .mapValues { (_, workflow) -> workflow.withMissingProfiles() }
             migrateLegacyProjectNotes()
             archiveLegacyTranscriptChats()
-            backfillCursorPlansFromTranscripts()
+            backfillPlanModeCompletedText()
+            repairCompletedSpecWorkflowStates()
             ready.complete(Unit)
             refreshCliStatuses()
             if (enableProbes) {
@@ -260,6 +297,10 @@ class DesktopAgentRunService(
 
     /** True while the embedded PTY or underlying tmux session is still running for [taskId]. */
     override fun isTerminalLive(taskId: String): Boolean = terminals.isAlive(taskId)
+
+    override fun isLaneLive(taskId: String): Boolean = currentTask(taskId)?.let { task ->
+        if (task.lane == AgentLaneKind.Acp) acpManager.isAlive(taskId) else terminals.isAlive(taskId)
+    } ?: false
 
     override val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = terminals.interactiveTaskIds
 
@@ -341,6 +382,20 @@ class DesktopAgentRunService(
         return flow
     }
 
+    override fun knownSkillNames(directory: String?): StateFlow<Set<String>> {
+        val normalizedDirectory = directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val skillScope = KnownSkillScope(normalizedDirectory)
+        val flow = knownSkillNameFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptySet()) }
+        if (loadedKnownSkillScopes.add(skillScope)) {
+            scope.launch(Dispatchers.IO) {
+                flow.value = discoverKnownAgentSkillNames(normalizedDirectory)
+            }
+        }
+        return flow
+    }
+
     override fun refreshSkills(agent: AgentKind, directory: String?) {
         val normalizedDirectory = directory
             ?.takeIf { it.isNotBlank() }
@@ -350,6 +405,8 @@ class DesktopAgentRunService(
         loadedSkillScopes.add(skillScope)
         scope.launch(Dispatchers.IO) {
             flow.value = discoverAgentSkills(agent, normalizedDirectory)
+            knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
+                discoverKnownAgentSkillNames(normalizedDirectory)
         }
     }
 
@@ -884,11 +941,12 @@ class DesktopAgentRunService(
             provenance = draft.provenance,
             status = null,
             vendorSessionId = null,
+            lane = draft.lane ?: resolveLane(draft.agent),
             createdAtMillis = now,
         )
 
         val binary = binaryFor(task.agent)
-        if (binary == null) {
+        if (binary == null && task.lane == AgentLaneKind.Terminal) {
             task = task.copy(
                 status = AgentStatus.Error,
                 errorMessage = unavailableCliMessage(task.agent),
@@ -970,7 +1028,6 @@ class DesktopAgentRunService(
     ) {
         val existing = currentTask(taskId) ?: return
         if (existing.userInputRequest != null) return
-        val adapter = adapters[existing.agent] ?: return
         // Keep the chat's original provenance; a contextual follow-up only fills an empty one.
         val task = if (provenance != null && existing.provenance == null) {
             existing.copy(provenance = provenance)
@@ -984,6 +1041,32 @@ class DesktopAgentRunService(
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
+        if (task.lane == AgentLaneKind.Acp) {
+            val acpFollowUp = task.followUpCliPayload(followUp, imagePaths, selectedSkills).prompt
+            appendEvents(taskId, listOf(AgentEvent.UserMessage(System.currentTimeMillis(), acpFollowUp, selectedSkills, imagePaths)))
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentStatus.Working,
+                    exitCode = null,
+                    errorMessage = null,
+                    finishedAtMillis = null,
+                    unread = false,
+                    latestPrompt = acpFollowUp,
+                )
+            }
+            scope.launch(Dispatchers.IO) {
+                val success = runAcpFollowUp(taskId, acpFollowUp, imagePaths)
+                if (!success && currentTask(taskId)?.lane == AgentLaneKind.Acp) {
+                    updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, finishedAtMillis = null) }
+                    persist()
+                    resume(taskId, acpFollowUp, imagePaths, selectedSkills, contextBundleIds, provenance)
+                }
+            }
+            return
+        }
+
+        val adapter = adapters[existing.agent] ?: return
+
         val followUpCli = task.followUpCliPayload(followUp, imagePaths, selectedSkills)
         val followUpForCli = followUpCli.prompt
         val followUpImagePathsForCli = followUpCli.imagePaths
@@ -1100,6 +1183,9 @@ class DesktopAgentRunService(
     override fun canReattachSession(taskId: String): Boolean {
         val task = currentTask(taskId) ?: return false
         if (task.userInputRequest != null) return false
+        if (task.lane == AgentLaneKind.Acp) {
+            return task.resumable && task.acpSessionId?.isNotBlank() == true && !task.isActive && !acpManager.isAlive(taskId)
+        }
         val broken = TmuxAndy.isAvailable() && TmuxAndy.sessionLooksBroken(taskId)
         if (!broken && (task.isActive || terminals.isAlive(taskId))) return false
         return resumeTaskForReattach(task) != null
@@ -1108,6 +1194,28 @@ class DesktopAgentRunService(
     override fun reattachSession(taskId: String) {
         val task = currentTask(taskId) ?: return
         if (task.userInputRequest != null) return
+        if (task.lane == AgentLaneKind.Acp) {
+            if (!canReattachSession(taskId)) return
+            scope.launch(Dispatchers.IO) {
+                val projectEnv = task.projectId?.let { projectId ->
+                    runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
+                }.orEmpty()
+                val endpoint = if (task.attachAndyMcp) prepareAcpMcp() else null
+                val started = runCatching {
+                    acpManager.start(task, buildAgentLaunchEnvironment(projectEnv), endpoint) { snapshot ->
+                        applyStatusSnapshot(taskId, snapshot)
+                    }
+                }.isSuccess
+                if (started) {
+                    acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
+                    updateTask(taskId) {
+                        it.copy(status = AgentStatus.Done, resumable = true, statusConfident = true, unread = false)
+                    }
+                    persist()
+                }
+            }
+            return
+        }
         val broken = TmuxAndy.isAvailable() && TmuxAndy.sessionLooksBroken(taskId)
         if (!broken && (task.isActive || terminals.isAlive(taskId))) return
         if (broken) {
@@ -1204,17 +1312,36 @@ class DesktopAgentRunService(
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
         val task = currentTask(taskId) ?: return
         val request = task.userInputRequest?.takeIf { it.id == requestId } ?: return
-        if (task.status != AgentStatus.Blocked) return
         val normalizedAnswers = request.questions.associate { question ->
             question.id to answers[question.id].orEmpty().trim()
         }
         if (normalizedAnswers.values.any { it.isBlank() }) return
+
+        if (request.origin == app.andy.model.AgentUserInputOrigin.AcpPermission) {
+            val answer = normalizedAnswers.values.firstOrNull().orEmpty()
+            if (!acpManager.respondPermission(taskId, requestId, answer)) return
+            appendEvents(taskId, listOf(AgentEvent.UserMessage(System.currentTimeMillis(), answer)))
+            return
+        }
+
+        if (task.status != AgentStatus.Blocked) return
 
         val response = request.responseForAgent(normalizedAnswers)
         val now = System.currentTimeMillis()
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, response)))
 
         terminals.get(taskId)?.artifacts?.writeAnswer(response)
+        acpManager.artifacts(taskId)?.writeAnswer(response)
+
+        if (task.lane == AgentLaneKind.Acp) {
+            updateTask(taskId) {
+                it.copy(status = AgentStatus.Working, userInputRequest = null, finishedAtMillis = null, unread = false)
+            }
+            scope.launch(Dispatchers.IO) {
+                runAcpFollowUp(taskId, response, emptyList())
+            }
+            return
+        }
 
         if (terminals.isAlive(taskId)) {
             updateTask(taskId) {
@@ -1257,49 +1384,10 @@ class DesktopAgentRunService(
         }
     }
 
-    override suspend fun startImplementation(taskId: String) {
-        ready.await()
+    override fun setAcpSessionMode(taskId: String, modeId: String) {
         val task = currentTask(taskId) ?: return
-        val completedPlan = task.completedPlanText?.takeIf { it.isNotBlank() } ?: return
-        if (task.status != AgentStatus.Done || !task.planMode || task.isActive || task.workflowTaskId != null) return
-
-        _lastUsedAgent.value = task.agent
-        val now = System.currentTimeMillis()
-        val implementationPrompt = implementationPromptFor(task.prompt, completedPlan)
-        val implementationBaseline = task.cwd?.let { cwd ->
-            withContext(Dispatchers.IO) { worktrees.captureChangeBaseline(cwd) }
-        }
-        val implementationTask = task.copy(
-            planMode = false,
-            sandboxMode = AgentSandboxMode.WorkspaceWrite,
-            implementationPrompt = implementationPrompt,
-            vendorSessionId = null,
-            status = null,
-            startedAtMillis = null,
-            finishedAtMillis = null,
-            exitCode = null,
-            errorMessage = null,
-            totalCostUsd = null,
-            costIsEstimated = false,
-            inputTokens = null,
-            outputTokens = null,
-            contextTokens = null,
-            contextWindowTokens = null,
-            changeBaselineTree = implementationBaseline,
-            completedChanges = null,
-            unread = false,
-        )
-        appendEvents(taskId, listOf(AgentEvent.UserMessage(now, implementationPrompt, task.skills)))
-        upsertTask(implementationTask)
-        persist()
-        launchRunAwaitingTerminal(
-            implementationTask,
-            writeAfterStart = implementationTask.promptForCli()
-                .takeIf { it.isNotBlank() }
-                .takeUnless { adapters.getValue(implementationTask.agent).embedsInitialPrompt },
-        ) { adapter, binary, mcpUrl ->
-            adapter.buildInteractiveCommand(binary, currentTask(taskId) ?: implementationTask, mcpUrl)
-        }
+        if (task.lane != AgentLaneKind.Acp) return
+        scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, modeId) }
     }
 
     override fun queueFollowUp(
@@ -1311,13 +1399,29 @@ class DesktopAgentRunService(
         provenance: AgentContextualProvenance?,
     ) {
         val task = currentTask(taskId) ?: return
-        if (!task.isActive && !terminals.isAlive(taskId)) return
+        if (!task.isActive && !isLaneLive(taskId)) return
 
         val text = followUp.trim()
         if (text.isBlank() && imagePaths.isEmpty()) return
         val skillDirectory = task.worktreePath ?: task.cwd
         val selectedSkills = skills.filter { skill ->
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
+        }
+
+        if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
+            val now = System.currentTimeMillis()
+            val acpPrompt = task.followUpCliPayload(text, imagePaths, selectedSkills).prompt
+            appendEvents(taskId, listOf(AgentEvent.UserMessage(now, acpPrompt, selectedSkills, imagePaths)))
+            updateTask(taskId) { current ->
+                current.copy(
+                    status = AgentStatus.Working,
+                    finishedAtMillis = null,
+                    latestPrompt = acpPrompt,
+                    unread = false,
+                )
+            }
+            scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
+            return
         }
 
         if (terminals.isAlive(taskId)) {
@@ -1394,6 +1498,7 @@ class DesktopAgentRunService(
             unread = false,
         )
         store.deleteTaskArtifacts(taskId)
+        connectionStallAutoRetries.remove(taskId)
         eventFlows[taskId]?.value = emptyList()
         upsertTask(retried)
         persist()
@@ -1476,6 +1581,10 @@ class DesktopAgentRunService(
         onTerminalStarted: () -> Unit = {},
     ) {
         val task = currentTask(taskId) ?: return
+        if (task.lane == AgentLaneKind.Acp) {
+            runAcpProcess(taskId, handle, writeAfterStart, onTerminalStarted, argvBuilder)
+            return
+        }
         val adapter = adapters.getValue(task.agent)
         val binary = binaryFor(task.agent)
         if (binary == null) {
@@ -1851,6 +1960,160 @@ class DesktopAgentRunService(
         )
     }
 
+    private suspend fun runAcpProcess(
+        taskId: String,
+        handle: TaskHandle,
+        writeAfterStart: String?,
+        onTerminalStarted: () -> Unit,
+        argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
+    ) {
+        val task = currentTask(taskId) ?: return
+        val resolvedCwd = AgentScratchWorkspace.resolveCwd(task.cwd)
+        val taskForLaunch = if (resolvedCwd != task.cwd) {
+            updateTask(taskId) { it.copy(cwd = resolvedCwd) }
+            persist()
+            task.copy(cwd = resolvedCwd)
+        } else task
+        val projectEnv = taskForLaunch.projectId?.let { projectId ->
+            runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
+        }.orEmpty()
+        val env = buildAgentLaunchEnvironment(projectEnv)
+        val mcpEndpoint = if (taskForLaunch.attachAndyMcp) {
+            runCatching { prepareAcpMcp() }.getOrElse { error ->
+                finishTask(taskId, AgentStatus.Error, null, "failed to prepare Andy MCP: ${error.message}")
+                return
+            }
+        } else null
+
+        updateTask(taskId) {
+            it.copy(
+                status = AgentStatus.Working,
+                startedAtMillis = it.startedAtMillis ?: System.currentTimeMillis(),
+                exitCode = null,
+                errorMessage = null,
+                finishedAtMillis = null,
+                unread = false,
+            )
+        }
+        persist()
+        reconcileWorkflowRun(taskId)
+        if (handle.stopRequested) {
+            finishTask(taskId, AgentStatus.Done, null, null, stoppedByUser = true)
+            return
+        }
+
+        val launchTask = currentTask(taskId) ?: taskForLaunch
+        val started = runCatching {
+            acpManager.start(
+                task = launchTask,
+                env = env,
+                mcp = mcpEndpoint,
+                onStatusSnapshot = { snapshot -> applyStatusSnapshot(taskId, snapshot) },
+            )
+        }.getOrElse { error ->
+            appendLaunchDiagnostics(taskId, "acpStartFailed=${error.message}\n")
+            // ACP is an opportunistic lane. A failed spawn/initialize returns to the
+            // existing terminal path while preserving the same task and prompt.
+            updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, startedAtMillis = null, finishedAtMillis = null) }
+            persist()
+            runProcess(taskId, handle, argvBuilder, writeAfterStart, onTerminalStarted)
+            return
+        }
+        onTerminalStarted()
+        ensureAcpArtifactMonitor(taskId, started.artifacts)
+        appendEvents(
+            taskId,
+            listOf(AgentEvent.UserMessage(System.currentTimeMillis(), launchTask.promptForCli(), launchTask.skills, launchTask.imagePaths)),
+        )
+        val success = acpManager.prompt(taskId, launchTask.promptForCli(), launchTask.imagePaths)
+        if (!success) {
+            appendLaunchDiagnostics(taskId, "acpPromptFailed=true\n")
+        }
+        completeAcpPromptTurn(taskId, success, isAutoRetry = false)
+    }
+
+    private suspend fun runAcpFollowUp(taskId: String, prompt: String, imagePaths: List<String>): Boolean {
+        acpSuppressProviderReplay.add(taskId)
+        acpProviderReplayScratch.remove(taskId)
+        try {
+            val task = currentTask(taskId) ?: return false
+            if (!acpManager.isAlive(taskId)) {
+                val projectEnv = task.projectId?.let { projectId ->
+                    runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
+                }.orEmpty()
+                val env = buildAgentLaunchEnvironment(projectEnv)
+                val endpoint = if (task.attachAndyMcp) prepareAcpMcp() else null
+                runCatching {
+                    acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
+                }.getOrElse {
+                    appendLaunchDiagnostics(taskId, "acpResumeFailed=${it.message}\n")
+                    return false
+                }
+            }
+            acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
+            val success = acpManager.prompt(taskId, prompt, imagePaths)
+            return completeAcpPromptTurn(taskId, success, isAutoRetry = false)
+        } finally {
+            acpSuppressProviderReplay.remove(taskId)
+            acpProviderReplayScratch.remove(taskId)
+        }
+    }
+
+    private suspend fun completeAcpPromptTurn(
+        taskId: String,
+        promptSuccess: Boolean,
+        isAutoRetry: Boolean,
+    ): Boolean {
+        if (deferAcpFinishIfAwaitingInput(taskId)) return promptSuccess
+
+        val stalled = transcriptHasConnectionStall(taskId)
+        if (
+            stalled &&
+            !isAutoRetry &&
+            connectionStallAutoRetries.getOrDefault(taskId, 0) < 1 &&
+            acpManager.isAlive(taskId)
+        ) {
+            connectionStallAutoRetries[taskId] = 1
+            appendLaunchDiagnostics(taskId, "connectionStallAutoRetry=true\n")
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentStatus.Working,
+                    errorMessage = null,
+                    finishedAtMillis = null,
+                    exitCode = null,
+                )
+            }
+            val retrySuccess = acpManager.prompt(taskId, CONNECTION_STALL_RETRY_PROMPT, emptyList())
+            return completeAcpPromptTurn(taskId, retrySuccess, isAutoRetry = true)
+        }
+
+        connectionStallAutoRetries.remove(taskId)
+        val outcome = acpManager.awaitRunOutcome(taskId)
+        val stillStalled = transcriptHasConnectionStall(taskId)
+        val recovered = promptSuccess && !stillStalled
+        val resumableAfterStall = stillStalled && acpManager.isAlive(taskId)
+        finishTask(
+            taskId = taskId,
+            status = when {
+                recovered -> AgentStatus.Done
+                resumableAfterStall -> AgentStatus.Done
+                else -> AgentStatus.Error
+            },
+            exitCode = null,
+            error = when {
+                recovered || resumableAfterStall -> null
+                else -> outcome.error ?: "ACP prompt failed"
+            },
+            resumable = acpManager.isAlive(taskId) && (recovered || resumableAfterStall),
+            statusConfident = true,
+            stopReason = outcome.stopReason,
+        )
+        return recovered || resumableAfterStall
+    }
+
+    private fun transcriptHasConnectionStall(taskId: String): Boolean =
+        eventFlows[taskId]?.value.orEmpty().hasRetriableConnectionStall()
+
     private suspend fun ensureCursorVendorSession(taskId: String, binary: String, cwd: String?) {
         val current = currentTask(taskId) ?: return
         if (!current.vendorSessionId.isNullOrBlank()) return
@@ -2108,6 +2371,15 @@ class DesktopAgentRunService(
     private fun snapshotActiveTasksBeforeShutdown() {
         val updated = _tasks.value.map { task ->
             if (task.status != AgentStatus.Working) return@map task
+            if (task.lane == AgentLaneKind.Acp) {
+                return@map task.copy(
+                    status = AgentStatus.Error,
+                    interrupted = true,
+                    resumable = task.acpSessionId?.isNotBlank() == true,
+                    finishedAtMillis = task.finishedAtMillis ?: System.currentTimeMillis(),
+                    statusConfident = true,
+                )
+            }
             val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
             val scrollback = terminals.bufferSnapshot(task.id).ifBlank {
                 store.scrollbackFile(task.id).takeIf { it.isFile }?.readText().orEmpty()
@@ -2178,14 +2450,6 @@ class DesktopAgentRunService(
         }
     }
 
-    private fun implementationPromptFor(originalRequest: String, completedPlan: String): String = buildString {
-        append("Begin implementation. Implement the completed plan below: make the edits and run the relevant verification.\n\n")
-        append("Original request:\n")
-        append(originalRequest.trim())
-        append("\n\nCompleted plan:\n")
-        append(completedPlan.trim())
-    }
-
     override fun completeWorkflowRun(taskId: String) {
         val task = currentTask(taskId) ?: return
         if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
@@ -2204,6 +2468,20 @@ class DesktopAgentRunService(
     }
 
     override fun stop(taskId: String) {
+        val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
+        if (acpTask != null) {
+            handles[taskId]?.stopRequested = true
+            acpManager.stop(taskId)
+            finishTask(
+                taskId = taskId,
+                status = AgentStatus.Done,
+                exitCode = null,
+                error = null,
+                stoppedByUser = true,
+                forceKillTerminal = true,
+            )
+            return
+        }
         val waiting = currentTask(taskId)?.takeIf { it.status == AgentStatus.Blocked }
         if (waiting != null) {
             terminals.stop(taskId)
@@ -2241,7 +2519,11 @@ class DesktopAgentRunService(
         }
         handles.remove(taskId)
         terminals.clear(taskId)
+        acpArtifactJobs.remove(taskId)?.cancel()
+        acpManager.clear(taskId)
+        queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
+        connectionStallAutoRetries.remove(taskId)
         _tasks.update { list -> list.filterNot { it.id == taskId } }
         store.deleteTaskArtifacts(taskId)
         task.workflowTaskId?.let { projectTaskId -> detachDeletedWorkflowRun(projectTaskId, taskId) }
@@ -2283,7 +2565,11 @@ class DesktopAgentRunService(
 
     override fun events(taskId: String): StateFlow<List<AgentEvent>> {
         currentTask(taskId) ?: return emptyEvents
-        return eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }
+        return eventFlows.computeIfAbsent(taskId) {
+            MutableStateFlow(
+                if (currentTask(taskId)?.lane == AgentLaneKind.Acp) loadAcpEventsForDisplay(taskId) else emptyList(),
+            )
+        }
     }
 
     override fun interactiveResumeCommand(taskId: String): String? {
@@ -2363,7 +2649,18 @@ class DesktopAgentRunService(
 
     override suspend fun refreshCliStatuses() {
         ready.await()
-        val statuses = withContext(Dispatchers.IO) { locator.locateAll(binaryOverrides) }
+        val statuses = withContext(Dispatchers.IO) {
+            val located = locator.locateAll(binaryOverrides)
+            val nodeAvailable = NodeRuntimeLocator().locate() != null
+            located.map { status ->
+                val acpReady = when (AcpRegistry.spec(status.kind)) {
+                    is app.andy.desktop.service.agents.acp.AcpLaunchSpec.Npx -> nodeAvailable
+                    is app.andy.desktop.service.agents.acp.AcpLaunchSpec.Native -> status.binaryPath != null
+                    null -> false
+                }
+                status.copy(acpReady = acpReady)
+            }
+        }
         _cliStatuses.value = statuses
         if (!enableProbes) return
         val models = withContext(Dispatchers.IO) {
@@ -2454,6 +2751,17 @@ class DesktopAgentRunService(
         }
     }
 
+    /** ACP receives an MCP server descriptor directly; it must not mutate provider config files. */
+    private suspend fun prepareAcpMcp(): AndyMcpEndpoint = mcpMutex.withLock {
+        val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
+        val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
+        if (!isRunning) {
+            val result = mcp.start(port)
+            check(result.isSuccess) { result.stderr.ifBlank { "server failed to start" } }
+        }
+        AndyMcpEndpoint(port = port, httpUrl = "http://127.0.0.1:$port/mcp-http")
+    }
+
     private fun runOpenClawModelPreflight(binary: String, model: String, cwd: String?): Boolean = runCatching {
         val process = ProcessBuilder(binary, "models", "set", model)
             .directory(cwd?.let(::File))
@@ -2469,6 +2777,17 @@ class DesktopAgentRunService(
             status?.ready == true -> status.binaryPath
             status != null -> null
             else -> binaryOverrides[agent.cliName]?.takeIf { File(it).canExecute() }
+        }
+    }
+
+    private fun resolveLane(agent: AgentKind): AgentLaneKind {
+        val suffix = agent.name.uppercase()
+        val configured = System.getenv("ANDY_AGENT_LANE_$suffix")
+            ?: System.getenv("ANDY_AGENT_LANE")
+        return when (configured?.lowercase()) {
+            "terminal", "tmux", "bossterm" -> AgentLaneKind.Terminal
+            "acp" -> AgentLaneKind.Acp
+            else -> agent.defaultLane()
         }
     }
 
@@ -2532,6 +2851,9 @@ class DesktopAgentRunService(
     /** Persist state and tear down owned tmux sessions on JVM exit or explicit close. */
     fun shutdownForProcessExit() {
         runCatching { snapshotActiveTasksBeforeShutdown() }
+        _tasks.value.filter { it.lane == AgentLaneKind.Acp && acpManager.isAlive(it.id) }.forEach { task ->
+            acpManager.stop(task.id)
+        }
         val activeTaskIds = handles.keys.toList()
         val jobs = handles.values.map { it.job }
         AgentSessionShutdown.onProcessExit(
@@ -3097,7 +3419,10 @@ class DesktopAgentRunService(
         val projectTaskId = run.workflowTaskId ?: return
         val typedTask = projectTask(projectTaskId) ?: return
         if (run.status == AgentStatus.Blocked) {
-            updateProjectTask(projectTaskId) { it.copy(state = ProjectTaskState.Waiting, lastError = null) }
+            updateProjectTask(projectTaskId) { task ->
+                if (task.kind == ProjectTaskKind.Spec && task.state == ProjectTaskState.Completed) task
+                else task.copy(state = ProjectTaskState.Waiting, lastError = null)
+            }
             persist()
             return
         }
@@ -3137,7 +3462,7 @@ class DesktopAgentRunService(
         }
         when (run.workflowStage) {
             ProjectWorkflowStage.Spec -> {
-                val plan = run.completedPlanText?.takeIf { it.isNotBlank() }
+                val plan = resolveCompletedPlanText(run.id, run)?.takeIf { it.isNotBlank() }
                 if (plan == null) {
                     if (run.stoppedByUser && typedTask.planVersions.isNotEmpty()) {
                         updateProjectTask(projectTaskId) {
@@ -3150,17 +3475,33 @@ class DesktopAgentRunService(
                     }
                 } else {
                     updateProjectTask(projectTaskId) { task ->
-                        if (task.planVersions.any { it.runId == run.id }) task else task.copy(
-                            planVersions = task.planVersions + ProjectPlanVersion(
-                                version = (task.planVersions.maxOfOrNull { it.version } ?: 0) + 1,
-                                text = plan,
-                                runId = run.id,
-                                createdAtMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
-                            ),
-                            state = ProjectTaskState.Completed,
-                            lastError = null,
-                            updatedAtMillis = System.currentTimeMillis(),
-                        )
+                        val existing = task.planVersions.firstOrNull { it.runId == run.id }
+                        when {
+                            existing == null -> task.copy(
+                                planVersions = task.planVersions + ProjectPlanVersion(
+                                    version = (task.planVersions.maxOfOrNull { it.version } ?: 0) + 1,
+                                    text = plan,
+                                    runId = run.id,
+                                    createdAtMillis = run.finishedAtMillis ?: System.currentTimeMillis(),
+                                ),
+                                state = ProjectTaskState.Completed,
+                                lastError = null,
+                                updatedAtMillis = System.currentTimeMillis(),
+                            )
+                            existing.text == plan -> task.copy(
+                                state = ProjectTaskState.Completed,
+                                lastError = null,
+                                updatedAtMillis = System.currentTimeMillis(),
+                            )
+                            else -> task.copy(
+                                planVersions = task.planVersions.map { version ->
+                                    if (version.runId == run.id) version.copy(text = plan) else version
+                                },
+                                state = ProjectTaskState.Completed,
+                                lastError = null,
+                                updatedAtMillis = System.currentTimeMillis(),
+                            )
+                        }
                     }
                 }
                 persist()
@@ -3555,26 +3896,23 @@ class DesktopAgentRunService(
         persist()
     }
 
-    /** Repairs Cursor plan-mode runs saved before plan.md artifacts were retained. */
-    private suspend fun backfillCursorPlansFromTranscripts() {
+    /** Repairs plan-mode runs whose stored plan text disagrees with `.andy/<taskId>/plan.md`. */
+    private suspend fun backfillPlanModeCompletedText() {
         val recoveredPlans = withContext(Dispatchers.IO) {
             _tasks.value.asSequence()
-                .filter { task ->
-                    task.agent == AgentKind.Cursor &&
-                        task.planMode &&
-                        task.status == AgentStatus.Done &&
-                        task.completedPlanText.isNullOrBlank()
-                }
+                .filter { task -> task.planMode && task.status == AgentStatus.Done }
                 .mapNotNull { task ->
-                    val plan = runCatching {
-                        AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
-                            .resolve("plan.md")
-                            .takeIf { it.isFile }
-                            ?.readText()
-                            ?.trim()
-                            ?.takeIf { it.isNotBlank() }
-                    }.getOrNull()
-                    plan?.let { task.id to it }
+                    resolveCompletedPlanText(task.id, task)?.let { plan ->
+                        val runMismatch = task.completedPlanText?.trim() != plan
+                        val versionMismatch = _projects.value.values.any { workflow ->
+                            workflow.tasks.any { projectTask ->
+                                projectTask.planVersions.any { version ->
+                                    version.runId == task.id && version.text != plan
+                                }
+                            }
+                        }
+                        if (runMismatch || versionMismatch) task.id to plan else null
+                    }
                 }
                 .toMap()
         }
@@ -3587,11 +3925,13 @@ class DesktopAgentRunService(
         }
         val repairedWorkflows = _projects.value.mapValues { (_, workflow) ->
             workflow.copy(tasks = workflow.tasks.map { task ->
-                task.copy(planVersions = task.planVersions.map { version ->
-                    recoveredPlans[version.runId]?.let { plan ->
-                        if (version.text == plan) version else version.copy(text = plan)
-                    } ?: version
-                })
+                repairSpecWorkflowState(
+                    task.copy(planVersions = task.planVersions.map { version ->
+                        recoveredPlans[version.runId]?.let { plan ->
+                            if (version.text == plan) version else version.copy(text = plan)
+                        } ?: version
+                    }),
+                )
             })
         }
         if (repairedTasks == _tasks.value && repairedWorkflows == _projects.value) return
@@ -3599,6 +3939,34 @@ class DesktopAgentRunService(
         _tasks.value = repairedTasks
         _projects.value = repairedWorkflows
         persist()
+    }
+
+    /**
+     * Grill-me ACP specs can park on [ProjectTaskState.Waiting] after a blocked checkpoint while
+     * the planning run later finishes with a plan artifact. Repair any spec that already has a
+     * done run + plan version but never reached [ProjectTaskState.Completed].
+     */
+    private suspend fun repairCompletedSpecWorkflowStates() {
+        val repaired = _projects.value.mapValues { (_, workflow) ->
+            workflow.copy(tasks = workflow.tasks.map { repairSpecWorkflowState(it) })
+        }
+        if (repaired == _projects.value) return
+        _projects.value = repaired
+        persist()
+    }
+
+    private fun repairSpecWorkflowState(task: ProjectTask): ProjectTask {
+        if (task.kind != ProjectTaskKind.Spec || task.planVersions.isEmpty()) return task
+        val hasDonePlan = task.planVersions.any { version ->
+            version.text.isNotBlank() &&
+                currentTask(version.runId)?.status == AgentStatus.Done
+        }
+        if (!hasDonePlan || task.state == ProjectTaskState.Completed) return task
+        return task.copy(
+            state = ProjectTaskState.Completed,
+            lastError = null,
+            updatedAtMillis = System.currentTimeMillis(),
+        )
     }
 
     private fun currentTask(taskId: String): AgentTask? = _tasks.value.firstOrNull { it.id == taskId }
@@ -3613,10 +3981,194 @@ class DesktopAgentRunService(
         _tasks.update { list -> list.map { if (it.id == taskId) transform(it) else it } }
     }
 
+    private fun loadAcpEventsForDisplay(taskId: String): List<AgentEvent> =
+        coalesceAcpTranscriptEvents(acpTranscriptStore.load(taskId))
+
+    private fun readPlanFromDisk(task: AgentTask): String? = runCatching {
+        AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
+            .resolve("plan.md")
+            .takeIf { it.isFile }
+            ?.readText()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    private fun readPendingWorkflowQuestion(task: AgentTask): AgentUserInputRequest? = runCatching {
+        val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
+        val questionFile = File(artifactDir, "question.json")
+        if (!questionFile.isFile) return@runCatching null
+        questionFile.readText().trim().takeIf { it.isNotBlank() }
+            ?.let { AgentWorkflowArtifacts.parseQuestionJson(it) }
+    }.getOrNull()
+
+    private suspend fun deferAcpFinishIfAwaitingInput(taskId: String): Boolean {
+        val task = currentTask(taskId) ?: return false
+        if (task.status == AgentStatus.Blocked) return true
+        val request = readPendingWorkflowQuestion(task) ?: return false
+        waitForUserInput(taskId, request, exitCode = 0, keepTerminal = true)
+        return true
+    }
+
+    private fun resolveCompletedPlanText(taskId: String, task: AgentTask): String? {
+        readPlanFromDisk(task)?.let { return it }
+        task.completedPlanText?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+        if (task.workflowStage == ProjectWorkflowStage.Spec) return null
+        if (task.lane != AgentLaneKind.Acp) return null
+        return planTextFromAcpTranscript(acpTranscriptStore.load(taskId))
+    }
+
+    private fun refreshAcpTranscriptFromDisk(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.lane != AgentLaneKind.Acp) return
+        scope.launch(Dispatchers.IO) {
+            val loaded = loadAcpEventsForDisplay(taskId)
+            eventFlows.computeIfAbsent(taskId) { MutableStateFlow(loaded) }.value = loaded
+            if (task.planMode && task.status == AgentStatus.Done && task.completedPlanText.isNullOrBlank()) {
+                resolveCompletedPlanText(taskId, task)?.let { plan ->
+                    updateTask(taskId) { current ->
+                        if (current.completedPlanText.isNullOrBlank()) current.copy(completedPlanText = plan) else current
+                    }
+                    persist()
+                }
+            }
+        }
+    }
+
     private fun appendEvents(taskId: String, events: List<AgentEvent>) {
         if (events.isEmpty()) return
-        val flow = eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }
-        flow.update { existing -> (existing + events).takeLast(MAX_EVENTS_IN_MEMORY) }
+        val task = currentTask(taskId)
+        val isAcp = task?.lane == AgentLaneKind.Acp
+        val flow = eventFlows.computeIfAbsent(taskId) {
+            MutableStateFlow(if (isAcp) loadAcpEventsForDisplay(taskId) else emptyList())
+        }
+        val filterReplay = taskId in acpSuppressProviderReplay
+        val replayScratch = if (filterReplay) {
+            acpProviderReplayScratch.computeIfAbsent(taskId) { StringBuilder() }
+        } else {
+            null
+        }
+        val accepted = if (!filterReplay) {
+            events
+        } else {
+            events.fold(emptyList<AgentEvent>() to flow.value) { (acceptedEvents, acc), event ->
+                if (shouldIgnoreAcpProviderHistoryReplay(acc, event, replayScratch!!)) {
+                    acceptedEvents to acc
+                } else {
+                    val nextAcc = mergeAcpTranscriptEvent(acc, event)
+                    (acceptedEvents + event) to nextAcc
+                }
+            }.first
+        }
+        if (accepted.isEmpty()) return
+        if (isAcp) {
+            accepted.forEach { event ->
+                if (event is AgentEvent.ToolCall) acpTranscriptStore.upsert(taskId, event)
+                else acpTranscriptStore.append(taskId, event)
+            }
+        }
+        flow.update { existing ->
+            val next = if (isAcp) {
+                accepted.fold(existing) { acc, event -> mergeAcpTranscriptEvent(acc, event) }
+            } else {
+                accepted.fold(existing) { acc, event -> acc + event }
+            }
+            if (isAcp) next else next.takeLast(MAX_TERMINAL_EVENTS_IN_MEMORY)
+        }
+    }
+
+    private fun mergeAcpTranscriptEvent(
+        existing: List<AgentEvent>,
+        event: AgentEvent,
+    ): List<AgentEvent> = when {
+        event is AgentEvent.ToolCall -> AcpEventMapper.reduce(existing, event)
+        else -> coalesceAgentStreamDeltas(existing, listOf(event))
+    }
+
+    private fun appendAcpEvent(taskId: String, event: AgentEvent) = appendEvents(taskId, listOf(event))
+
+    private fun ensureAcpArtifactMonitor(taskId: String, artifacts: AgentWorkflowArtifacts) {
+        if (acpArtifactJobs.containsKey(taskId)) return
+        acpArtifactJobs[taskId] = scope.launch {
+            artifacts.events.collect { event ->
+                when (event) {
+                    is AgentWorkflowArtifacts.Event.PlanReady -> {
+                        updateTask(taskId) { it.copy(completedPlanText = event.text) }
+                        reconcileWorkflowRun(taskId)
+                    }
+                    is AgentWorkflowArtifacts.Event.ReviewReady -> updateTask(taskId) { it.copy(completedResultText = event.json) }
+                    is AgentWorkflowArtifacts.Event.VerificationReady -> updateTask(taskId) { it.copy(completedResultText = event.json) }
+                    is AgentWorkflowArtifacts.Event.QuestionReady -> waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
+                }
+                persist()
+            }
+        }.also { job ->
+            job.invokeOnCompletion { acpArtifactJobs.remove(taskId, job) }
+        }
+    }
+
+    private fun persistAcpSessionId(taskId: String, sessionId: String) {
+        updateTask(taskId) { it.copy(acpSessionId = sessionId) }
+        scope.launch { persist() }
+    }
+
+    private fun handleAcpPermission(taskId: String, pending: PendingAcpPermission) {
+        val task = currentTask(taskId)
+        val activePermission = task?.userInputRequest?.takeIf {
+            it.origin == app.andy.model.AgentUserInputOrigin.AcpPermission
+        }
+        if (activePermission != null && activePermission.id != pending.request.id) {
+            queuedAcpPermissions.computeIfAbsent(taskId) { ArrayDeque() }.addLast(pending)
+            return
+        }
+        presentAcpPermission(taskId, pending)
+    }
+
+    private fun presentAcpPermission(taskId: String, pending: PendingAcpPermission) {
+        val request = pending.request
+        val question = request.questions.firstOrNull()
+        if (question == null) return
+        appendEvents(
+            taskId,
+            listOf(
+                AgentEvent.PermissionRequest(
+                    atMillis = System.currentTimeMillis(),
+                    requestId = request.id,
+                    toolName = question.header,
+                    question = question.question,
+                    options = question.options,
+                ),
+            ),
+        )
+        updateTask(taskId) {
+            it.copy(
+                status = AgentStatus.Blocked,
+                statusConfident = true,
+                userInputRequest = request,
+                finishedAtMillis = null,
+                unread = true,
+            )
+        }
+        scope.launch { persist() }
+    }
+
+    private fun handleAcpPermissionResolved(
+        taskId: String,
+        requestId: String,
+        optionId: String,
+        allowed: Boolean,
+        note: String? = null,
+    ) {
+        appendEvents(
+            taskId,
+            listOf(AgentEvent.PermissionResolved(System.currentTimeMillis(), requestId, optionId, allowed, note)),
+        )
+        updateTask(taskId) {
+            if (it.userInputRequest?.id == requestId) {
+                it.copy(status = AgentStatus.Working, statusConfident = true, userInputRequest = null, finishedAtMillis = null)
+            } else it
+        }
+        queuedAcpPermissions[taskId]?.removeFirstOrNull()?.let { next -> presentAcpPermission(taskId, next) }
+        scope.launch { persist() }
     }
 
     override fun markRead(taskId: String) {
@@ -3636,6 +4188,7 @@ class DesktopAgentRunService(
                 viewingTaskIds.add(taskId)
                 terminals.setOnlyForeground(taskId)
                 markRead(taskId)
+                refreshAcpTranscriptFromDisk(taskId)
             }
             else -> {
                 viewingTaskIds.remove(taskId)
@@ -3654,7 +4207,7 @@ class DesktopAgentRunService(
 
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
-        val terminalLive = terminals.isAlive(taskId)
+        val terminalLive = isLaneLive(taskId)
         if (shouldIgnoreStatusSnapshot(task, snapshot, terminalLive = terminalLive)) return
         val previous = previousTaskStatuses.put(taskId, snapshot.status)
         val clearResumable = snapshot.status == AgentStatus.Working ||
@@ -3726,7 +4279,9 @@ class DesktopAgentRunService(
         interrupted: Boolean = false,
         statusConfident: Boolean = true,
         forceKillTerminal: Boolean = false,
+        stopReason: String? = null,
     ) {
+        val lane = currentTask(taskId)?.lane ?: AgentLaneKind.Terminal
         val completedChanges = currentTask(taskId)?.let { task ->
             val baseline = task.changeBaselineTree
             task.cwd?.takeIf { baseline != null }?.let { cwd ->
@@ -3736,17 +4291,29 @@ class DesktopAgentRunService(
         updateTask(taskId) { task ->
             val shouldFinalize = task.finishedAtMillis == null && (task.isActive || task.status != null)
             if (shouldFinalize) {
+                val resolvedPlanText = if (status == AgentStatus.Done && task.planMode) {
+                    resolveCompletedPlanText(taskId, task)
+                } else {
+                    null
+                }
+                val completedPlanText = when {
+                    resolvedPlanText != null -> resolvedPlanText
+                    status == AgentStatus.Done && task.planMode && task.workflowStage == ProjectWorkflowStage.Spec -> null
+                    else -> task.completedPlanText
+                }
                 task.copy(
                     status = status,
                     stoppedByUser = stoppedByUser,
                     resumable = resumable,
                     interrupted = interrupted,
                     statusConfident = statusConfident,
+                    stopReason = stopReason ?: task.stopReason,
                     exitCode = exitCode,
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
                     unread = !isViewing(taskId),
                     completedChanges = completedChanges ?: task.completedChanges,
+                    completedPlanText = completedPlanText,
                 )
             } else {
                 task
@@ -3755,11 +4322,19 @@ class DesktopAgentRunService(
         val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
         handles.remove(taskId)
         val keepViewerMounted = resumable || taskId in viewingTaskIds
-        when {
-            forceKillTerminal || stoppedByUser -> terminals.stop(taskId)
-            terminals.isAlive(taskId) && keepViewerMounted -> Unit
-            terminals.isAlive(taskId) -> terminals.detach(taskId)
-            else -> terminals.stop(taskId)
+        if (lane == AgentLaneKind.Acp) {
+            if (forceKillTerminal || stoppedByUser || (status == AgentStatus.Error && !resumable)) {
+                acpArtifactJobs.remove(taskId)?.cancel()
+                acpManager.clear(taskId)
+                queuedAcpPermissions.remove(taskId)
+            }
+        } else {
+            when {
+                forceKillTerminal || stoppedByUser -> terminals.stop(taskId)
+                terminals.isAlive(taskId) && keepViewerMounted -> Unit
+                terminals.isAlive(taskId) -> terminals.detach(taskId)
+                else -> terminals.stop(taskId)
+            }
         }
         previousTaskStatuses.remove(taskId)
         if (status == AgentStatus.Done && queuedFollowUp != null) {
@@ -3776,6 +4351,11 @@ class DesktopAgentRunService(
             scope.launch {
                 persist()
                 reconcileWorkflowRun(taskId)
+                val workflowTaskId = currentTask(taskId)?.workflowTaskId
+                if (workflowTaskId != null) {
+                    updateProjectTask(workflowTaskId) { repairSpecWorkflowState(it) }
+                    persist()
+                }
             }
         }
     }

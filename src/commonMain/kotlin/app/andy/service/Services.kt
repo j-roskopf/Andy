@@ -435,11 +435,11 @@ interface AgentRunService {
      * slash completion never offers skills from a different provider's convention.
      */
     fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>>
+    /** All locally installed skill names, used to scope provider-advertised command history. */
+    fun knownSkillNames(directory: String?): StateFlow<Set<String>> = MutableStateFlow(emptySet())
     /** Re-scans the provider's skill locations after an external installation. */
     fun refreshSkills(agent: AgentKind, directory: String?)
     suspend fun createAndStart(draft: AgentTaskDraft): AgentTask
-    /** Starts a fresh writable provider run from a completed plan-mode task. */
-    suspend fun startImplementation(taskId: String)
     fun stop(taskId: String)
     /** Manually completes an active workflow build run and advances the project workflow. */
     fun completeWorkflowRun(taskId: String)
@@ -460,6 +460,8 @@ interface AgentRunService {
     fun canReattachSession(taskId: String): Boolean
     /** True while the embedded PTY or underlying tmux session is still running. */
     fun isTerminalLive(taskId: String): Boolean = false
+    /** True while the task's selected transport lane owns a live session. */
+    fun isLaneLive(taskId: String): Boolean = isTerminalLive(taskId)
     /**
      * Chats this app run still hosts an interactive session for. Sessions that only
      * survive in tmux from an earlier run are deliberately absent: reopening Andy puts
@@ -482,6 +484,8 @@ interface AgentRunService {
     fun setAppForeground(foreground: Boolean) = Unit
     /** Supplies an answer to an agent-issued decision checkpoint and continues the task. */
     fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>)
+    /** Switches the live ACP session's mode (e.g. plan vs. execute) for providers that advertise modes. */
+    fun setAcpSessionMode(taskId: String, modeId: String) = Unit
     /** Holds a follow-up until the active run completes successfully. */
     fun queueFollowUp(
         taskId: String,

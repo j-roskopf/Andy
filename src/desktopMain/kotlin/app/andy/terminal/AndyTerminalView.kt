@@ -44,6 +44,12 @@ data class AndyTerminalView(
 
     /** Settles the replay frame gate / paint kicks; cancelled by [disposeScrollbackReplayView]. */
     internal var replaySettleJob: Job? = null
+
+    /** Set when [createScrollbackReplayView] finishes parsing; null for live sessions. */
+    internal var replaySettled: AtomicBoolean? = null
+
+    /** Read-only replay is hidden until parsing settles so history does not visibly redraw. */
+    fun isScrollbackReplayReady(): Boolean = !readOnly || replaySettled?.get() == true
 }
 
 fun BossTermBackend.toTerminalView(): AndyTerminalView = AndyTerminalView(
@@ -112,6 +118,7 @@ fun createScrollbackReplayView(
         command = "/bin/sh",
         readOnly = true,
     ).also { view ->
+        view.replaySettled = replaySettled
         // The whole transcript is replayed as one payload and parsed character by character,
         // so an ungated replay asks for thousands of full-grid renders to reach a screen that
         // never changes again. Cap it while feeding, then leave the gate open and force a paint —

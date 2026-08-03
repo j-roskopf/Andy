@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
@@ -16,6 +17,7 @@ import app.andy.model.migrateLegacyTaskStatus
 import app.andy.model.AgentUserInputOption
 import app.andy.model.AgentUserInputQuestion
 import app.andy.model.AgentUserInputRequest
+import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ContextualActionKind
 import app.andy.model.AgentChangeSummary
@@ -58,9 +60,11 @@ data class AgentStoreState(
 
 class DesktopAgentTaskStore(
     private val databaseFile: File = File(System.getProperty("user.home"), ".andy/agents.db"),
+    transcriptsDir: File? = null,
 ) {
     val storeFile: File get() = databaseFile
-    val transcriptsDir: File = File(databaseFile.parentFile, "agents")
+    /** Scrollback / ACP transcript files. Defaults to `~/.andy/agents` beside [databaseFile]. */
+    val transcriptsDir: File = transcriptsDir ?: File(databaseFile.parentFile, "agents")
     private val legacyTomlFile: File get() = File(databaseFile.parentFile, "agents.toml")
     private val sqlite by lazy { SqliteAgentStore(dbFile = databaseFile) }
 
@@ -73,6 +77,9 @@ class DesktopAgentTaskStore(
 
     /** Cumulative terminal scrollback (ANSI) for finished-chat replay. */
     fun scrollbackFile(taskId: String): File = File(taskDir(taskId), "scrollback.ansi")
+
+    /** ACP's durable structured transcript, tailed by the GUI attach process. */
+    fun transcriptFile(taskId: String): File = File(taskDir(taskId), "transcript.jsonl")
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
         migrateLegacyTomlIfNeeded()
@@ -185,7 +192,6 @@ internal data class AgentTaskDto(
     val sandboxMode: String = "",
     val planMode: Boolean = false,
     val completedPlanText: String = "",
-    val implementationPrompt: String = "",
     val continuationPrompt: String = "",
     val latestPrompt: String = "",
     val model: String = "",
@@ -212,6 +218,9 @@ internal data class AgentTaskDto(
     val interrupted: Boolean = false,
     val statusConfident: Boolean = false,
     val vendorSessionId: String = "",
+    val acpSessionId: String = "",
+    val stopReason: String = "",
+    val lane: String = AgentLaneKind.Terminal.name,
     val createdAtMillis: Long,
     val startedAtMillis: Long = 0,
     val finishedAtMillis: Long = 0,
@@ -275,6 +284,7 @@ private fun AgentContextualProvenance.toDto(): AgentContextualProvenanceDto = Ag
 internal data class AgentUserInputRequestDto(
     val id: String,
     val questions: List<AgentUserInputQuestionDto>,
+    val origin: String = AgentUserInputOrigin.Artifact.name,
 )
 
 @Serializable
@@ -542,7 +552,6 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         planMode = planMode,
         completedPlanText = completedPlanText.takeIf { it.isNotBlank() },
-        implementationPrompt = implementationPrompt.takeIf { it.isNotBlank() },
         continuationPrompt = continuationPrompt.takeIf { it.isNotBlank() },
         latestPrompt = latestPrompt.takeIf { it.isNotBlank() },
         completedResultText = completedResultText.takeIf { it.isNotBlank() },
@@ -578,6 +587,14 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         interrupted = migrated.interrupted,
         statusConfident = statusConfident,
         vendorSessionId = vendorSessionId.takeIf { it.isNotBlank() },
+        acpSessionId = acpSessionId.takeIf { it.isNotBlank() },
+        stopReason = stopReason.takeIf { it.isNotBlank() },
+        lane = inferAgentLaneFromArtifacts(
+            taskId = id,
+            declaredLane = AgentLaneKind.entries.firstOrNull { it.name == lane },
+            agent = agentKind,
+            agentsDir = scrollbackFile(id).parentFile?.parentFile ?: defaultAndyAgentArtifactsDir(),
+        ),
         createdAtMillis = createdAtMillis,
         startedAtMillis = startedAtMillis.takeIf { it > 0 },
         finishedAtMillis = finishedAtMillis.takeIf { it > 0 },
@@ -643,7 +660,6 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             sandboxMode = task.sandboxMode?.name.orEmpty(),
             planMode = task.planMode,
             completedPlanText = task.completedPlanText.orEmpty(),
-            implementationPrompt = task.implementationPrompt.orEmpty(),
             continuationPrompt = task.continuationPrompt.orEmpty(),
             latestPrompt = task.latestPrompt.orEmpty(),
             completedResultText = task.completedResultText.orEmpty(),
@@ -675,6 +691,9 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             interrupted = task.interrupted,
             statusConfident = task.statusConfident,
             vendorSessionId = task.vendorSessionId.orEmpty(),
+            acpSessionId = task.acpSessionId.orEmpty(),
+            stopReason = task.stopReason.orEmpty(),
+            lane = task.lane.name,
             createdAtMillis = task.createdAtMillis,
             startedAtMillis = task.startedAtMillis ?: 0,
             finishedAtMillis = task.finishedAtMillis ?: 0,
@@ -707,11 +726,17 @@ private fun AgentUserInputRequestDto.toModel(): AgentUserInputRequest? {
         if (options.size !in 2..3) return@mapNotNull null
         AgentUserInputQuestion(id, question.header.trim(), text, options)
     }
-    return AgentUserInputRequest(id = id, questions = parsedQuestions.takeIf { it.isNotEmpty() } ?: return null)
+    return AgentUserInputRequest(
+        id = id,
+        questions = parsedQuestions.takeIf { it.isNotEmpty() } ?: return null,
+        origin = AgentUserInputOrigin.entries.firstOrNull { it.name == origin }
+            ?: AgentUserInputOrigin.Artifact,
+    )
 }
 
 private fun AgentUserInputRequest.toDto() = AgentUserInputRequestDto(
     id = id,
+    origin = origin.name,
     questions = questions.map { question ->
         AgentUserInputQuestionDto(
             id = question.id,

@@ -95,13 +95,15 @@ internal fun ChatMarkdown(
     modifier: Modifier = Modifier,
     lineHeight: TextUnit = 19.sp,
     density: AndyMarkdownDensity = AndyMarkdownDensity.Chat,
+    /**
+     * True for user-authored chat input. Provider markdown should stay false so wrapped source
+     * lines (common before inline emphasis) render as soft breaks instead of hard line breaks.
+     */
+    preserveLineBreaks: Boolean = false,
 ) {
     if (text.isBlank()) return
     AndyMarkdown(
-        // CommonMark treats a single newline as a soft break, which most renderers display as
-        // a space. In a chat transcript, pressing Shift+Enter or pasting multiline text is an
-        // explicit formatting choice, so promote those breaks to Markdown hard breaks.
-        text = text.withChatLineBreaks(),
+        text = if (preserveLineBreaks) text.withChatLineBreaks() else text,
         density = density,
         bodyLineHeight = lineHeight,
         modifier = modifier.fillMaxWidth(),

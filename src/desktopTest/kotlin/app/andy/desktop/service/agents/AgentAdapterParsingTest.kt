@@ -31,7 +31,7 @@ private fun task(
 private fun implementationTask(agent: AgentKind): AgentTask = task(agent, autonomy = AgentAutonomy.Full).copy(
     planMode = false,
     sandboxMode = AgentSandboxMode.WorkspaceWrite,
-    implementationPrompt = "Begin implementation. Implement the completed plan.",
+    continuationPrompt = "Begin implementation. Implement the completed plan.",
 )
 
 class ClaudeCodeInteractiveAdapterTest {

@@ -4,8 +4,6 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
-import app.andy.model.AgentSandboxMode
-import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentStatus
@@ -216,105 +214,6 @@ class AgentRetryTest {
             // detection past its grace window (observed: a later test's process finished but
             // its status read back Error/null instead of Done because of exactly this leak).
             runCatching { service?.close() }
-            scope.cancel()
-            dir.deleteRecursively()
-        }
-    }
-}
-
-class AgentPlanHandoffTest {
-    @Test
-    fun completedPlanStartsAFreshWritableRunWithTheOriginalRequestAndPlan() = runBlocking {
-        val shell = File("/bin/sh")
-        if (!shell.canExecute()) return@runBlocking
-
-        val dir = File.createTempFile("andy-agent-plan-handoff", null).also {
-            it.delete()
-            it.mkdirs()
-        }
-        val cwd = File(dir, "existing-worktree").apply { mkdirs() }
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        var service: DesktopAgentRunService? = null
-        try {
-            val completedPlan = "1. Add the handoff transition.\n2. Cover it with tests."
-            val planned = AgentTask(
-                id = "task-plan-handoff",
-                title = "plan the handoff",
-                prompt = "make the agent plan handoff work",
-                agent = AgentKind.Codex,
-                cwd = cwd.absolutePath,
-                originDir = dir.absolutePath,
-                useWorktree = true,
-                worktreePath = cwd.absolutePath,
-                branchName = "andy/codex/plan-handoff",
-                attachAndyMcp = true,
-                autonomy = AgentAutonomy.ReadOnly,
-                sandboxMode = AgentSandboxMode.ReadOnly,
-                planMode = true,
-                completedPlanText = completedPlan,
-                model = "gpt-5.6-terra",
-                skills = listOf(AgentSkill("verify", "", "/tmp/verify/SKILL.md")),
-                status = AgentStatus.Done,
-                vendorSessionId = "read-only-plan-thread",
-                createdAtMillis = 1,
-                finishedAtMillis = 2,
-                exitCode = 0,
-                changeBaselineTree = "stale-plan-baseline-tree",
-            )
-            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
-            store.save(
-                AgentStoreState(
-                    tasks = listOf(planned),
-                    binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath),
-                ),
-            )
-            val adapter = PlanHandoffTestAdapter()
-            service = DesktopAgentRunService(
-                scope = scope,
-                store = store,
-                locator = AgentCliLocator(),
-                adapters = mapOf(AgentKind.Codex to adapter),
-                worktrees = WorktreeManager(File(dir, "worktrees")),
-                mcp = FakeMcp(),
-                workspaceStore = FakeWorkspaceStore(),
-                actionConfig = FakeActionConfig(),
-                // Fast-exiting fake agents race the tmux-attach path; run them in-process.
-                terminalMode = AgentTerminalMode.DirectPty,
-            )
-            withTimeout(10_000) {
-                while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
-            }
-
-            service.startImplementation(planned.id)
-            withTimeout(10_000) {
-                while (adapter.freshTasks.isEmpty()) delay(25)
-            }
-            withTimeout(10_000) {
-                while (service.tasks.value.single().isActive) delay(25)
-            }
-
-            val implementation = service.tasks.value.single()
-            val launched = adapter.freshTasks.single()
-            assertEquals(AgentStatus.Done, implementation.status)
-            assertTrue(!implementation.planMode)
-            assertEquals(AgentSandboxMode.WorkspaceWrite, implementation.sandboxMode)
-            assertEquals(planned.cwd, implementation.cwd)
-            assertEquals(planned.worktreePath, implementation.worktreePath)
-            assertEquals(planned.model, implementation.model)
-            assertEquals(planned.skills, implementation.skills)
-            assertEquals(planned.attachAndyMcp, implementation.attachAndyMcp)
-            assertNull(implementation.changeBaselineTree)
-            assertTrue(launched.implementationPrompt?.contains(planned.prompt) == true)
-            assertTrue(launched.implementationPrompt.contains(completedPlan))
-            assertTrue(!launched.implementationPrompt.contains("Plan mode is active"))
-            assertTrue(adapter.resumeCalls == 0, "implementation must never use a provider resume command")
-            assertTrue(
-                service.events(planned.id).value.filterIsInstance<AgentEvent.UserMessage>()
-                    .any { it.text.startsWith("Begin implementation.") },
-            )
-        } finally {
-            runCatching { service?.close() }
-            delay(500)
             scope.cancel()
             dir.deleteRecursively()
         }
@@ -558,6 +457,93 @@ class CursorPlanBackfillTest {
             assertEquals(recoveredPlan, saved.projectWorkflows[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
         } finally {
             // See AgentRetryTest's finally block for why this matters: without it, this
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun prefersPlanArtifactOverGrillMeTranscriptCapturedInCompletedPlanText() = runBlocking {
+        val dir = File.createTempFile("andy-cursor-plan-backfill", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val grillMePreamble = "I dug into the repo before grilling you. Which platforms should v1 ship on?"
+            val recoveredPlan = "# Cook mode\n\n- Call keepScreenOn(true) on entry\n- Add DisposableEffect cleanup"
+            val run = AgentTask(
+                id = "cursor-spec-run",
+                title = "Spec: Cook mode",
+                prompt = "Plan cook mode keep-awake",
+                agent = AgentKind.Cursor,
+                cwd = dir.absolutePath,
+                originDir = dir.absolutePath,
+                planMode = true,
+                completedPlanText = grillMePreamble,
+                status = AgentStatus.Done,
+                workflowTaskId = "spec-cook",
+                workflowStage = ProjectWorkflowStage.Spec,
+                createdAtMillis = 1,
+                finishedAtMillis = 2,
+            )
+            val workflow = ProjectWorkflowState(
+                projectId = "project-cook",
+                tasks = listOf(
+                    ProjectTask(
+                        id = "spec-cook",
+                        projectId = "project-cook",
+                        kind = ProjectTaskKind.Spec,
+                        title = "Cook mode",
+                        instructions = "Plan it",
+                        profile = ProjectAgentProfile(agent = AgentKind.Cursor),
+                        includeScratchpad = false,
+                        state = ProjectTaskState.Completed,
+                        planVersions = listOf(ProjectPlanVersion(1, grillMePreamble, run.id, 2)),
+                        createdAtMillis = 1,
+                        updatedAtMillis = 2,
+                    ),
+                ),
+            )
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(
+                AgentStoreState(
+                    tasks = listOf(run),
+                    projectWorkflows = mapOf(workflow.projectId to workflow),
+                ),
+            )
+            File(AgentWorkflowArtifacts.dirFor(dir, run.id).apply { mkdirs() }, "plan.md").writeText(recoveredPlan)
+
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Cursor to CursorAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+
+            withTimeout(10_000) {
+                while (true) {
+                    val saved = store.load()
+                    val memoryHasRecoveredPlan =
+                        service.tasks.value.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            service.projects.value[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    val storeHasRecoveredPlan =
+                        saved.tasks.singleOrNull()?.completedPlanText == recoveredPlan &&
+                            saved.projectWorkflows[workflow.projectId]?.tasks?.singleOrNull()?.planVersions?.singleOrNull()?.text == recoveredPlan
+                    if (memoryHasRecoveredPlan && storeHasRecoveredPlan) break
+                    delay(25)
+                }
+            }
+            assertEquals(recoveredPlan, service.projects.value[workflow.projectId]?.tasks?.single()?.planVersions?.single()?.text)
+        } finally {
+            // See AgentRetryTest's finally block for why this matters: without it, this
             // test's PTY wait/scrape loop leaks into the rest of the suite.
             runCatching { service?.close() }
             scope.cancel()
@@ -610,30 +596,6 @@ private class QueueTestAdapter : AgentCliAdapter {
         followUpImagePaths: List<String>,
     ): List<String> =
         listOf(binary, "-c", "printf 'queued response\\n'")
-
-    override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
-}
-
-private class PlanHandoffTestAdapter : AgentCliAdapter {
-    override val kind = AgentKind.Codex
-    val freshTasks = mutableListOf<AgentTask>()
-    var resumeCalls = 0
-
-    override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> {
-        freshTasks += task
-        return listOf(binary, "-c", "printf 'implementation complete\\n'")
-    }
-
-    override fun buildInteractiveResumeCommand(
-        binary: String,
-        task: AgentTask,
-        mcpUrl: String?,
-        followUp: String?,
-        followUpImagePaths: List<String>,
-    ): List<String> {
-        resumeCalls += 1
-        return listOf(binary, "-c", "printf 'resumed\\n'")
-    }
 
     override fun interactiveResumeCommand(binary: String, task: AgentTask): String = shellQuote(binary)
 }

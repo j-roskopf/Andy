@@ -8,6 +8,7 @@ import app.andy.desktop.service.agents.CodexAdapter
 import app.andy.desktop.service.agents.CursorAdapter
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
+import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.OpenCodeAdapter
 import app.andy.desktop.service.agents.PiAdapter
 import app.andy.desktop.service.agents.HermesAdapter
@@ -358,10 +359,13 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     // Attach-only terminal host: must not open ~/.andy/agents.db. andyd owns that
     // store; a second writer silently reverts chats / unread badges on GUI quit.
     val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
+    val sharedAgentArtifactsDir = defaultAndyAgentArtifactsDir()
     val localAttach = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         store = DesktopAgentTaskStore(
             databaseFile = File(attachStoreDir, "agents-${ProcessHandle.current().pid()}.db"),
+            // andyd owns agents.db, but scrollback/transcript files live here for replay.
+            transcriptsDir = sharedAgentArtifactsDir,
         ),
         locator = AgentCliLocator(),
         adapters = mapOf(

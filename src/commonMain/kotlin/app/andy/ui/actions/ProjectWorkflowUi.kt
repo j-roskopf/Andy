@@ -1039,7 +1039,7 @@ internal fun BuildPairDialog(
                             onToggle = { planExpanded = !planExpanded },
                         )
                     } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
                             FilterPill("Spec plan", !externalPlan, Cyan) {
                                 if (availablePlans.isNotEmpty()) {
                                     externalPlan = false
@@ -1050,8 +1050,20 @@ internal fun BuildPairDialog(
                                 externalPlan = true
                                 plan = ProjectPlanSnapshot(plan.text.takeIf { plan.sourceSpecTaskId == null }.orEmpty())
                             }
-                            if (!externalPlan) Box {
-                                OutlinedButton(onClick = { planMenu = true }) { Text(plan.sourceLabel) }
+                            if (!externalPlan) Box(Modifier.weight(1f)) {
+                                OutlinedButton(
+                                    onClick = { planMenu = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    fixedHeight = false,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                ) {
+                                    Text(
+                                        plan.sourceLabel,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                                 DropdownMenu(expanded = planMenu, onDismissRequest = { planMenu = false }, containerColor = PanelSoft) {
                                     availablePlans.forEach { candidate -> DropdownMenuItem(text = { Text(candidate.sourceLabel, color = TextPrimary) }, onClick = { plan = candidate; planMenu = false }) }
                                 }

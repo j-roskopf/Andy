@@ -52,10 +52,12 @@ internal fun skillRootsFor(
         File(home, ".agents/skills"),
         File(codexHome, "plugins/cache"),
     )
-    // Claude gives personal skills precedence over the project directory.
+    // Claude gives personal skills precedence over the project directory and also sees
+    // portable skills that its ACP runtime advertises from the shared Agent Skills root.
     AgentKind.ClaudeCode -> listOfNotNull(
         File(home, ".claude/skills"),
         workspace?.let { File(it, ".claude/skills") },
+        File(home, ".agents/skills"),
     )
     // Cursor discovers its own and portable Agent Skills at workspace and user
     // scope. It also recognizes compatible Codex skills, so include that root
@@ -75,7 +77,6 @@ internal fun skillRootsFor(
     )
     AgentKind.OpenCode -> listOfNotNull(
         workspace?.let { File(it, ".opencode/skills") },
-        workspace?.let { File(it, ".claude/skills") },
         File(home, ".config/opencode/skills"),
         File(home, ".opencode/skills"),
     )
@@ -92,3 +93,10 @@ internal fun skillRootsFor(
         File(home, ".openclaw/skills"),
     )
 }
+
+/** Names of locally installed skills that an ACP provider may accidentally advertise globally. */
+internal fun discoverKnownAgentSkillNames(directory: String?): Set<String> = AgentKind.entries
+    .flatMap { discoverAgentSkills(it, directory) }
+    .mapTo(linkedSetOf()) { it.name.normalizedAgentCommandName() }
+
+internal fun String.normalizedAgentCommandName(): String = trim().trimStart('/', '$').lowercase()

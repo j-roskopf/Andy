@@ -85,6 +85,7 @@ actual fun AgentTerminalSurface(
 
     var liveTerminal by remember(taskId) { mutableStateOf<AndyTerminalView?>(null) }
     var historyTerminal by remember(taskId) { mutableStateOf<AndyTerminalView?>(null) }
+    var historyReplayReady by remember(taskId) { mutableStateOf(false) }
     val releaseViewer = remember(agentRuns) { agentRuns?.let { runs -> runs::releaseTerminalViewer } }
 
     LaunchedEffect(taskId, effectiveSessionActive, sessionsRevision) {
@@ -134,8 +135,10 @@ actual fun AgentTerminalSurface(
         runCatching { agentRuns?.attachTerminalIfNeeded(taskId) }
         if (adoptLiveIfPresent()) return@LaunchedEffect
 
-        // Bridge while the live viewer is still attaching.
-        openHistoryIfAvailable()
+        // Resuming a live CLI should not flash read-only scrollback while the viewer attaches.
+        if (!effectiveSessionActive) {
+            openHistoryIfAvailable()
+        }
 
         var attempts = 0
         val maxAttempts = if (agentRuns?.isTerminalLive(taskId) == true) 400 else 60
@@ -153,7 +156,30 @@ actual fun AgentTerminalSurface(
                 is McpAgentRunClient -> runs.reconcileStaleActiveTaskIfNeeded(taskId)
             }
         }
-        openHistoryIfAvailable()
+        if (!effectiveSessionActive) {
+            openHistoryIfAvailable()
+        }
+    }
+
+    LaunchedEffect(historyTerminal?.state) {
+        val history = historyTerminal ?: run {
+            historyReplayReady = false
+            return@LaunchedEffect
+        }
+        if (history.isScrollbackReplayReady()) {
+            historyReplayReady = true
+            return@LaunchedEffect
+        }
+        historyReplayReady = false
+        repeat(200) {
+            kickScrollbackReplayPaint(history)
+            if (history.isScrollbackReplayReady()) {
+                historyReplayReady = true
+                return@LaunchedEffect
+            }
+            delay(50)
+        }
+        historyReplayReady = history.isScrollbackReplayReady()
     }
 
     val historyToDispose = rememberUpdatedState(historyTerminal)
@@ -164,7 +190,8 @@ actual fun AgentTerminalSurface(
             releaseViewerOnDispose.value?.invoke(taskId)
         }
     }
-    val displayTerminal = liveTerminal ?: historyTerminal
+    val displayTerminal = liveTerminal ?: historyTerminal?.takeIf { historyReplayReady }
+    val historyReplayLoading = historyTerminal != null && liveTerminal == null && !historyReplayReady
     val acceptsLiveDrops = effectiveSessionActive && liveTerminal != null
     val tmuxWheelInput = remember(displayTerminal?.state, displayTerminal?.tmuxScrollback) {
         displayTerminal?.takeIf { it.tmuxScrollback }?.let { view ->
@@ -175,9 +202,9 @@ actual fun AgentTerminalSurface(
 
     // History feeds before EmbeddableTerminal mounts; without an ungated redraw after layout
     // ProperTerminal can keep the blank first committed bitmap until the window is resized.
-    LaunchedEffect(historyTerminal?.state, liveTerminal?.state) {
+    LaunchedEffect(historyTerminal?.state, liveTerminal?.state, historyReplayReady) {
         val history = historyTerminal ?: return@LaunchedEffect
-        if (liveTerminal != null) return@LaunchedEffect
+        if (liveTerminal != null || !historyReplayReady) return@LaunchedEffect
         repeat(8) {
             kickScrollbackReplayPaint(history)
             delay(100)
@@ -254,6 +281,7 @@ actual fun AgentTerminalSurface(
                 ) {
                     Text(
                         when {
+                            historyReplayLoading -> "Loading chat history…"
                             effectiveSessionActive -> "Waiting for terminal…"
                             else -> "Terminal session ended"
                         },
@@ -264,6 +292,7 @@ actual fun AgentTerminalSurface(
                     Text(
                         when {
                             imageDragActive -> "release to stage image for your next message"
+                            historyReplayLoading -> "Restoring the saved transcript for this chat"
                             effectiveSessionActive -> "Connecting to the live provider CLI for this chat"
                             else -> "Send a follow-up below to reopen the interactive CLI"
                         },
