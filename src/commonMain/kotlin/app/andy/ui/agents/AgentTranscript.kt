@@ -154,6 +154,8 @@ internal fun AgentTranscript(
     onSkillOpen: (AgentSkill) -> Unit = {},
     restoreScrollKey: String? = null,
     scrollMemory: TranscriptScrollMemory? = null,
+    /** Increment to jump to the live edge (e.g. after the user sends a follow-up). */
+    scrollToLatestRequest: Int = 0,
     autoExpandActivitySections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
     modifier: Modifier = Modifier,
@@ -308,6 +310,12 @@ internal fun AgentTranscript(
     fun jumpToLatest() {
         stickToBottom = true
         scope.launch { listState.scrollToItem(0) }
+    }
+
+    LaunchedEffect(scrollToLatestRequest, scrollInitialized) {
+        if (scrollToLatestRequest == 0 || !scrollInitialized) return@LaunchedEffect
+        stickToBottom = true
+        listState.scrollToItem(0)
     }
 
     Box(modifier) {
@@ -557,7 +565,7 @@ private fun AgentThinkingIndicator() {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ThinkingOrb(size = 14.dp, color = TextSecondary, contentDescription = "Thinking")
+        ThinkingOrb(size = 14.dp, color = Cyan, contentDescription = "Thinking")
         Text("Thinking", color = TextSecondary, fontSize = 12.sp)
     }
 }

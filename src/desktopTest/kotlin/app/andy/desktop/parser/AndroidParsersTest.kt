@@ -518,6 +518,50 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun parseDropboxIndexAssignsUniqueIdsForDuplicateTimestampAndTag() {
+        val output = """
+            ========================================
+            2026-08-03 13:16:33 clockpackage (text, 100 bytes)
+            Process: com.example.clock
+            java.lang.RuntimeException: first
+            ========================================
+            ========================================
+            2026-08-03 13:16:33 clockpackage (text, 200 bytes)
+            Process: com.example.clock
+            java.lang.RuntimeException: second
+        """.trimIndent()
+
+        val parsed = AndroidParsers.parseDropboxIndex(output)
+        val ids = parsed.records.map { it.id }
+
+        assertEquals(2, parsed.records.size)
+        assertEquals(listOf("dropbox|2026-08-03 13:16:33|clockpackage", "dropbox|2026-08-03 13:16:33|clockpackage#1"), ids)
+        assertEquals(2, parsed.bodiesById.size)
+    }
+
+    @Test
+    fun packagePidsFromPsMatchesTruncatedProcessNames() {
+        val output = """
+            PID   NAME
+            1234  com.example.clo
+            5678  system_server
+        """.trimIndent()
+
+        assertEquals(setOf("1234"), AndroidParsers.packagePidsFromPs(output, "com.example.clockpackage"))
+    }
+
+    @Test
+    fun packagePidsFromPsArgsMatchesFullPackageInCommandLine() {
+        val output = """
+            PID   ARGS
+            9012  com.example.clockpackage
+            5678  system_server
+        """.trimIndent()
+
+        assertEquals(setOf("9012"), AndroidParsers.packagePidsFromPsArgs(output, "com.example.clockpackage"))
+    }
+
+    @Test
     fun parseDropboxEntryStripsChunkRuleAndTimestampHeader() {
         val output = """
             ========================================

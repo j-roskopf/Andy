@@ -134,6 +134,43 @@ object AndroidParsers {
         return packageName to cleaned
     }
 
+    fun parsePidList(output: String): Set<String> =
+        output.split(Regex("\\s+")).filter { it.isNotBlank() && it.all(Char::isDigit) }.toSet()
+
+    /** Matches a process [name] column value to an Android package (handles 15-char truncation). */
+    fun processNameMatchesPackage(processName: String, packageName: String): Boolean =
+        processName == packageName ||
+            packageName.startsWith(processName) ||
+            processName.startsWith(packageName)
+
+    fun packagePidsFromPs(output: String, packageName: String): Set<String> =
+        output.lineSequence()
+            .mapNotNull { line ->
+                val trimmed = line.trim()
+                if (trimmed.isBlank() || trimmed.startsWith("PID", ignoreCase = true)) return@mapNotNull null
+                val parts = trimmed.split(Regex("\\s+"), limit = 2)
+                if (parts.size < 2) return@mapNotNull null
+                val pid = parts[0]
+                if (!pid.all(Char::isDigit)) return@mapNotNull null
+                val name = parts[1]
+                if (processNameMatchesPackage(name, packageName)) pid else null
+            }
+            .toSet()
+
+    fun packagePidsFromPsArgs(output: String, packageName: String): Set<String> =
+        output.lineSequence()
+            .mapNotNull { line ->
+                val trimmed = line.trim()
+                if (trimmed.isBlank() || trimmed.startsWith("PID", ignoreCase = true)) return@mapNotNull null
+                val parts = trimmed.split(Regex("\\s+"), limit = 2)
+                if (parts.size < 2) return@mapNotNull null
+                val pid = parts[0]
+                if (!pid.all(Char::isDigit)) return@mapNotNull null
+                val args = parts[1]
+                if (args.contains(packageName)) pid else null
+            }
+            .toSet()
+
     fun parseSystemImages(output: String): List<SystemImage> {
         return output.lineSequence()
             .filter { it.contains("system-images;android-") }
@@ -464,7 +501,9 @@ object AndroidParsers {
                         !line.startsWith("Package:") && !line.startsWith("Foreground:") && !line.startsWith("Build:")
                 }
                 ?: tag
-            val id = "dropbox|$timestampText|$tag"
+            val baseId = "dropbox|$timestampText|$tag"
+            val duplicateIndex = records.count { it.id == baseId || it.id.startsWith("$baseId#") }
+            val id = if (duplicateIndex == 0) baseId else "$baseId#$duplicateIndex"
             records += CrashRecord(
                 id = id,
                 kind = classifyDropboxTag(tag),

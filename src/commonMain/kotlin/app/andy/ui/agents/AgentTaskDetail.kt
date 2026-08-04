@@ -151,6 +151,7 @@ internal fun AgentTaskDetail(
     var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
+    var scrollToLatestRequest by remember(task.id) { mutableStateOf(0) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
     LaunchedEffect(task.id, task.isActive, task.status) {
@@ -286,6 +287,7 @@ internal fun AgentTaskDetail(
         }
         followUp = ""
         followUpImagePaths = emptyList()
+        scrollToLatestRequest++
     }
 
     LaunchedEffect(task.goal) {
@@ -420,6 +422,7 @@ internal fun AgentTaskDetail(
                     originalImagePaths = task.imagePaths,
                     restoreScrollKey = task.id,
                     scrollMemory = transcriptScrollMemory,
+                    scrollToLatestRequest = scrollToLatestRequest,
                     autoExpandActivitySections = workspaceState.agentTranscriptAutoExpandActivity,
                     collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
                     pendingContent = task.userInputRequest?.let { request ->

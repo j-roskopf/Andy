@@ -135,8 +135,9 @@ class DesktopCrashInspectorService(
     }
 
     private suspend fun loadDropboxEntry(serial: String, id: String): String? {
-        val parts = id.split('|', limit = 3)
-        if (parts.size != 3) return null
+        val canonicalId = id.substringBefore('#')
+        val parts = canonicalId.split('|', limit = 3)
+        if (parts.size != 3 || parts[0] != "dropbox") return null
         val timestampText = parts[1]
         val tag = parts[2]
         val dateParts = timestampText.split(' ', limit = 2)

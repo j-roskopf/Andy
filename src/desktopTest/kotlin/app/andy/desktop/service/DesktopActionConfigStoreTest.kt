@@ -294,6 +294,56 @@ class DesktopActionConfigStoreTest {
     }
 
     @Test
+    fun discoversRepoActionsFromGlobalProjectContextDir() = runBlocking {
+        val dir = createTempDirectory("andy-actions-global-context").toFile()
+        val workspace = dir.resolve("workspace").apply { mkdirs() }
+        val homeConfig = dir.resolve("home/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "proj-basil"
+                name = "Basil"
+                contextDir = "${workspace.absolutePath}/"
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+        workspace.resolve(".andy/actions.toml").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                version = 1
+                [[projects]]
+                id = "basil"
+                name = "Basil"
+                contextDir = "."
+                env = { }
+                [[actions]]
+                id = "act-desktop"
+                projectId = "basil"
+                name = "Desktop"
+                icon = "run"
+                command = "./gradlew :composeApp:run"
+                cwd = ""
+                env = { }
+                """.trimIndent() + "\n",
+            )
+        }
+
+        val store = DesktopActionConfigStore(homeConfig, discoveryRootsProvider = { emptyList() })
+        val loaded = store.load()
+        val project = loaded.projects.single()
+
+        assertEquals("proj-basil", project.id)
+        assertEquals(ConfigSource.Global, project.source)
+        assertEquals(1, project.actions.size)
+        assertEquals("act-desktop", project.actions.single().id)
+        assertEquals(ConfigSource.Repo, project.actions.single().source)
+    }
+
+    @Test
     fun savesVirtualProjectWhenGlobalChildIsAdded() = runBlocking {
         val dir = createTempDirectory("andy-actions-global-child").toFile()
         val homeConfig = dir.resolve("home/actions.toml")
