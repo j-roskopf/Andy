@@ -18,7 +18,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -72,7 +71,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
+import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
+import app.andy.model.AgentToolKind
 import app.andy.model.isRetriableConnectionStallMessage
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.model.stripDecisionCheckpointMarkup
@@ -80,18 +81,13 @@ import app.andy.model.AgentSkill
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.ui.components.AndyMarkdownDensity
-import app.andy.ui.components.AndyHorizontalDivider
-import app.andy.ui.components.Button
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
-import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.PanelCard
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -148,6 +144,8 @@ internal fun AgentTranscript(
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     completedContent: (@Composable () -> Unit)? = null,
+    /** Scrolls with the transcript on the live edge, below pending input and above events. */
+    trailingContent: (@Composable () -> Unit)? = null,
     /**
      * False while a completed chat's transcript (and trailing UI) is still loading.
      * Prevents pinning to the prompt-only stub before history arrives.
@@ -156,10 +154,14 @@ internal fun AgentTranscript(
     onSkillOpen: (AgentSkill) -> Unit = {},
     restoreScrollKey: String? = null,
     scrollMemory: TranscriptScrollMemory? = null,
+    autoExpandActivitySections: Boolean = false,
+    collapseActivityBetweenMessages: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val displayItems = remember(events) { transcriptDisplayItems(events) }
+    val displayItems = remember(events, collapseActivityBetweenMessages) {
+        transcriptDisplayItems(events, collapseActivityBetweenMessages)
+    }
     val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths)
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
@@ -184,6 +186,21 @@ internal fun AgentTranscript(
     var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedThinkingKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
+    fun setActivityExpanded(
+        key: String,
+        expanded: Boolean,
+        overrides: Set<String>,
+        onOverridesChange: (Set<String>) -> Unit,
+    ) {
+        onOverridesChange(
+            when {
+                autoExpandActivitySections && expanded -> overrides - key
+                autoExpandActivitySections && !expanded -> overrides + key
+                !autoExpandActivitySections && expanded -> overrides + key
+                else -> overrides - key
+            },
+        )
+    }
     // Desktop wheel/trackpad input can complete without isScrollInProgress ever becoming true.
     var userScrollGeneration by remember(taskId) { mutableStateOf(0) }
     val rowKeys = remember(
@@ -191,11 +208,13 @@ internal fun AgentTranscript(
         isActive,
         originalPromptVisible,
         pendingContent != null,
+        trailingContent != null,
         headerContent != null,
     ) {
         buildList {
             if (pendingContent != null) add("pending-task-input")
             if (isActive) add("agent-thinking")
+            if (trailingContent != null) add("trailing-content")
             displayItems.asReversed().forEach { add(transcriptDisplayItemKey(it)) }
             if (originalPromptVisible) add("original-prompt")
             if (headerContent != null) add("task-header")
@@ -291,12 +310,7 @@ internal fun AgentTranscript(
         scope.launch { listState.scrollToItem(0) }
     }
 
-    Box(
-        modifier
-            .clip(RoundedCornerShape(AndyRadius.Row))
-            .background(AndyColors.Neutral900.copy(alpha = 0.38f))
-            .border(1.dp, Border.copy(alpha = 0.76f), RoundedCornerShape(AndyRadius.Row)),
-    ) {
+    Box(modifier) {
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
             EmptyState("waiting for agent output")
         } else {
@@ -321,8 +335,8 @@ internal fun AgentTranscript(
                             }
                         }
                     },
-                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 // reverseLayout lays index zero at the visual bottom, so declare rows newest
                 // first while preserving the transcript's chronological reading order.
@@ -331,6 +345,9 @@ internal fun AgentTranscript(
                 }
                 if (isActive) {
                     item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
+                }
+                if (trailingContent != null) {
+                    item(key = "trailing-content", contentType = "trailing") { trailingContent() }
                 }
                 items(
                     count = displayItems.size,
@@ -353,30 +370,47 @@ internal fun AgentTranscript(
                             is TranscriptDisplayItem.Event -> TranscriptEvent(
                                 event = item.event,
                                 eventKey = transcriptEventKey(item.index, item.event),
-                                expandedToolKeys = expandedToolKeys,
-                                expandedThinkingKeys = expandedThinkingKeys,
+                                toolExpanded = transcriptActivityExpanded(
+                                    transcriptEventKey(item.index, item.event),
+                                    expandedToolKeys,
+                                    autoExpandActivitySections,
+                                ),
+                                thinkingExpanded = transcriptActivityExpanded(
+                                    transcriptEventKey(item.index, item.event),
+                                    expandedThinkingKeys,
+                                    autoExpandActivitySections,
+                                ),
                                 agentLabel = agentLabel,
                                 completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
                                 activePermissionRequestId = activePermissionRequestId,
                                 onToolExpandedChange = { key, expanded ->
-                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                    setActivityExpanded(key, expanded, expandedToolKeys) { expandedToolKeys = it }
                                 },
                                 onThinkingExpandedChange = { key, expanded ->
-                                    expandedThinkingKeys = if (expanded) expandedThinkingKeys + key else expandedThinkingKeys - key
+                                    setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
                                 },
                                 onSkillOpen = onSkillOpen,
                             )
                             is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
                                 events = item.events,
                                 startIndex = item.startIndex,
-                                expanded = transcriptDisplayItemKey(item) in expandedToolGroups,
+                                expanded = transcriptActivityExpanded(
+                                    transcriptDisplayItemKey(item),
+                                    expandedToolGroups,
+                                    autoExpandActivitySections,
+                                ),
                                 onExpandedChange = { expanded ->
                                     val key = transcriptDisplayItemKey(item)
-                                    expandedToolGroups = if (expanded) expandedToolGroups + key else expandedToolGroups - key
+                                    setActivityExpanded(key, expanded, expandedToolGroups) { expandedToolGroups = it }
                                 },
                                 expandedToolKeys = expandedToolKeys,
+                                expandedThinkingKeys = expandedThinkingKeys,
+                                autoExpandActivitySections = autoExpandActivitySections,
                                 onToolExpandedChange = { key, expanded ->
-                                    expandedToolKeys = if (expanded) expandedToolKeys + key else expandedToolKeys - key
+                                    setActivityExpanded(key, expanded, expandedToolKeys) { expandedToolKeys = it }
+                                },
+                                onThinkingExpandedChange = { key, expanded ->
+                                    setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
                                 },
                             )
                         }
@@ -412,17 +446,18 @@ internal fun AgentTranscript(
                 visible = scrollInitialized && !stickToBottom,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
             ) {
-                Button(
-                    onClick = ::jumpToLatest,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp),
-                ) {
-                    Text(
-                        if (isActive) "↓  follow live" else "↓  latest",
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
+                Text(
+                    if (isActive) "↓ follow live" else "↓ latest",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(AndyRadius.Pill))
+                        .background(AndyColors.Neutral850.copy(alpha = 0.92f))
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = ::jumpToLatest)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
             }
         }
     }
@@ -471,48 +506,59 @@ internal sealed class TranscriptDisplayItem {
     data class ToolCalls(val startIndex: Int, val events: List<AgentEvent>) : TranscriptDisplayItem()
 }
 
+internal fun transcriptActivityExpanded(
+    key: String,
+    overrides: Set<String>,
+    autoExpand: Boolean,
+): Boolean = if (autoExpand) key !in overrides else key in overrides
+
 internal fun transcriptDisplayItems(
     events: List<AgentEvent>,
+    collapseActivityBetweenMessages: Boolean = false,
 ): List<TranscriptDisplayItem> {
     val display = transcriptDisplayEvents(events).filterNot { it is AgentEvent.ContextUsage }
     val items = mutableListOf<TranscriptDisplayItem>()
     var index = 0
     while (index < display.size) {
         val event = display[index]
-        if (!event.isToolTranscriptEvent()) {
+        if (!event.isTranscriptActivityEvent()) {
             items += TranscriptDisplayItem.Event(index, event)
             index += 1
             continue
         }
         val startIndex = index
         val group = mutableListOf<AgentEvent>()
-        while (index < display.size && display[index].isToolTranscriptEvent()) {
+        while (index < display.size && display[index].isTranscriptActivityEvent()) {
             group += display[index]
             index += 1
         }
-        if (group.size == 1) {
-            items += TranscriptDisplayItem.Event(startIndex, group.single())
-        } else {
-            items += TranscriptDisplayItem.ToolCalls(startIndex, group)
+        when {
+            group.size == 1 -> items += TranscriptDisplayItem.Event(startIndex, group.single())
+            collapseActivityBetweenMessages -> items += TranscriptDisplayItem.ToolCalls(startIndex, group)
+            group.all { it is AgentEvent.ToolCall || it is AgentEvent.ToolResult } ->
+                items += TranscriptDisplayItem.ToolCalls(startIndex, group)
+            else -> group.forEachIndexed { offset, activity ->
+                items += TranscriptDisplayItem.Event(startIndex + offset, activity)
+            }
         }
     }
     return items
 }
 
-private fun AgentEvent.isToolTranscriptEvent(): Boolean =
-    this is AgentEvent.ToolCall || this is AgentEvent.ToolResult
+internal fun AgentEvent.isTranscriptActivityEvent(): Boolean =
+    this is AgentEvent.Thinking || this is AgentEvent.ToolCall || this is AgentEvent.ToolResult
 
 @Composable
 private fun AgentThinkingIndicator() {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ThinkingOrb(size = 18.dp, color = Cyan, contentDescription = "Thinking")
-        Text("thinking", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        ThinkingOrb(size = 14.dp, color = TextSecondary, contentDescription = "Thinking")
+        Text("Thinking", color = TextSecondary, fontSize = 12.sp)
     }
 }
 
@@ -520,8 +566,8 @@ private fun AgentThinkingIndicator() {
 private fun TranscriptEvent(
     event: AgentEvent,
     eventKey: String,
-    expandedToolKeys: Set<String>,
-    expandedThinkingKeys: Set<String>,
+    toolExpanded: Boolean,
+    thinkingExpanded: Boolean,
     agentLabel: String,
     completedContent: (@Composable () -> Unit)?,
     activePermissionRequestId: String? = null,
@@ -530,24 +576,17 @@ private fun TranscriptEvent(
     onSkillOpen: (AgentSkill) -> Unit,
 ) {
     when (event) {
-        is AgentEvent.SessionStarted -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text(
-                "${event.model ?: agentLabel}  session started",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-            )
-        }
+        is AgentEvent.SessionStarted -> Unit
         is AgentEvent.AssistantText -> {
             val visibleText = stripDecisionCheckpointMarkup(event.text)
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
             AgentResponse {
-                ChatMarkdown(visibleText, lineHeight = 19.sp)
+                ChatMarkdown(visibleText, lineHeight = 21.sp)
             }
         }
         is AgentEvent.Thinking -> ThinkingStep(
             text = event.text,
-            expanded = eventKey in expandedThinkingKeys,
+            expanded = thinkingExpanded,
             onExpandedChange = { expanded -> onThinkingExpandedChange(eventKey, expanded) },
         )
         is AgentEvent.UserMessage -> ChatMessageBubble(
@@ -577,16 +616,18 @@ private fun TranscriptEvent(
             }
         }
         is AgentEvent.ToolCall -> ToolBlock(
-            expanded = eventKey in expandedToolKeys,
+            expanded = toolExpanded,
             onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
             marker = "▸",
             name = event.toolName,
             summary = event.summary,
             detail = event.detail,
+            kind = event.kind,
+            locations = event.locations,
             color = Cyan,
         )
         is AgentEvent.ToolResult -> ToolBlock(
-            expanded = eventKey in expandedToolKeys,
+            expanded = toolExpanded,
             onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
             marker = if (event.isError) "✗" else "✓",
             name = event.toolName,
@@ -604,14 +645,13 @@ private fun TranscriptEvent(
         )
         // The header owns this live status; a transcript row would only add noise.
         is AgentEvent.ContextUsage -> Unit
-        is AgentEvent.PlanUpdate -> PanelCard {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("plan", color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
-                event.entries.forEach { entry ->
-                    Text("${entry.status}  ${entry.content}", color = TextPrimary, fontSize = 12.sp)
-                }
+        is AgentEvent.PlanUpdate -> Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Plan", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            event.entries.forEach { entry ->
+                Text("${entry.status}  ${entry.content}", color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
             }
         }
         is AgentEvent.ModeChanged -> Text(
@@ -626,12 +666,21 @@ private fun TranscriptEvent(
         is AgentEvent.AvailableModes -> Unit
         is AgentEvent.PermissionRequest -> {
             if (event.requestId != activePermissionRequestId) {
-                PanelCard {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(event.toolName.ifBlank { "permission" }, color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
-                        Text(event.question, color = TextPrimary, fontSize = 12.sp)
-                        Text(event.options.joinToString(" · ") { it.label }, color = TextSecondary, fontSize = 11.sp)
-                    }
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        event.toolName.ifBlank { "permission" },
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Text(event.question, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                    Text(
+                        event.options.joinToString(" · ") { it.label },
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                    )
                 }
             }
         }
@@ -650,6 +699,9 @@ private fun TranscriptEvent(
     }
 }
 
+private val TranscriptAsideIndent = 14.dp
+private val TranscriptAsideContentIndent = 22.dp
+
 @Composable
 private fun ThinkingStep(
     text: String,
@@ -657,65 +709,31 @@ private fun ThinkingStep(
     onExpandedChange: (Boolean) -> Unit,
 ) {
     val expandable = text.lineSequence().any { it.isNotBlank() }
-    // Open aside — left accent only, no filled card, so it reads lighter than chat/tool blocks.
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .padding(horizontal = 2.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    TranscriptExpandableRow(
+        headline = "Thinking",
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        expandable = expandable,
+        headlineColor = TextSecondary,
+        indent = TranscriptAsideIndent,
     ) {
-        Box(
+        val bodyModifier = if (expanded) {
             Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(Cyan.copy(alpha = 0.28f), RoundedCornerShape(1.dp)),
-        )
-        Column(
-            Modifier.weight(1f).animateContentSize(),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            DisableSelection {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .then(if (expandable) Modifier.clickable { onExpandedChange(!expanded) } else Modifier),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (expandable) {
-                        Text(
-                            if (expanded) "v" else ">",
-                            color = Cyan.copy(alpha = 0.65f),
-                            fontFamily = MonoFont,
-                            fontSize = 10.sp,
-                            modifier = Modifier.width(10.dp),
-                        )
-                    }
-                    ThinkingOrb(size = 14.dp, color = Cyan, animate = false, contentDescription = "Thinking")
-                    Text("thinking", color = Cyan.copy(alpha = 0.65f), fontFamily = MonoFont, fontSize = 10.sp)
-                }
-            }
-            AnimatedVisibility(visible = expandable) {
-                val bodyModifier = if (expanded) {
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 220.dp)
-                        .verticalScroll(rememberScrollState())
-                } else {
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 60.dp)
-                        .clipToBounds()
-                }
-                ChatMarkdown(
-                    text,
-                    density = AndyMarkdownDensity.Thinking,
-                    lineHeight = 15.sp,
-                    modifier = bodyModifier,
-                )
-            }
+                .fillMaxWidth()
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState())
+        } else {
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 48.dp)
+                .clipToBounds()
         }
+        ChatMarkdown(
+            text,
+            density = AndyMarkdownDensity.Thinking,
+            lineHeight = 16.sp,
+            modifier = bodyModifier.padding(top = 4.dp),
+        )
     }
 }
 
@@ -725,19 +743,18 @@ private fun ChatMessageBubble(
     content: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxWidth()) {
-        PanelCard(
+        Column(
             modifier = Modifier
                 .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
-                .widthIn(max = 720.dp)
-                .fillMaxWidth(if (alignEnd) 0.78f else 1f)
-                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart),
-            background = AndyColors.Neutral700.copy(alpha = AndyOverlay.Strong),
-            borderColor = null,
-            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
-            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-        ) {
-            content()
-        }
+                .widthIn(max = 640.dp)
+                .fillMaxWidth(if (alignEnd) 0.82f else 1f)
+                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart)
+                .clip(RoundedCornerShape(14.dp))
+                .background(AndyColors.Neutral800.copy(alpha = 0.5f))
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = { content() },
+        )
     }
 }
 
@@ -765,27 +782,21 @@ private fun AgentCompletion(
 
     Column(
         Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         duration?.let {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    if (event.success) "Worked for $it" else "Failed after $it",
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                )
-                Text(">", color = TextSecondary.copy(alpha = 0.72f), fontSize = 11.sp)
-            }
-            AndyHorizontalDivider(color = Border)
+            TranscriptExpandableRow(
+                headline = if (event.success) "Worked for $it" else "Failed after $it",
+                expanded = false,
+                onExpandedChange = {},
+                expandable = false,
+                headlineColor = TextSecondary,
+            )
         }
         if (cost != null || tokens != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                cost?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
-                tokens?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                cost?.let { Text(it, color = TextSecondary.copy(alpha = 0.8f), fontFamily = MonoFont, fontSize = 11.sp) }
+                tokens?.let { Text(it, color = TextSecondary.copy(alpha = 0.8f), fontFamily = MonoFont, fontSize = 11.sp) }
             }
         }
         event.finalText?.takeIf { it.isNotBlank() }?.let {
@@ -963,91 +974,56 @@ private fun CompactToolCallsBlock(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     expandedToolKeys: Set<String>,
+    expandedThinkingKeys: Set<String>,
+    autoExpandActivitySections: Boolean,
     onToolExpandedChange: (String, Boolean) -> Unit,
+    onThinkingExpandedChange: (String, Boolean) -> Unit,
 ) {
-    val toolNames = events.mapNotNull { event ->
-        when (event) {
-            is AgentEvent.ToolCall -> event.toolName.takeIf { it.isNotBlank() }
-            is AgentEvent.ToolResult -> event.toolName?.takeIf { it.isNotBlank() }
-            else -> null
-        }
-    }.distinct()
-    val maxHeadlineNames = 3
-    val headline = buildString {
-        append(events.size)
-        append(if (events.size == 1) " tool" else " tools")
-        if (toolNames.isNotEmpty()) {
-            append(": ")
-            append(toolNames.take(maxHeadlineNames).joinToString(", "))
-            if (toolNames.size > maxHeadlineNames) append(", …")
-        }
-    }
     val hasError = events.any { it is AgentEvent.ToolResult && it.isError }
-    val color = if (hasError) Red else Cyan
+    val headlineColor = if (hasError) Red.copy(alpha = 0.9f) else TextSecondary
 
-    PanelCard(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        background = AndyColors.Neutral850.copy(alpha = AndyOverlay.Subtle),
-        borderColor = Border.copy(alpha = 0.65f),
-        contentPadding = PaddingValues(AndySpace.Space3),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    TranscriptExpandableRow(
+        headline = compactActivityHeadline(events),
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        headlineColor = headlineColor,
+        indent = TranscriptAsideIndent,
     ) {
-        DisableSelection {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onExpandedChange(!expanded) },
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    if (expanded) "v" else ">",
-                    color = color,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    modifier = Modifier.width(10.dp),
-                )
-                Text(
-                    headline,
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        AnimatedVisibility(visible = expanded) {
-            Column(
-                Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                events.forEachIndexed { offset, event ->
-                    val eventKey = transcriptEventKey(startIndex + offset, event)
-                    when (event) {
-                        is AgentEvent.ToolCall -> ToolBlock(
-                            expanded = eventKey in expandedToolKeys,
-                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                            marker = "▸",
-                            name = event.toolName,
-                            summary = event.summary,
-                            detail = event.detail,
-                            color = Cyan,
-                        )
-                        is AgentEvent.ToolResult -> ToolBlock(
-                            expanded = eventKey in expandedToolKeys,
-                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                            marker = if (event.isError) "✗" else "✓",
-                            name = event.toolName,
-                            summary = event.summary,
-                            detail = event.detail,
-                            color = if (event.isError) Red else TextSecondary,
-                        )
-                        else -> Unit
-                    }
+        Column(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            events.forEachIndexed { offset, event ->
+                val eventKey = transcriptEventKey(startIndex + offset, event)
+                when (event) {
+                    is AgentEvent.Thinking -> ThinkingStep(
+                        text = event.text,
+                        expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandActivitySections),
+                        onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
+                    )
+                    is AgentEvent.ToolCall -> ToolBlock(
+                        expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                        onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                        marker = "▸",
+                        name = event.toolName,
+                        summary = event.summary,
+                        detail = event.detail,
+                        kind = event.kind,
+                        locations = event.locations,
+                        color = Cyan,
+                        indent = TranscriptAsideContentIndent,
+                    )
+                    is AgentEvent.ToolResult -> ToolBlock(
+                        expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                        onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                        marker = if (event.isError) "✗" else "✓",
+                        name = event.toolName,
+                        summary = event.summary,
+                        detail = event.detail,
+                        color = if (event.isError) Red else TextSecondary,
+                        indent = TranscriptAsideContentIndent,
+                    )
+                    else -> Unit
                 }
             }
         }
@@ -1062,73 +1038,197 @@ private fun ToolBlock(
     name: String?,
     summary: String,
     detail: String,
+    kind: AgentToolKind? = null,
+    locations: List<String> = emptyList(),
     color: Color,
+    indent: Dp = TranscriptAsideIndent,
 ) {
-    val headline = listOfNotNull(name?.takeIf { it.isNotBlank() }, summary.takeIf { it.isNotBlank() }).joinToString(": ")
-    val body = detail.ifBlank { summary }.ifBlank { name.orEmpty() }
-    val expandable = headline.isNotBlank() || body.isNotBlank()
+    val headline = toolBlockHeadline(name, summary, kind, locations)
+    val body = detail
+        .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
+        .orEmpty()
+        .ifBlank { summary.takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }.orEmpty() }
+        .ifBlank { name.orEmpty() }
+    val expandable = body.isNotBlank() && body != headline
 
-    Column(
-        Modifier.fillMaxWidth()
-            .animateContentSize()
-            .then(
-                if (expandable) {
-                    Modifier
-                        .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Subtle), RoundedCornerShape(AndyRadius.Control))
-                        .border(1.dp, Border.copy(alpha = 0.65f), RoundedCornerShape(AndyRadius.Control))
-                } else {
-                    Modifier
-                },
-            )
-            .padding(horizontal = if (expandable) 10.dp else 0.dp, vertical = if (expandable) 10.dp else 0.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    if (!expandable) {
+        Text(
+            headline.ifBlank { marker },
+            color = color.copy(alpha = 0.88f),
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            modifier = Modifier.padding(start = indent),
+        )
+        return
+    }
+
+    TranscriptExpandableRow(
+        headline = headline,
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        headlineColor = color.copy(alpha = 0.88f),
+        indent = indent,
     ) {
+        Text(
+            body,
+            color = TextPrimary.copy(alpha = 0.92f),
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState()),
+        )
+    }
+}
+
+@Composable
+private fun TranscriptExpandableRow(
+    headline: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    expandable: Boolean = true,
+    headlineColor: Color = TextSecondary,
+    indent: Dp = 0.dp,
+    contentIndent: Dp = indent + 8.dp,
+    content: @Composable () -> Unit = {},
+) {
+    Column(modifier.fillMaxWidth().animateContentSize()) {
         DisableSelection {
-            Row(
-                Modifier
+            Text(
+                headline,
+                color = headlineColor,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (expandable) Modifier.clickable { onExpandedChange(!expanded) } else Modifier),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Text(
-                    if (expandable) if (expanded) "v" else ">" else marker,
-                    color = color,
-                    fontFamily = MonoFont,
-                    fontSize = 12.sp,
-                    modifier = if (expandable) Modifier.width(10.dp) else Modifier,
-                )
-                Text(
-                    headline.ifBlank { name.orEmpty() },
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    maxLines = if (expanded) Int.MAX_VALUE else 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+                    .padding(start = indent)
+                    .then(
+                        if (expandable) {
+                            Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { onExpandedChange(!expanded) }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            )
         }
-        AnimatedVisibility(visible = expanded && body.isNotBlank()) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .heightIn(max = 220.dp)
-                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Control))
-                    .padding(horizontal = 8.dp, vertical = 7.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Text(
-                    body,
-                    color = TextPrimary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                )
+        if (expandable) {
+            AnimatedVisibility(visible = expanded) {
+                Column(Modifier.fillMaxWidth().padding(start = contentIndent)) {
+                    content()
+                }
             }
         }
     }
 }
+
+private fun compactActivityHeadline(events: List<AgentEvent>): String {
+    val thinkingCount = events.count { it is AgentEvent.Thinking }
+    val toolHeadline = compactToolActivityHeadline(events)
+    return when {
+        thinkingCount > 0 && toolHeadline.isNotBlank() -> {
+            val thinkingLabel = if (thinkingCount == 1) "thought" else "$thinkingCount thoughts"
+            "$thinkingLabel, $toolHeadline"
+        }
+        thinkingCount > 0 -> if (thinkingCount == 1) "Thinking" else "$thinkingCount thinking steps"
+        else -> toolHeadline
+    }
+}
+
+internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
+    val toolCalls = events.filterIsInstance<AgentEvent.ToolCall>()
+    if (toolCalls.isEmpty()) {
+        val count = events.size
+        return "$count tool ${if (count == 1) "result" else "results"}"
+    }
+    if (toolCalls.size == 1) {
+        val call = toolCalls.single()
+        return toolActionPhrase(call.toolName, call.summary, call.kind, call.locations)
+    }
+    val phrases = toolCalls.map { toolActionPhrase(it.toolName, it.summary, it.kind, it.locations) }
+    val readCount = toolCalls.count { it.toolName.lowercase() in ReadToolNames || it.kind == AgentToolKind.Read }
+    val commandCount = toolCalls.count { it.toolName.lowercase() in CommandToolNames || it.kind == AgentToolKind.Execute }
+    val agentCount = toolCalls.count { it.toolName.lowercase() in AgentToolNames }
+    val editCount = toolCalls.count {
+        it.kind == AgentToolKind.Edit || it.toolName.lowercase() in EditToolNames
+    }
+    val summaryParts = buildList {
+        if (agentCount > 0) add("ran ${if (agentCount == 1) "an agent" else "$agentCount agents"}")
+        if (readCount > 0) add("read $readCount ${if (readCount == 1) "file" else "files"}")
+        if (editCount > 0) add("edited $editCount ${if (editCount == 1) "file" else "files"}")
+        if (commandCount > 0) add("ran $commandCount ${if (commandCount == 1) "command" else "commands"}")
+    }
+    if (summaryParts.isNotEmpty()) {
+        return summaryParts.joinToString(", ")
+    }
+    val meaningfulPhrases = phrases.filter { it.isNotBlank() && !AcpToolCallPresentation.isMinimalOutput(it) }
+    if (meaningfulPhrases.isEmpty()) {
+        val count = toolCalls.size
+        return "$count tool ${if (count == 1) "call" else "calls"}"
+    }
+    return meaningfulPhrases.take(3).joinToString(", ").let { headline ->
+        if (meaningfulPhrases.size > 3) "$headline, …" else headline
+    }
+}
+
+private fun toolBlockHeadline(
+    name: String?,
+    summary: String,
+    kind: AgentToolKind?,
+    locations: List<String>,
+): String {
+    val label = name?.trim().orEmpty()
+    val detail = summary
+        .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
+        .orEmpty()
+        .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
+    return when {
+        detail.isNotBlank() && label.isNotBlank() && !label.equals(detail, ignoreCase = true) ->
+            "$label: $detail"
+        label.isNotBlank() -> label
+        detail.isNotBlank() -> detail
+        else -> toolActionPhrase(label, summary, kind, locations)
+    }
+}
+
+private fun toolActionPhrase(
+    toolName: String,
+    summary: String,
+    kind: AgentToolKind? = null,
+    locations: List<String> = emptyList(),
+): String {
+    val lower = toolName.lowercase()
+    val trimmedSummary = summary
+        .trim()
+        .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
+        .orEmpty()
+        .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
+    return when {
+        lower in AgentToolNames -> "Ran an agent"
+        lower in ReadToolNames || kind == AgentToolKind.Read ->
+            trimmedSummary.takeIf { it.isNotBlank() }?.let { "Read $it" } ?: "Read file"
+        lower in EditToolNames || kind == AgentToolKind.Edit ->
+            trimmedSummary.takeIf { it.isNotBlank() }?.let { "Edited $it" } ?: "Edited file"
+        lower in CommandToolNames || kind == AgentToolKind.Execute ->
+            trimmedSummary.takeIf { it.isNotBlank() }?.let { "Ran $it" } ?: "Ran command"
+        trimmedSummary.isNotBlank() -> trimmedSummary
+        toolName.isNotBlank() -> toolName
+        else -> "Tool call"
+    }
+}
+
+private val ReadToolNames = setOf("read", "grep", "glob", "list_dir", "file_read", "get_network_request")
+private val CommandToolNames = setOf("shell", "run_terminal_cmd", "bash", "write", "strreplace")
+private val EditToolNames = setOf("edit", "edit file", "edit_file", "str_replace", "apply_patch", "write")
+private val AgentToolNames = setOf("task", "agent", "mcp_task")
 
 /**
  * Lazy identity for a transcript row. Must stay stable while streamed text / tool
@@ -1160,28 +1260,32 @@ internal fun ConnectionStallBanner(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    PanelCard(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium),
-        contentPadding = PaddingValues(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             "Connection stalled",
             color = Red,
-            fontFamily = MonoFont,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
         )
         Text(
-            "Andy lost the stream to Cursor before this turn finished. Retry to pick up where the agent left off.",
+            "Andy lost the stream before this turn finished. Retry to pick up where the agent left off.",
             color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            OutlinedButton(onClick = onRetry) { Text("retry", fontSize = 11.sp) }
+            Text(
+                "Retry",
+                color = Cyan,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onRetry)
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
         }
     }
 }

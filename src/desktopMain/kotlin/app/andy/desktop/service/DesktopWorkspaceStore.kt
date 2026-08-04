@@ -140,6 +140,8 @@ class DesktopWorkspaceStore(
             keepAgentSessionsOnShutdown = props.getProperty("keepAgentSessionsOnShutdown")?.toBooleanStrictOrNull() ?: false,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
+            agentTranscriptAutoExpandActivity = props.getProperty("agentTranscriptAutoExpandActivity")?.toBooleanStrictOrNull() ?: false,
+            agentTranscriptCollapseActivityBlocks = props.getProperty("agentTranscriptCollapseActivityBlocks")?.toBooleanStrictOrNull() ?: false,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
         )
     }.also { mutableState.value = it }
@@ -229,6 +231,8 @@ class DesktopWorkspaceStore(
             setProperty("keepAgentSessionsOnShutdown", state.keepAgentSessionsOnShutdown.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
+            setProperty("agentTranscriptAutoExpandActivity", state.agentTranscriptAutoExpandActivity.toString())
+            setProperty("agentTranscriptCollapseActivityBlocks", state.agentTranscriptCollapseActivityBlocks.toString())
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
         }
         file.outputStream().use { props.store(it, "Andy workspace") }

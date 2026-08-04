@@ -90,14 +90,13 @@ import app.andy.ui.components.PendingConfirmation
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentTask
-import app.andy.model.AndroidDevice
 import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
 import app.andy.model.ProjectNote
 import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
-import app.andy.model.RunningAction
+import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.service.AndyServices
 import app.andy.currentTimeMillis
@@ -106,7 +105,6 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.WorkspaceCanvas
@@ -167,10 +165,6 @@ private const val RecentSessionsPerProject = 5
 private fun ProjectCockpit(
     services: AndyServices,
     config: ActionsConfig,
-    running: List<RunningAction>,
-    activeRunId: String?,
-    terminalRunId: String?,
-    onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
     preferredProjectId: String?,
@@ -181,10 +175,9 @@ private fun ProjectCockpit(
     requestedAgentTaskId: String?,
     requestedProjectId: String?,
     onRequestedAgentTaskConsumed: () -> Unit,
-    serial: String?,
-    device: AndroidDevice?,
-    targetDisplayName: String? = null,
+    onNotifyTerminalRun: (String) -> Unit,
     active: Boolean,
+    workspaceState: WorkspaceState,
 ) {
     val scope = rememberCoroutineScope()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
@@ -210,10 +203,6 @@ private fun ProjectCockpit(
     var expandedProjectSessionsId by remember { mutableStateOf<String?>(null) }
     var viewingArchivedForProjectId by remember { mutableStateOf<String?>(null) }
     var collapsedProjectIds by remember { mutableStateOf(setOf<String>()) }
-    var docks by remember { mutableStateOf(AuxDocks()) }
-    var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
-    var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
-    var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
     val effectiveProjectWorkflow = project?.let { loadedProjectWorkflow ?: ProjectWorkflowState(it.id) }
@@ -239,42 +228,6 @@ private fun ProjectCockpit(
                 if (selectedTaskId == task.id) selectedTaskId = null
             }
         }
-    }
-
-    fun selectTerminalTab(runId: String) {
-        if (runId !in terminalTabIds) terminalTabIds = terminalTabIds + runId
-        onActiveRunIdChange(runId)
-    }
-
-    fun ensureTerminalDock(placement: DockPlacement = lastTerminalPlacement) {
-        lastTerminalPlacement = placement
-        docks = docks.show(placement, DockKind.Terminal)
-    }
-
-    fun openOrFocusTerminal(placement: DockPlacement, project: ActionProject) {
-        val runId = activeRunId?.takeIf { activeId ->
-            running.any { it.runId == activeId && it.projectId == project.id }
-        } ?: services.actionRuns.openShell(project)
-        selectTerminalTab(runId)
-        ensureTerminalDock(placement)
-    }
-
-    fun closeTerminalTab(runId: String) {
-        services.actionRuns.stop(runId)
-        val remaining = terminalTabIds.filter { it != runId }
-        terminalTabIds = remaining
-        if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())
-        if (remaining.isEmpty()) docks = docks.clearKind(DockKind.Terminal)
-    }
-
-    fun onDockToggle(placement: DockPlacement, kind: DockKind) {
-        if (kind == DockKind.Terminal && docks[placement] != DockKind.Terminal) {
-            val current = project ?: return
-            openOrFocusTerminal(placement, current)
-            return
-        }
-        if (kind == DockKind.Terminal) lastTerminalPlacement = placement
-        docks = docks.toggle(placement, kind)
     }
 
     LaunchedEffect(workspaceReady, config.projects, preferredProjectId) {
@@ -313,18 +266,6 @@ private fun ProjectCockpit(
             canvas = ProjectCanvas.Tasks
             initialWorkflowSelectionApplied = true
         }
-    }
-    LaunchedEffect(terminalRunId, running) {
-        val runId = terminalRunId ?: return@LaunchedEffect
-        if (runId == handledTerminalRunId) return@LaunchedEffect
-        val terminalRun = running.firstOrNull { it.runId == runId } ?: return@LaunchedEffect
-        selectProject(terminalRun.projectId)
-        selectTerminalTab(runId)
-        ensureTerminalDock(lastTerminalPlacement)
-        handledTerminalRunId = runId
-    }
-    LaunchedEffect(running) {
-        terminalTabIds = terminalTabIds.filter { tabId -> running.any { it.runId == tabId } }
     }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
@@ -397,9 +338,7 @@ private fun ProjectCockpit(
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val railWidth = AndyLayout.ListWidth
-        val chatMinWidth = if (docks.right != null) 280.dp else 520.dp
-        val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
-        val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
+        val chatMinWidth = 520.dp
 
         Column(
             Modifier.fillMaxSize(),
@@ -509,12 +448,10 @@ private fun ProjectCockpit(
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
-                            docks = docks,
                             onCanvasChange = {
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
                             },
-                            onDockToggle = ::onDockToggle,
                         )
                         Box(
                             Modifier.fillMaxSize().testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
@@ -539,6 +476,7 @@ private fun ProjectCockpit(
                                                 selected,
                                                 onDelete = ::requestDeleteChat,
                                                 transcriptScrollMemory = transcriptScrollMemory,
+                                                workspaceState = workspaceState,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -610,8 +548,7 @@ private fun ProjectCockpit(
                                     onNewAction = { editingAction = EditingAction(current.id, null) },
                                     onRunAction = { action ->
                                         val runId = services.actionRuns.run(current, action)
-                                        selectTerminalTab(runId)
-                                        ensureTerminalDock(lastTerminalPlacement)
+                                        onNotifyTerminalRun(runId)
                                     },
                                 )
                                 ProjectCanvas.Scratchpad -> ProjectScratchpadEditor(
@@ -624,42 +561,7 @@ private fun ProjectCockpit(
                         }
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    docks.right?.let { rightKind ->
-                        ProjectAuxDock(
-                            kind = rightKind,
-                            services = services,
-                            terminalTabs = terminalTabs,
-                            activeRunId = activeTerminalRunId,
-                            placement = DockPlacement.Right,
-                            serial = serial,
-                            device = device,
-                            targetDisplayName = targetDisplayName,
-                            liveActive = active,
-                            onSelectTab = ::selectTerminalTab,
-                            onCloseTab = ::closeTerminalTab,
-                            onClose = { docks = docks.clear(DockPlacement.Right) },
-                            modifier = Modifier.width(460.dp).fillMaxHeight(),
-                        )
-                    }
                 }
-            }
-            docks.bottom?.let { bottomKind ->
-                ProjectAuxDock(
-                    kind = bottomKind,
-                    services = services,
-                    terminalTabs = terminalTabs,
-                    activeRunId = activeTerminalRunId,
-                    placement = DockPlacement.Bottom,
-                    serial = serial,
-                    device = device,
-                    targetDisplayName = targetDisplayName,
-                    liveActive = active,
-                    onSelectTab = ::selectTerminalTab,
-                    onCloseTab = ::closeTerminalTab,
-                    onClose = { docks = docks.clear(DockPlacement.Bottom) },
-                    modifier = Modifier.fillMaxWidth().height(300.dp),
-                )
             }
         }
     }
@@ -740,10 +642,6 @@ private fun ProjectCockpit(
 internal fun ActionsScreen(
     services: AndyServices,
     config: ActionsConfig,
-    running: List<RunningAction>,
-    activeRunId: String?,
-    terminalRunId: String?,
-    onActiveRunIdChange: (String?) -> Unit,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
     showIntroduction: Boolean = false,
@@ -757,9 +655,8 @@ internal fun ActionsScreen(
     requestedAgentTaskId: String? = null,
     requestedProjectId: String? = null,
     onRequestedAgentTaskConsumed: () -> Unit = {},
-    serial: String? = null,
-    device: AndroidDevice? = null,
-    targetDisplayName: String? = null,
+    onNotifyTerminalRun: (String) -> Unit = {},
+    workspaceState: WorkspaceState = WorkspaceState(),
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -767,10 +664,6 @@ internal fun ActionsScreen(
         ProjectCockpit(
             services = services,
             config = config,
-            running = running,
-            activeRunId = activeRunId,
-            terminalRunId = terminalRunId,
-            onActiveRunIdChange = onActiveRunIdChange,
             onConfigChange = onConfigChange,
             agentTasks = agentTasks,
             preferredProjectId = preferredProjectId,
@@ -781,10 +674,9 @@ internal fun ActionsScreen(
             requestedAgentTaskId = requestedAgentTaskId,
             requestedProjectId = requestedProjectId,
             onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
-            serial = serial,
-            device = device,
-            targetDisplayName = targetDisplayName,
+            onNotifyTerminalRun = onNotifyTerminalRun,
             active = active,
+            workspaceState = workspaceState,
         )
     }
 }
@@ -1358,9 +1250,7 @@ private fun ProjectSessionRow(
 private fun ProjectChatToolbar(
     project: ActionProject,
     canvas: ProjectCanvas,
-    docks: AuxDocks,
     onCanvasChange: (ProjectCanvas) -> Unit,
-    onDockToggle: (DockPlacement, DockKind) -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -1389,64 +1279,6 @@ private fun ProjectChatToolbar(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ProjectCanvas.entries.filter { it != ProjectCanvas.Chat }.forEach { tab ->
                 FilterPill(tab.label, canvas == tab, if (tab == ProjectCanvas.Runbook) Rust else Cyan) { onCanvasChange(tab) }
-            }
-        }
-        DockToggleRow(docks = docks, onToggle = onDockToggle)
-    }
-}
-
-@Composable
-private fun ProjectAuxDock(
-    kind: DockKind,
-    services: AndyServices,
-    terminalTabs: List<RunningAction>,
-    activeRunId: String?,
-    placement: DockPlacement,
-    serial: String?,
-    device: AndroidDevice?,
-    targetDisplayName: String?,
-    liveActive: Boolean,
-    onSelectTab: (String) -> Unit,
-    onCloseTab: (String) -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    when (kind) {
-        DockKind.Terminal -> {
-            if (liveActive) {
-                TerminalDockDrawer(
-                    services = services,
-                    terminalTabs = terminalTabs,
-                    activeRunId = activeRunId,
-                    placement = placement,
-                    onSelectTab = onSelectTab,
-                    onCloseTab = onCloseTab,
-                    onClose = onClose,
-                    modifier = modifier,
-                )
-            } else {
-                PanelCard(modifier, accent = Rust) {
-                    EmptyState("Terminal pauses while another tab is open")
-                }
-            }
-        }
-        DockKind.Live -> {
-            // Keep the live mirror out of composition while Projects is retained but inactive
-            // so the Live tab (and other embedded live panes) can own the session.
-            if (liveActive) {
-                LiveDockDrawer(
-                    services = services,
-                    serial = serial,
-                    device = device,
-                    targetDisplayName = targetDisplayName,
-                    placement = placement,
-                    onClose = onClose,
-                    modifier = modifier,
-                )
-            } else {
-                PanelCard(modifier, accent = Cyan) {
-                    EmptyState("Live view pauses while another tab is open")
-                }
             }
         }
     }

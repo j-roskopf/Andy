@@ -148,7 +148,7 @@ private fun AndyMarkdown(
     val thinking = density == AndyMarkdownDensity.Thinking
     val body = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = if (thinking) MonoFont else DisplayFont,
-        fontSize = if (thinking) 11.sp else 13.sp,
+        fontSize = if (thinking) 11.sp else 14.sp,
         lineHeight = bodyLineHeight,
         color = if (thinking) TextSecondary else TextPrimary,
     )
@@ -161,10 +161,10 @@ private fun AndyMarkdown(
         markdownState = markdownState,
         colors = markdownColor(
             text = if (thinking) TextSecondary else TextPrimary,
-            codeBackground = if (thinking) AndyColors.Neutral850.copy(alpha = 0.35f) else AndyColors.Neutral850,
-            inlineCodeBackground = if (thinking) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral700,
-            dividerColor = Border.copy(alpha = if (thinking) 0.35f else 1f),
-            tableBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.4f else 1f),
+            codeBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.35f else 0.55f),
+            inlineCodeBackground = AndyColors.Neutral700.copy(alpha = if (thinking) 0.45f else 0.72f),
+            dividerColor = Border.copy(alpha = if (thinking) 0.35f else 0.45f),
+            tableBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.4f else 0.65f),
         ),
         typography = markdownTypography(
             h1 = MaterialTheme.typography.displayLarge.copy(
@@ -209,13 +209,16 @@ private fun AndyMarkdown(
             inlineCode = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = MonoFont,
                 fontSize = if (thinking) 10.sp else 12.sp,
-                color = if (thinking) Cyan.copy(alpha = 0.88f) else Rust,
+                color = if (thinking) TextSecondary else TextPrimary.copy(alpha = 0.95f),
             ),
             ordered = body,
             bullet = body,
             list = body,
             textLink = TextLinkStyles(
-                style = body.copy(color = Cyan.copy(alpha = if (thinking) 0.85f else 1f), textDecoration = TextDecoration.Underline).toSpanStyle(),
+                style = body.copy(
+                    color = Cyan.copy(alpha = if (thinking) 0.82f else 0.92f),
+                    textDecoration = TextDecoration.None,
+                ).toSpanStyle(),
             ),
         ),
         padding = when (density) {

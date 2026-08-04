@@ -5,14 +5,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +41,8 @@ import app.andy.ui.theme.TextSecondary
 /**
  * Underline-style tab bar for page-level navigation. Prefer this over [FilterPill]
  * when switching between distinct content panes.
+ *
+ * [trailing] is placed on the trailing edge of the tab row (e.g. filter pills).
  */
 @Composable
 internal fun TabBar(
@@ -45,19 +50,34 @@ internal fun TabBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5),
             verticalAlignment = Alignment.Bottom,
         ) {
-            tabs.forEachIndexed { index, label ->
-                TabBarItem(
-                    label = label,
-                    selected = index == selectedIndex,
-                    onClick = { onSelect(index) },
-                )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                tabs.forEachIndexed { index, label ->
+                    TabBarItem(
+                        label = label,
+                        selected = index == selectedIndex,
+                        onClick = { onSelect(index) },
+                    )
+                }
+            }
+            if (trailing != null) {
+                Spacer(Modifier.weight(1f))
+                Box(
+                    Modifier
+                        .padding(bottom = AndySpace.Space2)
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    trailing()
+                }
             }
         }
         Box(
@@ -76,12 +96,14 @@ internal fun <T> TabBar(
     onSelect: (T) -> Unit,
     label: (T) -> String,
     modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     TabBar(
         tabs = tabs.map(label),
         selectedIndex = tabs.indexOf(selected).coerceAtLeast(0),
         onSelect = { index -> onSelect(tabs[index]) },
         modifier = modifier,
+        trailing = trailing,
     )
 }
 

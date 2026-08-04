@@ -30,6 +30,8 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 
 @Composable
 internal actual fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureDraft) -> Unit) {
@@ -89,7 +91,14 @@ internal actual fun BugCaptureDialog(onDismiss: () -> Unit, onSave: (BugCaptureD
 
 @Composable
 internal actual fun ClipTextDialog(onDismiss: () -> Unit, onSend: (String) -> Unit) {
-    var text by remember { mutableStateOf("") }
+    var text by remember {
+        mutableStateOf(
+            runCatching {
+                val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                (clipboard.getData(DataFlavor.stringFlavor) as? String).orEmpty()
+            }.getOrDefault(""),
+        )
+    }
     DialogWindow(
         onCloseRequest = onDismiss,
         state = rememberDialogState(width = 460.dp, height = 280.dp),

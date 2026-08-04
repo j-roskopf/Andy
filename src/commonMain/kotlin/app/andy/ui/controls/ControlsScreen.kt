@@ -277,7 +277,7 @@ internal fun ControlsScreen(
             },
         )
 
-        PanelCard(accent = Rust) {
+        PanelCard(borderColor = Color.Transparent) {
             ControlSectionHeader(
                 title = "Hardware navigation",
                 description = "Send a key event directly through the active mirror connection.",
@@ -304,10 +304,10 @@ internal fun ControlsScreen(
 private fun ControlSection(
     title: String,
     description: String,
-    accent: Color? = null,
+    @Suppress("UNUSED_PARAMETER") accent: Color? = null,
     content: @Composable () -> Unit,
 ) {
-    PanelCard(accent = accent) {
+    PanelCard(borderColor = Color.Transparent) {
         ControlSectionHeader(title, description)
         @OptIn(ExperimentalLayoutApi::class)
         FlowRow(

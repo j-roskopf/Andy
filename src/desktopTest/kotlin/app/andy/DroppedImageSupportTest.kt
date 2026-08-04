@@ -21,6 +21,17 @@ class DroppedImageSupportTest {
     }
 
     @Test
+    fun acceptsMultipleImageFilesFromFileList() {
+        val first = File.createTempFile("andy-drop-test-1", ".png").apply { deleteOnExit() }
+        val second = File.createTempFile("andy-drop-test-2", ".jpg").apply { deleteOnExit() }
+        val transferable = FakeTransferable(
+            flavors = listOf(DataFlavor.javaFileListFlavor),
+            values = mapOf(DataFlavor.javaFileListFlavor to listOf(first, second)),
+        )
+        assertEquals(listOf(first.absolutePath, second.absolutePath), transferable.droppedImagePaths())
+    }
+
+    @Test
     fun ignoresNonImageFiles() {
         val transferable = FakeTransferable(
             flavors = listOf(DataFlavor.javaFileListFlavor),

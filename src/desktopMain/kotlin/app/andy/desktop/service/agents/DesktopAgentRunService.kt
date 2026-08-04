@@ -21,6 +21,7 @@ import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.fallbackTitle
 import app.andy.model.AgentStatus
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
@@ -912,7 +913,7 @@ class DesktopAgentRunService(
         }
         var task = AgentTask(
             id = id,
-            title = draft.title.ifBlank { draft.prompt.truncateForSummary(60) },
+            title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
             prompt = draft.prompt,
             agent = draft.agent,
             projectId = draft.projectId,

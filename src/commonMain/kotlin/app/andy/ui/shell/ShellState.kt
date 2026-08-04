@@ -83,14 +83,22 @@ internal class ShellState(
         private set
     var chromeMenuExpanded by mutableStateOf(false)
         private set
+    var docks by mutableStateOf(ShellDocks())
+        private set
+    var lastTerminalPlacement by mutableStateOf(DockPlacement.Right)
+        private set
 
     /** In-app deep links for contextual agent actions (§5), separate from OS-level requests. */
     var pendingAgentTaskOpen by mutableStateOf<OpenAgentTaskRequest?>(null)
         private set
     var pendingInvestigationOpen by mutableStateOf<OpenInvestigationRequest?>(null)
         private set
+    /** Settings category label to select on next Settings entry (e.g. "Proxy"). */
+    var pendingSettingsCategory by mutableStateOf<String?>(null)
+        private set
     private var startupTargetId: String? = null
     private var startupSelectionResolved = false
+    private var handledTerminalRunId: String? = null
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
@@ -104,6 +112,17 @@ internal class ShellState(
         } else {
             destination = value
         }
+    }
+
+    fun openProxySettings() {
+        pendingSettingsCategory = "Proxy"
+        navigateTo(AndyDestination.Settings)
+    }
+
+    fun consumeSettingsCategory(): String? {
+        val value = pendingSettingsCategory
+        pendingSettingsCategory = null
+        return value
     }
 
     /** Opens the chat a contextual action just launched, in whichever destination owns it. */
@@ -262,6 +281,100 @@ internal class ShellState(
 
     fun updateChromeMenuExpanded(value: Boolean) {
         chromeMenuExpanded = value
+    }
+
+    /** Placement icon: close if open, otherwise show the landing menu. */
+    fun onPlacementIconClick(placement: DockPlacement) {
+        val pane = docks.pane(placement)
+        docks = if (pane.visible) {
+            docks.update(placement) { it.hide() }.copy(landingFor = null)
+        } else {
+            docks.copy(landingFor = placement)
+        }
+    }
+
+    fun dismissDockLanding() {
+        docks = docks.copy(landingFor = null)
+    }
+
+    fun openDockKind(placement: DockPlacement, kind: DockTabKind) {
+        when (kind) {
+            DockTabKind.Live -> docks = docks.withLiveExclusive(placement)
+            DockTabKind.Logs -> docks = docks.update(placement) { it.withTab(DockTab.logs()) }
+            DockTabKind.Terminal -> openOrFocusTerminal(placement)
+        }
+    }
+
+    fun openOrFocusTerminal(placement: DockPlacement = lastTerminalPlacement) {
+        val project = actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull()
+        if (project == null) {
+            docks = docks.copy(landingFor = null)
+            return
+        }
+        val runId = activeRunId?.takeIf { activeId ->
+            // Prefer keeping the focused shell when it belongs to this project.
+            services.actionRuns.running.value.any { it.runId == activeId && it.projectId == project.id }
+        } ?: services.actionRuns.openShell(project)
+        focusTerminalRun(runId, placement)
+    }
+
+    fun focusTerminalRun(runId: String, placement: DockPlacement = lastTerminalPlacement) {
+        if (runId.isBlank()) return
+        lastTerminalPlacement = placement
+        activeRunId = runId
+        terminalRunId = runId
+        handledTerminalRunId = runId
+        docks = docks.withTerminalExclusive(placement, runId)
+    }
+
+    fun notifyTerminalRun(runId: String) {
+        if (runId.isBlank()) return
+        focusTerminalRun(runId, lastTerminalPlacement)
+    }
+
+    fun selectDockTab(placement: DockPlacement, tabId: String) {
+        docks = docks.update(placement) { it.selectTab(tabId) }
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
+        if (tab?.kind == DockTabKind.Terminal && tab.runId != null) {
+            activeRunId = tab.runId
+        }
+    }
+
+    fun closeDockTab(placement: DockPlacement, tabId: String) {
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
+        if (tab?.kind == DockTabKind.Terminal && tab.runId != null) {
+            services.actionRuns.stop(tab.runId)
+            if (activeRunId == tab.runId) {
+                val remaining = docks.pane(placement).tabs
+                    .filter { it.id != tabId && it.kind == DockTabKind.Terminal }
+                    .mapNotNull { it.runId }
+                activeRunId = remaining.lastOrNull()
+            }
+        }
+        docks = docks.update(placement) { it.closeTab(tabId) }
+    }
+
+    fun closeDock(placement: DockPlacement) {
+        docks = docks.update(placement) { it.hide() }
+    }
+
+    fun consumeTerminalRun(runningActions: List<RunningAction>) {
+        val runId = terminalRunId ?: return
+        if (runId == handledTerminalRunId) return
+        val run = runningActions.firstOrNull { it.runId == runId } ?: return
+        handledTerminalRunId = runId
+        activeRunId = runId
+        rememberLastProject(run.projectId)
+        docks = docks.withTerminalExclusive(lastTerminalPlacement, runId)
+    }
+
+    fun pruneDockTerminalTabs(runningActions: List<RunningAction>) {
+        val alive = runningActions.mapTo(mutableSetOf()) { it.runId }
+        val nextRight = docks.right.withoutTerminalRuns(alive)
+        val nextBottom = docks.bottom.withoutTerminalRuns(alive)
+        if (nextRight == docks.right && nextBottom == docks.bottom) return
+        docks = docks.copy(right = nextRight, bottom = nextBottom)
     }
 
     suspend fun refreshDevicesNow(): List<AndroidDevice> {

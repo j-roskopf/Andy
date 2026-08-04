@@ -118,7 +118,17 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             Box(Modifier.size(6.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
-            Text(label, color = color, fontFamily = DisplayFont, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                label,
+                color = color,
+                fontFamily = DisplayFont,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

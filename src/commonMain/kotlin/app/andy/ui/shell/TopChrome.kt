@@ -89,6 +89,13 @@ internal fun TopChrome(
     onActionSelectionChange: (projectId: String, actionId: String?) -> Unit = { _, _ -> },
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
+    onProxyClick: () -> Unit = {},
+    rightPaneOpen: Boolean = false,
+    bottomPaneOpen: Boolean = false,
+    dockLandingFor: DockPlacement? = null,
+    onPlacementIconClick: (DockPlacement) -> Unit = {},
+    onDismissDockLanding: () -> Unit = {},
+    onOpenDockKind: (DockPlacement, DockTabKind) -> Unit = { _, _ -> },
     onMenuExpandedChange: (Boolean) -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
 ) {
@@ -96,7 +103,8 @@ internal fun TopChrome(
     var projectMenuExpanded by remember { mutableStateOf(false) }
     var actionMenuExpanded by remember { mutableStateOf(false) }
     var deviceMenuExpanded by remember { mutableStateOf(false) }
-    val anyMenuExpanded = projectMenuExpanded || actionMenuExpanded || deviceMenuExpanded
+    val anyMenuExpanded =
+        projectMenuExpanded || actionMenuExpanded || deviceMenuExpanded || dockLandingFor != null
     SideEffect {
         onMenuExpandedChange(anyMenuExpanded)
     }
@@ -133,8 +141,34 @@ internal fun TopChrome(
             )
         }
         actions()
+        Box {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PanePlacementToggle(
+                    placement = DockPlacement.Bottom,
+                    selected = bottomPaneOpen,
+                    onClick = { onPlacementIconClick(DockPlacement.Bottom) },
+                )
+                PanePlacementToggle(
+                    placement = DockPlacement.Right,
+                    selected = rightPaneOpen,
+                    onClick = { onPlacementIconClick(DockPlacement.Right) },
+                )
+            }
+            DockLandingMenu(
+                expanded = dockLandingFor != null,
+                onDismiss = onDismissDockLanding,
+                onSelect = { kind ->
+                    val placement = dockLandingFor ?: return@DockLandingMenu
+                    onOpenDockKind(placement, kind)
+                },
+            )
+        }
+        Spacer(Modifier.width(AndySpace.Space3))
         if (destination != AndyDestination.Network && proxyRunning) {
-            ProxyToolbarIndicator()
+            ProxyToolbarIndicator(onClick = onProxyClick)
             Spacer(Modifier.width(AndySpace.Space3))
         }
         if (hasActionRunnerControls) {
@@ -192,11 +226,12 @@ internal fun TopChrome(
 }
 
 @Composable
-private fun ProxyToolbarIndicator() {
+private fun ProxyToolbarIndicator(onClick: () -> Unit) {
     Row(
         Modifier
             .height(AndyLayout.ControlHeightMd)
             .background(AndyColors.SurfaceHover, AndyShape.Interactive)
+            .clickable(onClick = onClick)
             .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),

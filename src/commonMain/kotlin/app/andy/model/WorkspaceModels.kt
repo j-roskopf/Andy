@@ -100,6 +100,10 @@ data class WorkspaceState(
     val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
+    /** Expand tool, thinking, and grouped activity rows when a transcript opens. */
+    val agentTranscriptAutoExpandActivity: Boolean = false,
+    /** Merge consecutive thinking/tool steps into one block between user/assistant messages. */
+    val agentTranscriptCollapseActivityBlocks: Boolean = false,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
 )

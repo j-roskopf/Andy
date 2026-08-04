@@ -1,6 +1,7 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.AgentToolKind
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.planTextFromAcpTranscript
@@ -50,6 +51,56 @@ class AgentTranscriptTest {
         val displayed = transcriptDisplayEvents(listOf(first, second))
 
         assertEquals(listOf(first.copy(text = "Hey! What are we working on today?")), displayed)
+    }
+
+    @Test
+    fun thinkingAndToolStaySeparateWhenActivityCollapseDisabled() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "Find it"),
+            AgentEvent.Thinking(atMillis = 2, text = "Need to search the repo"),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Grep", summary = "AgentTranscript"),
+            AgentEvent.AssistantText(atMillis = 4, text = "Done."),
+        )
+
+        val items = transcriptDisplayItems(events, collapseActivityBetweenMessages = false)
+
+        assertEquals(4, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0])
+        assertIs<TranscriptDisplayItem.Event>(items[1])
+        assertTrue(items[1] is TranscriptDisplayItem.Event && (items[1] as TranscriptDisplayItem.Event).event is AgentEvent.Thinking)
+        assertIs<TranscriptDisplayItem.Event>(items[2])
+        assertTrue(items[2] is TranscriptDisplayItem.Event && (items[2] as TranscriptDisplayItem.Event).event is AgentEvent.ToolCall)
+        assertIs<TranscriptDisplayItem.Event>(items[3])
+    }
+
+    @Test
+    fun collapseActivityBetweenMessagesGroupsThinkingAndSingleTool() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "Find it"),
+            AgentEvent.Thinking(atMillis = 2, text = "Need to search the repo"),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Grep", summary = "AgentTranscript"),
+            AgentEvent.AssistantText(atMillis = 4, text = "Done."),
+        )
+
+        val items = transcriptDisplayItems(events, collapseActivityBetweenMessages = true)
+
+        assertEquals(3, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0])
+        val group = assertIs<TranscriptDisplayItem.ToolCalls>(items[1])
+        assertEquals(2, group.events.size)
+        assertIs<TranscriptDisplayItem.Event>(items[2])
+    }
+
+    @Test
+    fun autoExpandTreatsUnsetKeysAsExpanded() {
+        assertTrue(transcriptActivityExpanded("tool-1", emptySet(), autoExpand = true))
+        assertFalse(transcriptActivityExpanded("tool-1", setOf("tool-1"), autoExpand = true))
+    }
+
+    @Test
+    fun manualExpandRequiresExplicitKey() {
+        assertFalse(transcriptActivityExpanded("tool-1", emptySet(), autoExpand = false))
+        assertTrue(transcriptActivityExpanded("tool-1", setOf("tool-1"), autoExpand = false))
     }
 
     @Test
@@ -234,6 +285,28 @@ class AgentTranscriptTest {
         val displayed = transcriptDisplayEvents(events).filterIsInstance<AgentEvent.AssistantText>()
 
         assertEquals(listOf("first", "second"), displayed.map { it.text })
+    }
+
+    @Test
+    fun compactToolActivityHeadlineSummarizesEmptyEditCalls() {
+        val events = listOf(
+            AgentEvent.ToolCall(
+                atMillis = 1,
+                toolName = "Edit File",
+                summary = "{}",
+                kind = AgentToolKind.Edit,
+            ),
+            AgentEvent.ToolCall(
+                atMillis = 2,
+                toolName = "Edit File",
+                summary = "{}",
+                kind = AgentToolKind.Edit,
+            ),
+        )
+
+        val headline = compactToolActivityHeadline(events)
+
+        assertEquals("edited 2 files", headline)
     }
 
     @Test

@@ -89,6 +89,7 @@ import app.andy.ui.agents.AgentProviderModelProfileControls
 import app.andy.ui.agents.AgentUserInputCard
 import app.andy.ui.agents.ChatAttachedImages
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
@@ -97,6 +98,8 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
+import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -582,8 +585,11 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 150.dp)
+                            .onChatImagePaste(scope) { added ->
+                                followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                            }
                             .onImageFilesDropped(
-                                onFiles = { dropped -> followUpImagePaths = (followUpImagePaths + dropped).distinct() },
+                                onFiles = { dropped -> followUpImagePaths = attachChatImages(followUpImagePaths, dropped) },
                                 onDragActiveChange = { active -> followUpImageDragActive = active },
                             )
                             .border(
@@ -595,7 +601,7 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                         colors = fieldColors(),
                         placeholder = {
                             Text(
-                                if (followUpImageDragActive) "release to attach image" else "describe the issue — drag screenshots here",
+                                if (followUpImageDragActive) "release to attach images" else "describe the issue — attach, paste, or drag screenshots",
                                 color = if (followUpImageDragActive) Cyan else TextSecondary,
                                 fontFamily = MonoFont,
                             )
@@ -609,6 +615,11 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                             maxHeight = 100.dp,
                         )
                     }
+                    ChatImageAttachButton(
+                        onImagesAttached = { added ->
+                            followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                        },
+                    )
                 }
             },
             confirmButton = {
@@ -898,8 +909,11 @@ internal fun SpecTaskDialog(
                             .fillMaxWidth()
                             .heightIn(min = 170.dp)
                             .testTag("spec-brief-field")
+                            .onChatImagePaste(scope) { added ->
+                                imagePaths = attachChatImages(imagePaths, added)
+                            }
                             .onImageFilesDropped(
-                                onFiles = { dropped -> imagePaths = (imagePaths + dropped).distinct() },
+                                onFiles = { dropped -> imagePaths = attachChatImages(imagePaths, dropped) },
                                 onDragActiveChange = { active -> imageDragActive = active },
                             )
                             .border(
@@ -911,7 +925,7 @@ internal fun SpecTaskDialog(
                         colors = fieldColors(),
                         placeholder = {
                             Text(
-                                if (imageDragActive) "release to attach image" else "describe the work — drag images here",
+                                if (imageDragActive) "release to attach images" else "describe the work — attach, paste, or drag images",
                                 color = if (imageDragActive) Cyan else TextSecondary,
                                 fontFamily = MonoFont,
                             )
@@ -925,6 +939,9 @@ internal fun SpecTaskDialog(
                             maxHeight = 100.dp,
                         )
                     }
+                    ChatImageAttachButton(
+                        onImagesAttached = { added -> imagePaths = attachChatImages(imagePaths, added) },
+                    )
                 }
                 ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

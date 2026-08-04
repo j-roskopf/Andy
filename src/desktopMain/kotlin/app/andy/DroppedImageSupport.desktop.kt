@@ -13,7 +13,7 @@ import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 
-internal fun File.isSupportedImageFile(): Boolean = extension.lowercase() in supportedImageExtensions
+internal fun File.isSupportedImageFile(): Boolean = absolutePath.isSupportedImagePath()
 
 internal fun Image.persistDroppedImage(): String? = runCatching {
     val buffered = if (this is BufferedImage) this else {
@@ -113,6 +113,3 @@ internal fun Component.installImageDropTarget(
     return DropTarget(this, DnDConstants.ACTION_COPY, listener, true)
 }
 
-private val supportedImageExtensions = setOf(
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif",
-)
