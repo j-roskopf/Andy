@@ -137,11 +137,18 @@ object AndroidParsers {
     fun parsePidList(output: String): Set<String> =
         output.split(Regex("\\s+")).filter { it.isNotBlank() && it.all(Char::isDigit) }.toSet()
 
+    private const val PS_PROCESS_NAME_MAX_LEN = 15
+
     /** Matches a process [name] column value to an Android package (handles 15-char truncation). */
     fun processNameMatchesPackage(processName: String, packageName: String): Boolean =
-        processName == packageName ||
-            packageName.startsWith(processName) ||
-            processName.startsWith(packageName)
+        when {
+            processName == packageName -> true
+            processName.startsWith("$packageName:") -> true
+            processName.length == PS_PROCESS_NAME_MAX_LEN &&
+                packageName.length > PS_PROCESS_NAME_MAX_LEN &&
+                processName == packageName.take(PS_PROCESS_NAME_MAX_LEN) -> true
+            else -> false
+        }
 
     fun packagePidsFromPs(output: String, packageName: String): Set<String> =
         output.lineSequence()
@@ -167,9 +174,18 @@ object AndroidParsers {
                 val pid = parts[0]
                 if (!pid.all(Char::isDigit)) return@mapNotNull null
                 val args = parts[1]
-                if (args.contains(packageName)) pid else null
+                if (argsMatchPackage(args, packageName)) pid else null
             }
             .toSet()
+
+    private fun argsMatchPackage(args: String, packageName: String): Boolean {
+        val head = args.trim().split(Regex("\\s+"), limit = 2).firstOrNull().orEmpty()
+        if (head.isEmpty()) return false
+        if (processNameMatchesPackage(head, packageName)) return true
+        return head.split('/').any { segment ->
+            segment == packageName || segment.startsWith("$packageName:")
+        }
+    }
 
     fun parseSystemImages(output: String): List<SystemImage> {
         return output.lineSequence()

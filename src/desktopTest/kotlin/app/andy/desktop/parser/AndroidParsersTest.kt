@@ -562,6 +562,32 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun processNameMatchingRejectsLongerSiblingPackageName() {
+        assertFalse(AndroidParsers.processNameMatchesPackage("com.example.app2", "com.example.app"))
+    }
+
+    @Test
+    fun packagePidsFromPsArgsRejectsSiblingPackageTokens() {
+        val output = """
+            PID   ARGS
+            1111  com.example.app2
+            2222  grep com.example.app
+        """.trimIndent()
+
+        assertEquals(emptySet(), AndroidParsers.packagePidsFromPsArgs(output, "com.example.app"))
+    }
+
+    @Test
+    fun packagePidsFromPsArgsMatchesPackageSubprocessToken() {
+        val output = """
+            PID   ARGS
+            3333  com.example.app:ui
+        """.trimIndent()
+
+        assertEquals(setOf("3333"), AndroidParsers.packagePidsFromPsArgs(output, "com.example.app"))
+    }
+
+    @Test
     fun parseDropboxEntryStripsChunkRuleAndTimestampHeader() {
         val output = """
             ========================================

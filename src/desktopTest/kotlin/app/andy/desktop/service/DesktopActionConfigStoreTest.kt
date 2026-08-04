@@ -305,7 +305,7 @@ class DesktopActionConfigStoreTest {
                 [[projects]]
                 id = "proj-basil"
                 name = "Basil"
-                contextDir = "${workspace.absolutePath}/"
+                contextDir = "${workspace.absolutePath.replace("\\", "\\\\")}/"
                 env = { }
                 """.trimIndent() + "\n",
             )
