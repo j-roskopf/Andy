@@ -62,7 +62,8 @@ import app.andy.desktop.service.agents.acp.AgentAcpManager
 import app.andy.desktop.service.agents.acp.AcpRegistry
 import app.andy.desktop.service.agents.acp.AcpEventMapper
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
-import app.andy.desktop.service.agents.acp.shouldIgnoreAcpProviderHistoryReplay
+import app.andy.desktop.service.agents.acp.AcpReplayFilterResult
+import app.andy.desktop.service.agents.acp.filterAcpProviderHistoryReplay
 import app.andy.desktop.service.agents.acp.NodeRuntimeLocator
 import app.andy.desktop.service.agents.acp.PendingAcpPermission
 import app.andy.model.TerminalAppearanceSnapshot
@@ -4052,11 +4053,17 @@ class DesktopAgentRunService(
             events
         } else {
             events.fold(emptyList<AgentEvent>() to flow.value) { (acceptedEvents, acc), event ->
-                if (shouldIgnoreAcpProviderHistoryReplay(acc, event, replayScratch!!)) {
-                    acceptedEvents to acc
-                } else {
-                    val nextAcc = mergeAcpTranscriptEvent(acc, event)
-                    (acceptedEvents + event) to nextAcc
+                when (val decision = filterAcpProviderHistoryReplay(acc, event, replayScratch!!)) {
+                    AcpReplayFilterResult.Ignore -> acceptedEvents to acc
+                    is AcpReplayFilterResult.Accept -> {
+                        val accepted = when (event) {
+                            is AgentEvent.AssistantText -> decision.text?.let { text -> event.copy(text = text) } ?: event
+                            is AgentEvent.Thinking -> decision.text?.let { text -> event.copy(text = text) } ?: event
+                            else -> event
+                        }
+                        val nextAcc = mergeAcpTranscriptEvent(acc, accepted)
+                        (acceptedEvents + accepted) to nextAcc
+                    }
                 }
             }.first
         }

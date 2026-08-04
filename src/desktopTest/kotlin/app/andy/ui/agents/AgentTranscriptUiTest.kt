@@ -199,6 +199,51 @@ class AgentTranscriptUiTest {
         }
 
     @Test
+    fun scrollToLatestRequestJumpsToLiveEdgeAfterDetaching() =
+        runTranscriptUiTest {
+            val memory = TranscriptScrollMemory()
+            var events by mutableStateOf(
+                (0..40).map { index ->
+                    AgentEvent.UserMessage(atMillis = index.toLong(), text = "conversation row $index")
+                },
+            )
+            var scrollToLatestRequest by mutableStateOf(0)
+
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = events,
+                        isActive = true,
+                        restoreScrollKey = "follow-up",
+                        scrollMemory = memory,
+                        scrollToLatestRequest = scrollToLatestRequest,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithTag("transcript-list").performMouseInput {
+                moveTo(center)
+                scroll(-12f)
+            }
+            waitForIdle()
+            assertFalse(assertNotNull(memory.get("follow-up")).stickToBottom)
+
+            runOnUiThread {
+                events = events + AgentEvent.UserMessage(atMillis = 41, text = "follow-up message")
+                scrollToLatestRequest++
+            }
+            waitForIdle()
+
+            val restored = assertNotNull(memory.get("follow-up"))
+            assertEquals(true, restored.stickToBottom)
+            assertEquals(0, restored.index)
+            assertEquals(0, restored.offset)
+            onNodeWithTag("transcript-row-UserMessage-41-41").assertIsDisplayed()
+        }
+
+    @Test
     fun pendingInputRendersOnLiveEdge() =
         runTranscriptUiTest {
             setContent {

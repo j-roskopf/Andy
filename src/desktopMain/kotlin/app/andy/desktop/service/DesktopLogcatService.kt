@@ -35,7 +35,8 @@ class DesktopLogcatService(
                 add(buffer)
             }
         }
-        val normalizedFilter = resolveLogcatFilter(serial, filter)
+        var resolvedFilter = resolveLogcatFilter(serial, filter)
+        var lastPidRefreshNanos = System.nanoTime()
         var process: Process? = null
         val reader = launch(Dispatchers.IO) {
             process = ProcessBuilder(command).redirectErrorStream(true).start()
@@ -45,11 +46,15 @@ class DesktopLogcatService(
                 process?.inputStream?.bufferedReader()?.useLines { lines ->
                     for (line in lines) {
                         if (!isActive) break
+                        val now = System.nanoTime()
+                        if (resolvedFilter.packageName != null && now - lastPidRefreshNanos > 2_000_000_000L) {
+                            resolvedFilter = resolveLogcatFilter(serial, filter)
+                            lastPidRefreshNanos = now
+                        }
                         val entry = AndroidParsers.parseLogcatLine(line)
-                        if (entry != null && matchesLogcatFilter(entry, normalizedFilter)) {
+                        if (entry != null && matchesLogcatFilter(entry, resolvedFilter)) {
                             batch += entry
                         }
-                        val now = System.nanoTime()
                         if (batch.size >= 80 || (batch.isNotEmpty() && now - lastFlush > 80_000_000L)) {
                             send(batch.toList())
                             batch.clear()
@@ -88,21 +93,44 @@ class DesktopLogcatService(
         val (packageName, search) = AndroidParsers.extractPackageFilter(filter.search)
         val explicitPackage = filter.packageName ?: packageName
         val packagePids = explicitPackage?.takeIf { it.isNotBlank() }?.let { name ->
-            devices.shell(serial, listOf("pidof", name)).stdout
-                .split(Regex("\\s+"))
-                .filter { it.isNotBlank() }
-                .toSet()
+            resolvePackagePids(serial, name)
         }.orEmpty()
         return ResolvedLogcatFilter(search = search, levels = filter.levels, packageName = explicitPackage, packagePids = packagePids)
     }
 
+    private suspend fun resolvePackagePids(serial: String, packageName: String): Set<String> {
+        val fromPidof = AndroidParsers.parsePidList(
+            devices.shell(serial, listOf("pidof", packageName)).stdout,
+        )
+        if (fromPidof.isNotEmpty()) return fromPidof
+
+        val fromPs = AndroidParsers.packagePidsFromPs(
+            devices.shell(serial, listOf("ps", "-A", "-o", "PID,NAME")).stdout,
+            packageName,
+        )
+        if (fromPs.isNotEmpty()) return fromPs
+
+        return AndroidParsers.packagePidsFromPsArgs(
+            devices.shell(serial, listOf("ps", "-A", "-o", "PID,ARGS")).stdout,
+            packageName,
+        )
+    }
+
     private fun matchesLogcatFilter(entry: LogcatEntry, filter: ResolvedLogcatFilter): Boolean {
         if (entry.level !in filter.levels) return false
-        if (filter.packageName != null && entry.pid !in filter.packagePids) return false
+        if (filter.packageName != null) {
+            val pidMatch = entry.pid != null && entry.pid in filter.packagePids
+            val textMatch = logEntryMentionsPackage(entry, filter.packageName)
+            if (!pidMatch && !textMatch) return false
+        }
         return filter.search.isBlank() ||
             entry.message.contains(filter.search, true) ||
             entry.tag.contains(filter.search, true)
     }
+
+    private fun logEntryMentionsPackage(entry: LogcatEntry, packageName: String): Boolean =
+        entry.tag.contains(packageName, ignoreCase = true) ||
+            entry.message.contains(packageName, ignoreCase = true)
 
     private data class ResolvedLogcatFilter(
         val search: String,

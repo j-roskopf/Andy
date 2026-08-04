@@ -144,32 +144,88 @@ class AcpLaneTest {
             AgentEvent.AssistantText(atMillis = 2, text = "first answer about the weather"),
         )
         val replayScratch = StringBuilder()
-        assertTrue(
-            shouldIgnoreAcpProviderHistoryReplay(
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
                 existing,
                 AgentEvent.AssistantText(atMillis = 3, text = "first answer", isStreamDelta = true),
                 replayScratch,
             ),
         )
-        assertTrue(
-            shouldIgnoreAcpProviderHistoryReplay(
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
                 existing,
                 AgentEvent.AssistantText(atMillis = 4, text = " about the weather", isStreamDelta = true),
                 replayScratch,
             ),
         )
-        assertFalse(
-            shouldIgnoreAcpProviderHistoryReplay(
+        assertEquals(
+            AcpReplayFilterResult.Accept(),
+            filterAcpProviderHistoryReplay(
                 existing,
                 AgentEvent.AssistantText(atMillis = 5, text = "brand new answer", isStreamDelta = true),
                 StringBuilder(),
             ),
         )
-        assertTrue(
-            shouldIgnoreAcpProviderHistoryReplay(
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
                 existing + AgentEvent.ToolCall(atMillis = 6, toolName = "read", summary = "x", toolCallId = "call-1"),
                 AgentEvent.ToolCall(atMillis = 7, toolName = "read", summary = "done", toolCallId = "call-1"),
                 StringBuilder(),
+            ),
+        )
+    }
+
+    @Test
+    fun replayFilterRecoversBufferedPrefixWhenNewThinkingDivergesFromPrior() {
+        val existing = listOf(
+            AgentEvent.Thinking(atMillis = 1, text = "reverting the old layout"),
+        )
+        val replayScratch = StringBuilder()
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.Thinking(atMillis = 2, text = "re", isStreamDelta = true),
+                replayScratch,
+            ),
+        )
+        assertEquals(
+            AcpReplayFilterResult.Accept(text = "reverting the layout to the original"),
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.Thinking(atMillis = 3, text = "verting the layout to the original", isStreamDelta = true),
+                replayScratch,
+            ),
+        )
+    }
+
+    @Test
+    fun replayFilterEmitsOnlySuffixWhenNewAssistantTextExtendsPrior() {
+        val existing = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "**Width** — nearly full width"),
+        )
+        val replayScratch = StringBuilder()
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.AssistantText(atMillis = 2, text = "**Width** — nearly full width", isStreamDelta = true),
+                replayScratch,
+            ),
+        )
+        assertEquals(
+            AcpReplayFilterResult.Accept(),
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.AssistantText(
+                    atMillis = 3,
+                    text = " again (`fillMaxWidth` with 8dp padding)",
+                    isStreamDelta = true,
+                ),
+                replayScratch,
             ),
         )
     }

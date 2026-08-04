@@ -27,15 +27,27 @@ class DesktopActionConfigStore(
                 ActionsConfig()
             }
         }
-        val roots = runCatching { discoveryRootsProvider() }.getOrDefault(emptyList()).distinct()
-        val discoveredProjects = roots.mapNotNull { rootPath ->
-            val rootDir = File(rootPath)
-            val repoFile = File(rootDir, ".andy/actions.toml")
-            if (!repoFile.isFile) return@mapNotNull null
-            val decoded = decode(repoFile, ConfigSource.Repo).getOrNull() ?: return@mapNotNull null
-            decoded.resolveRelativeProjectPaths(rootDir).stripRepoEnv(repoFile)
+        val discoveredFromProjects = personal.projects.mapNotNull { project ->
+            loadRepoConfig(File(project.contextDir.normalizedContextDir()))
         }
-        personal.mergeDiscoveredProjects(discoveredProjects)
+        val discoveredFromWorkspace = runCatching { discoveryRootsProvider() }
+            .getOrDefault(emptyList())
+            .map { it.normalizedContextDir() }
+            .distinct()
+            .filter { rootPath ->
+                personal.projects.none { project ->
+                    project.contextDir.normalizedContextDir() == rootPath
+                }
+            }
+            .mapNotNull { rootPath -> loadRepoConfig(File(rootPath)) }
+        personal.mergeDiscoveredProjects(discoveredFromProjects + discoveredFromWorkspace)
+    }
+
+    private fun loadRepoConfig(rootDir: File): ActionsConfig? {
+        val repoFile = File(rootDir, ".andy/actions.toml")
+        if (!repoFile.isFile) return null
+        val decoded = decode(repoFile, ConfigSource.Repo).getOrNull() ?: return null
+        return decoded.resolveRelativeProjectPaths(rootDir).stripRepoEnv(repoFile)
     }
 
     override suspend fun save(config: ActionsConfig): Unit = withContext(Dispatchers.IO) {
@@ -197,14 +209,18 @@ private fun ActionsConfig.stripRepoEnv(sourceFile: File): ActionsConfig {
     return copy(projects = cleanedProjects)
 }
 
+private fun String.normalizedContextDir(): String =
+    File(this).toPath().normalize().toFile().absolutePath
+
 private fun ActionsConfig.mergeDiscoveredProjects(
     discoveredConfigs: List<ActionsConfig>,
 ): ActionsConfig {
     val merged = projects.toMutableList()
     discoveredConfigs.forEach { discoveredConfig ->
         discoveredConfig.projects.forEach { repoProject ->
+            val repoContextDir = repoProject.contextDir.normalizedContextDir()
             val existingIndex = merged.indexOfFirst { project ->
-                project.contextDir == repoProject.contextDir || project.id == repoProject.id
+                project.contextDir.normalizedContextDir() == repoContextDir || project.id == repoProject.id
             }
             if (existingIndex < 0) {
                 merged += repoProject
