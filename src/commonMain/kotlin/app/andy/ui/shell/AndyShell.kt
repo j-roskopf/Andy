@@ -1,11 +1,15 @@
 package app.andy.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -145,6 +149,10 @@ internal fun AndyShell(
     val runningActionIds = remember(runningActions) { runningActions.map { it.runId } }
     LaunchedEffect(runningActionIds) {
         state.syncActiveRun(runningActions)
+        state.pruneDockTerminalTabs(runningActions)
+    }
+    LaunchedEffect(state.terminalRunId, runningActionIds) {
+        state.consumeTerminalRun(runningActions)
     }
 
     LaunchedEffect(requestedDestination) {
@@ -301,12 +309,17 @@ internal fun AndyShell(
                     onActionSelectionChange = state::rememberActionSelection,
                     onRunAction = { project, action -> state.runAction(project, action) },
                     proxyRunning = proxyRunning,
+                    rightPaneOpen = state.docks.right.visible,
+                    bottomPaneOpen = state.docks.bottom.visible,
+                    dockLandingFor = state.docks.landingFor,
+                    onPlacementIconClick = state::onPlacementIconClick,
+                    onDismissDockLanding = state::dismissDockLanding,
+                    onOpenDockKind = state::openDockKind,
                     onMenuExpandedChange = state::updateChromeMenuExpanded,
+                    onProxyClick = state::openProxySettings,
                     actions = {
                         if (state.destination == AndyDestination.Network) {
                             FilterPill("Rules", state.networkRulesVisible, Rust, toolbar = true) { state.toggleNetworkRulesVisible() }
-                            Spacer(Modifier.width(8.dp))
-                            FilterPill("Live", state.networkLiveVisible, Cyan, toolbar = true) { state.toggleNetworkLiveVisible() }
                             Spacer(Modifier.width(10.dp))
                         } else if (
                             state.destination == AndyDestination.Performance &&
@@ -317,12 +330,17 @@ internal fun AndyShell(
                         }
                     },
                 )
-                Box(
+                val liveDockActive = state.destination != AndyDestination.Live &&
+                    state.activeTargetId !in poppedOutTargetIds
+                Column(
                     Modifier
                         .fillMaxSize()
                         .background(AndyColors.ContentBg)
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents
                     val computerFilesActive = state.destination == AndyDestination.ComputerFiles
@@ -334,10 +352,6 @@ internal fun AndyShell(
                         ActionsScreen(
                             services = services,
                             config = state.actionsConfig,
-                            running = runningActions,
-                            activeRunId = state.activeRunId,
-                            terminalRunId = state.terminalRunId,
-                            onActiveRunIdChange = { state.updateActiveRunId(it) },
                             onConfigChange = { state.persistActionsConfig(it) },
                             agentTasks = agentTasks,
                             showIntroduction = state.workspaceLoaded && !state.workspaceState.projectsIntroductionCompleted,
@@ -351,9 +365,7 @@ internal fun AndyShell(
                             requestedAgentTaskId = effectiveOpenAgentTask?.takeIf { it.projectId != null }?.taskId,
                             requestedProjectId = effectiveOpenAgentTask?.projectId,
                             onRequestedAgentTaskConsumed = consumeOpenAgentTask,
-                            serial = state.activeTargetId,
-                            device = state.devices.firstOrNull { it.serial == state.selectedSerial },
-                            targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
+                            onNotifyTerminalRun = state::notifyTerminalRun,
                             workspaceState = state.workspaceState,
                         )
                     }
@@ -454,11 +466,6 @@ internal fun AndyShell(
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
                             transfer = state.transfer,
-                            projects = state.actionsConfig.projects,
-                            running = runningActions,
-                            activeRunId = state.activeRunId,
-                            terminalRunId = state.terminalRunId,
-                            onActiveRunIdChange = { state.updateActiveRunId(it) },
                             foldableHingeAngle = state.foldableHingeAngle,
                             onFoldableHingeAngleChange = state::updateFoldableHingeAngle,
                         )
@@ -566,9 +573,58 @@ internal fun AndyShell(
                         AndyDestination.Settings -> SettingsScreen(
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
-                            services = services
+                            services = services,
+                            initialCategory = state.pendingSettingsCategory,
+                            onInitialCategoryConsumed = { state.consumeSettingsCategory() },
                         )
                     }
+                }
+                if (state.docks.right.visible) {
+                    Spacer(Modifier.width(12.dp))
+                    ShellDockDrawer(
+                        services = services,
+                        pane = state.docks.right,
+                        placement = DockPlacement.Right,
+                        running = runningActions,
+                        serial = state.activeTargetId,
+                        device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                        targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
+                        liveActive = liveDockActive,
+                        logcat = services.logcat,
+                        appsService = services.apps,
+                        selectedPackage = state.workspaceState.selectedPackage,
+                        onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
+                        logcatState = state.logcatState,
+                        onSelectTab = { state.selectDockTab(DockPlacement.Right, it) },
+                        onCloseTab = { state.closeDockTab(DockPlacement.Right, it) },
+                        onOpenKind = { state.openDockKind(DockPlacement.Right, it) },
+                        onClose = { state.closeDock(DockPlacement.Right) },
+                        modifier = Modifier.width(460.dp).fillMaxHeight(),
+                    )
+                }
+                }
+                if (state.docks.bottom.visible) {
+                    ShellDockDrawer(
+                        services = services,
+                        pane = state.docks.bottom,
+                        placement = DockPlacement.Bottom,
+                        running = runningActions,
+                        serial = state.activeTargetId,
+                        device = state.devices.firstOrNull { it.serial == state.selectedSerial },
+                        targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
+                        liveActive = liveDockActive,
+                        logcat = services.logcat,
+                        appsService = services.apps,
+                        selectedPackage = state.workspaceState.selectedPackage,
+                        onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
+                        logcatState = state.logcatState,
+                        onSelectTab = { state.selectDockTab(DockPlacement.Bottom, it) },
+                        onCloseTab = { state.closeDockTab(DockPlacement.Bottom, it) },
+                        onOpenKind = { state.openDockKind(DockPlacement.Bottom, it) },
+                        onClose = { state.closeDock(DockPlacement.Bottom) },
+                        modifier = Modifier.fillMaxWidth().height(300.dp),
+                    )
+                }
                 }
             }
         }

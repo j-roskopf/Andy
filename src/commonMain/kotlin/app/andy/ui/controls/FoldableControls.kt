@@ -49,7 +49,7 @@ internal fun FoldableControlsPanel(
     PanelCard(
         modifier = modifier.fillMaxWidth(),
         background = AndyColors.Neutral900.copy(alpha = 0.44f),
-        borderColor = Border.copy(alpha = 0.72f),
+        borderColor = Color.Transparent,
         contentPadding = PaddingValues(AndySpace.Space5),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {

@@ -36,7 +36,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
-import app.andy.model.ActionProject
 import app.andy.model.BugCaptureDraft
 import app.andy.model.BugReport
 import app.andy.model.DeviceConnectionState
@@ -44,7 +43,6 @@ import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
-import app.andy.model.RunningAction
 import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
 import app.andy.service.AndyPlatform
@@ -58,9 +56,6 @@ import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.transfer.LocalDropKind
 import app.andy.transfer.classifyLocalPaths
-import app.andy.ui.actions.DockPlacement
-import app.andy.ui.actions.TerminalDockDrawer
-import app.andy.ui.actions.TerminalDockToggleRow
 import app.andy.model.VirtualDevice
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.controls.FoldableDisplayProfile
@@ -207,11 +202,6 @@ internal fun LiveScreen(
     selectedPackage: String?,
     onSelectedPackageChange: (String?) -> Unit,
     transfer: DeviceTransferCoordinator,
-    projects: List<ActionProject> = emptyList(),
-    running: List<RunningAction> = emptyList(),
-    activeRunId: String? = null,
-    terminalRunId: String? = null,
-    onActiveRunIdChange: (String?) -> Unit = {},
     foldableHingeAngle: Float = 180f,
     onFoldableHingeAngleChange: (Float) -> Unit = {},
 ) {
@@ -263,10 +253,6 @@ internal fun LiveScreen(
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth) }
     var userResizedDevicePane by remember(serial) { mutableStateOf(false) }
     var minDevicePaneWidth by remember(serial) { mutableStateOf(360f) }
-    var terminalPlacement by remember { mutableStateOf<DockPlacement?>(null) }
-    var lastTerminalPlacement by remember { mutableStateOf(DockPlacement.Right) }
-    var terminalTabIds by remember { mutableStateOf<List<String>>(emptyList()) }
-    var handledTerminalRunId by remember { mutableStateOf<String?>(null) }
     // Android Auto DHU: off by default; Live-scoped and cleared on device switch.
     // DHU runs in its own desktop-head-unit window (no Andy embed / pointer forwarding).
     var androidAutoEnabled by remember(serial) { mutableStateOf(false) }
@@ -286,53 +272,6 @@ internal fun LiveScreen(
         }
     }
 
-    fun selectTerminalTab(runId: String) {
-        if (runId !in terminalTabIds) terminalTabIds = terminalTabIds + runId
-        onActiveRunIdChange(runId)
-    }
-
-    fun closeTerminalTab(runId: String) {
-        services.actionRuns.stop(runId)
-        val remaining = terminalTabIds.filter { it != runId }
-        terminalTabIds = remaining
-        if (activeRunId == runId) onActiveRunIdChange(remaining.lastOrNull())
-        if (remaining.isEmpty()) terminalPlacement = null
-    }
-
-    fun openOrFocusTerminal(placement: DockPlacement) {
-        val project = projects.firstOrNull { project ->
-            activeRunId != null && running.any { it.runId == activeRunId && it.projectId == project.id }
-        } ?: projects.firstOrNull()
-        if (project == null) {
-            liveActionStatus = "Create a project to open a terminal"
-            return
-        }
-        val runId = activeRunId?.takeIf { activeId -> running.any { it.runId == activeId } }
-            ?: services.actionRuns.openShell(project)
-        selectTerminalTab(runId)
-        lastTerminalPlacement = placement
-        terminalPlacement = placement
-    }
-
-    fun toggleTerminal(placement: DockPlacement) {
-        if (terminalPlacement == placement) {
-            terminalPlacement = null
-            return
-        }
-        openOrFocusTerminal(placement)
-    }
-
-    LaunchedEffect(terminalRunId, running) {
-        val runId = terminalRunId ?: return@LaunchedEffect
-        if (runId == handledTerminalRunId) return@LaunchedEffect
-        if (running.none { it.runId == runId }) return@LaunchedEffect
-        selectTerminalTab(runId)
-        terminalPlacement = lastTerminalPlacement
-        handledTerminalRunId = runId
-    }
-    LaunchedEffect(running) {
-        terminalTabIds = terminalTabIds.filter { tabId -> running.any { it.runId == tabId } }
-    }
     val sendMirrorInput = rememberMirrorInputSender(services, serial)
     fun sendHardware(input: MirrorInput) {
         sendMirrorInput(input)
@@ -506,8 +445,6 @@ internal fun LiveScreen(
             services.dhu.refreshReadiness(serial)
         }
     }
-    val activeTerminalRunId = activeRunId?.takeIf { it in terminalTabIds }
-    val terminalTabs = terminalTabIds.mapNotNull { tabId -> running.firstOrNull { it.runId == tabId } }
     val iosInputEnabled = isIosTarget && when (iosTarget.kind) {
         // Physical devices have no HID path. Sims accept input as soon as Live attaches — don't
         // gate on frame presentation or registry Booted state (Devices → Live can race that).
@@ -629,8 +566,6 @@ internal fun LiveScreen(
                             showHardwareControls = !isIosTarget,
                             showClipTextControl = !isIosTarget || iosInputEnabled,
                             passThroughInput = !isIosTarget || iosInputEnabled,
-                            terminalPlacement = terminalPlacement.takeIf { iosSinglePane },
-                            onTerminalToggle = if (iosSinglePane) ::toggleTerminal else null,
                             modifier = Modifier.fillMaxSize().onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
                             onPower = { sendHardware(MirrorInput.Power) },
                             onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
@@ -789,8 +724,6 @@ internal fun LiveScreen(
             stoppingEmulator = stoppingEmulatorSerial == serial,
             stopStatus = stopStatus,
             bugSaveStatus = bugSaveStatus,
-            terminalPlacement = terminalPlacement,
-            onTerminalToggle = ::toggleTerminal,
             logcat = services.logcat,
             appsService = services.apps,
             selectedPackage = selectedPackage,
@@ -802,30 +735,6 @@ internal fun LiveScreen(
                 .padding(start = 6.dp),
         )
         }
-        if (terminalPlacement == DockPlacement.Right) {
-            TerminalDockDrawer(
-                services = services,
-                terminalTabs = terminalTabs,
-                activeRunId = activeTerminalRunId,
-                placement = DockPlacement.Right,
-                onSelectTab = ::selectTerminalTab,
-                onCloseTab = ::closeTerminalTab,
-                onClose = { terminalPlacement = null },
-                modifier = Modifier.width(420.dp).fillMaxHeight().padding(start = 6.dp),
-            )
-        }
-    }
-    if (terminalPlacement == DockPlacement.Bottom) {
-        TerminalDockDrawer(
-            services = services,
-            terminalTabs = terminalTabs,
-            activeRunId = activeTerminalRunId,
-            placement = DockPlacement.Bottom,
-            onSelectTab = ::selectTerminalTab,
-            onCloseTab = ::closeTerminalTab,
-            onClose = { terminalPlacement = null },
-            modifier = Modifier.fillMaxWidth().height(280.dp),
-        )
     }
     if (clipDialogVisible) {
         ClipTextDialog(

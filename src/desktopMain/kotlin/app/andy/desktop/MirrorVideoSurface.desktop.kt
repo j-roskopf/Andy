@@ -30,6 +30,8 @@ import java.awt.AlphaComposite
 import java.awt.Point
 import java.awt.BasicStroke
 import java.awt.Cursor
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.HierarchyBoundsAdapter
@@ -318,6 +320,8 @@ private class MirrorPanel(
         addKeyListener(object : KeyAdapter() {
             override fun keyTyped(event: KeyEvent) {
                 if (!passThroughInput) return
+                // Shortcut chords (Cmd/Ctrl+V paste, etc.) must not inject the bare letter.
+                if (event.isMetaDown || event.isControlDown) return
                 val char = event.keyChar
                 // Printable characters are forwarded as text; control keys (Enter,
                 // Backspace, Tab, Esc, Delete) are handled in keyPressed as key events.
@@ -327,6 +331,11 @@ private class MirrorPanel(
 
             override fun keyPressed(event: KeyEvent) {
                 if (!passThroughInput) return
+                if (isPasteShortcut(event)) {
+                    readSystemClipboardText()?.let { onInput(MirrorInput.Text(it)) }
+                    event.consume()
+                    return
+                }
                 val androidKeyCode = androidKeyCodeFor(event.keyCode) ?: return
                 onInput(MirrorInput.Key(androidKeyCode))
                 event.consume()
@@ -582,6 +591,17 @@ private class MirrorPanel(
         KeyEvent.VK_PAGE_DOWN -> 93
         else -> null
     }
+
+    private fun isPasteShortcut(event: KeyEvent): Boolean {
+        if (event.keyCode != KeyEvent.VK_V) return false
+        return event.isMetaDown || event.isControlDown
+    }
+
+    private fun readSystemClipboardText(): String? =
+        runCatching {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            (clipboard.getData(DataFlavor.stringFlavor) as? String)?.takeIf { it.isNotEmpty() }
+        }.getOrNull()
 
     private fun sendDeviceMove(point: DevicePoint) {
         val now = System.nanoTime()

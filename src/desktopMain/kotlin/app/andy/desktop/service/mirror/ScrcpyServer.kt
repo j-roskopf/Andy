@@ -44,6 +44,7 @@ internal object ScrcpyControlMessage {
     private const val ACTION_UP = 1
     private const val ACTION_MOVE = 2
     private const val POINTER_ID_GENERIC_FINGER = -2L
+    private const val MAX_INJECT_TEXT_BYTES = 300
 
     fun serialize(input: MirrorInput, frame: MirrorFrame): List<ByteArray> {
         return when (input) {
@@ -70,7 +71,7 @@ internal object ScrcpyControlMessage {
                 add(touch(ACTION_UP, input.endX, input.endY, frame, pressure = 0f))
             }
             is MirrorInput.Key -> keyPress(input.keyCode)
-            is MirrorInput.Text -> listOf(text(input.value))
+            is MirrorInput.Text -> textMessages(input.value)
             MirrorInput.Back -> keyPress(4)
             MirrorInput.Home -> keyPress(3)
             MirrorInput.Recents -> keyPress(187)
@@ -93,8 +94,34 @@ internal object ScrcpyControlMessage {
         return bytes
     }
 
+    /** scrcpy rejects INJECT_TEXT payloads over 300 UTF-8 bytes; split so paste is not truncated. */
+    private fun textMessages(value: String): List<ByteArray> {
+        if (value.isEmpty()) return emptyList()
+        val chunks = ArrayList<ByteArray>()
+        var index = 0
+        while (index < value.length) {
+            var end = index
+            var byteCount = 0
+            while (end < value.length) {
+                val next = end + Character.charCount(value.codePointAt(end))
+                val piece = value.substring(end, next).encodeToByteArray()
+                if (byteCount + piece.size > MAX_INJECT_TEXT_BYTES) break
+                byteCount += piece.size
+                end = next
+            }
+            if (end == index) {
+                // Single code point larger than the limit — skip rather than hang.
+                index += Character.charCount(value.codePointAt(index))
+                continue
+            }
+            chunks += text(value.substring(index, end))
+            index = end
+        }
+        return chunks
+    }
+
     private fun text(value: String): ByteArray {
-        val payload = value.encodeToByteArray().take(300).toByteArray()
+        val payload = value.encodeToByteArray()
         val bytes = ByteArray(1 + 4 + payload.size)
         bytes[0] = TYPE_INJECT_TEXT.toByte()
         bytes.writeInt(1, payload.size)

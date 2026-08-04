@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,8 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -230,25 +233,38 @@ internal fun DevicesScreen(
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
                 colors = fieldColors(),
             )
-            DeviceListFilter.entries.forEach { filter ->
-                FilterPill(filter.label, state.deviceFilter == filter, if (state.deviceFilter == filter) Rust else Cyan) { state.deviceFilter = filter }
-            }
             Spacer(Modifier.weight(1f))
             if (state.platformTab == DevicesPlatformTab.Android && allowWifiPairing) {
                 OutlinedButton(onClick = { state.showPairDialog = true }) { Text("Pair over Wi‑Fi") }
             }
             if (state.platformTab == DevicesPlatformTab.Android && allowAvdManagement) {
-                Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) { Text("Create virtual device") }
+                Button(onClick = { state.showCreateWizard = true }, colors = primaryButtonColors()) {
+                    Text(
+                        "Create virtual device",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
-        if (allowIosManagement) {
-            TabBar(
-                tabs = DevicesPlatformTab.entries,
-                selected = state.platformTab,
-                onSelect = { state.platformTab = it },
-                label = { it.label },
-            )
-        }
+        TabBar(
+            tabs = if (allowIosManagement) DevicesPlatformTab.entries else emptyList(),
+            selected = state.platformTab,
+            onSelect = { state.platformTab = it },
+            label = { it.label },
+            trailing = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    DeviceListFilter.entries.forEach { filter ->
+                        FilterPill(
+                            filter.label,
+                            state.deviceFilter == filter,
+                            if (state.deviceFilter == filter) Rust else Cyan,
+                        ) { state.deviceFilter = filter }
+                    }
+                }
+            },
+        )
         if (sdk.issues.isNotEmpty() && state.platformTab == DevicesPlatformTab.Android) {
             PanelCard {
                 Text("SDK setup", color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -445,63 +461,103 @@ private fun AndroidDevicesTab(
             val online = device.state == DeviceConnectionState.Online
             val rowShape = RoundedCornerShape(AndyRadius.Row)
             var labelDialogOpen by remember(device.serial) { mutableStateOf(false) }
-            Row(
-                Modifier.fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-                    .heightIn(min = 76.dp)
-                    .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
-                    .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)))
-                Spacer(Modifier.width(18.dp))
-                Column(Modifier.width(260.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val showStorage = maxWidth >= 900.dp
+                val showSpecs = maxWidth >= 720.dp
+                Row(
+                    Modifier.fillMaxWidth()
+                        .height(IntrinsicSize.Min)
+                        .heightIn(min = 76.dp)
+                        .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
+                        .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)))
+                    Column(Modifier.weight(1f).widthIn(min = 120.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                deviceLabels[device.serial] ?: device.displayName,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Text(
+                                "· label",
+                                color = Cyan,
+                                fontSize = 10.sp,
+                                modifier = Modifier.clickable { labelDialogOpen = true },
+                            )
+                        }
                         Text(
-                            deviceLabels[device.serial] ?: device.displayName,
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
+                            device.serial,
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            softWrap = false,
                         )
+                        if (!showSpecs) {
+                            Text(
+                                listOfNotNull(
+                                    device.apiLevel?.let { "API $it" },
+                                    device.abi,
+                                    device.storageSummary,
+                                ).joinToString(" · "),
+                                color = TextSecondary,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                softWrap = false,
+                            )
+                        }
+                    }
+                    if (showSpecs) {
                         Text(
-                            "· label",
-                            color = Cyan,
-                            fontSize = 10.sp,
-                            modifier = Modifier.clickable { labelDialogOpen = true },
+                            "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            modifier = Modifier.widthIn(max = 140.dp),
+                            maxLines = 2,
                         )
                     }
-                    Text(device.serial, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                }
-                Text(
-                    "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(170.dp),
-                )
-                Text(
-                    device.storageSummary ?: "-",
-                    color = TextSecondary,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    modifier = Modifier.width(150.dp),
-                )
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusTag(device.state.name, if (online) Green else TextSecondary)
-                    if (device.transport == DeviceTransport.Wifi) {
-                        StatusTag("Wi‑Fi", Cyan)
+                    if (showStorage) {
+                        Text(
+                            device.storageSummary ?: "-",
+                            color = TextSecondary,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            modifier = Modifier.widthIn(max = 140.dp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            softWrap = false,
+                        )
                     }
-                }
-                OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
-                if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(
-                        onClick = { onStopEmulator(device) },
-                        enabled = stoppingEmulatorSerial != device.serial,
+                    Row(
+                        Modifier.wrapContentWidth(unbounded = false),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
+                        StatusTag(device.state.name, if (online) Green else TextSecondary)
+                        if (device.transport == DeviceTransport.Wifi) {
+                            StatusTag("Wi‑Fi", Cyan)
+                        }
+                        OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
+                        if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
+                            OutlinedButton(
+                                onClick = { onStopEmulator(device) },
+                                enabled = stoppingEmulatorSerial != device.serial,
+                            ) {
+                                Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
+                            }
+                        }
                     }
                 }
             }

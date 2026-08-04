@@ -63,13 +63,16 @@ import app.andy.model.WorkspaceState
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.ProxyStartOptions
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.McpServerService
+import app.andy.service.ProxyService
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
@@ -120,13 +123,27 @@ private enum class WebSettingsCategory(
 internal fun SettingsScreen(
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
-    services: AndyServices
+    services: AndyServices,
+    initialCategory: String? = null,
+    onInitialCategoryConsumed: () -> Unit = {},
 ) {
     services.web?.let { web ->
         WebSettingsScreen(web, workspaceState, onUpdateWorkspace, services.capabilities.destinations)
         return
     }
     var category by remember { mutableStateOf(DesktopSettingsCategory.Appearance) }
+    LaunchedEffect(initialCategory) {
+        val match = DesktopSettingsCategory.entries.firstOrNull {
+            it.label.equals(initialCategory, ignoreCase = true) ||
+                it.name.equals(initialCategory, ignoreCase = true)
+        }
+        if (match != null) {
+            category = match
+            onInitialCategoryConsumed()
+        } else if (initialCategory != null) {
+            onInitialCategoryConsumed()
+        }
+    }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
     val toolNames = remember { services.mcp.getToolNames() }
 
@@ -157,6 +174,7 @@ internal fun SettingsScreen(
             DesktopSettingsCategory.Proxy -> ProxyPanel(
                 workspaceState = workspaceState,
                 onUpdateWorkspace = onUpdateWorkspace,
+                proxy = services.proxy,
                 proxyStatus = proxyStatus,
                 proxyRunning = proxyRunning,
             )
@@ -776,9 +794,11 @@ private fun AgentNotificationsPanel(
 private fun ProxyPanel(
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    proxy: ProxyService,
     proxyStatus: String,
     proxyRunning: Boolean,
 ) {
+    val scope = rememberCoroutineScope()
     PanelCard {
         SettingsSectionHeader(
             title = "HTTP debug proxy",
@@ -803,12 +823,47 @@ private fun ProxyPanel(
             }
             Spacer(Modifier.width(16.dp))
             Row(
+                Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("Proxy Status:", color = TextSecondary, fontSize = 12.sp)
                 GlowingDot(proxyRunning)
-                Text(proxyStatus, color = if (proxyRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+                Text(
+                    proxyStatus,
+                    color = if (proxyRunning) Green else Rust,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                if (proxyRunning) {
+                    OutlinedButton(
+                        onClick = { scope.launch { proxy.stop() } },
+                    ) {
+                        Text("Stop proxy")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                proxy.ensureCertificateAuthority()
+                                proxy.start(
+                                    workspaceState.proxyPort,
+                                    workspaceState.proxyRules,
+                                    ProxyStartOptions(
+                                        sslInsecure = workspaceState.proxySslInsecure,
+                                        upstreamTrustedCaPath = workspaceState.proxyUpstreamTrustedCaPath,
+                                    ),
+                                )
+                            }
+                        },
+                    ) {
+                        Text("Start proxy")
+                    }
+                }
             }
         }
     }

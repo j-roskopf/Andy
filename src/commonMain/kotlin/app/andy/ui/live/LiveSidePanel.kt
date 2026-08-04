@@ -33,8 +33,6 @@ import app.andy.model.DeviceKind
 import app.andy.service.AppService
 import app.andy.service.LogcatService
 import app.andy.service.MirrorRendererMode
-import app.andy.ui.actions.DockPlacement
-import app.andy.ui.actions.TerminalDockToggleRow
 import app.andy.ui.components.Button
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
@@ -92,8 +90,6 @@ internal fun LiveSidePanel(
     stoppingEmulator: Boolean,
     stopStatus: String,
     bugSaveStatus: String,
-    terminalPlacement: DockPlacement?,
-    onTerminalToggle: (DockPlacement) -> Unit,
     logcat: LogcatService,
     appsService: AppService,
     selectedPackage: String?,
@@ -145,10 +141,6 @@ internal fun LiveSidePanel(
                     )
                 }
             }
-            TerminalDockToggleRow(
-                terminalPlacement = terminalPlacement,
-                onToggle = onTerminalToggle,
-            )
         }
 
         TabBar(

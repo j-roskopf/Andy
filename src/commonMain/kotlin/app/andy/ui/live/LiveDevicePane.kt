@@ -61,8 +61,6 @@ import app.andy.model.AndroidDevice
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorSession
-import app.andy.ui.actions.DockPlacement
-import app.andy.ui.actions.TerminalDockToggleRow
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.controls.FoldableDisplayProfile
@@ -351,8 +349,6 @@ internal fun LiveDevicePane(
     mirroredElsewhere: Boolean = false,
     /** When true the hand-off target is the device's own native app (Simulator.app / emulator). */
     mirroredInExternalApp: Boolean = false,
-    terminalPlacement: DockPlacement? = null,
-    onTerminalToggle: ((DockPlacement) -> Unit)? = null,
     registerNativeHost: Boolean = true,
     registerNativeHostFill: Boolean = false,
     mirrorStreamKey: Any? = null,
@@ -434,8 +430,6 @@ internal fun LiveDevicePane(
                 }
                 LiveStreamHeader(
                     chips = streamChips,
-                    terminalPlacement = terminalPlacement,
-                    onTerminalToggle = onTerminalToggle,
                 )
                 Spacer(Modifier.height(6.dp))
             }
@@ -945,8 +939,6 @@ internal fun HardwareControlIcon(icon: HardwareIcon, color: Color, modifier: Mod
 @Composable
 internal fun LiveStreamHeader(
     chips: List<LiveStreamChip>,
-    terminalPlacement: DockPlacement? = null,
-    onTerminalToggle: ((DockPlacement) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -970,14 +962,6 @@ internal fun LiveStreamHeader(
                     }
                     LiveStreamChipView(chip)
                 }
-            }
-        }
-        if (onTerminalToggle != null) {
-            Box(Modifier.align(Alignment.CenterEnd)) {
-                TerminalDockToggleRow(
-                    terminalPlacement = terminalPlacement,
-                    onToggle = onTerminalToggle,
-                )
             }
         }
     }
