@@ -867,6 +867,20 @@ fun promptWithGoalHint(text: String, goal: String?): String = goal?.takeIf { it.
     "$text\n\nPersistent task goal: $activeGoal\nKeep this goal in mind throughout the task."
 } ?: text
 
+/** Basename for a local file path, tolerating both slash styles. */
+fun localPathFileName(path: String): String =
+    path.trim().substringAfterLast('/').substringAfterLast('\\')
+
+/** Derives a list title when the composer leaves [AgentTaskDraft.title] blank. */
+fun AgentTaskDraft.fallbackTitle(): String = when {
+    prompt.isNotBlank() -> prompt.replace('\n', ' ').trim()
+    imagePaths.isNotEmpty() -> {
+        val first = localPathFileName(imagePaths.first())
+        if (imagePaths.size == 1) first else "$first (+${imagePaths.size - 1})"
+    }
+    else -> ""
+}
+
 private fun promptWithPlanModeHint(text: String, planMode: Boolean, grilling: Boolean = false): String = when {
     !planMode -> text
     grilling -> {

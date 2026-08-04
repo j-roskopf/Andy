@@ -54,6 +54,26 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun thinkingAndToolStaySeparateWhenActivityCollapseDisabled() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "Find it"),
+            AgentEvent.Thinking(atMillis = 2, text = "Need to search the repo"),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Grep", summary = "AgentTranscript"),
+            AgentEvent.AssistantText(atMillis = 4, text = "Done."),
+        )
+
+        val items = transcriptDisplayItems(events, collapseActivityBetweenMessages = false)
+
+        assertEquals(4, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0])
+        assertIs<TranscriptDisplayItem.Event>(items[1])
+        assertTrue(items[1] is TranscriptDisplayItem.Event && (items[1] as TranscriptDisplayItem.Event).event is AgentEvent.Thinking)
+        assertIs<TranscriptDisplayItem.Event>(items[2])
+        assertTrue(items[2] is TranscriptDisplayItem.Event && (items[2] as TranscriptDisplayItem.Event).event is AgentEvent.ToolCall)
+        assertIs<TranscriptDisplayItem.Event>(items[3])
+    }
+
+    @Test
     fun collapseActivityBetweenMessagesGroupsThinkingAndSingleTool() {
         val events = listOf(
             AgentEvent.UserMessage(atMillis = 1, text = "Find it"),

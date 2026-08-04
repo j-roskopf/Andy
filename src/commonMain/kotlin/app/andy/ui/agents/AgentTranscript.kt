@@ -532,10 +532,14 @@ internal fun transcriptDisplayItems(
             group += display[index]
             index += 1
         }
-        if (collapseActivityBetweenMessages || group.size > 1) {
-            items += TranscriptDisplayItem.ToolCalls(startIndex, group)
-        } else {
-            items += TranscriptDisplayItem.Event(startIndex, group.single())
+        when {
+            group.size == 1 -> items += TranscriptDisplayItem.Event(startIndex, group.single())
+            collapseActivityBetweenMessages -> items += TranscriptDisplayItem.ToolCalls(startIndex, group)
+            group.all { it is AgentEvent.ToolCall || it is AgentEvent.ToolResult } ->
+                items += TranscriptDisplayItem.ToolCalls(startIndex, group)
+            else -> group.forEachIndexed { offset, activity ->
+                items += TranscriptDisplayItem.Event(startIndex + offset, activity)
+            }
         }
     }
     return items
