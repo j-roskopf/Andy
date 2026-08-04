@@ -141,10 +141,15 @@ object AcpEventMapper {
         val details = content.joinToString("\n") { it.render(terminalOutput) }
             .ifBlank { listOfNotNull(rawInput, rawOutput).joinToString("\n") }
         val presented = AcpToolCallPresentation.present(title, rawInput, rawOutput, details)
+        val summary = AcpToolCallPresentation.enrichSummary(
+            summary = presented.summary,
+            kind = kind.toAgentKind(),
+            locations = locations,
+        )
         return AgentEvent.ToolCall(
             atMillis = atMillis,
             toolName = presented.toolName,
-            summary = presented.summary,
+            summary = summary,
             detail = presented.detail,
             toolCallId = id,
             kind = kind.toAgentKind(),

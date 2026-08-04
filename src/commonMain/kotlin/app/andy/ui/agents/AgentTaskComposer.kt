@@ -79,6 +79,7 @@ import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
@@ -86,6 +87,8 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.FieldChromeStyle
+import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.Cyan
@@ -325,7 +328,7 @@ private fun rememberAgentTaskComposerForm(
         availableSkills.filter { skill -> state.prompt.referencesComposerSkill(skill) }
     }
     val validBudget = state.budgetText.toMaxBudgetUsd()
-    val canSubmit = state.prompt.isNotBlank() &&
+    val canSubmit = (state.prompt.isNotBlank() || state.imagePaths.isNotEmpty()) &&
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         (state.budgetText.isBlank() || validBudget != null) &&
         cliStatuses.any { it.kind == state.agent && it.ready }
@@ -543,8 +546,11 @@ private fun AgentChatComposer(
                         if (canSubmit) onSubmit()
                         true
                     }
+                    .onChatImagePaste(form.scope) { added ->
+                        state.imagePaths = attachChatImages(state.imagePaths, added)
+                    }
                     .onImageFilesDropped(
-                        onFiles = { dropped -> state.imagePaths = (state.imagePaths + dropped).distinct() },
+                        onFiles = { dropped -> state.imagePaths = attachChatImages(state.imagePaths, dropped) },
                         onDragActiveChange = { active -> state.imageDragActive = active },
                     ),
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
@@ -553,7 +559,11 @@ private fun AgentChatComposer(
                 visualTransformation = slashHighlight,
                 placeholder = {
                     Text(
-                        if (state.imageDragActive) "release to attach image" else "What should ${state.agent.label} work on?",
+                        when {
+                            state.imageDragActive -> "release to attach images"
+                            state.imagePaths.isNotEmpty() -> "add a message or send images — attach, paste, or drag more"
+                            else -> "What should ${state.agent.label} work on? — attach, paste, or drag images"
+                        },
                         color = if (state.imageDragActive) Cyan else TextSecondary,
                         fontFamily = MonoFont,
                         fontSize = 13.sp,
@@ -776,6 +786,9 @@ private fun AgentChatComposer(
                 }
             }
             AgentQuotaMenu(services = form.services, agent = state.agent)
+            ChatImageAttachButton(
+                onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
+            )
             OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
                 Text(if (showOptions) "hide options" else "options", fontSize = 11.sp)
             }
@@ -850,8 +863,11 @@ private fun AgentTaskComposerFields(
                     minLines = if (showProjectHeader) 8 else 6,
                     modifier = Modifier.fillMaxWidth()
                         .heightIn(min = if (showProjectHeader) 180.dp else 140.dp)
+                        .onChatImagePaste(form.scope) { added ->
+                            state.imagePaths = attachChatImages(state.imagePaths, added)
+                        }
                         .onImageFilesDropped(
-                            onFiles = { dropped -> state.imagePaths = (state.imagePaths + dropped).distinct() },
+                            onFiles = { dropped -> state.imagePaths = attachChatImages(state.imagePaths, dropped) },
                             onDragActiveChange = { active -> state.imageDragActive = active },
                         )
                         .border(
@@ -867,7 +883,7 @@ private fun AgentTaskComposerFields(
                     colors = fieldColors(),
                     visualTransformation = slashHighlight,
                     placeholder = {
-                        Text("type / for ${state.agent.label} commands or skills — drop image files here to attach them", color = TextSecondary, fontFamily = MonoFont)
+                        Text("type / for ${state.agent.label} commands or skills — attach, paste, or drag images", color = TextSecondary, fontFamily = MonoFont)
                     },
                 )
                 DropdownMenu(
@@ -925,9 +941,9 @@ private fun AgentTaskComposerFields(
             }
         }
         if (showPrompt && state.imageDragActive) {
-            Text("release to attach image", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            Text("release to attach images", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
         } else if (showPrompt && state.imagePaths.isEmpty()) {
-            Text("drop image files onto the prompt to attach them", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
+            Text("attach, paste, or drag image files onto the prompt", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         } else if (showPrompt) {
             Text("Attached images", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
             ChatAttachedImages(

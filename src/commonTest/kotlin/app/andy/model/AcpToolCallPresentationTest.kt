@@ -3,6 +3,7 @@ package app.andy.model
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AcpToolCallPresentationTest {
     @Test
@@ -64,5 +65,30 @@ class AcpToolCallPresentationTest {
         assertEquals("Andy MCP · list devices", merged.toolName)
         assertEquals("serial=R3CXB056ZZB", merged.summary)
         assertEquals(AgentToolState.Completed, merged.state)
+    }
+
+    @Test
+    fun emptyJsonArgumentsAreMinimal() {
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("{}"))
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("""{"success":true}"""))
+    }
+
+    @Test
+    fun editFileSummaryUsesLocationsWhenArgumentsAreEmpty() {
+        val presented = AcpToolCallPresentation.present(
+            title = "Edit File",
+            rawInput = "{}",
+            rawOutput = null,
+            contentDetails = "",
+        )
+        assertEquals("", presented.summary)
+        assertEquals(
+            "AgentTranscript.kt",
+            AcpToolCallPresentation.enrichSummary(
+                presented.summary,
+                AgentToolKind.Edit,
+                listOf("/Users/dev/Andy/src/commonMain/kotlin/app/andy/ui/agents/AgentTranscript.kt"),
+            ),
+        )
     }
 }

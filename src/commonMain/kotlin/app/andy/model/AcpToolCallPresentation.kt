@@ -55,10 +55,17 @@ object AcpToolCallPresentation {
             !isMinimalOutput(previous.summary) && previous.summary.isNotBlank() -> previous.summary
             else -> presented.summary
         }
+        val mergedLocations = (previous.locations + incoming.locations).distinct()
+        val resolvedSummary = enrichSummary(
+            summary = summary.ifBlank { presented.summary },
+            kind = incoming.kind ?: previous.kind,
+            locations = mergedLocations,
+        )
         return incoming.copy(
             toolName = presented.toolName.ifBlank { mergedName },
-            summary = summary.ifBlank { presented.summary },
+            summary = resolvedSummary,
             detail = presented.detail.ifBlank { mergedDetail },
+            locations = mergedLocations,
         )
     }
 
@@ -89,7 +96,28 @@ object AcpToolCallPresentation {
 
     fun isMinimalOutput(text: String): Boolean {
         val trimmed = text.trim()
-        return trimmed.isEmpty() || minimalSuccessOutput.matches(trimmed)
+        if (trimmed.isEmpty() || minimalSuccessOutput.matches(trimmed)) return true
+        if (trimmed == "{}" || trimmed == "[]") return true
+        parseJson(trimmed)?.let { obj ->
+            if (obj.isEmpty()) return true
+            val parts = obj.entries
+                .filterNot { (key, _) -> key in toolNameKeys }
+                .mapNotNull { (key, value) -> formatArgument(key, value) }
+            if (parts.isEmpty()) return true
+        }
+        return false
+    }
+
+    /** Fill in a path-based summary when ACP only sent empty JSON arguments. */
+    fun enrichSummary(
+        summary: String,
+        kind: AgentToolKind?,
+        locations: List<String>,
+    ): String {
+        if (!isMinimalOutput(summary) && summary.isNotBlank()) return summary
+        val paths = locations.map { it.trim() }.filter { it.isNotBlank() }
+        if (paths.isEmpty()) return summary.takeUnless { isMinimalOutput(it) }.orEmpty()
+        return paths.joinToString(", ") { shortenPath(it) }
     }
 
     internal fun formatSummary(
@@ -102,11 +130,12 @@ object AcpToolCallPresentation {
         val inputSummary = summarizeArguments(rawInput)
         val detail = when {
             content.isNotBlank() -> content
-            rawInput.isNotBlank() && rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) ->
+            rawInput.isNotBlank() && rawOutput.isNotBlank() &&
+                !isMinimalOutput(rawInput) && !isMinimalOutput(rawOutput) ->
                 "$rawInput\n$rawOutput"
-            rawInput.isNotBlank() -> rawInput
+            rawInput.isNotBlank() && !isMinimalOutput(rawInput) -> rawInput
             rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> rawOutput
-            else -> toolName
+            else -> ""
         }
         val firstContentLine = content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
         val summary = when {
@@ -115,8 +144,7 @@ object AcpToolCallPresentation {
                 summarizeArguments(firstContentLine).ifBlank { firstContentLine }
             rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) ->
                 rawOutput.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
-            toolName.isNotBlank() && !isGenericTitle(toolName) -> toolName
-            else -> detail.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().ifBlank { toolName }
+            else -> detail.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
         }
         return summary to detail
     }
@@ -163,12 +191,12 @@ object AcpToolCallPresentation {
 
     private fun summarizeArguments(rawInput: String): String {
         val input = rawInput.trim()
-        if (input.isEmpty()) return ""
+        if (input.isEmpty() || isMinimalOutput(input)) return ""
         parseJson(input)?.let { obj ->
             val parts = obj.entries
                 .filterNot { (key, _) -> key in toolNameKeys }
                 .mapNotNull { (key, value) -> formatArgument(key, value) }
-            if (parts.isNotEmpty()) return parts.joinToString(", ")
+            return if (parts.isNotEmpty()) parts.joinToString(", ") else ""
         }
         return input.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
     }
@@ -191,6 +219,9 @@ object AcpToolCallPresentation {
         text.startsWith("{") || text.startsWith("[")
 
     private fun humanize(segment: String): String = segment.replace('_', ' ')
+
+    private fun shortenPath(path: String): String =
+        path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path }
 
     private val toolNameKeys = listOf("name", "tool", "toolName", "function", "function_name")
 }

@@ -190,7 +190,7 @@ class AgentTranscriptUiTest {
             waitForIdle()
             assertFalse(assertNotNull(memory.get("streaming")).stickToBottom)
 
-            onNodeWithText("↓  latest").performClick()
+            onNodeWithText("↓ latest").performClick()
             waitForIdle()
             val followed = assertNotNull(memory.get("streaming"))
             assertEquals(true, followed.stickToBottom)
@@ -221,6 +221,31 @@ class AgentTranscriptUiTest {
             }
             waitForIdle()
             onNodeWithTag("pending-input").assertIsDisplayed()
+        }
+
+    @Test
+    fun trailingContentRendersOnLiveEdge() =
+        runTranscriptUiTest {
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "spec brief"),
+                            AgentEvent.AssistantText(atMillis = 2, text = "Updated the reducer."),
+                        ),
+                        isActive = false,
+                        trailingContent = {
+                            androidx.compose.material3.Text(
+                                "Edited 2 files",
+                                modifier = Modifier.testTag("trailing-content"),
+                            )
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+            onNodeWithTag("trailing-content").assertIsDisplayed()
         }
 
     /** Some existing async service tests can leave one failure queued in coroutines-test. */

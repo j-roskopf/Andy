@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -405,32 +407,52 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
             )
         }
         Box(Modifier.fillMaxSize()) {
-            LazyColumn(Modifier.fillMaxSize().padding(end = 8.dp), state = listState) {
-                items(entries) { entry ->
-                    if (compact) {
-                        Text("${entry.time} ${entry.pid ?: "-"} ${entry.level.name.take(1)}/${entry.tag}: ${entry.message}", color = levelColor(entry.level), fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    } else {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 22.dp)
-                                .padding(vertical = 1.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            MonoCell(entry.time, timeWidth.dp, TextSecondary, compact = true)
-                            Box(Modifier.width(levelWidth.dp), contentAlignment = Alignment.CenterStart) {
-                                LogLevelBadge(entry.level)
+            SelectionContainer(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize().padding(end = 8.dp), state = listState) {
+                    items(entries) { entry ->
+                        if (compact) {
+                            Row(verticalAlignment = Alignment.Top) {
+                                DisableSelection {
+                                    Text(
+                                        "${entry.time} ${entry.pid ?: "-"} ${entry.level.name.take(1)}/${entry.tag}: ",
+                                        color = levelColor(entry.level),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                    )
+                                }
+                                Text(
+                                    entry.message,
+                                    color = levelColor(entry.level),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                )
                             }
-                            MonoCell(entry.tag, tagWidth.dp, logLevelForeground(entry.level), compact = true)
-                            Text(
-                                entry.message,
-                                color = TextPrimary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
+                        } else {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 22.dp)
+                                    .padding(vertical = 1.dp),
+                                verticalAlignment = Alignment.Top,
+                            ) {
+                                DisableSelection {
+                                    MonoCell(entry.time, timeWidth.dp, TextSecondary, compact = true)
+                                    Box(Modifier.width(levelWidth.dp), contentAlignment = Alignment.CenterStart) {
+                                        LogLevelBadge(entry.level)
+                                    }
+                                    MonoCell(entry.tag, tagWidth.dp, logLevelForeground(entry.level), compact = true)
+                                }
+                                Text(
+                                    entry.message,
+                                    color = TextPrimary,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                     }
                 }

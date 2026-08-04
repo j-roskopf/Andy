@@ -1,38 +1,30 @@
 package app.andy.ui.agents
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentUserInputRequest
-import app.andy.ui.components.Button
-import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TextField
-import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.AndyOverlay
-import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
-import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 
@@ -61,57 +53,54 @@ internal fun AgentUserInputCard(
     Column(
         modifier
             .fillMaxWidth()
-            .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Row))
-            .border(1.dp, Rust.copy(alpha = 0.6f), RoundedCornerShape(AndyRadius.Row))
-            .padding(14.dp),
+            .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                if (permissionPrompt) "PERMISSION REQUIRED" else "DECISION NEEDED",
-                color = Rust,
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.Bold,
-                fontSize = 10.sp,
-            )
-            Text(
-                if (permissionPrompt) "Choose whether to allow this tool call." else "Choose an option or enter your own answer.",
+                if (permissionPrompt) "Permission required" else "Decision needed",
                 color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
             )
+            if (!permissionPrompt) {
+                Text(
+                    "Choose an option or enter your own answer.",
+                    color = TextSecondary.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                )
+            }
         }
         request.questions.forEach { question ->
-            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 question.header.takeIf { it.isNotBlank() }?.let { header ->
-                    Text(header.uppercase(), color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                    Text(header, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                 }
-                Text(question.question, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(
+                    question.question,
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                )
                 if (permissionPrompt) {
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         question.options.forEach { option ->
                             val deny = option.label.lowercase().let {
                                 it.contains("deny") || it.contains("reject")
                             }
-                            if (deny) {
-                                OutlinedButton(
-                                    onClick = { onSubmit(mapOf(question.id to option.label)) },
-                                    modifier = Modifier.weight(1f),
-                                ) {
-                                    Text(option.label, color = Red, fontSize = 11.sp)
-                                }
-                            } else {
-                                Button(
-                                    onClick = { onSubmit(mapOf(question.id to option.label)) },
-                                    modifier = Modifier.weight(1f),
-                                    colors = primaryButtonColors(),
-                                ) {
-                                    Text(option.label, fontSize = 11.sp)
-                                }
-                            }
+                            Text(
+                                option.label,
+                                color = if (deny) Red else Cyan,
+                                fontSize = 12.sp,
+                                modifier = Modifier
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { onSubmit(mapOf(question.id to option.label)) }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                            )
                         }
                     }
                 } else {
@@ -145,18 +134,22 @@ internal fun AgentUserInputCard(
             }
         }
         if (!permissionPrompt) {
-            Button(
-                onClick = {
-                    onSubmit(request.questions.associate { question ->
-                        question.id to when (val selection = selections[question.id]) {
-                            OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
-                            else -> selection.orEmpty()
-                        }
-                    })
-                },
-                enabled = canSubmit,
-                colors = primaryButtonColors(),
-            ) { Text("Continue", fontSize = 11.sp) }
+            Text(
+                "Continue",
+                color = if (canSubmit) Cyan else TextSecondary.copy(alpha = 0.5f),
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(enabled = canSubmit) {
+                        onSubmit(request.questions.associate { question ->
+                            question.id to when (val selection = selections[question.id]) {
+                                OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
+                                else -> selection.orEmpty()
+                            }
+                        })
+                    }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
         }
     }
 }
@@ -171,17 +164,22 @@ private fun ChoiceRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (selected) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium), RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, if (selected) Cyan.copy(alpha = 0.75f) else Border, RoundedCornerShape(AndyRadius.Control))
             .selectable(selected = selected, onClick = onSelect)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 2.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(if (selected) "●" else "○", color = if (selected) Cyan else TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+        Text(
+            if (selected) "●" else "○",
+            color = if (selected) Cyan else TextSecondary.copy(alpha = 0.65f),
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+        )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, color = TextPrimary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            description.takeIf { it.isNotBlank() }?.let { Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp) }
+            Text(label, color = TextPrimary, fontSize = 12.sp)
+            description.takeIf { it.isNotBlank() }?.let {
+                Text(it, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
+            }
         }
     }
 }

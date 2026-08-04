@@ -354,6 +354,7 @@ internal fun AndyShell(
                             serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
+                            workspaceState = state.workspaceState,
                         )
                     }
                     RetainedDestination(active = agentsActive) {
@@ -361,6 +362,7 @@ internal fun AndyShell(
                             services = services, active = agentsActive,
                             requestedTaskId = effectiveOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = consumeOpenAgentTask,
+                            workspaceState = state.workspaceState,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {

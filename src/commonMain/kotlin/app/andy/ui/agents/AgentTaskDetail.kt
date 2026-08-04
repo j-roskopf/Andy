@@ -76,6 +76,7 @@ import app.andy.model.AgentFileDiff
 import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.AgentSkill
+import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
 import app.andy.model.DiffLine
@@ -86,6 +87,7 @@ import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
@@ -95,6 +97,8 @@ import app.andy.ui.shell.LocalOpenInvestigation
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
+import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -122,6 +126,7 @@ internal fun AgentTaskDetail(
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
     transcriptScrollMemory: TranscriptScrollMemory? = null,
+    workspaceState: WorkspaceState = WorkspaceState(),
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -303,7 +308,7 @@ internal fun AgentTaskDetail(
         }
     }
 
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -397,7 +402,7 @@ internal fun AgentTaskDetail(
             val terminalModifier = remember { Modifier.fillMaxSize() }
             val imagesStagedLatest = rememberUpdatedState(
                 newValue = { staged: List<String> ->
-                    followUpImagePaths = (followUpImagePaths + staged).distinct()
+                    followUpImagePaths = attachChatImages(followUpImagePaths, staged)
                 },
             )
             val onImagesStaged = remember<(List<String>) -> Unit>(task.id) {
@@ -415,6 +420,8 @@ internal fun AgentTaskDetail(
                     originalImagePaths = task.imagePaths,
                     restoreScrollKey = task.id,
                     scrollMemory = transcriptScrollMemory,
+                    autoExpandActivitySections = workspaceState.agentTranscriptAutoExpandActivity,
+                    collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
                     pendingContent = task.userInputRequest?.let { request ->
                         {
                             AgentUserInputCard(
@@ -425,6 +432,26 @@ internal fun AgentTaskDetail(
                             )
                         }
                     },
+                    trailingContent = changeSummary
+                        ?.takeIf { it.files.isNotEmpty() }
+                        ?.let { summary ->
+                            {
+                                AgentChangeSummaryCard(
+                                    summary = summary,
+                                    filesExpanded = changedFilesExpanded,
+                                    onFilesExpandedChange = { changedFilesExpanded = it },
+                                    showAllFiles = showAllChangedFiles,
+                                    onShowAllFilesChange = { showAllChangedFiles = it },
+                                    expandedPath = expandedDiffPath,
+                                    loadingPath = loadingDiffPath,
+                                    diffs = loadedFileDiffs,
+                                    viewMode = diffViewMode,
+                                    onViewModeChange = { diffViewMode = it },
+                                    onToggleFile = { path -> toggleFileDiff(path) },
+                                    embedded = true,
+                                )
+                            }
+                        },
                     activePermissionRequestId = pendingPermissionId,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -438,37 +465,39 @@ internal fun AgentTaskDetail(
                 )
             }
         }
-        changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
-            AgentChangeSummaryCard(
-                summary = summary,
-                filesExpanded = changedFilesExpanded,
-                onFilesExpandedChange = { changedFilesExpanded = it },
-                showAllFiles = showAllChangedFiles,
-                onShowAllFilesChange = { showAllChangedFiles = it },
-                expandedPath = expandedDiffPath,
-                loadingPath = loadingDiffPath,
-                diffs = loadedFileDiffs,
-                viewMode = diffViewMode,
-                onViewModeChange = { diffViewMode = it },
-                onToggleFile = { path -> toggleFileDiff(path) },
-                embedded = true,
-            )
+        if (!acpTask) {
+            changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
+                AgentChangeSummaryCard(
+                    summary = summary,
+                    filesExpanded = changedFilesExpanded,
+                    onFilesExpandedChange = { changedFilesExpanded = it },
+                    showAllFiles = showAllChangedFiles,
+                    onShowAllFilesChange = { showAllChangedFiles = it },
+                    expandedPath = expandedDiffPath,
+                    loadingPath = loadingDiffPath,
+                    diffs = loadedFileDiffs,
+                    viewMode = diffViewMode,
+                    onViewModeChange = { diffViewMode = it },
+                    onToggleFile = { path -> toggleFileDiff(path) },
+                    embedded = true,
+                )
+            }
         }
 
         if (task.queuedFollowUps.isNotEmpty()) {
-            PanelCard(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                background = AndyColors.Neutral850,
-                borderColor = Cyan.copy(alpha = 0.6f),
-                contentPadding = PaddingValues(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("MESSAGE QUEUE · ${task.queuedFollowUps.size}", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                }
+                Text(
+                    "${task.queuedFollowUps.size} queued message${if (task.queuedFollowUps.size == 1) "" else "s"}",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                )
                 task.queuedFollowUps.forEachIndexed { index, queuedFollowUp ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("${index + 1}.", color = Cyan, fontFamily = MonoFont, fontSize = 11.sp)
+                        Text("${index + 1}.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 queuedFollowUp.text.ifBlank { "images attached" },
@@ -480,40 +509,47 @@ internal fun AgentTaskDetail(
                             if (queuedFollowUp.skills.isNotEmpty()) {
                                 Text(
                                     queuedFollowUp.skills.joinToString("  ") { "/${it.name}" },
-                                    color = Cyan,
+                                    color = Cyan.copy(alpha = 0.85f),
                                     fontFamily = MonoFont,
                                     fontSize = 10.sp,
                                 )
                             }
                         }
-                        OutlinedButton(
-                            onClick = { services.agentRuns.removeQueuedFollowUp(task.id, index) },
-                            modifier = Modifier.height(26.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
-                        ) { Text("remove", fontSize = 10.sp) }
+                        Text(
+                            "Remove",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { services.agentRuns.removeQueuedFollowUp(task.id, index) }
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
                     }
                 }
             }
         }
 
         if (showFollowUpComposer) {
-            PanelCard(
-                modifier = Modifier.fillMaxWidth(),
-                background = AndyColors.SurfaceRaised,
-                borderColor = if (followUpImageDragActive) Cyan else null,
-                contentPadding = PaddingValues(16.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Border.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Row))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 if (acpTask && availableAcpModes.isNotEmpty()) {
                     val currentMode = availableAcpModes.firstOrNull { it.id == currentAcpModeId } ?: availableAcpModes.first()
                     Box {
-                        OutlinedButton(
-                            onClick = { modeMenuExpanded = true },
-                            modifier = Modifier.heightIn(min = 26.dp),
-                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 3.dp),
-                        ) {
-                            Text("mode: ${currentMode.name}", fontSize = 10.sp, fontFamily = MonoFont)
-                        }
+                        Text(
+                            "mode: ${currentMode.name}",
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { modeMenuExpanded = true }
+                                .padding(vertical = 2.dp),
+                        )
                         DropdownMenu(
                             expanded = modeMenuExpanded,
                             onDismissRequest = { modeMenuExpanded = false },
@@ -544,26 +580,34 @@ internal fun AgentTaskDetail(
                 }
                 if (task.userInputRequest == null) {
                     task.goal?.let { goal ->
-                        OutlinedButton(
-                            onClick = { goalEditorOpen = !goalEditorOpen },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 34.dp),
-                            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 5.dp),
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { goalEditorOpen = !goalEditorOpen }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-                                Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                            Text("Goal", color = Green.copy(alpha = 0.85f), fontFamily = MonoFont, fontSize = 10.sp)
+                            Text(
+                                goal,
+                                color = TextPrimary,
+                                fontFamily = MonoFont,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(if (goalEditorOpen) "⌄" else "›", color = TextSecondary.copy(alpha = 0.6f), fontSize = 11.sp)
                         }
                     }
                     if (goalEditorOpen) {
-                        PanelCard(
-                            modifier = Modifier.fillMaxWidth(),
-                            background = AndyColors.Neutral900,
-                            borderColor = Green.copy(alpha = 0.4f),
-                            contentPadding = PaddingValues(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        Column(
+                            Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("persistent task goal", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            Text("Persistent task goal", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
                             TextField(
                                 goalEditorText,
                                 { goalEditorText = it },
@@ -574,21 +618,28 @@ internal fun AgentTaskDetail(
                                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp),
                                 colors = fieldColors(),
                             )
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Button(
-                                    onClick = {
-                                        services.agentRuns.updateGoal(task.id, goalEditorText)
-                                        goalEditorOpen = false
-                                    },
-                                    enabled = goalEditorText.isNotBlank(),
-                                    modifier = Modifier.height(28.dp),
-                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
-                                ) { Text("save goal", fontSize = 10.sp) }
-                                OutlinedButton(
-                                    onClick = { services.agentRuns.updateGoal(task.id, null) },
-                                    modifier = Modifier.height(28.dp),
-                                    contentPadding = PaddingValues(horizontal = 9.dp, vertical = 1.dp),
-                                ) { Text("clear goal", fontSize = 10.sp) }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    "Save goal",
+                                    color = if (goalEditorText.isNotBlank()) Cyan else TextSecondary,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable(enabled = goalEditorText.isNotBlank()) {
+                                            services.agentRuns.updateGoal(task.id, goalEditorText)
+                                            goalEditorOpen = false
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                )
+                                Text(
+                                    "Clear goal",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable { services.agentRuns.updateGoal(task.id, null) }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                )
                             }
                         }
                     }
@@ -600,10 +651,10 @@ internal fun AgentTaskDetail(
                                 skillMenuDismissed = false
                             },
                             singleLine = false,
-                            minLines = 3,
+                            minLines = 1,
                             maxLines = 8,
                             modifier = Modifier.fillMaxWidth()
-                                .heightIn(min = 94.dp, max = 180.dp)
+                                .heightIn(max = 180.dp)
                                 .onPreviewKeyEvent { event ->
                                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                     if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
@@ -615,26 +666,28 @@ internal fun AgentTaskDetail(
                                     if (canSendFollowUp) submitFollowUp()
                                     true
                                 }
+                                .onChatImagePaste(scope) { added ->
+                                    followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                                }
                                 .onImageFilesDropped(
-                                    onFiles = { dropped -> followUpImagePaths = (followUpImagePaths + dropped).distinct() },
+                                    onFiles = { dropped -> followUpImagePaths = attachChatImages(followUpImagePaths, dropped) },
                                     onDragActiveChange = { active -> followUpImageDragActive = active },
                                 ),
-                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 14.sp, lineHeight = 21.sp),
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,
                             visualTransformation = slashHighlight,
                             placeholder = {
                                 Text(
                                     when {
-                                        followUpImageDragActive -> "release to attach image"
+                                        followUpImageDragActive -> "release to attach images"
                                         terminalSessionActive && followUpImagePaths.isNotEmpty() ->
                                             "add a message — staged images send with it, enter to submit"
                                         else ->
-                                            "follow-up prompt — type / for ${task.agent.label} commands or skills, enter to send"
+                                            "follow-up prompt — attach, paste, or drag images; / for commands"
                                     },
-                                    color = if (followUpImageDragActive) Cyan else TextSecondary,
-                                    fontFamily = MonoFont,
-                                    fontSize = 13.sp,
+                                    color = if (followUpImageDragActive) Cyan else TextSecondary.copy(alpha = 0.75f),
+                                    fontSize = 14.sp,
                                 )
                             },
                         )
@@ -711,15 +764,26 @@ internal fun AgentTaskDetail(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Spacer(Modifier.weight(1f))
-                    OutlinedButton(
-                        onClick = {
-                            services.agentRuns.interactiveResumeCommand(task.id)?.let {
-                                copyText(it)
-                                copiedHint = true
-                            }
-                            scope.launch { services.agentRuns.openInTerminal(task.id) }
+                    ChatImageAttachButton(
+                        onImagesAttached = { added ->
+                            followUpImagePaths = attachChatImages(followUpImagePaths, added)
                         },
-                    ) { Text(if (copiedHint) "opened" else "terminal") }
+                    )
+                    Text(
+                        if (copiedHint) "Opened" else "Terminal",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable {
+                                services.agentRuns.interactiveResumeCommand(task.id)?.let {
+                                    copyText(it)
+                                    copiedHint = true
+                                }
+                                scope.launch { services.agentRuns.openInTerminal(task.id) }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
                     if (task.userInputRequest == null) {
                         ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
                     }
@@ -795,93 +859,105 @@ private fun AgentTaskHeader(
             delay(1_000)
         }
     }
-    PanelCard(
-        modifier = Modifier.fillMaxWidth(),
-        background = AndyColors.Neutral850,
-        borderColor = Border,
-        contentPadding = PaddingValues(12.dp),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(
-                if (expanded) "v" else ">",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                modifier = Modifier
-                    .width(10.dp)
-                    .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable { expanded = !expanded },
-            )
-            AgentBadge(task.agent)
             Column(
                 Modifier
                     .weight(1f)
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable { expanded = !expanded },
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
                     task.prompt.ifBlank { task.title },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
-                    // No animateContentSize: tweening title height across chat switches
-                    // resized the terminal for ~180ms and read as settle/jump.
+                    fontSize = 16.sp,
+                    lineHeight = 22.sp,
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    "${task.agent.label}  ${task.modelConfigurationLabel()}",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            StatusTag(agentStatusLabel(task), agentStatusColor(task.status))
-            // Fixed action slot so READ-ONLY ↔ stop does not shift header height on attach.
-            Box(Modifier.height(30.dp), contentAlignment = Alignment.Center) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${task.agent.label} · ${task.modelConfigurationLabel()}",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(agentStatusLabel(task), color = agentStatusColor(task.status), fontFamily = MonoFont, fontSize = 10.sp)
                     if (!terminalLive) {
-                        StatusTag("READ-ONLY", TextSecondary)
-                    }
-                    if (terminalLive) {
-                        onCompleteBuild?.let { complete ->
-                            OutlinedButton(
-                                onClick = complete,
-                                modifier = Modifier.height(30.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                            ) { Text("mark complete", fontSize = 11.sp) }
-                        }
-                        Button(
-                            onClick = onStop,
-                            colors = ButtonDefaults.buttonColors(containerColor = Rust, contentColor = AndyColors.Neutral100),
-                            modifier = Modifier.height(30.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                        ) { Text(if (task.status == AgentStatus.Blocked) "cancel" else "stop", fontSize = 11.sp) }
+                        Text("read-only", color = TextSecondary.copy(alpha = 0.75f), fontFamily = MonoFont, fontSize = 10.sp)
                     }
                 }
             }
-            if (task.status == AgentStatus.Error) {
-                Button(
-                    onClick = onRetry,
-                    colors = primaryButtonColors(),
-                    modifier = Modifier.height(30.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                ) { Text("retry", fontSize = 11.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (terminalLive) {
+                    onCompleteBuild?.let { complete ->
+                        Text(
+                            "Complete",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable(onClick = complete)
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
+                    Text(
+                        if (task.status == AgentStatus.Blocked) "Cancel" else "Stop",
+                        color = Rust,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(onClick = onStop)
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
+                if (task.status == AgentStatus.Error) {
+                    Text(
+                        "Retry",
+                        color = Cyan,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(onClick = onRetry)
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
+                Text(
+                    "Delete",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onDelete)
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+                Text(
+                    if (expanded) "⌄" else "›",
+                    color = TextSecondary.copy(alpha = 0.55f),
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 2.dp),
+                )
             }
-            OutlinedButton(
-                onClick = onDelete,
-                modifier = Modifier.height(30.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            ) { Text("delete", fontSize = 11.sp) }
         }
 
         AnimatedVisibility(
@@ -900,32 +976,32 @@ private fun AgentTaskHeader(
                 )
 
                 task.goal?.let { goal ->
-                    PanelCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        background = Green.copy(alpha = 0.12f),
-                        borderColor = Green.copy(alpha = 0.38f),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Text("GOAL MODE ACTIVE", color = Green, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                        Text(goal, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
+                    Text(
+                        "Goal: $goal",
+                        color = Green.copy(alpha = 0.9f),
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
 
                 AgentContextWindowIndicator(task)
 
-                AndyHorizontalDivider(color = Border)
-
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = onCopyPrompt,
-                        modifier = Modifier.height(30.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) { Text("copy prompt", fontSize = 10.sp) }
+                    Text(
+                        "Copy prompt",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable(onClick = onCopyPrompt)
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
                     Spacer(Modifier.weight(1f))
                     formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let {
                         Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
+import app.andy.model.WorkspaceState
 import app.andy.model.modelConfigurationLabel
 import app.andy.service.AndyServices
 import app.andy.currentTimeMillis
@@ -63,6 +64,7 @@ private fun AgentCommandCenter(
     active: Boolean,
     requestedTaskId: String?,
     onRequestedTaskConsumed: () -> Unit,
+    workspaceState: WorkspaceState,
 ) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
@@ -225,6 +227,7 @@ private fun AgentCommandCenter(
                             selected,
                             onDelete = ::requestDelete,
                             transcriptScrollMemory = transcriptScrollMemory,
+                            workspaceState = workspaceState,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -246,8 +249,9 @@ internal fun AgentsScreen(
     active: Boolean = true,
     requestedTaskId: String? = null,
     onRequestedTaskConsumed: () -> Unit = {},
+    workspaceState: WorkspaceState = WorkspaceState(),
 ) {
-    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed)
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, workspaceState)
 }
 
 @Composable

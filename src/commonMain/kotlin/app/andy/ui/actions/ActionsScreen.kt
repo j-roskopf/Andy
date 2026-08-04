@@ -98,6 +98,7 @@ import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.RunningAction
+import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.service.AndyServices
 import app.andy.currentTimeMillis
@@ -185,6 +186,7 @@ private fun ProjectCockpit(
     device: AndroidDevice?,
     targetDisplayName: String? = null,
     active: Boolean,
+    workspaceState: WorkspaceState,
 ) {
     val scope = rememberCoroutineScope()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
@@ -539,6 +541,7 @@ private fun ProjectCockpit(
                                                 selected,
                                                 onDelete = ::requestDeleteChat,
                                                 transcriptScrollMemory = transcriptScrollMemory,
+                                                workspaceState = workspaceState,
                                                 modifier = Modifier.fillMaxSize(),
                                             )
                                         }
@@ -760,6 +763,7 @@ internal fun ActionsScreen(
     serial: String? = null,
     device: AndroidDevice? = null,
     targetDisplayName: String? = null,
+    workspaceState: WorkspaceState = WorkspaceState(),
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -785,6 +789,7 @@ internal fun ActionsScreen(
             device = device,
             targetDisplayName = targetDisplayName,
             active = active,
+            workspaceState = workspaceState,
         )
     }
 }

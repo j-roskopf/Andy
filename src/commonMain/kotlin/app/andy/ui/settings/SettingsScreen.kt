@@ -151,6 +151,7 @@ internal fun SettingsScreen(
             )
             DesktopSettingsCategory.Agents -> {
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
+                AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -631,6 +632,51 @@ private fun OnboardingPanel(
     }
 }
 
+
+@Composable
+private fun AgentTranscriptPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Transcript",
+            description = "How thinking steps and tool calls appear in agent chats.",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = workspace.agentTranscriptAutoExpandActivity,
+                onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandActivity = value) } },
+            )
+            Text(
+                "Auto-expand thinking and tool sections",
+                color = TextPrimary,
+                fontSize = 13.sp,
+            )
+        }
+        Text(
+            "Opens each thinking step and tool call when it appears. You can still collapse sections manually.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = workspace.agentTranscriptCollapseActivityBlocks,
+                onCheckedChange = { value -> update { it.copy(agentTranscriptCollapseActivityBlocks = value) } },
+            )
+            Text(
+                "Collapse activity between messages",
+                color = TextPrimary,
+                fontSize = 13.sp,
+            )
+        }
+        Text(
+            "Groups consecutive thinking and tool steps into one block between user and assistant messages.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+    }
+}
 
 @Composable
 private fun AgentSessionsPanel(
