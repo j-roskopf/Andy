@@ -137,6 +137,7 @@ class DesktopWorkspaceStore(
             selectedPackage = props.getProperty("selectedPackage")?.takeIf { it.isNotBlank() },
             lastActionProjectId = props.getProperty("lastActionProjectId")?.takeIf { it.isNotBlank() },
             lastActionId = props.getProperty("lastActionId")?.takeIf { it.isNotBlank() },
+            lastActionIdByProject = loadLastActionIdByProject(props),
             agentOsNotificationsEnabled = props.getProperty("agentOsNotificationsEnabled")?.toBooleanStrictOrNull() ?: true,
             agentNotificationSoundEnabled = props.getProperty("agentNotificationSoundEnabled")?.toBooleanStrictOrNull() ?: true,
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
@@ -231,6 +232,7 @@ class DesktopWorkspaceStore(
             setProperty("selectedPackage", state.selectedPackage.orEmpty())
             setProperty("lastActionProjectId", state.lastActionProjectId.orEmpty())
             setProperty("lastActionId", state.lastActionId.orEmpty())
+            saveIndexedStringMap(this, "lastActionByProject", state.lastActionIdByProject)
             setProperty("agentOsNotificationsEnabled", state.agentOsNotificationsEnabled.toString())
             setProperty("agentNotificationSoundEnabled", state.agentNotificationSoundEnabled.toString())
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
@@ -289,6 +291,14 @@ class DesktopWorkspaceStore(
                 pairedAtMillis = props.getProperty(prefix + "pairedAtMillis")?.toLongOrNull() ?: 0L,
             )
         }
+    }
+
+    private fun loadLastActionIdByProject(props: Properties): Map<String, String> {
+        val remembered = loadIndexedStringMap(props, "lastActionByProject")
+        if (remembered.isNotEmpty()) return remembered
+        val projectId = props.getProperty("lastActionProjectId")?.takeIf { it.isNotBlank() } ?: return emptyMap()
+        val actionId = props.getProperty("lastActionId")?.takeIf { it.isNotBlank() } ?: return emptyMap()
+        return mapOf(projectId to actionId)
     }
 
     private fun loadIndexedStringMap(props: Properties, prefix: String): Map<String, String> {

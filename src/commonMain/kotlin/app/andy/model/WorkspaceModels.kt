@@ -96,6 +96,8 @@ data class WorkspaceState(
     val lastActionProjectId: String? = null,
     /** Last action shown in the header action runner. */
     val lastActionId: String? = null,
+    /** Last selected action per project in the header action runner. */
+    val lastActionIdByProject: Map<String, String> = emptyMap(),
     val agentOsNotificationsEnabled: Boolean = true,
     val agentNotificationSoundEnabled: Boolean = true,
     val agentIconBadgeEnabled: Boolean = true,

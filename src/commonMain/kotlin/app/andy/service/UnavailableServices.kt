@@ -356,6 +356,19 @@ object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override suspend fun deleteProject(projectId: String) = Unit
 }
 
+object UnavailableKanbanService : KanbanService {
+    override val board = MutableStateFlow(KanbanBoard())
+
+    override fun addLane(name: String) = Unit
+    override fun renameLane(laneId: String, name: String) = Unit
+    override fun deleteLane(laneId: String) = Unit
+    override fun moveLane(laneId: String, direction: KanbanLaneDirection) = Unit
+    override fun addCard(laneId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun updateCard(cardId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun deleteCard(cardId: String) = Unit
+    override fun moveCard(cardId: String, toLaneId: String, toIndex: Int) = Unit
+}
+
 object UnavailableDhuService : DhuService {
     private val emptyReadiness = DhuReadiness(
         hostKind = DhuHostKind.Unsupported,

@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.model.KanbanBoard
 import app.andy.store.openAndyAgentDatabase
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -56,6 +57,18 @@ internal class SqliteAgentStore(
             maxConcurrent = maxConcurrent.coerceIn(1, 64),
             projectWorkflows = workflows,
             legacyTranscriptChatsArchived = legacyArchived,
+        )
+    }
+
+    fun loadKanbanBoard(): KanbanBoard? =
+        db.agentStoreQueries.selectKanbanBoard().executeAsOneOrNull()?.let { row ->
+            runCatching { json.decodeFromString(KanbanBoard.serializer(), row) }.getOrNull()
+        }
+
+    fun saveKanbanBoard(board: KanbanBoard) {
+        db.agentStoreQueries.upsertKanbanBoard(
+            updated_at_millis = System.currentTimeMillis(),
+            payload = json.encodeToString(KanbanBoard.serializer(), board),
         )
     }
 

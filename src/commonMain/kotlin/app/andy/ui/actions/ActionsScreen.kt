@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.project_new_chat
+import app.andy.ui.components.TabBar
 import app.andy.ui.components.AndyAlertDialog
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
@@ -661,23 +662,35 @@ internal fun ActionsScreen(
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
     } else {
-        ProjectCockpit(
-            services = services,
-            config = config,
-            onConfigChange = onConfigChange,
-            agentTasks = agentTasks,
-            preferredProjectId = preferredProjectId,
-            onPreferredProjectChange = onPreferredProjectChange,
-            workspaceReady = workspaceReady,
-            initialWorkflowTaskId = initialWorkflowTaskId,
-            initialCanvasLabel = initialCanvasLabel,
-            requestedAgentTaskId = requestedAgentTaskId,
-            requestedProjectId = requestedProjectId,
-            onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
-            onNotifyTerminalRun = onNotifyTerminalRun,
-            active = active,
-            workspaceState = workspaceState,
-        )
+        var pageTab by remember { mutableStateOf(ProjectsPageTab.Projects) }
+        Column(Modifier.fillMaxSize()) {
+            TabBar(
+                tabs = ProjectsPageTab.entries,
+                selected = pageTab,
+                onSelect = { pageTab = it },
+                label = { it.label },
+            )
+            when (pageTab) {
+                ProjectsPageTab.Projects -> ProjectCockpit(
+                    services = services,
+                    config = config,
+                    onConfigChange = onConfigChange,
+                    agentTasks = agentTasks,
+                    preferredProjectId = preferredProjectId,
+                    onPreferredProjectChange = onPreferredProjectChange,
+                    workspaceReady = workspaceReady,
+                    initialWorkflowTaskId = initialWorkflowTaskId,
+                    initialCanvasLabel = initialCanvasLabel,
+                    requestedAgentTaskId = requestedAgentTaskId,
+                    requestedProjectId = requestedProjectId,
+                    onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
+                    onNotifyTerminalRun = onNotifyTerminalRun,
+                    active = active,
+                    workspaceState = workspaceState,
+                )
+                ProjectsPageTab.Kanban -> KanbanBoardScreen(services = services)
+            }
+        }
     }
 }
 

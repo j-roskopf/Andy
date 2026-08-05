@@ -567,6 +567,24 @@ interface ProjectWorkflowService {
     suspend fun deleteProject(projectId: String)
 }
 
+enum class KanbanLaneDirection { Left, Right }
+
+interface KanbanService {
+    val board: StateFlow<KanbanBoard>
+
+    fun addLane(name: String)
+    fun renameLane(laneId: String, name: String)
+    /** Deletes the lane and all its cards. Caller (UI) must confirm first. No-ops if this is the last lane. */
+    fun deleteLane(laneId: String)
+    fun moveLane(laneId: String, direction: KanbanLaneDirection)
+
+    fun addCard(laneId: String, title: String, description: String, tags: List<String>)
+    fun updateCard(cardId: String, title: String, description: String, tags: List<String>)
+    fun deleteCard(cardId: String)
+    /** Moves [cardId] to [toLaneId] at position [toIndex] (0-based, post-removal index in the target lane). */
+    fun moveCard(cardId: String, toLaneId: String, toIndex: Int)
+}
+
 data class CommandResult(
     val exitCode: Int,
     val stdout: String,
@@ -855,6 +873,7 @@ data class AndyServices(
     val agentRuns: AgentRunService,
     val agentRetention: AgentRetentionService = UnavailableAgentRetentionService,
     val projectWorkflows: ProjectWorkflowService,
+    val kanban: KanbanService = UnavailableKanbanService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,

@@ -35,6 +35,12 @@ CREATE TABLE quota_access (
   antigravity_account_access INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE kanban_board (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  updated_at_millis INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+
 getMeta:
 SELECT value FROM store_meta WHERE key = ?;
 
@@ -97,3 +103,9 @@ VALUES (1, ?, ?, ?);
 
 countTasks:
 SELECT COUNT(*) FROM agent_task;
+
+selectKanbanBoard:
+SELECT payload FROM kanban_board WHERE id = 1;
+
+upsertKanbanBoard:
+INSERT OR REPLACE INTO kanban_board(id, updated_at_millis, payload) VALUES (1, ?, ?);

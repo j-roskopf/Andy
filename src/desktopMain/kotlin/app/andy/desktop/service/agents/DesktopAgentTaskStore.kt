@@ -38,6 +38,7 @@ import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectVerificationVerdict
+import app.andy.model.KanbanBoard
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import kotlinx.coroutines.Dispatchers
@@ -145,6 +146,13 @@ class DesktopAgentTaskStore(
     fun saveSync(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
         databaseFile.parentFile?.mkdirs()
         sqlite.save(state, allowEmptyTaskList)
+    }
+
+    fun loadKanbanBoard(): KanbanBoard? = sqlite.loadKanbanBoard()
+
+    fun saveKanbanBoard(board: KanbanBoard) {
+        databaseFile.parentFile?.mkdirs()
+        sqlite.saveKanbanBoard(board)
     }
 
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {

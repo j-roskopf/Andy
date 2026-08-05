@@ -288,6 +288,37 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun rejoinsAssistantTextSplitMidWordByToolCall() {
+        val events = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "I've kicked off a research pass over the existing device-", isStreamDelta = true),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Read", summary = "ActionsScreen.kt"),
+            AgentEvent.AssistantText(
+                atMillis = 3,
+                text = "page tab UI, project structure, persistence patterns, and any drag-and-drop precedent.",
+                isStreamDelta = true,
+            ),
+            AgentEvent.ToolCall(atMillis = 4, toolName = "Bash", summary = "ls"),
+            AgentEvent.AssistantText(atMillis = 5, text = "Direct", isStreamDelta = true),
+            AgentEvent.ToolCall(atMillis = 6, toolName = "Read", summary = "./src"),
+            AgentEvent.AssistantText(atMillis = 7, text = "ory's set up. Waiting on the codebase research now.", isStreamDelta = true),
+        )
+
+        val displayed = transcriptDisplayEvents(events).filterIsInstance<AgentEvent.AssistantText>()
+
+        assertEquals(2, displayed.size)
+        assertTrue(displayed[0].text.contains("device-page tab UI"))
+        assertEquals("Directory's set up. Waiting on the codebase research now.", displayed[1].text)
+    }
+
+    @Test
+    fun shouldMergeSplitAssistantTextDetectsHyphenAndCapitalizedFragments() {
+        assertTrue(shouldMergeSplitAssistantText("existing device-", "page tab UI"))
+        assertTrue(shouldMergeSplitAssistantText("Direct", "ory's set up."))
+        assertTrue(!shouldMergeSplitAssistantText("first", "second"))
+        assertTrue(!shouldMergeSplitAssistantText("Done.", "Next step"))
+    }
+
+    @Test
     fun compactToolActivityHeadlineSummarizesEmptyEditCalls() {
         val events = listOf(
             AgentEvent.ToolCall(

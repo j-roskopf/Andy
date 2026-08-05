@@ -43,6 +43,7 @@ import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.ProjectAction
+import app.andy.model.rememberedActionId
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
@@ -86,6 +87,7 @@ internal fun TopChrome(
     actionConfig: ActionsConfig,
     selectedActionProjectId: String? = null,
     selectedActionId: String? = null,
+    lastActionIdByProject: Map<String, String> = emptyMap(),
     onActionSelectionChange: (projectId: String, actionId: String?) -> Unit = { _, _ -> },
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
@@ -176,6 +178,7 @@ internal fun TopChrome(
                 config = actionConfig,
                 selectedProjectId = selectedActionProjectId,
                 selectedActionId = selectedActionId,
+                lastActionIdByProject = lastActionIdByProject,
                 onSelectionChange = onActionSelectionChange,
                 onRunAction = onRunAction,
                 projectExpanded = projectMenuExpanded,
@@ -252,6 +255,7 @@ private fun ActionRunnerSelector(
     config: ActionsConfig,
     selectedProjectId: String?,
     selectedActionId: String?,
+    lastActionIdByProject: Map<String, String>,
     onSelectionChange: (projectId: String, actionId: String?) -> Unit,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     projectExpanded: Boolean,
@@ -293,7 +297,7 @@ private fun ActionRunnerSelector(
                     DropdownMenuItem(
                         text = { Text(item.name, color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {
-                            val nextActionId = item.actions.firstOrNull()?.id
+                            val nextActionId = item.rememberedActionId(lastActionIdByProject)
                             onSelectionChange(item.id, nextActionId)
                             onProjectExpandedChange(false)
                         },

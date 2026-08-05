@@ -93,6 +93,7 @@ class DesktopWorkspaceStoreTest {
                 filesTab = "Database",
                 lastActionProjectId = "garden",
                 lastActionId = "test",
+                lastActionIdByProject = mapOf("garden" to "test", "orchard" to "lint"),
             ),
         )
         val tracing = DesktopWorkspaceStore(file).load()
@@ -106,6 +107,7 @@ class DesktopWorkspaceStoreTest {
         assertEquals("Database", tracing.filesTab)
         assertEquals("garden", tracing.lastActionProjectId)
         assertEquals("test", tracing.lastActionId)
+        assertEquals(mapOf("garden" to "test", "orchard" to "lint"), tracing.lastActionIdByProject)
 
         file.writeText(file.readText().replace("performanceTab=Tracing", "performanceTab=Nope"))
         assertEquals("Metrics", DesktopWorkspaceStore(file).load().performanceTab)

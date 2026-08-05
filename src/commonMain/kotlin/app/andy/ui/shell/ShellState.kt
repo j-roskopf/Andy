@@ -20,6 +20,7 @@ import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
+import app.andy.model.rememberedActionId
 import app.andy.service.AndyServices
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OpenInvestigationRequest
@@ -614,12 +615,7 @@ internal class ShellState(
     }
 
     fun runAction(project: ActionProject, action: ProjectAction) {
-        updateWorkspace {
-            it.copy(
-                lastActionProjectId = project.id,
-                lastActionId = action.id,
-            )
-        }
+        rememberActionSelection(project.id, action.id)
         val runId = services.actionRuns.run(project, action)
         activeRunId = runId
         terminalRunId = runId
@@ -637,24 +633,16 @@ internal class ShellState(
             it.copy(
                 lastActionProjectId = projectId,
                 lastActionId = actionId,
+                lastActionIdByProject = actionId?.let { id -> it.lastActionIdByProject + (projectId to id) }
+                    ?: it.lastActionIdByProject,
             )
         }
     }
 
     fun rememberLastProject(projectId: String) {
         if (workspaceState.lastActionProjectId == projectId) return
-        val actionId = workspaceState.lastActionId?.takeIf { actionId ->
-            actionsConfig.projects
-                .firstOrNull { it.id == projectId }
-                ?.actions
-                ?.any { it.id == actionId } == true
-        } ?: actionsConfig.projects.firstOrNull { it.id == projectId }?.actions?.firstOrNull()?.id
-        updateWorkspace {
-            it.copy(
-                lastActionProjectId = projectId,
-                lastActionId = actionId,
-            )
-        }
+        val project = actionsConfig.projects.firstOrNull { it.id == projectId } ?: return
+        rememberActionSelection(projectId, project.rememberedActionId(workspaceState.lastActionIdByProject))
     }
 
     fun stopAction(run: RunningAction) {
