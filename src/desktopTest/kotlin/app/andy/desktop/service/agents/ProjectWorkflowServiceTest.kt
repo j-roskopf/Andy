@@ -625,7 +625,7 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
-    fun specForcesPlanModeAndAttachesInstalledGrillSkills() = runBlocking {
+    fun specDefaultsToPlanModeAndAttachesInstalledGrillSkills() = runBlocking {
         val adapter = WorkflowAdapter(kind = AgentKind.ClaudeCode)
         withHarness(
             adapter = adapter,
@@ -645,7 +645,7 @@ class ProjectWorkflowServiceTest {
                     projectId = "project-1",
                     title = "Plan with questions",
                     brief = "Produce a decision-complete implementation plan",
-                    profile = specProfile().copy(agent = AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full, sandboxMode = AgentSandboxMode.None),
+                    profile = specProfile().copy(agent = AgentKind.ClaudeCode),
                     grillMeEnabled = true,
                 ),
             )
@@ -659,6 +659,28 @@ class ProjectWorkflowServiceTest {
             assertEquals(listOf("grill-me", "grilling"), run.skills.map { it.name })
             assertTrue(run.prompt.contains("plan.md"))
             assertTrue(run.prompt.contains("grill", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun specHonorsExplicitSkipPermissionsChoice() = runBlocking {
+        val adapter = WorkflowAdapter(kind = AgentKind.ClaudeCode)
+        withHarness(adapter = adapter) { harness ->
+            val specId = harness.service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan without prompts",
+                    brief = "Produce a decision-complete implementation plan",
+                    profile = specProfile().copy(agent = AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full, sandboxMode = AgentSandboxMode.None),
+                ),
+            )
+            harness.service.runSpec(specId)
+            await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.state == ProjectTaskState.Completed }
+
+            val run = adapter.launched.single()
+            assertFalse(run.planMode)
+            assertEquals(AgentAutonomy.Full, run.autonomy)
+            assertEquals(AgentSandboxMode.None, run.sandboxMode)
         }
     }
 

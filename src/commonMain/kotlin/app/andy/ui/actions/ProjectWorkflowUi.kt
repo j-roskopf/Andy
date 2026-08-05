@@ -77,7 +77,7 @@ import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
-import app.andy.model.defaultSandboxMode
+import app.andy.model.effectiveSandboxMode
 import app.andy.model.grillMeInstallCommand
 import app.andy.model.isGrillMeSkillName
 import app.andy.model.labelFor
@@ -425,7 +425,7 @@ private fun SpecDetail(
         }
     }
     if (task.planVersions.isEmpty()) {
-        WorkflowNotice("No implementation plan yet. Spec runs are always fresh, read-only planning sessions.", Cyan)
+        WorkflowNotice("No implementation plan yet. Spec runs are always fresh planning sessions.", Cyan)
     } else {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             task.planVersions.sortedByDescending { it.version }.forEach { plan ->
@@ -956,7 +956,7 @@ internal fun SpecTaskDialog(
                         )
                     }
                 }
-                WorkflowNotice("Plan mode and read-only safety are locked for every Spec run.", Green)
+                WorkflowNotice("Spec runs in plan mode by default; change Access above for accept edits or skip permissions.", Green)
             }
         },
         confirmButton = {
@@ -1188,7 +1188,7 @@ internal fun ProjectProfilesDialog(
                     }
                 }
                 when (selectedRole) {
-                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN + READ ONLY LOCKED", spec, { spec = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
+                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN BY DEFAULT", spec, { spec = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
                     ProjectTaskKind.Build -> ProjectAgentProfileEditor("BUILD", build, { build = it }, cliStatuses, providerModels, ProjectTaskKind.Build)
                     ProjectTaskKind.Review -> ProjectAgentProfileEditor("REVIEW · BUILD WORKSPACE INHERITED", review, { review = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
                     ProjectTaskKind.Verification -> ProjectAgentProfileEditor("VERIFY · BUILD WORKSPACE INHERITED", verify, { verify = it }, cliStatuses, providerModels, ProjectTaskKind.Verification)
@@ -1249,21 +1249,44 @@ internal fun ProjectAgentProfileEditor(
                 wrapOptions = true,
             )
         }
-        if (role != ProjectTaskKind.Spec) {
-            ProjectProfileSection(number = "02", title = "Access") {
-                @OptIn(ExperimentalLayoutApi::class)
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    verticalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    AgentAutonomy.entries.forEach { autonomy -> FilterPill(autonomy.label, profile.autonomy == autonomy, Cyan) { onChange(profile.copy(autonomy = autonomy)) } }
-                    AgentSandboxMode.entries.forEach { mode ->
-                        FilterPill(mode.labelFor(profile.agent), (profile.sandboxMode ?: profile.autonomy.defaultSandboxMode()) == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) { onChange(profile.copy(sandboxMode = mode)) }
-                    }
+        ProjectProfileSection(number = "02", title = "Approvals") {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                FilterPill("confirm every tool call", profile.confirmToolCalls, Rust) { onChange(profile.copy(confirmToolCalls = !profile.confirmToolCalls)) }
+                Text(
+                    if (profile.confirmToolCalls) {
+                        "Every tool call — including reads and searches — needs your OK before it runs."
+                    } else {
+                        "Reads and searches run without asking; writes are gated by Access below."
+                    },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 9.sp,
+                )
+            }
+        }
+        ProjectProfileSection(number = "03", title = "Access") {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                AgentAutonomy.entries.forEach { autonomy -> FilterPill(autonomy.label, profile.autonomy == autonomy, Cyan) { onChange(profile.copy(autonomy = autonomy)) } }
+                AgentSandboxMode.entries.forEach { mode ->
+                    FilterPill(mode.labelFor(profile.agent), profile.effectiveSandboxMode() == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) { onChange(profile.copy(sandboxMode = mode)) }
                 }
             }
-            ProjectProfileSection(number = "03", title = "Workspace") {
+            if (role == ProjectTaskKind.Spec) {
+                Text(
+                    "Spec defaults to plan (read-only, no writes). Choose accept edits or skip permissions to let the spec agent write files or run commands without asking.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 9.sp,
+                )
+            }
+        }
+        if (role != ProjectTaskKind.Spec) {
+            ProjectProfileSection(number = "04", title = "Workspace") {
                 @OptIn(ExperimentalLayoutApi::class)
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -1274,8 +1297,8 @@ internal fun ProjectAgentProfileEditor(
                     FilterPill("Andy MCP", profile.attachAndyMcp, Cyan) { onChange(profile.copy(attachAndyMcp = !profile.attachAndyMcp)) }
                 }
             }
-            Text("${profile.agent.sandboxControlLabel()}: ${(profile.sandboxMode ?: profile.autonomy.defaultSandboxMode()).labelFor(profile.agent)}", color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
         }
+        Text("${profile.agent.sandboxControlLabel()}: ${profile.effectiveSandboxMode().labelFor(profile.agent)}", color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
     }
 }
 

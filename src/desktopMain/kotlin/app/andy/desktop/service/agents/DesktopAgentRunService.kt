@@ -30,6 +30,7 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.grillMeInteractivePromptAddendum
 import app.andy.model.specPlanWriteInstruction
 import app.andy.model.ProjectAgentProfile
+import app.andy.model.effectiveSandboxMode
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectPlanSnapshot
 import app.andy.model.ProjectPlanVersion
@@ -492,7 +493,7 @@ class DesktopAgentRunService(
                 prompt = prompt,
                 projectId = spec.projectId,
                 directory = directory,
-                planMode = true,
+                planMode = spec.profile.effectiveSandboxMode() == AgentSandboxMode.ReadOnly,
                 skills = grillSkills.takeIf { spec.grillMeEnabled }.orEmpty(),
                 imagePaths = spec.imagePaths,
                 workflowTaskId = spec.id,
@@ -931,6 +932,7 @@ class DesktopAgentRunService(
             autonomy = draft.autonomy,
             sandboxMode = draft.sandboxMode,
             planMode = draft.planMode,
+            confirmToolCalls = draft.confirmToolCalls,
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
@@ -2805,7 +2807,10 @@ class DesktopAgentRunService(
         return ProjectWorkflowState(
             projectId = projectId,
             profiles = mapOf(
-                ProjectTaskKind.Spec to base.normalizedFor(ProjectTaskKind.Spec),
+                ProjectTaskKind.Spec to base.normalizedFor(ProjectTaskKind.Spec).copy(
+                    autonomy = app.andy.model.AgentAutonomy.ReadOnly,
+                    sandboxMode = AgentSandboxMode.ReadOnly,
+                ),
                 ProjectTaskKind.Build to base.normalizedFor(ProjectTaskKind.Build),
                 ProjectTaskKind.Review to base.normalizedFor(ProjectTaskKind.Review),
                 ProjectTaskKind.Verification to base.normalizedFor(ProjectTaskKind.Verification),
@@ -2819,11 +2824,7 @@ class DesktopAgentRunService(
             maxBudgetUsd = maxBudgetUsd?.takeIf { it > 0.0 },
         )
         return when (kind) {
-            ProjectTaskKind.Spec -> normalized.copy(
-                autonomy = app.andy.model.AgentAutonomy.ReadOnly,
-                sandboxMode = AgentSandboxMode.ReadOnly,
-                useWorktree = false,
-            )
+            ProjectTaskKind.Spec -> normalized.copy(useWorktree = false)
             ProjectTaskKind.Build -> normalized
             ProjectTaskKind.Review -> normalized.copy(useWorktree = false)
             ProjectTaskKind.Verification -> normalized.copy(useWorktree = false)
@@ -2836,7 +2837,13 @@ class DesktopAgentRunService(
         val base = _providerDefaults.value[agent]?.toProjectProfile(agent) ?: ProjectAgentProfile(agent = agent)
         return copy(
             profiles = ProjectTaskKind.entries.associateWith { kind ->
-                profiles[kind] ?: base.normalizedFor(kind)
+                profiles[kind] ?: base.normalizedFor(kind).let {
+                    if (kind == ProjectTaskKind.Spec) {
+                        it.copy(autonomy = app.andy.model.AgentAutonomy.ReadOnly, sandboxMode = AgentSandboxMode.ReadOnly)
+                    } else {
+                        it
+                    }
+                }
             },
         )
     }
@@ -2922,6 +2929,7 @@ class DesktopAgentRunService(
         autonomy = autonomy,
         sandboxMode = if (planMode) AgentSandboxMode.ReadOnly else sandboxMode,
         planMode = planMode,
+        confirmToolCalls = confirmToolCalls,
         model = model,
         reasoningEffort = reasoningEffort,
         fastMode = fastMode,

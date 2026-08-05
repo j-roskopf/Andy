@@ -44,6 +44,15 @@ class ShellDocksTest {
     }
 
     @Test
+    fun multipleTerminalTabsCoexistInPane() {
+        val pane = DockPane()
+            .withTab(DockTab.terminal("run-1"))
+            .withTab(DockTab.terminal("run-2"))
+        assertEquals(2, pane.tabs.size)
+        assertEquals("terminal:run-2", pane.activeTabId)
+    }
+
+    @Test
     fun terminalMovesBetweenPlacements() {
         val docks = ShellDocks()
             .withTerminalExclusive(DockPlacement.Right, "run-1")

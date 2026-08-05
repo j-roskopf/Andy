@@ -15,6 +15,7 @@ object AcpToolCallPresentation {
         Regex("""^\{\s*"?success"?\s*[:=]\s*true\s*\}$""", RegexOption.IGNORE_CASE)
     private val embeddedMcpToolName =
         Regex("""\bmcp_(?:andy|emu)_([a-z0-9_]+)\b""", RegexOption.IGNORE_CASE)
+    private val fenceMarkerLine = Regex("""^(`{3,}|~{3,})\S*$""")
 
     data class Presented(
         val toolName: String,
@@ -137,17 +138,22 @@ object AcpToolCallPresentation {
             rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> rawOutput
             else -> ""
         }
-        val firstContentLine = content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+        val firstContentLine = firstMeaningfulLine(content)
         val summary = when {
             inputSummary.isNotBlank() -> inputSummary
             firstContentLine.isNotBlank() && !isMinimalOutput(firstContentLine) ->
                 summarizeArguments(firstContentLine).ifBlank { firstContentLine }
-            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) ->
-                rawOutput.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
-            else -> detail.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> firstMeaningfulLine(rawOutput)
+            else -> firstMeaningfulLine(detail)
         }
         return summary to detail
     }
+
+    /** First non-blank line, skipping bare code-fence delimiters (```` ``` ````, ```` ```console ````, `~~~`). */
+    private fun firstMeaningfulLine(text: String): String =
+        text.lineSequence()
+            .firstOrNull { it.isNotBlank() && !fenceMarkerLine.matches(it.trim()) }
+            .orEmpty()
 
     private fun richerDetail(first: String, second: String): String {
         val a = first.trim()

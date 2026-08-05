@@ -297,11 +297,11 @@ internal class ShellState(
         docks = docks.copy(landingFor = null)
     }
 
-    fun openDockKind(placement: DockPlacement, kind: DockTabKind) {
+    fun openDockKind(placement: DockPlacement, kind: DockTabKind, newTerminal: Boolean = false) {
         when (kind) {
             DockTabKind.Live -> docks = docks.withLiveExclusive(placement)
             DockTabKind.Logs -> docks = docks.update(placement) { it.withTab(DockTab.logs()) }
-            DockTabKind.Terminal -> openOrFocusTerminal(placement)
+            DockTabKind.Terminal -> if (newTerminal) openNewTerminalTab(placement) else openOrFocusTerminal(placement)
         }
     }
 
@@ -316,6 +316,18 @@ internal class ShellState(
             // Prefer keeping the focused shell when it belongs to this project.
             services.actionRuns.running.value.any { it.runId == activeId && it.projectId == project.id }
         } ?: services.actionRuns.openShell(project)
+        focusTerminalRun(runId, placement)
+    }
+
+    /** Always spawns a fresh interactive shell tab, even when other terminals are open. */
+    fun openNewTerminalTab(placement: DockPlacement = lastTerminalPlacement) {
+        val project = actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull()
+        if (project == null) {
+            docks = docks.copy(landingFor = null)
+            return
+        }
+        val runId = services.actionRuns.openShell(project)
         focusTerminalRun(runId, placement)
     }
 

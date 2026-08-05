@@ -1078,12 +1078,11 @@ private fun ToolBlock(
         headlineColor = color.copy(alpha = 0.88f),
         indent = indent,
     ) {
-        Text(
+        ChatMarkdown(
             body,
-            color = TextPrimary.copy(alpha = 0.92f),
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
+            density = AndyMarkdownDensity.Thinking,
             lineHeight = 16.sp,
+            preserveLineBreaks = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp)

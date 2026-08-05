@@ -27,10 +27,12 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -376,12 +378,25 @@ internal fun ShellDockDrawer(
     logcatState: LogcatState,
     onSelectTab: (String) -> Unit,
     onCloseTab: (String) -> Unit,
-    onOpenKind: (DockTabKind) -> Unit,
+    onOpenKind: (DockTabKind, newTerminal: Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = pane.activeTab
     var addMenuExpanded by remember { mutableStateOf(false) }
+    val addMenuExpandedState = rememberUpdatedState(addMenuExpanded)
+    fun dismissAddMenu() {
+        if (!addMenuExpanded) return
+        addMenuExpanded = false
+        HeavyweightOverlayRegistry.pop()
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            if (addMenuExpandedState.value) {
+                HeavyweightOverlayRegistry.pop()
+            }
+        }
+    }
     val reveal = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         reveal.snapTo(0f)
@@ -431,13 +446,14 @@ internal fun ShellDockDrawer(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val terminalTabs = pane.tabs.filter { it.kind == DockTabKind.Terminal }
             pane.tabs.forEach { tab ->
                 val runningAction = tab.runId?.let { id -> running.firstOrNull { it.runId == id } }
                 DockTabPill(
                     text = when (tab.kind) {
                         DockTabKind.Live -> "live"
                         DockTabKind.Logs -> "logs"
-                        DockTabKind.Terminal -> runningAction?.actionName ?: "terminal"
+                        DockTabKind.Terminal -> dockTerminalTabLabel(tab, terminalTabs, runningAction)
                     },
                     selected = tab.id == active?.id,
                     color = when (tab.kind) {
@@ -461,17 +477,22 @@ internal fun ShellDockDrawer(
                         .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Control))
                         .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                         .semantics { contentDescription = "Add pane tab"; role = Role.Button }
-                        .clickable(onClick = { addMenuExpanded = true }),
+                        .clickable(onClick = {
+                            if (!addMenuExpanded) {
+                                HeavyweightOverlayRegistry.push()
+                            }
+                            addMenuExpanded = true
+                        }),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
                 DockLandingMenu(
                     expanded = addMenuExpanded,
-                    onDismiss = { addMenuExpanded = false },
+                    onDismiss = ::dismissAddMenu,
                     onSelect = { kind ->
-                        addMenuExpanded = false
-                        onOpenKind(kind)
+                        dismissAddMenu()
+                        onOpenKind(kind, true)
                     },
                 )
             }
@@ -574,6 +595,17 @@ private fun DockTabPill(
             )
         }
     }
+}
+
+private fun dockTerminalTabLabel(
+    tab: DockTab,
+    terminalTabs: List<DockTab>,
+    runningAction: RunningAction?,
+): String {
+    val base = runningAction?.actionName ?: "terminal"
+    if (terminalTabs.size <= 1 || runningAction?.actionId != "terminal") return base
+    val index = terminalTabs.indexOfFirst { it.id == tab.id }
+    return if (index < 0) base else "$base ${index + 1}"
 }
 
 private fun dockActionStatusColor(status: ActionRunStatus?): Color = when (status) {
