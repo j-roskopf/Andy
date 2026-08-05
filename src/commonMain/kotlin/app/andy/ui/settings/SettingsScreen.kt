@@ -72,6 +72,7 @@ import app.andy.service.AndyServices
 import app.andy.service.McpServerService
 import app.andy.service.ProxyService
 import app.andy.service.RetentionSweepResult
+import app.andy.service.UnavailableAgentRetentionService
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
@@ -171,7 +172,9 @@ internal fun SettingsScreen(
             DesktopSettingsCategory.Agents -> {
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
-                AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
+                if (services.agentRetention !is UnavailableAgentRetentionService) {
+                    AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
+                }
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(

@@ -43,7 +43,7 @@ internal fun retentionAction(
     return when {
         task.archived && task.transcriptCompressed && ageBasis < cutoffDeleteMillis ->
             RetentionAction.PermanentDelete
-        !task.archived && ageBasis < cutoffArchiveMillis ->
+        !task.archived && !task.transcriptCompressed && ageBasis < cutoffArchiveMillis ->
             RetentionAction.CompressArchive
         else -> RetentionAction.Skip
     }
@@ -128,6 +128,12 @@ class DesktopAgentRetentionService(
         val entries = dir.listFiles().orEmpty()
         if (!dir.exists() || entries.isEmpty()) {
             runService.markArchivedByRetention(taskId, compressed = false)
+            return@withContext 0L
+        }
+
+        val existingArchive = store.archiveFile(taskId)
+        if (existingArchive.isFile && entries.all { it == existingArchive }) {
+            runService.markArchivedByRetention(taskId, compressed = true)
             return@withContext 0L
         }
 

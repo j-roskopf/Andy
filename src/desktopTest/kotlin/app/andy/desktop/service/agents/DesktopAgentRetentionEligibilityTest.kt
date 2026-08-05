@@ -51,6 +51,19 @@ class DesktopAgentRetentionEligibilityTest {
     }
 
     @Test
+    fun unarchivedCompressedTaskSkipsRecompression() {
+        assertEquals(
+            RetentionAction.Skip,
+            retentionAction(
+                task(createdAtMillis = 89_999, archived = false, transcriptCompressed = true),
+                now,
+                cutoffArchive,
+                cutoffDelete,
+            ),
+        )
+    }
+
+    @Test
     fun freshTaskSkipsAndFinishedAtIsTheAgeBasis() {
         assertEquals(RetentionAction.Skip, retentionAction(task(createdAtMillis = 1, finishedAtMillis = 95_000), now, cutoffArchive, cutoffDelete))
         assertEquals(RetentionAction.CompressArchive, retentionAction(task(createdAtMillis = 95_000, finishedAtMillis = 89_999), now, cutoffArchive, cutoffDelete))
