@@ -329,6 +329,10 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun isGitRepo(dir: String) = false
 }
 
+object UnavailableAgentRetentionService : AgentRetentionService {
+    override suspend fun runSweepNow() = RetentionSweepResult(0, 0, 0, 0)
+}
+
 object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override val projects = MutableStateFlow(emptyMap<String, ProjectWorkflowState>())
     override suspend fun projectContextDir(projectId: String): String? = null

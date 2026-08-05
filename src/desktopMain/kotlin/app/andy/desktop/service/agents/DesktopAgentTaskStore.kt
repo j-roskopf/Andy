@@ -45,6 +45,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import net.peanuuutz.tomlkt.Toml
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.ZipFile
+
+private val archiveViewCleanupRegistered = AtomicBoolean(false)
+
+fun registerArchiveViewShutdownHook() {
+    if (!archiveViewCleanupRegistered.compareAndSet(false, true)) return
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runCatching {
+            File(System.getProperty("java.io.tmpdir"), "andy-archive-view").deleteRecursively()
+        }
+    })
+}
 
 data class AgentStoreState(
     val tasks: List<AgentTask> = emptyList(),
@@ -70,6 +83,8 @@ class DesktopAgentTaskStore(
 
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
 
+    fun archiveFile(taskId: String): File = File(taskDir(taskId), "archive.zip")
+
     fun launchLogFile(taskId: String): File = File(taskDir(taskId), "launch.log")
 
     /** Task-local copies of managed evidence bundles (§4), keyed by bundle id under this directory. */
@@ -80,6 +95,42 @@ class DesktopAgentTaskStore(
 
     /** ACP's durable structured transcript, tailed by the GUI attach process. */
     fun transcriptFile(taskId: String): File = File(taskDir(taskId), "transcript.jsonl")
+
+    /**
+     * Resolves the directory used for reading a task's transcript. Retention leaves compressed
+     * chats in place and extracts them into a process-local cache the first time they are opened.
+     */
+    suspend fun resolvedContentDir(taskId: String, compressed: Boolean): File = withContext(Dispatchers.IO) {
+        resolvedContentDirBlocking(taskId, compressed)
+    }
+
+    /** Synchronous companion used by the terminal replay path, which already runs off Main. */
+    fun resolvedContentDirBlocking(taskId: String, compressed: Boolean): File {
+        if (!compressed) return taskDir(taskId)
+        val archive = archiveFile(taskId)
+        if (!archive.isFile) return taskDir(taskId)
+        val extractDir = File(File(System.getProperty("java.io.tmpdir"), "andy-archive-view"), taskId)
+        if (extractDir.exists()) return extractDir
+        extractDir.mkdirs()
+        val canonicalRoot = extractDir.canonicalFile
+        ZipFile(archive).use { zip ->
+            zip.entries().asSequence().forEach { entry ->
+                val outFile = File(extractDir, entry.name)
+                if (!outFile.canonicalFile.toPath().startsWith(canonicalRoot.toPath())) {
+                    error("Archive entry escapes extraction directory: ${entry.name}")
+                }
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input ->
+                        outFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+        }
+        return extractDir
+    }
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
         migrateLegacyTomlIfNeeded()
@@ -236,6 +287,7 @@ internal data class AgentTaskDto(
     val contextWindowTokens: Long = 0,
     val unread: Boolean = false,
     val archived: Boolean = false,
+    val transcriptCompressed: Boolean = false,
     val ownsWorktree: Boolean = false,
     val workflowTaskId: String = "",
     val workflowStage: String = "",
@@ -613,6 +665,7 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         contextWindowTokens = contextWindowTokens.takeIf { it > 0 },
         unread = unread,
         archived = archived,
+        transcriptCompressed = transcriptCompressed,
         contextBundleIds = contextBundleIds,
         provenance = provenance?.toModel(),
     )
@@ -714,6 +767,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             contextWindowTokens = task.contextWindowTokens ?: 0,
             unread = task.unread,
             archived = task.archived,
+            transcriptCompressed = task.transcriptCompressed,
             contextBundleIds = task.contextBundleIds,
             provenance = task.provenance?.toDto(),
         )

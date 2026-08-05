@@ -7,8 +7,10 @@ import app.andy.desktop.service.agents.ClaudeCodeAdapter
 import app.andy.desktop.service.agents.CodexAdapter
 import app.andy.desktop.service.agents.CursorAdapter
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.agents.DesktopAgentRetentionService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
+import app.andy.desktop.service.agents.registerArchiveViewShutdownHook
 import app.andy.desktop.service.agents.OpenCodeAdapter
 import app.andy.desktop.service.agents.PiAdapter
 import app.andy.desktop.service.agents.HermesAdapter
@@ -86,9 +88,11 @@ data class DaemonRuntime(
 fun createDaemonRuntime(
     socketPath: File = File(System.getProperty("user.home"), ".andy/andyd.sock"),
 ): DaemonRuntime {
+    registerArchiveViewShutdownHook()
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
+    runBlocking { store.load() }
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
@@ -157,9 +161,10 @@ fun createDaemonRuntime(
         recordingExport = recordingExportService,
     )
 
+    val agentTaskStore = DesktopAgentTaskStore()
     val agentRuns = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-        store = DesktopAgentTaskStore(),
+        store = agentTaskStore,
         locator = AgentCliLocator(),
         adapters = mapOf(
             AgentKind.ClaudeCode to ClaudeCodeAdapter(),
@@ -178,6 +183,13 @@ fun createDaemonRuntime(
         terminalMode = AgentTerminalMode.TmuxHeadless,
     )
     mcp.bindAgentServices(agentRuns, agentRuns)
+    val agentRetention = DesktopAgentRetentionService(
+        runService = agentRuns,
+        store = agentTaskStore,
+        actionConfigStore = actionConfig,
+        workspace = store.state,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    ).also { it.start() }
 
     val services = AndyServices(
         devices = devices,
@@ -210,6 +222,7 @@ fun createDaemonRuntime(
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = agentRuns,
+        agentRetention = agentRetention,
         projectWorkflows = agentRuns,
         notificationSounds = DesktopNotificationSoundPlayer(),
         capabilities = PlatformCapabilities.Desktop.copy(
@@ -270,9 +283,11 @@ fun createDesktopRuntime(mode: RuntimeMode = resolveRuntimeMode()): DesktopRunti
 
 /** GUI as MCP client of a running `andyd` — local attach terminals only. */
 private fun createDesktopClientRuntime(): DesktopRuntime {
+    registerArchiveViewShutdownHook()
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
+    runBlocking { store.load() }
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
@@ -440,9 +455,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
 
 /** In-process daemon (current monolithic path + optional unix socket for CLI). */
 private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
+    registerArchiveViewShutdownHook()
     val runner = CommandRunner()
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
+    runBlocking { store.load() }
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
@@ -522,9 +539,10 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         recordingExport = recordingExportService,
     )
 
+    val agentTaskStore = DesktopAgentTaskStore()
     val agentRuns = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-        store = DesktopAgentTaskStore(),
+        store = agentTaskStore,
         locator = AgentCliLocator(),
         adapters = mapOf(
             AgentKind.ClaudeCode to ClaudeCodeAdapter(),
@@ -542,6 +560,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         actionConfig = actionConfig,
     )
     mcp.bindAgentServices(agentRuns, agentRuns)
+    val agentRetention = DesktopAgentRetentionService(
+        runService = agentRuns,
+        store = agentTaskStore,
+        actionConfigStore = actionConfig,
+        workspace = store.state,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    ).also { it.start() }
 
     // Live sessions pick up terminal theme/font changes from Settings.
     updatesScope.launch {
@@ -601,6 +626,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = agentRuns,
+        agentRetention = agentRetention,
         projectWorkflows = agentRuns,
         notificationSounds = DesktopNotificationSoundPlayer(),
         capabilities = PlatformCapabilities.Desktop.copy(

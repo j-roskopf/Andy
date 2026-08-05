@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.agents.DesktopAgentTaskStore
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.discoverAgentSkills
@@ -156,8 +157,11 @@ class McpAgentRunClient(
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val eventLoads = ConcurrentHashMap.newKeySet<String>()
     private val sharedAgentArtifactsDir = defaultAndyAgentArtifactsDir()
+    private val sharedAgentTaskStore = DesktopAgentTaskStore(transcriptsDir = sharedAgentArtifactsDir)
     private val localTranscriptStore = AcpTranscriptStore(fileFor = { taskId ->
-        File(sharedAgentArtifactsDir, "$taskId/transcript.jsonl")
+        val compressed = _tasks.value.firstOrNull { it.id == taskId }?.transcriptCompressed == true ||
+            sharedAgentTaskStore.archiveFile(taskId).isFile
+        File(sharedAgentTaskStore.resolvedContentDirBlocking(taskId, compressed), "transcript.jsonl")
     })
 
     private var localBridge: DesktopAgentRunService? = null
@@ -272,6 +276,7 @@ class McpAgentRunClient(
             exitCode = exitCodeRaw?.takeUnless { it == Int.MIN_VALUE.toLong() }?.toInt(),
             unread = obj.bool("unread"),
             archived = obj.bool("archived"),
+            transcriptCompressed = obj.bool("transcriptCompressed"),
         )
     }
 

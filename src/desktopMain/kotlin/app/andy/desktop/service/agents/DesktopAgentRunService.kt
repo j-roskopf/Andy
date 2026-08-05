@@ -104,6 +104,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Terminal-lane transcript cap; ACP transcripts are coalesced and bounded by disk (8 MB). */
 private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
+/** Review/verify agents can look idle on screen before the JSON artifact lands on disk. */
+private const val WORKFLOW_ARTIFACT_WAIT_MS = 3 * 60 * 1000L
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
 private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
 private val CursorChatIdRegex = Regex(
@@ -143,7 +145,7 @@ class DesktopAgentRunService(
                 else -> TerminalAppearanceSnapshot()
             }
         },
-        scrollbackFile = { id -> store.scrollbackFile(id) },
+        scrollbackFile = ::resolvedScrollbackFile,
         mode = terminalMode,
         artifactPollIntervalMs = artifactPollIntervalMs,
     )
@@ -201,7 +203,7 @@ class DesktopAgentRunService(
     private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
-    private val acpTranscriptStore = AcpTranscriptStore(store::transcriptFile)
+    private val acpTranscriptStore = AcpTranscriptStore(::resolvedTranscriptFile)
     private val acpManager = AgentAcpManager(
         scope = scope,
         binaryFor = ::binaryFor,
@@ -248,6 +250,7 @@ class DesktopAgentRunService(
             archiveLegacyTranscriptChats()
             backfillPlanModeCompletedText()
             repairCompletedSpecWorkflowStates()
+            reconcileStuckWorkflowArtifacts()
             ready.complete(Unit)
             refreshCliStatuses()
             if (enableProbes) {
@@ -271,7 +274,23 @@ class DesktopAgentRunService(
     override val attachedTerminalTaskIds: StateFlow<Set<String>> get() = terminals.attachedTaskIds
 
     /** Cumulative scrollback file for finished-chat replay (may not exist yet). */
-    internal fun scrollbackFile(taskId: String): File = store.scrollbackFile(taskId)
+    internal fun scrollbackFile(taskId: String): File = resolvedScrollbackFile(taskId)
+
+    private fun resolvedContentDir(taskId: String): File =
+        store.resolvedContentDirBlocking(
+            taskId,
+            compressed = currentTask(taskId)?.transcriptCompressed == true || store.archiveFile(taskId).isFile,
+        )
+
+    private fun resolvedScrollbackFile(taskId: String): File =
+        File(resolvedContentDir(taskId), "scrollback.ansi")
+
+    private fun resolvedTranscriptFile(taskId: String): File =
+        File(resolvedContentDir(taskId), "transcript.jsonl")
+
+    internal suspend fun awaitReady() {
+        ready.await()
+    }
 
     /**
      * Copies [bundleIds] from the managed evidence root into this task's local evidence
@@ -350,10 +369,10 @@ class DesktopAgentRunService(
         val viewing = true
         val recovered = when {
             task.finishedAtMillis != null && task.status == AgentStatus.Working ->
-                recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+                recoverInterruptedTaskStatus(task, resolvedScrollbackFile(taskId))
             !task.isActive && task.status != AgentStatus.Blocked -> return
             handles[taskId]?.job?.isActive == true || terminals.isAlive(taskId) -> return
-            else -> recoverInterruptedTaskStatus(task, store.scrollbackFile(taskId))
+            else -> recoverInterruptedTaskStatus(task, resolvedScrollbackFile(taskId))
         }
         if (recovered == task) return
         val previousStatus = task.status
@@ -770,7 +789,11 @@ class DesktopAgentRunService(
             buildRun == null -> startBuildAttempt(buildTaskId)
             build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested && !build.singleReviewPass -> startBuildAttempt(buildTaskId)
             build.reviewEnabled && latestReviewVerdict?.status == ProjectReviewStatus.ChangesRequested && build.singleReviewPass -> setPairAttention(build, reviewLimitReachedMessage(build))
-            build.reviewEnabled && currentReviewApproval(review, buildRun.id, build.reviewGeneration) == null -> startReviewAttempt(buildTaskId)
+            build.reviewEnabled && currentReviewApproval(review, buildRun.id, build.reviewGeneration) == null -> {
+                if (!reconcilePendingReviewArtifact(build, review)) {
+                    startReviewAttempt(buildTaskId)
+                }
+            }
             build.linkedVerificationTaskId != null -> startVerificationAttempt(buildTaskId)
             else -> completeBuildWithoutVerification(buildTaskId)
         }
@@ -1906,8 +1929,17 @@ class DesktopAgentRunService(
 
         val current = currentTask(taskId) ?: return
         val planFromDisk = artifacts.planFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
-        val reviewFromDisk = artifacts.reviewFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
-        val verificationFromDisk = artifacts.verificationFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        var reviewFromDisk = artifacts.reviewFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        var verificationFromDisk = artifacts.verificationFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        when (current.workflowStage) {
+            ProjectWorkflowStage.Review -> if (reviewFromDisk == null) {
+                reviewFromDisk = awaitWorkflowArtifactText(artifacts.reviewFile)
+            }
+            ProjectWorkflowStage.Verification -> if (verificationFromDisk == null) {
+                verificationFromDisk = awaitWorkflowArtifactText(artifacts.verificationFile)
+            }
+            else -> Unit
+        }
 
         val status = when {
             handle.stopRequested -> AgentStatus.Done
@@ -2386,7 +2418,7 @@ class DesktopAgentRunService(
             }
             val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
             val scrollback = terminals.bufferSnapshot(task.id).ifBlank {
-                store.scrollbackFile(task.id).takeIf { it.isFile }?.readText().orEmpty()
+                resolvedScrollbackFile(task.id).takeIf { it.isFile }?.readText().orEmpty()
             }
             val liveStatus = terminals.liveSessionStatus(task.id)
             when {
@@ -3689,7 +3721,44 @@ class DesktopAgentRunService(
 
     private fun artifactTextForRun(run: AgentTask, fileName: String): String? {
         val file = File(AgentWorkflowArtifacts.dirFor(run.cwd?.let(::File), run.id), fileName)
-        return file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        return readWorkflowArtifactText(file)
+    }
+
+    private fun readWorkflowArtifactText(file: File): String? =
+        file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+
+    private suspend fun awaitWorkflowArtifactText(file: File): String? {
+        val deadline = System.currentTimeMillis() + WORKFLOW_ARTIFACT_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            readWorkflowArtifactText(file)?.let { return it }
+            delay(AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS)
+        }
+        return readWorkflowArtifactText(file)
+    }
+
+    private suspend fun reconcilePendingReviewArtifact(build: ProjectTask, review: ProjectTask?): Boolean {
+        val reviewTask = review ?: return false
+        val attempt = reviewTask.attempts.lastOrNull {
+            it.stage == ProjectWorkflowStage.Review && it.reviewGeneration == build.reviewGeneration
+        } ?: return false
+        val run = currentTask(attempt.runId) ?: return false
+        if (run.status != AgentStatus.Done || reviewTask.reviewVerdicts.any { it.runId == run.id }) return false
+        val artifactText = artifactTextForRun(run, "review.json") ?: run.completedResultText
+        if (artifactText.isNullOrBlank()) return false
+        reconcileWorkflowRun(run.id)
+        return projectTask(build.id)?.state != ProjectTaskState.NeedsAttention
+    }
+
+    /** Pairs stuck in NeedsAttention after a late review.json write recover on launch or resume. */
+    private suspend fun reconcileStuckWorkflowArtifacts() {
+        val buildIds = _projects.value.values.flatMap { workflow ->
+            workflow.tasks.filter { it.kind == ProjectTaskKind.Build && it.state == ProjectTaskState.NeedsAttention }.map { it.id }
+        }
+        for (buildId in buildIds) {
+            val build = projectTask(buildId) ?: continue
+            val review = build.linkedReviewTaskId?.let(::projectTask)
+            reconcilePendingReviewArtifact(build, review)
+        }
     }
 
     private fun parseReviewVerdict(
@@ -3880,7 +3949,7 @@ class DesktopAgentRunService(
         if (legacyTranscriptChatsArchived) return
         val candidates = withContext(Dispatchers.IO) {
             _tasks.value.filter { task ->
-                !task.archived && !task.isActive && !store.scrollbackFile(task.id).isFile
+                !task.archived && !task.isActive && !resolvedScrollbackFile(task.id).isFile
             }
         }
         if (candidates.isNotEmpty()) {
@@ -4276,6 +4345,20 @@ class DesktopAgentRunService(
         if (task.archived || task.isActive) return
         updateTask(taskId) { it.copy(archived = true, unread = false) }
         scope.launch { persist() }
+    }
+
+    /** Marks a task as retained by the automatic sweep after its files are safely rewritten. */
+    internal suspend fun markArchivedByRetention(taskId: String, compressed: Boolean = true) {
+        val task = currentTask(taskId) ?: return
+        if (task.isActive) return
+        updateTask(taskId) {
+            it.copy(
+                archived = true,
+                transcriptCompressed = compressed,
+                unread = false,
+            )
+        }
+        persist()
     }
 
     override fun unarchive(taskId: String) {

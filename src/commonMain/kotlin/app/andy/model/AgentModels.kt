@@ -498,6 +498,8 @@ data class AgentTask(
     val unread: Boolean = false,
     /** Hidden from the default chat list until unarchived. */
     val archived: Boolean = false,
+    /** True when automatic retention reduced this task's transcript directory to archive.zip. */
+    val transcriptCompressed: Boolean = false,
     /** True only for the run that created and may remove [worktreePath]. */
     val ownsWorktree: Boolean = false,
     /** Optional typed project task that launched this raw agent session. */

@@ -71,6 +71,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
+import app.andy.domain.ToolCallFileContent
+import app.andy.domain.looksLikeFilePath
+import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
 import app.andy.model.AgentToolKind
@@ -158,6 +161,7 @@ internal fun AgentTranscript(
     scrollToLatestRequest: Int = 0,
     autoExpandActivitySections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
+    onToolFileOpen: (ToolCallFileContent) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -398,6 +402,7 @@ internal fun AgentTranscript(
                                     setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
                                 },
                                 onSkillOpen = onSkillOpen,
+                                onToolFileOpen = onToolFileOpen,
                             )
                             is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
                                 events = item.events,
@@ -420,6 +425,7 @@ internal fun AgentTranscript(
                                 onThinkingExpandedChange = { key, expanded ->
                                     setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
                                 },
+                                onToolFileOpen = onToolFileOpen,
                             )
                         }
                     }
@@ -582,6 +588,7 @@ private fun TranscriptEvent(
     onToolExpandedChange: (String, Boolean) -> Unit,
     onThinkingExpandedChange: (String, Boolean) -> Unit,
     onSkillOpen: (AgentSkill) -> Unit,
+    onToolFileOpen: (ToolCallFileContent) -> Unit,
 ) {
     when (event) {
         is AgentEvent.SessionStarted -> Unit
@@ -633,6 +640,7 @@ private fun TranscriptEvent(
             kind = event.kind,
             locations = event.locations,
             color = Cyan,
+            onToolFileOpen = onToolFileOpen,
         )
         is AgentEvent.ToolResult -> ToolBlock(
             expanded = toolExpanded,
@@ -642,6 +650,7 @@ private fun TranscriptEvent(
             summary = event.summary,
             detail = event.detail,
             color = if (event.isError) Red else TextSecondary,
+            onToolFileOpen = onToolFileOpen,
         )
         is AgentEvent.TaskError -> {
             if (event.message.isRetriableConnectionStallMessage()) return
@@ -986,6 +995,7 @@ private fun CompactToolCallsBlock(
     autoExpandActivitySections: Boolean,
     onToolExpandedChange: (String, Boolean) -> Unit,
     onThinkingExpandedChange: (String, Boolean) -> Unit,
+    onToolFileOpen: (ToolCallFileContent) -> Unit,
 ) {
     val hasError = events.any { it is AgentEvent.ToolResult && it.isError }
     val headlineColor = if (hasError) Red.copy(alpha = 0.9f) else TextSecondary
@@ -1020,6 +1030,7 @@ private fun CompactToolCallsBlock(
                         locations = event.locations,
                         color = Cyan,
                         indent = TranscriptAsideContentIndent,
+                        onToolFileOpen = onToolFileOpen,
                     )
                     is AgentEvent.ToolResult -> ToolBlock(
                         expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
@@ -1030,6 +1041,7 @@ private fun CompactToolCallsBlock(
                         detail = event.detail,
                         color = if (event.isError) Red else TextSecondary,
                         indent = TranscriptAsideContentIndent,
+                        onToolFileOpen = onToolFileOpen,
                     )
                     else -> Unit
                 }
@@ -1050,6 +1062,7 @@ private fun ToolBlock(
     locations: List<String> = emptyList(),
     color: Color,
     indent: Dp = TranscriptAsideIndent,
+    onToolFileOpen: (ToolCallFileContent) -> Unit = {},
 ) {
     val headline = toolBlockHeadline(name, summary, kind, locations)
     val body = detail
@@ -1058,15 +1071,21 @@ private fun ToolBlock(
         .ifBlank { summary.takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }.orEmpty() }
         .ifBlank { name.orEmpty() }
     val expandable = body.isNotBlank() && body != headline
+    val fileContent = remember(body) { parseToolCallFileContent(body) }
+    val openableContent = fileContent ?: locations.firstOrNull { looksLikeFilePath(it) }?.let {
+        ToolCallFileContent(path = it, oldText = null, newText = null)
+    }
 
     if (!expandable) {
-        Text(
-            headline.ifBlank { marker },
+        ToolPathText(
+            text = headline.ifBlank { marker },
+            fileContent = openableContent,
+            onOpen = onToolFileOpen,
             color = color.copy(alpha = 0.88f),
-            fontFamily = MonoFont,
+            modifier = Modifier.padding(start = indent),
+            maxLines = 1,
             fontSize = 11.sp,
             lineHeight = 15.sp,
-            modifier = Modifier.padding(start = indent),
         )
         return
     }
@@ -1077,18 +1096,153 @@ private fun ToolBlock(
         onExpandedChange = onExpandedChange,
         headlineColor = color.copy(alpha = 0.88f),
         indent = indent,
+        headlineContent = openableContent?.let { content ->
+            {
+                ToolPathText(
+                    text = headline,
+                    fileContent = content,
+                    onOpen = onToolFileOpen,
+                    color = color.copy(alpha = 0.88f),
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                )
+            }
+        },
     ) {
-        ChatMarkdown(
-            body,
-            density = AndyMarkdownDensity.Thinking,
-            lineHeight = 16.sp,
-            preserveLineBreaks = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp)
-                .heightIn(max = 220.dp)
-                .verticalScroll(rememberScrollState()),
+        ToolCallDetailBody(
+            body = body,
+            fileContent = fileContent,
+            onOpen = onToolFileOpen,
         )
+    }
+}
+
+@Composable
+private fun ToolCallDetailBody(
+    body: String,
+    fileContent: ToolCallFileContent?,
+    onOpen: (ToolCallFileContent) -> Unit,
+) {
+    if (fileContent != null) {
+        Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            DisableSelection {
+                ToolPathText(
+                    text = fileContent.path,
+                    fileContent = fileContent,
+                    onOpen = onOpen,
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                )
+            }
+            val preview = when {
+                fileContent.hasDiff -> buildString {
+                    if (!fileContent.oldText.isNullOrBlank()) {
+                        append("--- old\n")
+                        append(fileContent.oldText.orEmpty())
+                    }
+                    if (!fileContent.newText.isNullOrBlank()) {
+                        if (isNotEmpty()) append('\n')
+                        append("+++ new\n")
+                        append(fileContent.newText.orEmpty())
+                    }
+                }
+                else -> fileContent.newText.orEmpty()
+            }
+            if (preview.isNotBlank()) {
+                ChatMarkdown(
+                    preview,
+                    density = AndyMarkdownDensity.Thinking,
+                    lineHeight = 16.sp,
+                    preserveLineBreaks = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+        }
+        return
+    }
+    ChatMarkdown(
+        body,
+        density = AndyMarkdownDensity.Thinking,
+        lineHeight = 16.sp,
+        preserveLineBreaks = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .heightIn(max = 220.dp)
+            .verticalScroll(rememberScrollState()),
+    )
+}
+
+@Composable
+private fun ToolPathText(
+    text: String,
+    fileContent: ToolCallFileContent?,
+    onOpen: (ToolCallFileContent) -> Unit,
+    color: Color,
+    modifier: Modifier = Modifier,
+    maxLines: Int = Int.MAX_VALUE,
+    fontSize: androidx.compose.ui.unit.TextUnit = 11.sp,
+    lineHeight: androidx.compose.ui.unit.TextUnit = 15.sp,
+) {
+    val path = fileContent?.path?.takeIf { it.isNotBlank() && it in text }
+    if (path == null || fileContent == null) {
+        Text(
+            text,
+            color = color,
+            fontFamily = MonoFont,
+            fontSize = fontSize,
+            lineHeight = lineHeight,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = modifier,
+        )
+        return
+    }
+    val prefixEnd = text.indexOf(path)
+    val suffixStart = prefixEnd + path.length
+    DisableSelection {
+        Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+            if (prefixEnd > 0) {
+                Text(
+                    text.substring(0, prefixEnd),
+                    color = color,
+                    fontFamily = MonoFont,
+                    fontSize = fontSize,
+                    lineHeight = lineHeight,
+                    maxLines = maxLines,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                path,
+                color = Cyan,
+                fontFamily = MonoFont,
+                fontSize = fontSize,
+                lineHeight = lineHeight,
+                maxLines = maxLines,
+                overflow = TextOverflow.Ellipsis,
+                textDecoration = TextDecoration.Underline,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable { onOpen(fileContent) },
+            )
+            if (suffixStart < text.length) {
+                Text(
+                    text.substring(suffixStart),
+                    color = color,
+                    fontFamily = MonoFont,
+                    fontSize = fontSize,
+                    lineHeight = lineHeight,
+                    maxLines = maxLines,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 
@@ -1102,30 +1256,50 @@ private fun TranscriptExpandableRow(
     headlineColor: Color = TextSecondary,
     indent: Dp = 0.dp,
     contentIndent: Dp = indent + 8.dp,
+    headlineContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit = {},
 ) {
     Column(modifier.fillMaxWidth().animateContentSize()) {
         DisableSelection {
-            Text(
-                headline,
-                color = headlineColor,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                maxLines = if (expanded) Int.MAX_VALUE else 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = indent)
-                    .then(
-                        if (expandable) {
-                            Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { onExpandedChange(!expanded) }
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
+            if (headlineContent != null) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = indent)
+                        .then(
+                            if (expandable) {
+                                Modifier
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { onExpandedChange(!expanded) }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    headlineContent()
+                }
+            } else {
+                Text(
+                    headline,
+                    color = headlineColor,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = indent)
+                        .then(
+                            if (expandable) {
+                                Modifier
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { onExpandedChange(!expanded) }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
+            }
         }
         if (expandable) {
             AnimatedVisibility(visible = expanded) {

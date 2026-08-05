@@ -238,6 +238,35 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun lateReviewArtifactRecoveredOnResumeWithoutStartingAnotherReview() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("malformed")))) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.NeedsAttention
+            }
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
+            val reviewRunId = review.attempts.single().runId
+            val reviewRun = harness.service.tasks.value.first { it.id == reviewRunId }
+            File(AgentWorkflowArtifacts.dirFor(File(harness.projectDir.absolutePath), reviewRun.id), "review.json")
+                .writeText("""{"status":"approved","summary":"Late artifact","findings":[]}""")
+
+            harness.service.resumeBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+            val recovered = harness.service.projects.value.getValue("project-1")
+            val recoveredReview = recovered.tasks.first { it.id == build.linkedReviewTaskId }
+            assertEquals(1, recoveredReview.attempts.size)
+            assertEquals(ProjectReviewStatus.Approved, recoveredReview.reviewVerdicts.single().status)
+        }
+    }
+
+    @Test
     fun duplicateTerminalReviewBlockAdvancesThePair() = runBlocking {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("duplicate-leading")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)

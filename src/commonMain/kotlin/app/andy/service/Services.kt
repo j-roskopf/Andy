@@ -530,6 +530,17 @@ interface AgentRunService {
     suspend fun isGitRepo(dir: String): Boolean
 }
 
+data class RetentionSweepResult(
+    val chatsCompressedArchived: Int,
+    val chatsPermanentlyDeleted: Int,
+    val projectLocalFoldersDeleted: Int,
+    val bytesReclaimed: Long,
+)
+
+interface AgentRetentionService {
+    suspend fun runSweepNow(): RetentionSweepResult
+}
+
 interface ProjectWorkflowService {
     val projects: StateFlow<Map<String, ProjectWorkflowState>>
     /** Absolute context directory for [projectId], if the project is configured. */
@@ -842,6 +853,7 @@ data class AndyServices(
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
     val agentRuns: AgentRunService,
+    val agentRetention: AgentRetentionService = UnavailableAgentRetentionService,
     val projectWorkflows: ProjectWorkflowService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,

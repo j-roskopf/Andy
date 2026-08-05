@@ -197,6 +197,7 @@ fun Server.registerAgentProjectTools(
                         put("cwd", task.cwd.orEmpty())
                         put("unread", task.unread)
                         put("archived", task.archived)
+                        put("transcriptCompressed", task.transcriptCompressed)
                         put("createdAtMillis", task.createdAtMillis)
                         put("startedAtMillis", task.startedAtMillis ?: 0L)
                         put("finishedAtMillis", task.finishedAtMillis ?: 0L)

@@ -63,8 +63,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import app.andy.rememberCopyText
 import app.andy.currentTimeMillis
-import app.andy.domain.buildSplitDiffPairs
-import app.andy.domain.SplitDiffPair
+import app.andy.domain.ToolCallFileContent
+import app.andy.domain.diffFromToolCallFileContent
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentUserInputOrigin
@@ -79,8 +79,6 @@ import app.andy.model.AgentSkill
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
-import app.andy.model.DiffLine
-import app.andy.model.DiffLineKind
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
 import app.andy.model.shouldShowConnectionStallBanner
@@ -117,8 +115,6 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class DiffViewMode { Unified, Split }
-
 @Composable
 internal fun AgentTaskDetail(
     services: AndyServices,
@@ -148,6 +144,7 @@ internal fun AgentTaskDetail(
     var loadedFileDiffs by remember(task.id) { mutableStateOf<Map<String, AgentFileDiff>>(emptyMap()) }
     var loadingDiffPath by remember(task.id) { mutableStateOf<String?>(null) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
+    var toolDiffPane by remember(task.id) { mutableStateOf<AgentFileDiff?>(null) }
     var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
@@ -295,6 +292,10 @@ internal fun AgentTaskDetail(
         if (task.goal == null) goalEditorOpen = false
     }
 
+    fun openToolFile(content: ToolCallFileContent) {
+        toolDiffPane = diffFromToolCallFileContent(content)
+    }
+
     fun toggleFileDiff(path: String) {
         if (expandedDiffPath == path) {
             expandedDiffPath = null
@@ -317,16 +318,6 @@ internal fun AgentTaskDetail(
         if (task.status == AgentStatus.Error) {
             Text(
                 "interrupted by an app restart — retry for a fresh run, or continue interactively to pick the session back up",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-            )
-        }
-        // Redundant while the live CLI is on screen — showing it steals height from the
-        // terminal on every idle↔working flip.
-        if (task.status == AgentStatus.Done && !terminalSessionActive) {
-            Text(
-                "done at prompt — continue interactively to send your next message",
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
@@ -414,50 +405,62 @@ internal fun AgentTaskDetail(
                 val pendingPermissionId = task.userInputRequest
                     ?.takeIf { it.origin == AgentUserInputOrigin.AcpPermission }
                     ?.id
-                AgentTranscript(
-                    events = transcriptEvents,
-                    isActive = task.isActive,
-                    agentLabel = task.agent.cliName,
-                    originalPrompt = task.prompt.ifBlank { task.title },
-                    originalImagePaths = task.imagePaths,
-                    restoreScrollKey = task.id,
-                    scrollMemory = transcriptScrollMemory,
-                    scrollToLatestRequest = scrollToLatestRequest,
-                    autoExpandActivitySections = workspaceState.agentTranscriptAutoExpandActivity,
-                    collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
-                    pendingContent = task.userInputRequest?.let { request ->
-                        {
-                            AgentUserInputCard(
-                                request = request,
-                                onSubmit = { answers ->
-                                    services.agentRuns.respondToUserInput(task.id, request.id, answers)
-                                },
-                            )
-                        }
-                    },
-                    trailingContent = changeSummary
-                        ?.takeIf { it.files.isNotEmpty() }
-                        ?.let { summary ->
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AgentTranscript(
+                        events = transcriptEvents,
+                        isActive = task.isActive,
+                        agentLabel = task.agent.cliName,
+                        originalPrompt = task.prompt.ifBlank { task.title },
+                        originalImagePaths = task.imagePaths,
+                        restoreScrollKey = task.id,
+                        scrollMemory = transcriptScrollMemory,
+                        scrollToLatestRequest = scrollToLatestRequest,
+                        autoExpandActivitySections = workspaceState.agentTranscriptAutoExpandActivity,
+                        collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
+                        pendingContent = task.userInputRequest?.let { request ->
                             {
-                                AgentChangeSummaryCard(
-                                    summary = summary,
-                                    filesExpanded = changedFilesExpanded,
-                                    onFilesExpandedChange = { changedFilesExpanded = it },
-                                    showAllFiles = showAllChangedFiles,
-                                    onShowAllFilesChange = { showAllChangedFiles = it },
-                                    expandedPath = expandedDiffPath,
-                                    loadingPath = loadingDiffPath,
-                                    diffs = loadedFileDiffs,
-                                    viewMode = diffViewMode,
-                                    onViewModeChange = { diffViewMode = it },
-                                    onToggleFile = { path -> toggleFileDiff(path) },
-                                    embedded = true,
+                                AgentUserInputCard(
+                                    request = request,
+                                    onSubmit = { answers ->
+                                        services.agentRuns.respondToUserInput(task.id, request.id, answers)
+                                    },
                                 )
                             }
                         },
-                    activePermissionRequestId = pendingPermissionId,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                        trailingContent = changeSummary
+                            ?.takeIf { it.files.isNotEmpty() }
+                            ?.let { summary ->
+                                {
+                                    AgentChangeSummaryCard(
+                                        summary = summary,
+                                        filesExpanded = changedFilesExpanded,
+                                        onFilesExpandedChange = { changedFilesExpanded = it },
+                                        showAllFiles = showAllChangedFiles,
+                                        onShowAllFilesChange = { showAllChangedFiles = it },
+                                        expandedPath = expandedDiffPath,
+                                        loadingPath = loadingDiffPath,
+                                        diffs = loadedFileDiffs,
+                                        viewMode = diffViewMode,
+                                        onViewModeChange = { diffViewMode = it },
+                                        onToggleFile = { path -> toggleFileDiff(path) },
+                                        embedded = true,
+                                    )
+                                }
+                            },
+                        activePermissionRequestId = pendingPermissionId,
+                        onToolFileOpen = ::openToolFile,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                    )
+                    toolDiffPane?.let { diff ->
+                        AgentToolDiffSidePane(
+                            diff = diff,
+                            viewMode = diffViewMode,
+                            onViewModeChange = { diffViewMode = it },
+                            onClose = { toolDiffPane = null },
+                            modifier = Modifier.width(420.dp).fillMaxHeight(),
+                        )
+                    }
+                }
             } else {
                 AgentTerminalSurface(
                     services = services,
@@ -1251,376 +1254,4 @@ private fun ChangedFileRow(
             }
         }
     }
-}
-
-@Composable
-private fun AgentFileDiffViewer(
-    diff: AgentFileDiff,
-    viewMode: DiffViewMode,
-    onViewModeChange: (DiffViewMode) -> Unit,
-    onCollapse: () -> Unit,
-) {
-    var expandedContextBlocks by remember(diff.path) { mutableStateOf(setOf<Int>()) }
-    val unifiedRows = remember(diff.lines, expandedContextBlocks) {
-        buildDiffDisplayRows(diff.lines, expandedContextBlocks)
-    }
-    val splitRows = remember(diff.lines, expandedContextBlocks) {
-        buildSplitDiffDisplayRows(buildSplitDiffPairs(diff.lines), expandedContextBlocks)
-    }
-    val verticalScroll = rememberScrollState()
-    val horizontalScroll = rememberScrollState()
-
-    PanelCard(
-        modifier = Modifier.fillMaxWidth(),
-        background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong),
-        contentPadding = PaddingValues(0.dp),
-        verticalArrangement = Arrangement.Top,
-    ) {
-        Row(
-            Modifier.fillMaxWidth()
-                .background(AndyColors.Neutral850)
-                .padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                diff.path,
-                color = TextPrimary,
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            FilterPill("unified", viewMode == DiffViewMode.Unified, Cyan) {
-                onViewModeChange(DiffViewMode.Unified)
-            }
-            FilterPill("split", viewMode == DiffViewMode.Split, Cyan) {
-                onViewModeChange(DiffViewMode.Split)
-            }
-            Text("+${diff.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
-            Text("-${diff.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
-            Text(
-                "v",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                modifier = Modifier.clickable(onClick = onCollapse).padding(horizontal = 4.dp),
-            )
-        }
-        when {
-            diff.isBinary -> {
-                Text(
-                    "binary file changed",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(10.dp),
-                )
-            }
-            diff.lines.isEmpty() -> {
-                Text(
-                    "no line changes",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(10.dp),
-                )
-            }
-            else -> {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 420.dp)
-                        .verticalScroll(verticalScroll),
-                ) {
-                    when (viewMode) {
-                        DiffViewMode.Unified -> {
-                            Column(Modifier.horizontalScroll(horizontalScroll).padding(bottom = 6.dp)) {
-                                unifiedRows.forEach { row ->
-                                    when (row) {
-                                        is DiffDisplayRow.Collapsed -> CollapsedContextBar(
-                                            count = row.lines.size,
-                                            onToggle = {
-                                                expandedContextBlocks = toggleContextBlock(expandedContextBlocks, row.id)
-                                            },
-                                        )
-                                        is DiffDisplayRow.Line -> DiffCodeLine(row.line)
-                                    }
-                                }
-                            }
-                        }
-                        DiffViewMode.Split -> {
-                            Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
-                                splitRows.forEach { row ->
-                                    when (row) {
-                                        is SplitDisplayRow.Collapsed -> CollapsedContextBar(
-                                            count = row.pairs.size,
-                                            onToggle = {
-                                                expandedContextBlocks = toggleContextBlock(expandedContextBlocks, row.id)
-                                            },
-                                        )
-                                        is SplitDisplayRow.Pair -> SplitDiffCodeRow(row.pair)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CollapsedContextBar(count: Int, onToggle: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .background(AndyColors.Neutral850.copy(alpha = AndyOverlay.Strong))
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("^", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-        Text(
-            "$count unmodified ${if (count == 1) "line" else "lines"}",
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-        )
-        Text("v", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-    }
-}
-
-@Composable
-private fun DiffCodeLine(line: DiffLine) {
-    val background = when (line.kind) {
-        DiffLineKind.Addition -> Green.copy(alpha = 0.14f)
-        DiffLineKind.Deletion -> Red.copy(alpha = 0.16f)
-        DiffLineKind.Context -> Color.Transparent
-    }
-    val gutter = when (line.kind) {
-        DiffLineKind.Addition -> Green
-        DiffLineKind.Deletion -> Red
-        DiffLineKind.Context -> Color.Transparent
-    }
-    val textColor = when (line.kind) {
-        DiffLineKind.Addition -> AndyColors.GreenSoft
-        DiffLineKind.Deletion -> Red.copy(alpha = 0.92f)
-        DiffLineKind.Context -> TextSecondary
-    }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(background)
-            .padding(end = 10.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(18.dp)
-                .background(gutter),
-        )
-        Text(
-            line.oldLineNumber?.toString().orEmpty(),
-            color = TextSecondary.copy(alpha = 0.65f),
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            modifier = Modifier.width(36.dp).padding(start = 6.dp),
-        )
-        Text(
-            line.newLineNumber?.toString().orEmpty(),
-            color = TextSecondary.copy(alpha = 0.65f),
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            modifier = Modifier.width(36.dp),
-        )
-        Text(
-            when (line.kind) {
-                DiffLineKind.Addition -> "+"
-                DiffLineKind.Deletion -> "-"
-                DiffLineKind.Context -> " "
-            },
-            color = textColor,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-            modifier = Modifier.width(12.dp),
-        )
-        Text(
-            line.text.ifEmpty { " " },
-            color = textColor,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-        )
-    }
-}
-
-@Composable
-private fun SplitDiffCodeRow(pair: SplitDiffPair) {
-    Row(Modifier.fillMaxWidth()) {
-        SplitDiffPane(
-            line = pair.old,
-            side = DiffSplitSide.Old,
-            modifier = Modifier.weight(1f),
-        )
-        Box(
-            Modifier
-                .width(1.dp)
-                .height(18.dp)
-                .background(Border),
-        )
-        SplitDiffPane(
-            line = pair.new,
-            side = DiffSplitSide.New,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-private enum class DiffSplitSide { Old, New }
-
-@Composable
-private fun SplitDiffPane(
-    line: DiffLine?,
-    side: DiffSplitSide,
-    modifier: Modifier = Modifier,
-) {
-    val kind = line?.kind
-    val background = when {
-        kind == DiffLineKind.Deletion -> Red.copy(alpha = 0.16f)
-        kind == DiffLineKind.Addition -> Green.copy(alpha = 0.14f)
-        line == null && side == DiffSplitSide.Old -> Green.copy(alpha = 0.06f)
-        line == null && side == DiffSplitSide.New -> Red.copy(alpha = 0.06f)
-        else -> Color.Transparent
-    }
-    val gutter = when (kind) {
-        DiffLineKind.Deletion -> Red
-        DiffLineKind.Addition -> Green
-        else -> Color.Transparent
-    }
-    val textColor = when (kind) {
-        DiffLineKind.Deletion -> Red.copy(alpha = 0.92f)
-        DiffLineKind.Addition -> AndyColors.GreenSoft
-        DiffLineKind.Context -> TextSecondary
-        null -> TextSecondary.copy(alpha = 0.35f)
-    }
-    val lineNumber = when (side) {
-        DiffSplitSide.Old -> line?.oldLineNumber
-        DiffSplitSide.New -> line?.newLineNumber
-    }
-    val marker = when (kind) {
-        DiffLineKind.Deletion -> "-"
-        DiffLineKind.Addition -> "+"
-        DiffLineKind.Context -> " "
-        null -> " "
-    }
-    Row(
-        modifier
-            .background(background)
-            .padding(end = 8.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(18.dp)
-                .background(gutter),
-        )
-        Text(
-            lineNumber?.toString().orEmpty(),
-            color = TextSecondary.copy(alpha = 0.65f),
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            modifier = Modifier.width(36.dp).padding(start = 6.dp),
-        )
-        Text(
-            marker,
-            color = textColor,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-            modifier = Modifier.width(12.dp),
-        )
-        Text(
-            line?.text?.ifEmpty { " " } ?: " ",
-            color = textColor,
-            fontFamily = MonoFont,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-private sealed class DiffDisplayRow {
-    data class Line(val line: DiffLine) : DiffDisplayRow()
-    data class Collapsed(val id: Int, val lines: List<DiffLine>) : DiffDisplayRow()
-}
-
-private sealed class SplitDisplayRow {
-    data class Pair(val pair: SplitDiffPair) : SplitDisplayRow()
-    data class Collapsed(val id: Int, val pairs: List<SplitDiffPair>) : SplitDisplayRow()
-}
-
-private fun toggleContextBlock(expanded: Set<Int>, id: Int): Set<Int> =
-    if (id in expanded) expanded - id else expanded + id
-
-private fun buildDiffDisplayRows(
-    lines: List<DiffLine>,
-    expandedContextBlocks: Set<Int>,
-): List<DiffDisplayRow> {
-    if (lines.isEmpty()) return emptyList()
-    val rows = mutableListOf<DiffDisplayRow>()
-    var index = 0
-    var blockId = 0
-    while (index < lines.size) {
-        val line = lines[index]
-        if (line.kind != DiffLineKind.Context) {
-            rows += DiffDisplayRow.Line(line)
-            index += 1
-            continue
-        }
-        val start = index
-        while (index < lines.size && lines[index].kind == DiffLineKind.Context) index += 1
-        val block = lines.subList(start, index).toList()
-        val id = blockId++
-        if (id in expandedContextBlocks) {
-            block.forEach { rows += DiffDisplayRow.Line(it) }
-        } else {
-            rows += DiffDisplayRow.Collapsed(id, block)
-        }
-    }
-    return rows
-}
-
-private fun buildSplitDiffDisplayRows(
-    pairs: List<SplitDiffPair>,
-    expandedContextBlocks: Set<Int>,
-): List<SplitDisplayRow> {
-    if (pairs.isEmpty()) return emptyList()
-    val rows = mutableListOf<SplitDisplayRow>()
-    var index = 0
-    var blockId = 0
-    while (index < pairs.size) {
-        if (!pairs[index].isContext) {
-            rows += SplitDisplayRow.Pair(pairs[index])
-            index += 1
-            continue
-        }
-        val start = index
-        while (index < pairs.size && pairs[index].isContext) index += 1
-        val block = pairs.subList(start, index).toList()
-        val id = blockId++
-        if (id in expandedContextBlocks) {
-            block.forEach { rows += SplitDisplayRow.Pair(it) }
-        } else {
-            rows += SplitDisplayRow.Collapsed(id, block)
-        }
-    }
-    return rows
 }
