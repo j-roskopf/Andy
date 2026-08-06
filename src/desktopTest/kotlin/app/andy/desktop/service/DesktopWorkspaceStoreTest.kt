@@ -27,6 +27,22 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
 
+        val retention = saved.copy(
+            retentionCleanupEnabled = false,
+            retentionCompressArchiveAfterDays = 12,
+            retentionPermanentDeleteAfterDays = 45,
+        )
+        DesktopWorkspaceStore(file).save(retention)
+        val loadedRetention = DesktopWorkspaceStore(file).load()
+        assertEquals(false, loadedRetention.retentionCleanupEnabled)
+        assertEquals(12, loadedRetention.retentionCompressArchiveAfterDays)
+        assertEquals(45, loadedRetention.retentionPermanentDeleteAfterDays)
+
+        val defaults = DesktopWorkspaceStore(createTempDirectory("andy-workspace-defaults").toFile().resolve("missing.properties")).load()
+        assertEquals(true, defaults.retentionCleanupEnabled)
+        assertEquals(30, defaults.retentionCompressArchiveAfterDays)
+        assertEquals(90, defaults.retentionPermanentDeleteAfterDays)
+
         val withIntents = saved.copy(
             savedIntents = listOf(
                 IntentDraft(

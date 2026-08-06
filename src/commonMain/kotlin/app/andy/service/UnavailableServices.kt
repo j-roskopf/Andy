@@ -329,6 +329,10 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun isGitRepo(dir: String) = false
 }
 
+object UnavailableAgentRetentionService : AgentRetentionService {
+    override suspend fun runSweepNow() = RetentionSweepResult(0, 0, 0, 0)
+}
+
 object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override val projects = MutableStateFlow(emptyMap<String, ProjectWorkflowState>())
     override suspend fun projectContextDir(projectId: String): String? = null
@@ -350,6 +354,19 @@ object UnavailableProjectWorkflowService : ProjectWorkflowService {
     override suspend fun startRecoveryReview(buildTaskId: String): String? = BrowserUnavailable
     override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
     override suspend fun deleteProject(projectId: String) = Unit
+}
+
+object UnavailableKanbanService : KanbanService {
+    override val board = MutableStateFlow(KanbanBoard())
+
+    override fun addLane(name: String) = Unit
+    override fun renameLane(laneId: String, name: String) = Unit
+    override fun deleteLane(laneId: String) = Unit
+    override fun moveLane(laneId: String, direction: KanbanLaneDirection) = Unit
+    override fun addCard(laneId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun updateCard(cardId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun deleteCard(cardId: String) = Unit
+    override fun moveCard(cardId: String, toLaneId: String, toIndex: Int) = Unit
 }
 
 object UnavailableDhuService : DhuService {

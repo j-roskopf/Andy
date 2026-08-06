@@ -122,6 +122,10 @@ class AndyDesktopScreenshotTest {
     fun desktopProjectScratchpadEditor() = capture(listOf(AndyScreenshotScenario.ProjectsScratchpadEditor))
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectKanbanBoard() = capture(listOf(AndyScreenshotScenario.ProjectsKanbanBoard))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     private fun capture(scenarios: List<AndyScreenshotScenario>) {
         val previousRenderer = System.getProperty("andy.screenshot.renderer")
         System.setProperty("andy.screenshot.renderer", "compose")
@@ -184,6 +188,10 @@ class AndyDesktopScreenshotTest {
                                 onAllNodesWithText("Export…").fetchSemanticsNodes().isNotEmpty()
                             }
                             onNodeWithText("Export…").performClick()
+                            waitForIdle()
+                        }
+                        AndyScreenshotScenario.ProjectsKanbanBoard -> {
+                            onNodeWithText("Kanban").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {

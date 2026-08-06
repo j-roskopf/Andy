@@ -53,6 +53,7 @@ class AcpPermissionBridgeTest {
         autonomy: AgentAutonomy = AgentAutonomy.Standard,
         planMode: Boolean = false,
         sandboxMode: AgentSandboxMode? = AgentSandboxMode.WorkspaceWrite,
+        confirmToolCalls: Boolean = false,
         onPending: (PendingAcpPermission) -> Unit = {},
         onResolved: (String, String, Boolean, String?) -> Unit = { _, _, _, _ -> },
     ): AcpPermissionBridge = AcpPermissionBridge(
@@ -60,6 +61,7 @@ class AcpPermissionBridgeTest {
         autonomy = autonomy,
         planMode = planMode,
         sandboxMode = sandboxMode,
+        confirmToolCalls = confirmToolCalls,
         cwd = File(System.getProperty("java.io.tmpdir")),
         onPending = onPending,
         onResolved = onResolved,
@@ -196,6 +198,42 @@ class AcpPermissionBridgeTest {
     }
 
     @Test
+    fun confirmToolCallsPromptsForReadEvenWhenAutonomyWouldAutoAllow() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val subject = bridge(
+            autonomy = AgentAutonomy.Standard,
+            sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            confirmToolCalls = true,
+            onPending = { pending = it },
+        )
+        coroutineScope {
+            val deferred = async { subject.request(toolCall(kind = ToolKind.READ), options, null) }
+            while (pending == null) yield()
+            assertNotNull(pending)
+            assertTrue(subject.respond(pending!!.request.id, allowOnce.name))
+            assertEquals(allowOnce.optionId, selectedOptionId(deferred.await()))
+        }
+    }
+
+    @Test
+    fun confirmToolCallsPromptsEvenWithFullBypassSandbox() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val subject = bridge(
+            autonomy = AgentAutonomy.Full,
+            sandboxMode = AgentSandboxMode.None,
+            confirmToolCalls = true,
+            onPending = { pending = it },
+        )
+        coroutineScope {
+            val deferred = async { subject.request(toolCall(), options, null) }
+            while (pending == null) yield()
+            assertNotNull(pending)
+            assertTrue(subject.respond(pending!!.request.id, allowOnce.name))
+            assertEquals(allowOnce.optionId, selectedOptionId(deferred.await()))
+        }
+    }
+
+    @Test
     fun planModePromptsForWorkspaceEdit() = runBlocking {
         var pending: PendingAcpPermission? = null
         val cwd = File.createTempFile("acp-permission", null).parentFile!!
@@ -205,6 +243,7 @@ class AcpPermissionBridgeTest {
             autonomy = AgentAutonomy.Full,
             planMode = true,
             sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            confirmToolCalls = false,
             cwd = cwd,
             onPending = { pending = it },
             onResolved = { _, _, _, _ -> },
@@ -237,6 +276,7 @@ class AcpPermissionBridgeTest {
             autonomy = AgentAutonomy.ReadOnly,
             planMode = false,
             sandboxMode = AgentSandboxMode.WorkspaceWrite,
+            confirmToolCalls = false,
             cwd = cwd,
             onPending = { pending = it },
             onResolved = { _, _, _, _ -> },

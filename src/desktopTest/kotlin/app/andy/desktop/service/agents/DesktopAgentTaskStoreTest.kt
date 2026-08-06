@@ -380,6 +380,22 @@ class DesktopAgentTaskStoreTest {
     }
 
     @Test
+    fun roundTripsTranscriptCompressedFlag() = withStore { store ->
+        val task = AgentTask(
+            id = "compressed-task",
+            title = "compressed chat",
+            prompt = "done",
+            agent = AgentKind.Codex,
+            status = AgentStatus.Done,
+            createdAtMillis = 42,
+            archived = true,
+            transcriptCompressed = true,
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        assertEquals(true, store.load().tasks.single().transcriptCompressed)
+    }
+
+    @Test
     fun refusesEmptySaveOverPopulatedStore() = withStore { store ->
         val task = AgentTask(
             id = "keep-me",

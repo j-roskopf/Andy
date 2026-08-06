@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -42,6 +43,9 @@ import app.andy.ui.theme.TextSecondary
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCheckBox
 import com.mikepenz.markdown.m3.Markdown
+import dev.snipme.highlights.Highlights
+import dev.snipme.highlights.model.SyntaxTheme
+import dev.snipme.highlights.model.SyntaxThemes
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownPadding
@@ -145,6 +149,7 @@ private fun AndyMarkdown(
     onTextChange: ((String) -> Unit)? = null,
 ) {
     val markdownState = rememberMarkdownState(text, retainState = true)
+    val highlightsBuilder = rememberAndyHighlightsBuilder()
     val thinking = density == AndyMarkdownDensity.Thinking
     val body = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = if (thinking) MonoFont else DisplayFont,
@@ -241,6 +246,24 @@ private fun AndyMarkdown(
             AndyMarkdownDensity.Preview -> markdownPadding()
         },
         components = markdownComponents(
+            codeBlock = {
+                SafeMarkdownHighlightedCodeBlock(
+                    content = it.content,
+                    node = it.node,
+                    style = it.typography.code,
+                    highlightsBuilder = highlightsBuilder,
+                    showHeader = !thinking,
+                )
+            },
+            codeFence = {
+                SafeMarkdownHighlightedCodeFence(
+                    content = it.content,
+                    node = it.node,
+                    style = it.typography.code,
+                    highlightsBuilder = highlightsBuilder,
+                    showHeader = !thinking,
+                )
+            },
             checkbox = { model ->
                 MarkdownCheckBox(
                     content = model.content,
@@ -296,3 +319,29 @@ internal fun toggleMarkdownCheckbox(
 
 private val CheckedTaskPattern = Regex("""\[[xX]]""")
 private val UncheckedTaskPattern = Regex("""\[ ]""")
+
+@Composable
+private fun rememberAndyHighlightsBuilder(): Highlights.Builder {
+    val isLight = AndyColors.isLight
+    return remember(isLight) {
+        Highlights.Builder().theme(andyChatSyntaxTheme(isLight))
+    }
+}
+
+/** Matches the desktop host editor palette so chat code blocks feel consistent with Andy. */
+private fun andyChatSyntaxTheme(isLight: Boolean): SyntaxTheme = if (isLight) {
+    SyntaxThemes.atom(darkMode = false)
+} else {
+    SyntaxTheme(
+        key = "andy",
+        code = 0xFFE4DED0.toInt(),
+        keyword = 0xFFD18A4B.toInt(),
+        string = 0xFF94C17A.toInt(),
+        literal = 0xFFE3B05E.toInt(),
+        comment = 0xFF8E8779.toInt(),
+        metadata = 0xFF88AFC8.toInt(),
+        multilineComment = 0xFF8E8779.toInt(),
+        punctuation = 0xFFE26F5C.toInt(),
+        mark = 0xFFB865FF.toInt(),
+    )
+}

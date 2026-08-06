@@ -41,6 +41,25 @@ internal object ModalDialogRegistry {
     }
 }
 
+/**
+ * In-window chrome menus that must paint above Swing/Metal mirrors. Unlike [ModalDialogRegistry],
+ * callers push/pop synchronously from click handlers so suppression is active in the same frame
+ * the menu opens — SideEffect-driven flags arrive one frame late and leave the mirror visible.
+ */
+internal object HeavyweightOverlayRegistry {
+    private var suppressCount by mutableStateOf(0)
+
+    val anyActive: Boolean get() = suppressCount > 0
+
+    fun push() {
+        suppressCount++
+    }
+
+    fun pop() {
+        suppressCount = (suppressCount - 1).coerceAtLeast(0)
+    }
+}
+
 /** Keeps heavyweight interop surfaces out of composition while the caller is composed. */
 @Composable
 internal fun SuppressHeavyweightSurfacesWhileOpen() {

@@ -233,7 +233,12 @@ internal fun AndyShell(
         // Keep SwingPanel mounted during window resize; MirrorPresentationGuard blocks geometry
         // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
         // Modal dialogs share the same rule as chrome menus: interop surfaces paint over them.
-        LocalSuppressHeavyweightSurfaces provides (state.chromeMenuExpanded || ModalDialogRegistry.anyOpen),
+        LocalSuppressHeavyweightSurfaces provides (
+            HeavyweightOverlayRegistry.anyActive ||
+            state.docks.landingFor != null ||
+            state.chromeMenuExpanded ||
+            ModalDialogRegistry.anyOpen
+        ),
         LocalOpenAgentTask provides state::openAgentTask,
         LocalOpenInvestigation provides state::openInvestigation,
     ) {
@@ -597,7 +602,7 @@ internal fun AndyShell(
                         logcatState = state.logcatState,
                         onSelectTab = { state.selectDockTab(DockPlacement.Right, it) },
                         onCloseTab = { state.closeDockTab(DockPlacement.Right, it) },
-                        onOpenKind = { state.openDockKind(DockPlacement.Right, it) },
+                        onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Right, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Right) },
                         modifier = Modifier.width(460.dp).fillMaxHeight(),
                     )
@@ -620,7 +625,7 @@ internal fun AndyShell(
                         logcatState = state.logcatState,
                         onSelectTab = { state.selectDockTab(DockPlacement.Bottom, it) },
                         onCloseTab = { state.closeDockTab(DockPlacement.Bottom, it) },
-                        onOpenKind = { state.openDockKind(DockPlacement.Bottom, it) },
+                        onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Bottom) },
                         modifier = Modifier.fillMaxWidth().height(300.dp),
                     )

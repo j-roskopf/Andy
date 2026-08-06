@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -70,6 +71,8 @@ import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.McpServerService
 import app.andy.service.ProxyService
+import app.andy.service.RetentionSweepResult
+import app.andy.service.UnavailableAgentRetentionService
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
@@ -169,6 +172,9 @@ internal fun SettingsScreen(
             DesktopSettingsCategory.Agents -> {
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
+                if (services.agentRetention !is UnavailableAgentRetentionService) {
+                    AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
+                }
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -723,6 +729,146 @@ private fun AgentSessionsPanel(
             fontSize = 12.sp,
         )
     }
+}
+
+@Composable
+private fun AgentRetentionPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    services: AndyServices,
+) {
+    val scope = rememberCoroutineScope()
+    var archiveDaysText by remember(workspace.retentionCompressArchiveAfterDays) {
+        mutableStateOf(workspace.retentionCompressArchiveAfterDays.toString())
+    }
+    var deleteDaysText by remember(workspace.retentionPermanentDeleteAfterDays) {
+        mutableStateOf(workspace.retentionPermanentDeleteAfterDays.toString())
+    }
+    var sweepInProgress by remember { mutableStateOf(false) }
+    var lastResult by remember { mutableStateOf<RetentionSweepResult?>(null) }
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Cleanup",
+            description = "Automatically compress and remove old chats.",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = workspace.retentionCleanupEnabled,
+                onCheckedChange = { value -> update { it.copy(retentionCleanupEnabled = value) } },
+            )
+            Text("Automatically clean up old chats", color = TextPrimary, fontSize = 13.sp)
+        }
+        Text(
+            "Unread or active chats, and chats archived manually, are always kept.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Compress & archive chats after", color = TextSecondary, fontSize = 13.sp)
+            TextField(
+                value = archiveDaysText,
+                onValueChange = { value ->
+                    val filtered = value.filter(Char::isDigit).take(4)
+                    archiveDaysText = filtered
+                    filtered.toIntOrNull()?.takeIf { it in 1..3650 }?.let { newArchiveDays ->
+                        update { state ->
+                            val newDeleteDays = if (state.retentionPermanentDeleteAfterDays <= newArchiveDays) {
+                                newArchiveDays + 1
+                            } else {
+                                state.retentionPermanentDeleteAfterDays
+                            }
+                            state.copy(
+                                retentionCompressArchiveAfterDays = newArchiveDays,
+                                retentionPermanentDeleteAfterDays = newDeleteDays,
+                            )
+                        }
+                    }
+                },
+                enabled = workspace.retentionCleanupEnabled,
+                modifier = Modifier.width(64.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+            )
+            Text("days", color = TextSecondary, fontSize = 13.sp)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Permanently delete archived chats after", color = TextSecondary, fontSize = 13.sp)
+            TextField(
+                value = deleteDaysText,
+                onValueChange = { value ->
+                    val filtered = value.filter(Char::isDigit).take(4)
+                    deleteDaysText = filtered
+                    filtered.toIntOrNull()
+                        ?.takeIf { it in (workspace.retentionCompressArchiveAfterDays + 1)..3650 }
+                        ?.let { newDeleteDays ->
+                            update { state -> state.copy(retentionPermanentDeleteAfterDays = newDeleteDays) }
+                        }
+                },
+                enabled = workspace.retentionCleanupEnabled,
+                modifier = Modifier.width(64.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+            )
+            Text("days", color = TextSecondary, fontSize = 13.sp)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = {
+                    scope.launch {
+                        sweepInProgress = true
+                        lastResult = null
+                        try {
+                            lastResult = services.agentRetention.runSweepNow()
+                        } finally {
+                            sweepInProgress = false
+                        }
+                    }
+                },
+                enabled = !sweepInProgress,
+                colors = primaryButtonColors(),
+            ) {
+                if (sweepInProgress) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cleaning up…")
+                } else {
+                    Text("Clean up now")
+                }
+            }
+        }
+        lastResult?.let { result ->
+            Text(
+                "Archived ${result.chatsCompressedArchived} · Deleted ${result.chatsPermanentlyDeleted} · " +
+                    "Project folders ${result.projectLocalFoldersDeleted} · Reclaimed ${formatRetentionBytes(result.bytesReclaimed)}",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+private fun formatRetentionBytes(bytes: Long): String {
+    val value = bytes.toDouble()
+    val (amount, suffix) = when {
+        bytes >= 1024L * 1024L * 1024L -> value / (1024.0 * 1024.0 * 1024.0) to "GB"
+        bytes >= 1024L * 1024L -> value / (1024.0 * 1024.0) to "MB"
+        bytes >= 1024L -> value / 1024.0 to "KB"
+        else -> value to "B"
+    }
+    val rounded = (amount * 10).toInt() / 10.0
+    return "$rounded $suffix"
 }
 
 @Composable

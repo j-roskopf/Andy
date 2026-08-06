@@ -431,6 +431,8 @@ data class AgentTask(
     val sandboxMode: AgentSandboxMode? = null,
     /** Ask the provider to inspect and propose work without making changes. */
     val planMode: Boolean = false,
+    /** ACP-lane only: surface every tool call (including reads) for approval instead of auto-allowing it. */
+    val confirmToolCalls: Boolean = false,
     /** Final response from a successful plan-mode run, retained for project workflow handoff. */
     val completedPlanText: String? = null,
     /** A fresh-provider continuation used only when that provider cannot resume its prior session. */
@@ -496,6 +498,8 @@ data class AgentTask(
     val unread: Boolean = false,
     /** Hidden from the default chat list until unarchived. */
     val archived: Boolean = false,
+    /** True when automatic retention reduced this task's transcript directory to archive.zip. */
+    val transcriptCompressed: Boolean = false,
     /** True only for the run that created and may remove [worktreePath]. */
     val ownsWorktree: Boolean = false,
     /** Optional typed project task that launched this raw agent session. */
@@ -628,6 +632,7 @@ data class AgentTaskDraft(
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
     val planMode: Boolean = false,
+    val confirmToolCalls: Boolean = false,
     val model: String? = null,
     val reasoningEffort: AgentReasoningEffort? = null,
     val fastMode: Boolean = false,
@@ -659,6 +664,7 @@ data class AgentProviderDefaults(
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
     val planMode: Boolean = false,
+    val confirmToolCalls: Boolean = false,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
@@ -761,6 +767,7 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     autonomy = autonomy,
     sandboxMode = sandboxMode,
     planMode = planMode,
+    confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
@@ -774,6 +781,7 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     autonomy = autonomy,
     sandboxMode = sandboxMode,
     planMode = planMode,
+    confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,

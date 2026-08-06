@@ -38,6 +38,7 @@ import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectVerificationVerdict
+import app.andy.model.KanbanBoard
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import net.peanuuutz.tomlkt.Toml
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.ZipFile
+
+private val archiveViewCleanupRegistered = AtomicBoolean(false)
+
+fun registerArchiveViewShutdownHook() {
+    if (!archiveViewCleanupRegistered.compareAndSet(false, true)) return
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runCatching {
+            File(System.getProperty("java.io.tmpdir"), "andy-archive-view").deleteRecursively()
+        }
+    })
+}
 
 data class AgentStoreState(
     val tasks: List<AgentTask> = emptyList(),
@@ -70,6 +84,8 @@ class DesktopAgentTaskStore(
 
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
 
+    fun archiveFile(taskId: String): File = File(taskDir(taskId), "archive.zip")
+
     fun launchLogFile(taskId: String): File = File(taskDir(taskId), "launch.log")
 
     /** Task-local copies of managed evidence bundles (§4), keyed by bundle id under this directory. */
@@ -80,6 +96,42 @@ class DesktopAgentTaskStore(
 
     /** ACP's durable structured transcript, tailed by the GUI attach process. */
     fun transcriptFile(taskId: String): File = File(taskDir(taskId), "transcript.jsonl")
+
+    /**
+     * Resolves the directory used for reading a task's transcript. Retention leaves compressed
+     * chats in place and extracts them into a process-local cache the first time they are opened.
+     */
+    suspend fun resolvedContentDir(taskId: String, compressed: Boolean): File = withContext(Dispatchers.IO) {
+        resolvedContentDirBlocking(taskId, compressed)
+    }
+
+    /** Synchronous companion used by the terminal replay path, which already runs off Main. */
+    fun resolvedContentDirBlocking(taskId: String, compressed: Boolean): File {
+        if (!compressed) return taskDir(taskId)
+        val archive = archiveFile(taskId)
+        if (!archive.isFile) return taskDir(taskId)
+        val extractDir = File(File(System.getProperty("java.io.tmpdir"), "andy-archive-view"), taskId)
+        if (extractDir.exists()) return extractDir
+        extractDir.mkdirs()
+        val canonicalRoot = extractDir.canonicalFile
+        ZipFile(archive).use { zip ->
+            zip.entries().asSequence().forEach { entry ->
+                val outFile = File(extractDir, entry.name)
+                if (!outFile.canonicalFile.toPath().startsWith(canonicalRoot.toPath())) {
+                    error("Archive entry escapes extraction directory: ${entry.name}")
+                }
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    zip.getInputStream(entry).use { input ->
+                        outFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+            }
+        }
+        return extractDir
+    }
 
     suspend fun load(): AgentStoreState = withContext(Dispatchers.IO) {
         migrateLegacyTomlIfNeeded()
@@ -94,6 +146,13 @@ class DesktopAgentTaskStore(
     fun saveSync(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
         databaseFile.parentFile?.mkdirs()
         sqlite.save(state, allowEmptyTaskList)
+    }
+
+    fun loadKanbanBoard(): KanbanBoard? = sqlite.loadKanbanBoard()
+
+    fun saveKanbanBoard(board: KanbanBoard) {
+        databaseFile.parentFile?.mkdirs()
+        sqlite.saveKanbanBoard(board)
     }
 
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
@@ -170,6 +229,7 @@ internal data class AgentProviderDefaultsDto(
     val autonomy: String = AgentAutonomy.Standard.name,
     val sandboxMode: String = "",
     val planMode: Boolean = false,
+    val confirmToolCalls: Boolean = false,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
@@ -191,6 +251,7 @@ internal data class AgentTaskDto(
     val autonomy: String = AgentAutonomy.Standard.name,
     val sandboxMode: String = "",
     val planMode: Boolean = false,
+    val confirmToolCalls: Boolean = false,
     val completedPlanText: String = "",
     val continuationPrompt: String = "",
     val latestPrompt: String = "",
@@ -234,6 +295,7 @@ internal data class AgentTaskDto(
     val contextWindowTokens: Long = 0,
     val unread: Boolean = false,
     val archived: Boolean = false,
+    val transcriptCompressed: Boolean = false,
     val ownsWorktree: Boolean = false,
     val workflowTaskId: String = "",
     val workflowStage: String = "",
@@ -324,6 +386,7 @@ internal data class ProjectAgentProfileDto(
     val fastMode: Boolean = false,
     val autonomy: String = AgentAutonomy.Standard.name,
     val sandboxMode: String = "",
+    val confirmToolCalls: Boolean = false,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
@@ -500,6 +563,7 @@ internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDe
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
         sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         planMode = planMode,
+        confirmToolCalls = confirmToolCalls,
         useWorktree = useWorktree,
         attachAndyMcp = attachAndyMcp,
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
@@ -551,6 +615,7 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
         sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
         planMode = planMode,
+        confirmToolCalls = confirmToolCalls,
         completedPlanText = completedPlanText.takeIf { it.isNotBlank() },
         continuationPrompt = continuationPrompt.takeIf { it.isNotBlank() },
         latestPrompt = latestPrompt.takeIf { it.isNotBlank() },
@@ -608,6 +673,7 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         contextWindowTokens = contextWindowTokens.takeIf { it > 0 },
         unread = unread,
         archived = archived,
+        transcriptCompressed = transcriptCompressed,
         contextBundleIds = contextBundleIds,
         provenance = provenance?.toModel(),
     )
@@ -629,6 +695,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             autonomy = defaults.autonomy.name,
             sandboxMode = defaults.sandboxMode?.name.orEmpty(),
             planMode = defaults.planMode,
+            confirmToolCalls = defaults.confirmToolCalls,
             useWorktree = defaults.useWorktree,
             attachAndyMcp = defaults.attachAndyMcp,
             maxBudgetUsd = defaults.maxBudgetUsd ?: 0.0,
@@ -659,6 +726,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             autonomy = task.autonomy.name,
             sandboxMode = task.sandboxMode?.name.orEmpty(),
             planMode = task.planMode,
+            confirmToolCalls = task.confirmToolCalls,
             completedPlanText = task.completedPlanText.orEmpty(),
             continuationPrompt = task.continuationPrompt.orEmpty(),
             latestPrompt = task.latestPrompt.orEmpty(),
@@ -707,6 +775,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             contextWindowTokens = task.contextWindowTokens ?: 0,
             unread = task.unread,
             archived = task.archived,
+            transcriptCompressed = task.transcriptCompressed,
             contextBundleIds = task.contextBundleIds,
             provenance = task.provenance?.toDto(),
         )
@@ -764,6 +833,7 @@ private fun ProjectAgentProfileDto.toModel(): ProjectAgentProfile = ProjectAgent
     fastMode = fastMode,
     autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
     sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
+    confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
@@ -885,6 +955,7 @@ private fun ProjectAgentProfile.toDto(): ProjectAgentProfileDto = ProjectAgentPr
     fastMode = fastMode,
     autonomy = autonomy.name,
     sandboxMode = sandboxMode?.name.orEmpty(),
+    confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd ?: 0.0,

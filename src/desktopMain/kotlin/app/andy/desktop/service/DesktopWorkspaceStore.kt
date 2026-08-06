@@ -120,6 +120,9 @@ class DesktopWorkspaceStore(
             tracingPresetId = props.getProperty("tracingPresetId")?.takeIf { it.isNotBlank() } ?: "default",
             tracingDurationSeconds = props.getProperty("tracingDurationSeconds")?.toIntOrNull() ?: 10,
             tracingBufferSizeMb = props.getProperty("tracingBufferSizeMb")?.toIntOrNull() ?: 64,
+            retentionCleanupEnabled = props.getProperty("retentionCleanupEnabled")?.toBooleanStrictOrNull() ?: true,
+            retentionCompressArchiveAfterDays = props.getProperty("retentionCompressArchiveAfterDays")?.toIntOrNull() ?: 30,
+            retentionPermanentDeleteAfterDays = props.getProperty("retentionPermanentDeleteAfterDays")?.toIntOrNull() ?: 90,
             tracingPresetsPaneWidth = props.getProperty("tracingPresetsPaneWidth")?.toFloatOrNull() ?: 320f,
             tracingLibraryPaneHeight = props.getProperty("tracingLibraryPaneHeight")?.toFloatOrNull() ?: 240f,
             designDevicePaneWidth = props.getProperty("designDevicePaneWidth")?.toFloatOrNull() ?: 520f,
@@ -213,6 +216,9 @@ class DesktopWorkspaceStore(
             setProperty("tracingPresetId", state.tracingPresetId)
             setProperty("tracingDurationSeconds", state.tracingDurationSeconds.toString())
             setProperty("tracingBufferSizeMb", state.tracingBufferSizeMb.toString())
+            setProperty("retentionCleanupEnabled", state.retentionCleanupEnabled.toString())
+            setProperty("retentionCompressArchiveAfterDays", state.retentionCompressArchiveAfterDays.toString())
+            setProperty("retentionPermanentDeleteAfterDays", state.retentionPermanentDeleteAfterDays.toString())
             setProperty("tracingPresetsPaneWidth", state.tracingPresetsPaneWidth.toString())
             setProperty("tracingLibraryPaneHeight", state.tracingLibraryPaneHeight.toString())
             setProperty("designDevicePaneWidth", state.designDevicePaneWidth.toString())

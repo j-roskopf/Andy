@@ -76,6 +76,7 @@ class AgentAcpManager(
             autonomy = task.autonomy,
             planMode = task.planMode,
             sandboxMode = task.sandboxMode,
+            confirmToolCalls = task.confirmToolCalls,
             cwd = File(task.cwd ?: error("ACP requires a cwd")),
             onPending = { onPermission(task.id, it) },
             onResolved = { requestId, optionId, allowed, note ->

@@ -31,6 +31,8 @@ class AcpPermissionBridge(
     private val autonomy: AgentAutonomy,
     private val planMode: Boolean,
     private val sandboxMode: AgentSandboxMode?,
+    /** When true, every tool call — including reads/searches that would otherwise auto-allow — is surfaced for approval. */
+    private val confirmToolCalls: Boolean,
     private val cwd: File,
     private val onPending: (PendingAcpPermission) -> Unit,
     private val onResolved: (String, String, Boolean, String?) -> Unit,
@@ -129,6 +131,7 @@ class AcpPermissionBridge(
         options: List<PermissionOption>,
     ): PermissionOption? {
         if (options.isEmpty()) return null
+        if (confirmToolCalls) return null
         val allow = options.filter {
             it.kind == PermissionOptionKind.ALLOW_ONCE || it.kind == PermissionOptionKind.ALLOW_ALWAYS
         }

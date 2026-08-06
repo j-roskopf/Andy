@@ -219,6 +219,7 @@ private class AgentTaskComposerFormState(
     var autonomy by mutableStateOf(AgentAutonomy.Standard)
     var sandboxMode by mutableStateOf<AgentSandboxMode?>(null)
     var planMode by mutableStateOf(false)
+    var confirmToolCalls by mutableStateOf(false)
     var modelId by mutableStateOf<String?>(null)
     var customModel by mutableStateOf("")
     var reasoningEffort by mutableStateOf<AgentReasoningEffort?>(null)
@@ -256,6 +257,7 @@ private class AgentTaskComposerFormState(
         // provider derive it from whichever autonomy level the user chooses.
         sandboxMode = defaults?.sandboxMode
         planMode = defaults?.planMode == true
+        confirmToolCalls = defaults?.confirmToolCalls == true
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
@@ -430,6 +432,7 @@ private class AgentTaskComposerForm(
             autonomy = state.autonomy,
             sandboxMode = state.sandboxMode,
             planMode = state.planMode,
+            confirmToolCalls = state.confirmToolCalls,
             model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
             reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
             fastMode = if (state.usesCustomModel) false else state.fastMode,
@@ -997,6 +1000,7 @@ private fun AgentTaskComposerFields(
                 FilterPill("isolate in git worktree", state.useWorktree, Green) { state.useWorktree = !state.useWorktree }
             }
             FilterPill("andy device tools (mcp)", state.attachMcp, Cyan) { state.attachMcp = !state.attachMcp }
+            FilterPill("confirm tool calls", state.confirmToolCalls, Rust) { state.confirmToolCalls = !state.confirmToolCalls }
         }
 
         Text("Autonomy", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)

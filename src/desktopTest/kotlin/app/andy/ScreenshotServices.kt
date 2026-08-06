@@ -78,6 +78,7 @@ internal object ScreenshotServices {
             actionRuns = ScreenshotActionRuns,
             agentRuns = ScreenshotAgentRuns,
             projectWorkflows = ScreenshotProjectWorkflows,
+            kanban = ScreenshotKanban,
             dhu = ScreenshotDhu,
         )
     }
@@ -889,5 +890,60 @@ internal object ScreenshotServices {
         override suspend fun startRecoveryReview(buildTaskId: String): String? = null
         override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
         override suspend fun deleteProject(projectId: String) = Unit
+    }
+
+    private object ScreenshotKanban : KanbanService {
+        override val board = MutableStateFlow(
+            KanbanBoard(
+                lanes = listOf(
+                    KanbanLane(
+                        id = "todo",
+                        name = "To-Do",
+                        cards = listOf(
+                            KanbanCard(
+                                id = "kanban-card-1",
+                                title = "Polish checkout validation",
+                                description = "Tighten empty postal-code handling\nand add reducer coverage.",
+                                tags = listOf("checkout", "validation"),
+                                createdAtMillis = now,
+                                updatedAtMillis = now,
+                            ),
+                            KanbanCard(
+                                id = "kanban-card-2",
+                                title = "Refresh screenshot baselines",
+                                description = "",
+                                tags = listOf("ci"),
+                                createdAtMillis = now,
+                                updatedAtMillis = now,
+                            ),
+                        ),
+                    ),
+                    KanbanLane(
+                        id = "doing",
+                        name = "Doing",
+                        cards = listOf(
+                            KanbanCard(
+                                id = "kanban-card-3",
+                                title = "Kanban board UI",
+                                description = "Lane menus, drag-and-drop,\nand card editor dialog.",
+                                tags = listOf("ui", "desktop"),
+                                createdAtMillis = now,
+                                updatedAtMillis = now,
+                            ),
+                        ),
+                    ),
+                    KanbanLane(id = "done", name = "Done"),
+                ),
+            ),
+        )
+
+        override fun addLane(name: String) = Unit
+        override fun renameLane(laneId: String, name: String) = Unit
+        override fun deleteLane(laneId: String) = Unit
+        override fun moveLane(laneId: String, direction: KanbanLaneDirection) = Unit
+        override fun addCard(laneId: String, title: String, description: String, tags: List<String>) = Unit
+        override fun updateCard(cardId: String, title: String, description: String, tags: List<String>) = Unit
+        override fun deleteCard(cardId: String) = Unit
+        override fun moveCard(cardId: String, toLaneId: String, toIndex: Int) = Unit
     }
 }

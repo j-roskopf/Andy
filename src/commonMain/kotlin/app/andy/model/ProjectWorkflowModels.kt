@@ -50,10 +50,15 @@ data class ProjectAgentProfile(
     val fastMode: Boolean = false,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
+    /** Surface every tool call (including reads) for approval, independent of the autonomy/sandbox lock. */
+    val confirmToolCalls: Boolean = false,
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
 )
+
+/** Resolves the sandbox mode actually in effect, falling back to the autonomy dial's default. */
+fun ProjectAgentProfile.effectiveSandboxMode(): AgentSandboxMode = sandboxMode ?: autonomy.defaultSandboxMode()
 
 data class ProjectPlanVersion(
     val version: Int,
@@ -205,6 +210,7 @@ fun AgentProviderDefaults.toProjectProfile(agent: AgentKind): ProjectAgentProfil
     fastMode = fastMode,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
+    confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,

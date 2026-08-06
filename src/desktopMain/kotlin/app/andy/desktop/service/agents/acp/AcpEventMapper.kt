@@ -117,7 +117,7 @@ object AcpEventMapper {
     }
 
     private fun textEvent(content: ContentBlock, atMillis: Long, thinking: Boolean): AgentEvent? {
-        val text = (content as? ContentBlock.Text)?.text ?: return AgentEvent.Raw(atMillis, content.toString())
+        val text = (content as? ContentBlock.Text)?.text ?: return AgentEvent.Raw(atMillis, content.renderText())
         if (text.isEmpty()) return null
         return if (thinking) {
             AgentEvent.Thinking(atMillis, text, isStreamDelta = true)
@@ -179,7 +179,7 @@ object AcpEventMapper {
     }
 
     private fun ToolCallContent.render(terminalOutput: (String) -> String?): String = when (this) {
-        is ToolCallContent.Content -> (content as? ContentBlock.Text)?.text ?: content.toString()
+        is ToolCallContent.Content -> content.renderText()
         is ToolCallContent.Diff -> buildString {
             append(path)
             if (!oldText.isNullOrBlank() || !newText.isNullOrBlank()) {
@@ -193,6 +193,16 @@ object AcpEventMapper {
             val output = terminalOutput(terminalId)
             if (output.isNullOrEmpty()) "terminal $terminalId" else "terminal $terminalId\n$output"
         }
+        else -> toString()
+    }
+
+    /** Human-readable stand-in for a content block. Never dumps binary payloads (e.g. image base64) as text. */
+    private fun ContentBlock.renderText(): String = when (this) {
+        is ContentBlock.Text -> text
+        is ContentBlock.Image -> "[image]"
+        is ContentBlock.Audio -> "[audio]"
+        is ContentBlock.Resource -> "[resource]"
+        is ContentBlock.ResourceLink -> "[resource: ${title ?: name}]"
         else -> toString()
     }
 

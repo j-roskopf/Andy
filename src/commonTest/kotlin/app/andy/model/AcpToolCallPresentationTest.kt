@@ -45,6 +45,28 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun summarySkipsBareCodeFenceMarkerLines() {
+        val (summary, _) = AcpToolCallPresentation.formatSummary(
+            toolName = "tool",
+            rawInput = "",
+            rawOutput = "",
+            contentDetails = "```console\nsrc/App.kt:12:fun main() {}\n```",
+        )
+        assertEquals("src/App.kt:12:fun main() {}", summary)
+    }
+
+    @Test
+    fun summaryFallbackSkipsBareFenceMarkerWhenNoOtherContent() {
+        val (summary, _) = AcpToolCallPresentation.formatSummary(
+            toolName = "tool",
+            rawInput = "",
+            rawOutput = "```console",
+            contentDetails = "```console",
+        )
+        assertTrue(summary.isBlank(), "expected no bare fence marker leaking into summary, got \"$summary\"")
+    }
+
+    @Test
     fun mergePreservesNamedToolWhenUpdateIsGeneric() {
         val first = AgentEvent.ToolCall(
             atMillis = 1,
