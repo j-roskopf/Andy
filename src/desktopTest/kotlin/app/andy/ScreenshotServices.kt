@@ -695,6 +695,7 @@ internal object ScreenshotServices {
         ) = Unit
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
         override fun updateGoal(taskId: String, goal: String?) = Unit
+        override fun updatePlanMode(taskId: String, planMode: Boolean) = Unit
         override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit
         override fun markRead(taskId: String) = Unit
         override fun markUnread(taskId: String) = Unit

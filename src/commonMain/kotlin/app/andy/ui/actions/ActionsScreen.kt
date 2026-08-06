@@ -180,6 +180,7 @@ private fun ProjectCockpit(
     onNotifyTerminalRun: (String) -> Unit,
     active: Boolean,
     workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
@@ -204,7 +205,10 @@ private fun ProjectCockpit(
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     var expandedProjectSessionsId by remember { mutableStateOf<String?>(null) }
     var viewingArchivedForProjectId by remember { mutableStateOf<String?>(null) }
-    var collapsedProjectIds by remember { mutableStateOf(setOf<String>()) }
+    val collapsedProjectIds = workspaceState.collapsedProjectChatIds
+    fun updateCollapsedProjectIds(transform: (Set<String>) -> Set<String>) {
+        onUpdateWorkspace { it.copy(collapsedProjectChatIds = transform(it.collapsedProjectChatIds)) }
+    }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
     val effectiveProjectWorkflow = project?.let { loadedProjectWorkflow ?: ProjectWorkflowState(it.id) }
@@ -394,20 +398,18 @@ private fun ProjectCockpit(
                                     expandedProjectSessionsId != item.id,
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
-                                        collapsedProjectIds = if (sessionsCollapsed) {
-                                            collapsedProjectIds - item.id
-                                        } else {
-                                            collapsedProjectIds + item.id
+                                        updateCollapsedProjectIds { ids ->
+                                            if (sessionsCollapsed) ids - item.id else ids + item.id
                                         }
                                     } else {
-                                        collapsedProjectIds = collapsedProjectIds - item.id
+                                        updateCollapsedProjectIds { it - item.id }
                                         selectProject(item.id)
                                         selectedWorkflowTaskId = null
                                         canvas = ProjectCanvas.Chat
                                     }
                                 },
                                 onOpenSession = { task ->
-                                    collapsedProjectIds = collapsedProjectIds - item.id
+                                    updateCollapsedProjectIds { it - item.id }
                                     selectProject(item.id)
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
@@ -426,7 +428,7 @@ private fun ProjectCockpit(
                                     expandedProjectSessionsId = null
                                 },
                                 onNewChat = {
-                                    collapsedProjectIds = collapsedProjectIds - item.id
+                                    updateCollapsedProjectIds { it - item.id }
                                     viewingArchivedForProjectId = null
                                     selectProject(item.id)
                                     selectedTaskId = null
@@ -659,6 +661,7 @@ internal fun ActionsScreen(
     onRequestedAgentTaskConsumed: () -> Unit = {},
     onNotifyTerminalRun: (String) -> Unit = {},
     workspaceState: WorkspaceState = WorkspaceState(),
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit = {},
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -704,6 +707,7 @@ internal fun ActionsScreen(
                     onNotifyTerminalRun = onNotifyTerminalRun,
                     active = active,
                     workspaceState = workspaceState,
+                    onUpdateWorkspace = onUpdateWorkspace,
                 )
                 ProjectsPageTab.Kanban -> KanbanBoardScreen(services = services)
             }

@@ -119,6 +119,7 @@ fun Server.registerAgentProjectTools(
             is AgentEvent.PlanUpdate -> {
                 put("type", "plan")
                 put("entries", buildJsonArray { entries.forEach { entry -> add(buildJsonObject { put("content", entry.content); put("status", entry.status) }) } })
+                markdown?.let { put("markdown", it) }
             }
             is AgentEvent.ModeChanged -> { put("type", "mode"); put("modeId", modeId) }
             is AgentEvent.AvailableCommands -> {

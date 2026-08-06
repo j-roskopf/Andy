@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -15,6 +16,7 @@ import app.andy.model.ProjectTaskState
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.WorkspaceState
+import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.test.OptInGates
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
@@ -305,6 +307,122 @@ class AgentQueuedFollowUpTest {
         } finally {
             // See AgentRetryTest's finally block for why this matters: without it, this
             // test's PTY wait/scrape loop leaks into the rest of the suite.
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun queueModeHoldsFollowUpsWhileTheRunIsActive() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-queue-mode", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            val workspaceStore = DesktopWorkspaceStore(File(dir, "workspace.properties"))
+            runBlocking {
+                workspaceStore.save(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue))
+            }
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = workspaceStore,
+                actionConfig = FakeActionConfig(),
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "queue mode test",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
+            }
+
+            service.queueFollowUp(task.id, "queued follow-up")
+            delay(100)
+
+            val current = service.tasks.value.first { it.id == task.id }
+            assertEquals(listOf("queued follow-up"), current.queuedFollowUps.map { it.text })
+            assertTrue(
+                service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().none { it.text == "queued follow-up" },
+            )
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun queueModeSendsImmediatelyWhenIdleAndQueueIsEmpty() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-queue-idle", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            val workspaceStore = DesktopWorkspaceStore(File(dir, "workspace.properties"))
+            runBlocking {
+                workspaceStore.save(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue))
+            }
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = workspaceStore,
+                actionConfig = FakeActionConfig(),
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "queue idle test",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
+            }
+            File(dir, ".queue-test-ready").writeText("go")
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Done) delay(25)
+            }
+
+            service.queueFollowUp(task.id, "send now")
+            delay(100)
+
+            val current = service.tasks.value.first { it.id == task.id }
+            assertTrue(current.queuedFollowUps.isEmpty())
+            assertTrue(
+                service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().any { it.text == "send now" },
+            )
+        } finally {
             runCatching { service?.close() }
             scope.cancel()
             dir.deleteRecursively()
@@ -612,9 +730,11 @@ private class FakeMcp : McpServerService {
     override fun getToolNames(): List<String> = emptyList()
 }
 
-private class FakeWorkspaceStore : WorkspaceStore {
-    override suspend fun load(): WorkspaceState = WorkspaceState()
-    override suspend fun save(state: WorkspaceState) = Unit
+private class FakeWorkspaceStore(
+    private val state: WorkspaceState = WorkspaceState(),
+) : WorkspaceStore {
+    override suspend fun load(): WorkspaceState = state
+    override suspend fun save(workspace: WorkspaceState) = Unit
 }
 
 private class FakeActionConfig : ActionConfigStore {

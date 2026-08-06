@@ -667,8 +667,15 @@ private fun TranscriptEvent(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text("Plan", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            event.markdown?.takeIf { it.isNotBlank() }?.let { markdown ->
+                ChatMarkdown(markdown, lineHeight = 18.sp)
+            }
             event.entries.forEach { entry ->
-                Text("${entry.status}  ${entry.content}", color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                val prefix = when (entry.status) {
+                    "file" -> "file"
+                    else -> entry.status
+                }
+                Text("$prefix  ${entry.content}", color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
             }
         }
         is AgentEvent.ModeChanged -> Text(

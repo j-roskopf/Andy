@@ -3,13 +3,16 @@ package app.andy.model
 /** Follow-up Andy sends after a provider stream stalls mid-turn. */
 const val CONNECTION_STALL_RETRY_PROMPT = "Continue where you left off."
 
-private val CONNECTION_STALL_PATTERN = Regex(
-    """(?i)(?:error:\s*)?(?:retriableerror:\s*)?connection\s+stalled(?:\s+repeatedly)?""",
+private val RETRIABLE_CONNECTION_ERROR_PATTERNS = listOf(
+    Regex("""(?i)(?:error:\s*)?(?:retriableerror:\s*)?connection\s+stalled(?:\s+repeatedly)?"""),
+    Regex(
+        """(?i)(?:error:\s*)?(?:retriableerror:\s*)?(?:\[canceled\]\s*)?http/2\s+stream\s+closed""",
+    ),
 )
 
-/** True when [text] is a Cursor/provider transport stall surfaced in chat output. */
+/** True when [text] is a Cursor/provider transport failure surfaced in chat output. */
 fun CharSequence.isRetriableConnectionStallMessage(): Boolean =
-    CONNECTION_STALL_PATTERN.containsMatchIn(this)
+    RETRIABLE_CONNECTION_ERROR_PATTERNS.any { it.containsMatchIn(this) }
 
 fun List<AgentEvent>.hasRetriableConnectionStall(): Boolean =
     any { event ->

@@ -335,9 +335,13 @@ class McpAgentRunClient(
                 durationMs = obj.long("durationMs"),
             )
             "usage" -> AgentEvent.ContextUsage(atMillis, obj.long("usedTokens"), obj.long("windowTokens"))
-            "plan" -> AgentEvent.PlanUpdate(atMillis, obj["entries"]?.jsonArray?.map { entry ->
-                AgentPlanEntry(entry.jsonObject.string("content").orEmpty(), entry.jsonObject.string("status").orEmpty())
-            }.orEmpty())
+            "plan" -> AgentEvent.PlanUpdate(
+                atMillis,
+                obj["entries"]?.jsonArray?.map { entry ->
+                    AgentPlanEntry(entry.jsonObject.string("content").orEmpty(), entry.jsonObject.string("status").orEmpty())
+                }.orEmpty(),
+                obj.string("markdown"),
+            )
             "mode" -> AgentEvent.ModeChanged(atMillis, obj.string("modeId").orEmpty())
             "modes" -> AgentEvent.AvailableModes(
                 atMillis = atMillis,
@@ -729,6 +733,7 @@ class McpAgentRunClient(
 
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
+    override fun updatePlanMode(taskId: String, planMode: Boolean) = Unit
     override suspend fun delete(taskId: String, removeWorktree: Boolean) {
         callTool(
             "chat.delete",

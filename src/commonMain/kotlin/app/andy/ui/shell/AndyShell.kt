@@ -372,6 +372,7 @@ internal fun AndyShell(
                             onRequestedAgentTaskConsumed = consumeOpenAgentTask,
                             onNotifyTerminalRun = state::notifyTerminalRun,
                             workspaceState = state.workspaceState,
+                            onUpdateWorkspace = { state.updateWorkspace(it) },
                         )
                     }
                     RetainedDestination(active = agentsActive) {
