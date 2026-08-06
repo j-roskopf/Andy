@@ -100,6 +100,7 @@ import app.andy.model.ProjectWorkflowState
 import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.service.AndyServices
+import app.andy.service.UnavailableKanbanService
 import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
@@ -663,12 +664,28 @@ internal fun ActionsScreen(
         ProjectsIntroduction(onComplete = onIntroductionComplete)
     } else {
         var pageTab by remember { mutableStateOf(ProjectsPageTab.Projects) }
+        var showAddLaneDialog by remember { mutableStateOf(false) }
+        val kanbanAvailable = services.kanban !is UnavailableKanbanService
+        if (showAddLaneDialog) {
+            KanbanAddLaneDialog(
+                onDismiss = { showAddLaneDialog = false },
+                onConfirm = { name ->
+                    services.kanban.addLane(name)
+                    showAddLaneDialog = false
+                },
+            )
+        }
         Column(Modifier.fillMaxSize()) {
             TabBar(
                 tabs = ProjectsPageTab.entries,
                 selected = pageTab,
                 onSelect = { pageTab = it },
                 label = { it.label },
+                trailing = if (pageTab == ProjectsPageTab.Kanban && kanbanAvailable) {
+                    { KanbanAddLaneAction(onClick = { showAddLaneDialog = true }) }
+                } else {
+                    null
+                },
             )
             when (pageTab) {
                 ProjectsPageTab.Projects -> ProjectCockpit(
@@ -752,33 +769,24 @@ private fun ProjectsSidebarHeader(
     val searchVisible = searchExpanded || query.isNotBlank()
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Projects",
-                color = TextSecondary.copy(alpha = 0.85f),
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
+            SearchGlyphButton(
+                active = searchVisible,
+                onClick = {
+                    if (searchVisible && query.isBlank()) {
+                        onSearchExpandedChange(false)
+                    } else {
+                        onSearchExpandedChange(true)
+                    }
+                },
             )
-            Spacer(Modifier.weight(1f))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                SearchGlyphButton(
-                    active = searchVisible,
-                    onClick = {
-                        if (searchVisible && query.isBlank()) {
-                            onSearchExpandedChange(false)
-                        } else {
-                            onSearchExpandedChange(true)
-                        }
-                    },
-                )
-                PlusGlyphButton(onClick = onNew)
-            }
+            Spacer(Modifier.width(4.dp))
+            PlusGlyphButton(onClick = onNew)
         }
         AnimatedVisibility(
             visible = searchVisible,

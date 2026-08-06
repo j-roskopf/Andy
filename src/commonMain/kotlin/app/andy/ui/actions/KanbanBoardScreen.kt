@@ -3,6 +3,8 @@ package app.andy.ui.actions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +67,9 @@ import app.andy.model.KanbanCard
 import app.andy.model.KanbanLane
 import app.andy.service.AndyServices
 import app.andy.service.KanbanLaneDirection
+import app.andy.service.UnavailableKanbanService
 import app.andy.ui.components.AndyAlertDialog
+import app.andy.ui.components.EmptyState
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.PendingConfirmation
@@ -108,6 +112,15 @@ internal data class KanbanDropTarget(
 
 @Composable
 internal fun KanbanBoardScreen(services: AndyServices) {
+    if (services.kanban is UnavailableKanbanService) {
+        EmptyState(
+            "Kanban isn't available while Andy is connected to a running andyd. " +
+                "Quit andyd and restart Andy to edit your board.",
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
+
     val board by services.kanban.board.collectAsState()
     var dragState by remember { mutableStateOf<KanbanDragState?>(null) }
     var laneBounds by remember { mutableStateOf<Map<String, Rect>>(emptyMap()) }
@@ -140,15 +153,12 @@ internal fun KanbanBoardScreen(services: AndyServices) {
 
     laneNameDialog?.let { dialog ->
         LaneNameDialog(
-            title = dialog.title,
+            title = "Rename lane",
             initialName = dialog.initialName,
-            confirmLabel = dialog.confirmLabel,
+            confirmLabel = "Save",
             onDismiss = { laneNameDialog = null },
             onConfirm = { name ->
-                when (dialog) {
-                    LaneNameDialogState.AddLane -> services.kanban.addLane(name)
-                    is LaneNameDialogState.RenameLane -> services.kanban.renameLane(dialog.laneId, name)
-                }
+                services.kanban.renameLane(dialog.laneId, name)
                 laneNameDialog = null
             },
         )
@@ -201,7 +211,7 @@ internal fun KanbanBoardScreen(services: AndyServices) {
                     },
                     onCardClick = { card -> cardDialog = CardDialogState.Edit(card) },
                     onAddCard = { cardDialog = CardDialogState.Create(lane.id) },
-                    onRenameLane = { laneNameDialog = LaneNameDialogState.RenameLane(lane.id, lane.name) },
+                    onRenameLane = { laneNameDialog = LaneNameDialogState(lane.id, lane.name) },
                     onDeleteLane = {
                         if (lane.cards.isEmpty()) {
                             services.kanban.deleteLane(lane.id)
@@ -247,7 +257,6 @@ internal fun KanbanBoardScreen(services: AndyServices) {
                     cardBounds = cardBounds,
                 )
             }
-            AddLaneColumn(onAddLane = { laneNameDialog = LaneNameDialogState.AddLane })
         }
 
         dragState?.let { drag ->
@@ -430,18 +439,38 @@ private fun KanbanLaneColumn(
 }
 
 @Composable
-private fun AddLaneColumn(onAddLane: () -> Unit) {
-    Column(
-        Modifier
-            .width(LaneWidthDp.dp)
-            .fillMaxHeight(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        OutlinedButton(onClick = onAddLane) {
-            Text("+ Add lane", fontFamily = DisplayFont, fontSize = 12.sp)
-        }
+internal fun KanbanAddLaneAction(onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val textColor = when {
+        hovered -> TextPrimary.copy(alpha = 0.82f)
+        else -> TextSecondary
     }
+    Text(
+        "+ Add lane",
+        color = textColor,
+        fontFamily = DisplayFont,
+        fontSize = 12.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .hoverable(interactionSource)
+            .clickable(onClick = onClick)
+            .padding(horizontal = AndySpace.Space2, vertical = 4.dp),
+    )
+}
+
+@Composable
+internal fun KanbanAddLaneDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    LaneNameDialog(
+        title = "New lane",
+        initialName = "",
+        confirmLabel = "Add",
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
+    )
 }
 
 @Composable
@@ -519,22 +548,7 @@ private fun KanbanTagChip(tag: String) {
 private fun tagColor(tag: String): Color =
     Color.hsv(hue = (tag.hashCode().mod(360)).toFloat(), saturation = 0.55f, value = 0.85f)
 
-private sealed class LaneNameDialogState {
-    abstract val title: String
-    abstract val initialName: String
-    abstract val confirmLabel: String
-
-    data object AddLane : LaneNameDialogState() {
-        override val title = "New lane"
-        override val initialName = ""
-        override val confirmLabel = "Add"
-    }
-
-    data class RenameLane(val laneId: String, override val initialName: String) : LaneNameDialogState() {
-        override val title = "Rename lane"
-        override val confirmLabel = "Save"
-    }
-}
+private data class LaneNameDialogState(val laneId: String, val initialName: String)
 
 private sealed class CardDialogState {
     data class Create(val laneId: String) : CardDialogState()

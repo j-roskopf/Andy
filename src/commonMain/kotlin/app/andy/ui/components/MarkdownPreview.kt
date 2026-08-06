@@ -114,51 +114,6 @@ internal fun ChatMarkdown(
     )
 }
 
-/**
- * IntelliJ's markdown parser treats `<tag>` inside inline code as HTML nodes, but mikepenz's
- * annotator does not render them — only the inline-code background remains visible.
- */
-internal fun String.escapeHtmlTagsInInlineCode(): String {
-    if (!contains('`')) return this
-    val lines = replace("\r\n", "\n").split('\n')
-    var inFence = false
-    return lines.joinToString("\n") { line ->
-        val fence = line.trimStart().startsWith("```") || line.trimStart().startsWith("~~~")
-        when {
-            fence -> {
-                inFence = !inFence
-                line
-            }
-            inFence -> line
-            else -> escapeHtmlTagsInInlineCodeLine(line)
-        }
-    }
-}
-
-private fun escapeHtmlTagsInInlineCodeLine(line: String): String {
-    val result = StringBuilder(line.length)
-    var index = 0
-    while (index < line.length) {
-        if (line[index] != '`') {
-            result.append(line[index])
-            index++
-            continue
-        }
-        val codeStart = index + 1
-        var codeEnd = codeStart
-        while (codeEnd < line.length && line[codeEnd] != '`') codeEnd++
-        val code = line.substring(codeStart, codeEnd)
-        result.append('`')
-        result.append(code.replace("<", "&lt;").replace(">", "&gt;"))
-        if (codeEnd < line.length) {
-            result.append('`')
-            codeEnd++
-        }
-        index = codeEnd
-    }
-    return result.toString()
-}
-
 /** Preserves chat line breaks without changing blank-line paragraphs or fenced code blocks. */
 internal fun String.withChatLineBreaks(): String {
     val lines = replace("\r\n", "\n").split('\n')
@@ -193,7 +148,7 @@ private fun AndyMarkdown(
     },
     onTextChange: ((String) -> Unit)? = null,
 ) {
-    val markdownState = rememberMarkdownState(text.escapeHtmlTagsInInlineCode(), retainState = true)
+    val markdownState = rememberMarkdownState(text, retainState = true)
     val highlightsBuilder = rememberAndyHighlightsBuilder()
     val thinking = density == AndyMarkdownDensity.Thinking
     val body = MaterialTheme.typography.bodyMedium.copy(

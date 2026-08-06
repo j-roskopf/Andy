@@ -35,11 +35,6 @@ data class ActionsConfig(
     val projects: List<ActionProject> = emptyList(),
 )
 
-fun ActionProject.rememberedActionId(lastActionIdByProject: Map<String, String>): String? =
-    lastActionIdByProject[id]?.takeIf { remembered ->
-        actions.any { it.id == remembered }
-    } ?: actions.firstOrNull()?.id
-
 enum class ActionRunStatus { Running, Exited, Failed, Stopped }
 
 data class RunningAction(

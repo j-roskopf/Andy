@@ -503,7 +503,7 @@ private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleI
  * in the transcript so it is visible once, with its completed state.
  */
 internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> {
-    val coalesced = joinAssistantTextSplitByActivity(coalesceAcpTranscriptEvents(events))
+    val coalesced = coalesceAcpTranscriptEvents(events)
     val displayable = coalesced.filterNot { event ->
         event is AgentEvent.AvailableCommands ||
             event is AgentEvent.Raw ||
@@ -514,67 +514,6 @@ internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent>
         event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
     }
 }
-
-/**
- * ACP can flush assistant stream chunks when a tool call starts, even mid-word. Rejoin those
- * fragments for display and defer the intervening activity until after the merged message.
- */
-internal fun joinAssistantTextSplitByActivity(events: List<AgentEvent>): List<AgentEvent> {
-    if (events.isEmpty()) return events
-    val result = mutableListOf<AgentEvent>()
-    var index = 0
-    while (index < events.size) {
-        val event = events[index]
-        if (event !is AgentEvent.AssistantText) {
-            result += event
-            index++
-            continue
-        }
-        var mergedMessage: AgentEvent.AssistantText = event
-        var lookahead = index + 1
-        val deferredActivity = mutableListOf<AgentEvent>()
-        while (true) {
-            val activity = mutableListOf<AgentEvent>()
-            while (lookahead < events.size && events[lookahead].isAssistantTextJoinActivity()) {
-                activity += events[lookahead]
-                lookahead++
-            }
-            val next = events.getOrNull(lookahead) as? AgentEvent.AssistantText ?: break
-            if (!shouldMergeSplitAssistantText(mergedMessage.text, next.text)) break
-            deferredActivity += activity
-            mergedMessage = mergedMessage.copy(text = mergedMessage.text + next.text)
-            lookahead++
-        }
-        result += mergedMessage
-        result += deferredActivity
-        index = lookahead
-    }
-    return result
-}
-
-internal fun shouldMergeSplitAssistantText(previous: String, next: String): Boolean {
-    val prev = previous.trimEnd()
-    val continuation = next.trimStart()
-    if (prev.isEmpty() || continuation.isEmpty()) return false
-
-    if (prev.endsWith('-')) return true
-
-    val prevLast = prev.last()
-    val nextFirst = continuation.first()
-    if (prevLast == '.' || prevLast == '!' || prevLast == '?' || prevLast == ':') return false
-
-    val lastToken = prev.substringAfterLast(' ').substringAfterLast('\n')
-    if (lastToken.firstOrNull()?.isUpperCase() == true && nextFirst.isLowerCase()) {
-        return lastToken.drop(1).any { it.isLowerCase() }
-    }
-    return false
-}
-
-private fun AgentEvent.isAssistantTextJoinActivity(): Boolean =
-    this is AgentEvent.ToolCall ||
-        this is AgentEvent.ToolResult ||
-        this is AgentEvent.Thinking ||
-        this is AgentEvent.Raw
 
 internal sealed class TranscriptDisplayItem {
     data class Event(val index: Int, val event: AgentEvent) : TranscriptDisplayItem()
