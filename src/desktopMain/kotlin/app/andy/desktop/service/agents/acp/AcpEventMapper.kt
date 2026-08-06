@@ -2,6 +2,8 @@ package app.andy.desktop.service.agents.acp
 
 import app.andy.desktop.service.agents.normalizedAgentCommandName
 import com.agentclientprotocol.model.ContentBlock
+import com.agentclientprotocol.model.PlanEntry
+import com.agentclientprotocol.model.PlanVariant
 import com.agentclientprotocol.model.SessionUpdate
 import com.agentclientprotocol.model.ToolCallContent
 import com.agentclientprotocol.model.ToolKind
@@ -82,7 +84,7 @@ object AcpEventMapper {
         is SessionUpdate.UsageUpdate -> AgentEvent.ContextUsage(atMillis, update.used, update.size)
         is SessionUpdate.SessionInfoUpdate -> AgentEvent.Raw(atMillis, "session: ${update.title}")
         is SessionUpdate.ConfigOptionUpdate -> AgentEvent.Raw(atMillis, "config options updated: ${update.configOptions}")
-        is SessionUpdate.PlanUpdateV2 -> AgentEvent.Raw(atMillis, "plan updated: ${update.plan}")
+        is SessionUpdate.PlanUpdateV2 -> planUpdateFromVariant(update.plan, atMillis)
         is SessionUpdate.UnknownSessionUpdate -> AgentEvent.Raw(atMillis, update.toString())
         else -> AgentEvent.Raw(atMillis, update.toString())
     }
@@ -100,6 +102,27 @@ object AcpEventMapper {
         val name = command.name.normalizedAgentCommandName()
         name !in knownSkillNames || name in allowedSkillNames
     }
+
+    internal fun planUpdateFromVariant(plan: PlanVariant, atMillis: Long): AgentEvent.PlanUpdate = when (plan) {
+        is PlanVariant.Items -> AgentEvent.PlanUpdate(
+            atMillis = atMillis,
+            entries = plan.entries.map { entry -> entry.toAgentPlanEntry() },
+        )
+        is PlanVariant.Markdown -> AgentEvent.PlanUpdate(
+            atMillis = atMillis,
+            entries = emptyList(),
+            markdown = plan.content,
+        )
+        is PlanVariant.File -> AgentEvent.PlanUpdate(
+            atMillis = atMillis,
+            entries = listOf(AgentPlanEntry(plan.uri, "file")),
+        )
+    }
+
+    private fun PlanEntry.toAgentPlanEntry(): AgentPlanEntry = AgentPlanEntry(
+        content = content,
+        status = status.name.lowercase(),
+    )
 
     /** Replace a mutable ACP tool row by id while preserving unrelated transcript events. */
     fun reduce(existing: List<AgentEvent>, incoming: AgentEvent): List<AgentEvent> {

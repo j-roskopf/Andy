@@ -8,10 +8,15 @@ import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.defaultLane
 import com.agentclientprotocol.model.ContentBlock
+import com.agentclientprotocol.model.PlanEntry
+import com.agentclientprotocol.model.PlanEntryPriority
+import com.agentclientprotocol.model.PlanEntryStatus
+import com.agentclientprotocol.model.PlanVariant
 import com.agentclientprotocol.model.SessionUpdate
 import com.agentclientprotocol.model.ToolCallStatus
 import com.agentclientprotocol.model.ToolKind
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import app.andy.desktop.service.agents.inferAgentLaneFromArtifacts
@@ -135,6 +140,51 @@ class AcpLaneTest {
                 atMillis = 12,
             ),
         )
+    }
+
+    @Test
+    fun mapperRendersPlanUpdateV2Items() {
+        val event = AcpEventMapper.map(
+            SessionUpdate.PlanUpdateV2(
+                plan = PlanVariant.Items(
+                    id = "plan-1",
+                    entries = listOf(
+                        PlanEntry(
+                            content = "Inspect CI workflow",
+                            priority = PlanEntryPriority.MEDIUM,
+                            status = PlanEntryStatus.PENDING,
+                            _meta = JsonNull,
+                        ),
+                    ),
+                    _meta = JsonNull,
+                ),
+                _meta = JsonNull,
+            ),
+            atMillis = 42,
+        )
+
+        assertIs<AgentEvent.PlanUpdate>(event)
+        assertEquals("Inspect CI workflow", event.entries.single().content)
+        assertEquals("pending", event.entries.single().status)
+    }
+
+    @Test
+    fun mapperRendersPlanUpdateV2Markdown() {
+        val event = AcpEventMapper.map(
+            SessionUpdate.PlanUpdateV2(
+                plan = PlanVariant.Markdown(
+                    id = "plan-md",
+                    content = "## Plan\n\n1. Profile iOS job",
+                    _meta = JsonNull,
+                ),
+                _meta = JsonNull,
+            ),
+            atMillis = 43,
+        )
+
+        assertIs<AgentEvent.PlanUpdate>(event)
+        assertEquals("## Plan\n\n1. Profile iOS job", event.markdown)
+        assertTrue(event.entries.isEmpty())
     }
 
     @Test

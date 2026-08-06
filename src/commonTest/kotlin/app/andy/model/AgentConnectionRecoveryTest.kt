@@ -10,6 +10,14 @@ class AgentConnectionRecoveryTest {
         assertTrue("Error: RetriableError: Connection stalled".isRetriableConnectionStallMessage())
         assertTrue("RetriableError: Connection stalled repeatedly".isRetriableConnectionStallMessage())
         assertTrue("connection stalled".isRetriableConnectionStallMessage())
+        assertTrue(
+            "Error: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"
+                .isRetriableConnectionStallMessage(),
+        )
+        assertTrue(
+            "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"
+                .isRetriableConnectionStallMessage(),
+        )
     }
 
     @Test

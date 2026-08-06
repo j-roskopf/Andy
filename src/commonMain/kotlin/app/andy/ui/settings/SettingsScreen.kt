@@ -61,6 +61,7 @@ import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
 import app.andy.isToggleableInSidebar
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
@@ -171,6 +172,7 @@ internal fun SettingsScreen(
             )
             DesktopSettingsCategory.Agents -> {
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
+                AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
                 if (services.agentRetention !is UnavailableAgentRetentionService) {
                     AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
@@ -696,6 +698,39 @@ private fun AgentTranscriptPanel(
         }
         Text(
             "Groups consecutive thinking and tool steps into one block between user and assistant messages.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+@Composable
+private fun AgentChatMessagingPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Messaging",
+            description = "How follow-up messages are delivered while an agent is working.",
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AgentMessageDeliveryMode.entries.forEach { mode ->
+                SettingsChoicePill(
+                    label = mode.label,
+                    selected = mode == workspace.agentMessageDeliveryMode,
+                    contentDescription = mode.label,
+                    onClick = { update { it.copy(agentMessageDeliveryMode = mode) } },
+                )
+            }
+        }
+        Text(
+            when (workspace.agentMessageDeliveryMode) {
+                AgentMessageDeliveryMode.Immediate ->
+                    "Send immediately delivers follow-ups to the live agent session as soon as you press send."
+                AgentMessageDeliveryMode.Queue ->
+                    "Queue messages holds follow-ups while a run is in progress, or when you are stacking multiple messages on an idle chat."
+            },
             color = TextSecondary,
             fontSize = 12.sp,
         )

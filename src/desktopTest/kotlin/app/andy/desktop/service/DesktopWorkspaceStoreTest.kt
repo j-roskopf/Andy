@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.IntentDraft
 import app.andy.model.IntentMode
@@ -26,6 +27,10 @@ class DesktopWorkspaceStoreTest {
 
         DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
+
+        val messaging = saved.copy(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue)
+        DesktopWorkspaceStore(file).save(messaging)
+        assertEquals(AgentMessageDeliveryMode.Queue, DesktopWorkspaceStore(file).load().agentMessageDeliveryMode)
 
         val retention = saved.copy(
             retentionCleanupEnabled = false,
@@ -123,6 +128,12 @@ class DesktopWorkspaceStoreTest {
 
         DesktopWorkspaceStore(file).save(saved.copy(disabledDestinations = emptySet()))
         assertEquals(emptySet(), DesktopWorkspaceStore(file).load().disabledDestinations)
+
+        DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = setOf("project-a", "project-b")))
+        assertEquals(setOf("project-a", "project-b"), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
+
+        DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = emptySet()))
+        assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
     }
 
     @Test

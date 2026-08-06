@@ -219,6 +219,16 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun planTextFromAcpTranscriptPrefersStructuredPlanMarkdown() {
+        val events = listOf(
+            AgentEvent.PlanUpdate(atMillis = 1, entries = emptyList(), markdown = "## Plan\n\n1. First"),
+            AgentEvent.AssistantText(atMillis = 2, text = "fallback", isStreamDelta = false),
+        )
+
+        assertEquals("## Plan\n\n1. First", planTextFromAcpTranscript(events))
+    }
+
+    @Test
     fun coalesceAcpTranscriptEventsFoldsManyStreamDeltas() {
         val deltas = (1..4_000).map { index ->
             AgentEvent.AssistantText(atMillis = index.toLong(), text = "x", isStreamDelta = true)
@@ -315,6 +325,25 @@ class AgentTranscriptTest {
             AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),
             AgentEvent.AssistantText(atMillis = 2, text = "Error: RetriableError: Connection stalled"),
             AgentEvent.TaskError(atMillis = 3, message = "RetriableError: Connection stalled"),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        assertIs<AgentEvent.ToolCall>(displayed.single())
+    }
+
+    @Test
+    fun http2CancelErrorsAreHiddenFromTranscriptDisplay() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),
+            AgentEvent.AssistantText(
+                atMillis = 2,
+                text = "Error: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+            ),
+            AgentEvent.TaskError(
+                atMillis = 3,
+                message = "RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)",
+            ),
         )
 
         val displayed = transcriptDisplayEvents(events)

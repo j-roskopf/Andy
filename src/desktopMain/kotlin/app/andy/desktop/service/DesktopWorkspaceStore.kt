@@ -4,6 +4,7 @@ import app.andy.model.IntentDraft
 import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
@@ -145,7 +146,11 @@ class DesktopWorkspaceStore(
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
             agentTranscriptAutoExpandActivity = props.getProperty("agentTranscriptAutoExpandActivity")?.toBooleanStrictOrNull() ?: false,
             agentTranscriptCollapseActivityBlocks = props.getProperty("agentTranscriptCollapseActivityBlocks")?.toBooleanStrictOrNull() ?: false,
+            agentMessageDeliveryMode = props.getProperty("agentMessageDeliveryMode")?.let { value ->
+                AgentMessageDeliveryMode.entries.firstOrNull { it.name == value }
+            } ?: AgentMessageDeliveryMode.Immediate,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
+            collapsedProjectChatIds = props.getProperty("collapsedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
         )
     }.also { mutableState.value = it }
 
@@ -239,7 +244,9 @@ class DesktopWorkspaceStore(
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
             setProperty("agentTranscriptAutoExpandActivity", state.agentTranscriptAutoExpandActivity.toString())
             setProperty("agentTranscriptCollapseActivityBlocks", state.agentTranscriptCollapseActivityBlocks.toString())
+            setProperty("agentMessageDeliveryMode", state.agentMessageDeliveryMode.name)
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
+            setProperty("collapsedProjectChatIds", state.collapsedProjectChatIds.joinToString("\n"))
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         mutableState.value = state

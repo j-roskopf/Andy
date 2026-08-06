@@ -1086,7 +1086,11 @@ sealed interface AgentEvent {
         val windowTokens: Long? = null,
     ) : AgentEvent
 
-    data class PlanUpdate(override val atMillis: Long, val entries: List<AgentPlanEntry>) : AgentEvent
+    data class PlanUpdate(
+        override val atMillis: Long,
+        val entries: List<AgentPlanEntry>,
+        val markdown: String? = null,
+    ) : AgentEvent
     data class ModeChanged(override val atMillis: Long, val modeId: String) : AgentEvent
     data class AvailableCommands(override val atMillis: Long, val commands: List<AgentSlashCommand>) : AgentEvent
     /** Emitted once when an ACP session opens, if the provider advertises switchable modes. */
@@ -1150,6 +1154,14 @@ data class AgentSessionMode(
     val name: String,
     val description: String? = null,
 )
+
+/** True when an ACP provider mode represents read-only planning rather than execution. */
+fun AgentSessionMode.looksLikePlanMode(): Boolean {
+    val normalizedId = id.trim().lowercase()
+    val normalizedName = name.trim().lowercase()
+    return normalizedId == "plan" || normalizedName == "plan" ||
+        normalizedId.endsWith("-plan") || normalizedName.endsWith(" plan")
+}
 
 /**
  * ACP providers sometimes emit whitespace-only text chunks. Older builds stored those as
@@ -1243,6 +1255,16 @@ fun planTextFromAcpTranscript(events: List<AgentEvent>): String? {
     val display = coalesceAcpTranscriptEvents(events).filterNot { event ->
         event is AgentEvent.AvailableCommands || event is AgentEvent.AvailableModes || event is AgentEvent.Raw
     }
+    display.filterIsInstance<AgentEvent.PlanUpdate>()
+        .mapNotNull { it.markdown?.trim()?.takeIf(String::isNotBlank) }
+        .lastOrNull()
+        ?.let { return it }
+    display.filterIsInstance<AgentEvent.PlanUpdate>()
+        .mapNotNull { update ->
+            update.entries.map { it.content.trim() }.filter { it.isNotBlank() }.joinToString("\n").takeIf { it.isNotBlank() }
+        }
+        .lastOrNull()
+        ?.let { return it }
     display.filterIsInstance<AgentEvent.TaskResult>()
         .mapNotNull { it.finalText?.trim()?.takeIf(String::isNotBlank) }
         .lastOrNull()

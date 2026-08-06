@@ -4,6 +4,12 @@ import kotlinx.serialization.Serializable
 
 enum class AgentNotificationTiming { Always, BackgroundOnly }
 
+/** How chat follow-ups are delivered while an agent run is in progress. */
+enum class AgentMessageDeliveryMode(val label: String) {
+    Immediate("Send immediately"),
+    Queue("Queue messages"),
+}
+
 enum class AgentNotificationSound(val id: String, val label: String) {
     Chime("chime", "Chime"),
     Ping("ping", "Ping"),
@@ -107,6 +113,10 @@ data class WorkspaceState(
     val agentTranscriptAutoExpandActivity: Boolean = false,
     /** Merge consecutive thinking/tool steps into one block between user/assistant messages. */
     val agentTranscriptCollapseActivityBlocks: Boolean = false,
+    /** When [AgentMessageDeliveryMode.Queue], follow-ups wait in a queue until the current run finishes. */
+    val agentMessageDeliveryMode: AgentMessageDeliveryMode = AgentMessageDeliveryMode.Immediate,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
+    /** Project ids whose chat lists are collapsed in the Projects sidebar. */
+    val collapsedProjectChatIds: Set<String> = emptySet(),
 )

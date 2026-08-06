@@ -13,6 +13,7 @@ import app.andy.model.isGrillMeSkillName
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQuotaSource
@@ -27,6 +28,7 @@ import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ConfigSource
 import app.andy.model.AgentSandboxMode
+import app.andy.model.looksLikePlanMode
 import app.andy.model.grillMeInteractivePromptAddendum
 import app.andy.model.specPlanWriteInstruction
 import app.andy.model.ProjectAgentProfile
@@ -1414,6 +1416,11 @@ class DesktopAgentRunService(
     override fun setAcpSessionMode(taskId: String, modeId: String) {
         val task = currentTask(taskId) ?: return
         if (task.lane != AgentLaneKind.Acp) return
+        val planMode = availableAcpModes(taskId).firstOrNull { it.id == modeId }?.looksLikePlanMode() == true
+        if (task.planMode != planMode) {
+            updateTask(taskId) { it.copy(planMode = planMode) }
+            scope.launch { persist() }
+        }
         scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, modeId) }
     }
 
@@ -1426,7 +1433,8 @@ class DesktopAgentRunService(
         provenance: AgentContextualProvenance?,
     ) {
         val task = currentTask(taskId) ?: return
-        if (!task.isActive && !isLaneLive(taskId)) return
+        val preferQueue = agentMessageDeliveryMode() == AgentMessageDeliveryMode.Queue
+        if (!task.isActive && !isLaneLive(taskId) && !preferQueue) return
 
         val text = followUp.trim()
         if (text.isBlank() && imagePaths.isEmpty()) return
@@ -1435,39 +1443,86 @@ class DesktopAgentRunService(
             this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
         }
 
-        if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
-            val now = System.currentTimeMillis()
-            val acpPrompt = task.followUpCliPayload(text, imagePaths, selectedSkills).prompt
-            appendEvents(taskId, listOf(AgentEvent.UserMessage(now, acpPrompt, selectedSkills, imagePaths)))
-            updateTask(taskId) { current ->
-                current.copy(
-                    status = AgentStatus.Working,
-                    finishedAtMillis = null,
-                    latestPrompt = acpPrompt,
-                    unread = false,
-                )
+        if (!preferQueue) {
+            if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
+                val now = System.currentTimeMillis()
+                val acpPrompt = task.followUpCliPayload(text, imagePaths, selectedSkills).prompt
+                appendEvents(taskId, listOf(AgentEvent.UserMessage(now, acpPrompt, selectedSkills, imagePaths)))
+                updateTask(taskId) { current ->
+                    current.copy(
+                        status = AgentStatus.Working,
+                        finishedAtMillis = null,
+                        latestPrompt = acpPrompt,
+                        unread = false,
+                    )
+                }
+                scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
+                return
             }
-            scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
-            return
-        }
 
-        if (terminals.isAlive(taskId)) {
-            val now = System.currentTimeMillis()
-            appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths)))
-            updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
-            val liveText = task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills)
-            scope.launch {
-                val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
-                terminals.write(taskId, liveText + evidenceSuffix)
+            if (terminals.isAlive(taskId)) {
+                val now = System.currentTimeMillis()
+                appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths)))
+                updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
+                val liveText = task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills)
+                scope.launch {
+                    val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(taskId, contextBundleIds) }
+                    terminals.write(taskId, liveText + evidenceSuffix)
+                }
+                return
             }
-            return
-        }
 
-        if (task.isActive && !isLaunchInProgress(taskId)) {
+            if (task.isActive && !isLaunchInProgress(taskId)) {
+                resume(taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance)
+                return
+            }
+        } else if (!task.isActive && !isLaunchInProgress(taskId) && task.queuedFollowUps.isEmpty()) {
             resume(taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance)
             return
         }
 
+        enqueueFollowUp(
+            taskId = taskId,
+            text = text,
+            imagePaths = imagePaths,
+            selectedSkills = selectedSkills,
+            contextBundleIds = contextBundleIds,
+            provenance = provenance,
+        )
+    }
+
+    override fun sendNextQueuedFollowUp(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.isActive || isLaunchInProgress(taskId)) return
+        val next = task.queuedFollowUps.firstOrNull() ?: return
+        updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
+        resume(
+            taskId,
+            next.text,
+            next.imagePaths,
+            next.skills,
+            next.contextBundleIds,
+            next.provenance,
+        )
+    }
+
+    override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) {
+        val task = currentTask(taskId) ?: return
+        if (queueIndex !in task.queuedFollowUps.indices) return
+        updateTask(taskId) { current ->
+            current.copy(queuedFollowUps = current.queuedFollowUps.filterIndexed { index, _ -> index != queueIndex })
+        }
+        scope.launch { persist() }
+    }
+
+    private fun enqueueFollowUp(
+        taskId: String,
+        text: String,
+        imagePaths: List<String>,
+        selectedSkills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+    ) {
         updateTask(taskId) { current ->
             current.copy(
                 latestPrompt = text.ifBlank { current.latestPrompt },
@@ -1491,14 +1546,11 @@ class DesktopAgentRunService(
         }
     }
 
-    override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) {
-        val task = currentTask(taskId) ?: return
-        if (queueIndex !in task.queuedFollowUps.indices) return
-        updateTask(taskId) { current ->
-            current.copy(queuedFollowUps = current.queuedFollowUps.filterIndexed { index, _ -> index != queueIndex })
+    private fun agentMessageDeliveryMode(): AgentMessageDeliveryMode =
+        when (val store = workspaceStore) {
+            is DesktopWorkspaceStore -> store.state.value.agentMessageDeliveryMode
+            else -> AgentMessageDeliveryMode.Immediate
         }
-        scope.launch { persist() }
-    }
 
     override suspend fun retry(taskId: String) {
         ready.await()
@@ -1546,6 +1598,34 @@ class DesktopAgentRunService(
         updateTask(taskId) { it.copy(goal = normalizedGoal) }
         scope.launch { persist() }
     }
+
+    override fun updatePlanMode(taskId: String, planMode: Boolean) {
+        val task = currentTask(taskId) ?: return
+        if (task.planMode == planMode) return
+        updateTask(taskId) { it.copy(planMode = planMode) }
+        scope.launch { persist() }
+        syncAcpSessionPlanMode(taskId, planMode)
+    }
+
+    private fun syncAcpSessionPlanMode(taskId: String, planMode: Boolean) {
+        val task = currentTask(taskId) ?: return
+        if (task.lane != AgentLaneKind.Acp) return
+        val modes = availableAcpModes(taskId)
+        if (modes.isEmpty()) return
+        val targetMode = if (planMode) {
+            modes.firstOrNull { it.looksLikePlanMode() } ?: return
+        } else {
+            modes.firstOrNull { !it.looksLikePlanMode() } ?: return
+        }
+        scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, targetMode.id) }
+    }
+
+    private fun availableAcpModes(taskId: String): List<app.andy.model.AgentSessionMode> =
+        loadAcpEventsForDisplay(taskId)
+            .filterIsInstance<AgentEvent.AvailableModes>()
+            .lastOrNull()
+            ?.modes
+            .orEmpty()
 
     private fun newAgentTaskId(): String = "task-" + UUID.randomUUID().toString().replace("-", "").take(10)
 
@@ -4436,7 +4516,7 @@ class DesktopAgentRunService(
             }
         }
         previousTaskStatuses.remove(taskId)
-        if (status == AgentStatus.Done && queuedFollowUp != null) {
+        if (status == AgentStatus.Done && queuedFollowUp != null && !stoppedByUser) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(
                 taskId,

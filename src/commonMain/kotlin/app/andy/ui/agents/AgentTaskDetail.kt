@@ -65,6 +65,7 @@ import app.andy.rememberCopyText
 import app.andy.currentTimeMillis
 import app.andy.domain.ToolCallFileContent
 import app.andy.domain.diffFromToolCallFileContent
+import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentUserInputOrigin
@@ -81,6 +82,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
+import app.andy.model.looksLikePlanMode
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
@@ -193,6 +195,7 @@ internal fun AgentTaskDetail(
         supportsResume && showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
     }
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
+    val queueMode = workspaceState.agentMessageDeliveryMode == AgentMessageDeliveryMode.Queue
     val slashCommand = findActiveSlashCommand(followUp)
     val allowedSkillNames = remember(availableSkills) {
         availableSkills.mapTo(linkedSetOf()) { it.name.trim().lowercase() }
@@ -225,6 +228,11 @@ internal fun AgentTaskDetail(
         }
     }
     var modeMenuExpanded by remember(task.id) { mutableStateOf(false) }
+    val currentAcpMode = remember(availableAcpModes, currentAcpModeId) {
+        availableAcpModes.firstOrNull { it.id == currentAcpModeId } ?: availableAcpModes.firstOrNull()
+    }
+    val acpPlanModeActive = currentAcpMode?.looksLikePlanMode() == true
+    val planModeActive = task.planMode || acpPlanModeActive
     val matchingCommands = slashCommand?.let { command ->
         availableCommands.filter { nativeCommand ->
             nativeCommand.name.contains(command.query, ignoreCase = true) ||
@@ -263,10 +271,13 @@ internal fun AgentTaskDetail(
     fun submitFollowUp() {
         if (!supportsResume || !canSendFollowUp) return
         fun sendOrQueue(message: String, skills: List<AgentSkill>) {
-            if (task.isActive) {
-                services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
-            } else {
-                services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
+            when {
+                queueMode && (task.isActive || task.queuedFollowUps.isNotEmpty()) ->
+                    services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
+                task.isActive ->
+                    services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
+                else ->
+                    services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
             }
         }
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
@@ -495,12 +506,29 @@ internal fun AgentTaskDetail(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    "${task.queuedFollowUps.size} queued message${if (task.queuedFollowUps.size == 1) "" else "s"}",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${task.queuedFollowUps.size} queued message${if (task.queuedFollowUps.size == 1) "" else "s"}",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                    )
+                    if (!task.isActive) {
+                        Text(
+                            "Send queued",
+                            color = Green,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { services.agentRuns.sendNextQueuedFollowUp(task.id) }
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 task.queuedFollowUps.forEachIndexed { index, queuedFollowUp ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("${index + 1}.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
@@ -536,54 +564,13 @@ internal fun AgentTaskDetail(
         }
 
         if (showFollowUpComposer) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Border.copy(alpha = 0.28f), RoundedCornerShape(AndyRadius.Row))
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.SurfaceRaised,
+                borderColor = if (followUpImageDragActive) Cyan else null,
+                contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (acpTask && availableAcpModes.isNotEmpty()) {
-                    val currentMode = availableAcpModes.firstOrNull { it.id == currentAcpModeId } ?: availableAcpModes.first()
-                    Box {
-                        Text(
-                            "mode: ${currentMode.name}",
-                            color = TextSecondary,
-                            fontFamily = MonoFont,
-                            fontSize = 11.sp,
-                            modifier = Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { modeMenuExpanded = true }
-                                .padding(vertical = 2.dp),
-                        )
-                        DropdownMenu(
-                            expanded = modeMenuExpanded,
-                            onDismissRequest = { modeMenuExpanded = false },
-                        ) {
-                            availableAcpModes.forEach { mode ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text(
-                                                mode.name,
-                                                color = if (mode.id == currentMode.id) Green else TextPrimary,
-                                                fontFamily = MonoFont,
-                                                fontSize = 12.sp,
-                                            )
-                                            mode.description?.takeIf { it.isNotBlank() }?.let { description ->
-                                                Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        modeMenuExpanded = false
-                                        services.agentRuns.setAcpSessionMode(task.id, mode.id)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
                 if (task.userInputRequest == null) {
                     task.goal?.let { goal ->
                         Row(
@@ -657,10 +644,10 @@ internal fun AgentTaskDetail(
                                 skillMenuDismissed = false
                             },
                             singleLine = false,
-                            minLines = 1,
-                            maxLines = 8,
+                            minLines = 3,
+                            maxLines = 7,
                             modifier = Modifier.fillMaxWidth()
-                                .heightIn(max = 180.dp)
+                                .heightIn(min = 94.dp, max = 180.dp)
                                 .onPreviewKeyEvent { event ->
                                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                     if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
@@ -679,7 +666,7 @@ internal fun AgentTaskDetail(
                                     onFiles = { dropped -> followUpImagePaths = attachChatImages(followUpImagePaths, dropped) },
                                     onDragActiveChange = { active -> followUpImageDragActive = active },
                                 ),
-                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 14.sp, lineHeight = 21.sp),
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,
                             visualTransformation = slashHighlight,
@@ -687,13 +674,14 @@ internal fun AgentTaskDetail(
                                 Text(
                                     when {
                                         followUpImageDragActive -> "release to attach images"
-                                        terminalSessionActive && followUpImagePaths.isNotEmpty() ->
-                                            "add a message — staged images send with it, enter to submit"
+                                        followUpImagePaths.isNotEmpty() ->
+                                            "add a message or send images — attach, paste, or drag more"
                                         else ->
-                                            "follow-up prompt — attach, paste, or drag images; / for commands"
+                                            "Follow up with ${task.agent.label} — attach, paste, or drag images"
                                     },
-                                    color = if (followUpImageDragActive) Cyan else TextSecondary.copy(alpha = 0.75f),
-                                    fontSize = 14.sp,
+                                    color = if (followUpImageDragActive) Cyan else TextSecondary,
+                                    fontFamily = MonoFont,
+                                    fontSize = 13.sp,
                                 )
                             },
                         )
@@ -769,27 +757,62 @@ internal fun AgentTaskDetail(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Spacer(Modifier.weight(1f))
+                    Row(
+                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        FilterPill("plan", planModeActive, Green) {
+                            services.agentRuns.updatePlanMode(task.id, !planModeActive)
+                        }
+                        if (acpTask && availableAcpModes.isNotEmpty() && currentAcpMode != null) {
+                            Box {
+                                FilterPill(currentAcpMode.name, true, Cyan) { modeMenuExpanded = true }
+                                DropdownMenu(
+                                    expanded = modeMenuExpanded,
+                                    onDismissRequest = { modeMenuExpanded = false },
+                                ) {
+                                    availableAcpModes.forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                    Text(
+                                                        mode.name,
+                                                        color = if (mode.id == currentAcpMode.id) Green else TextPrimary,
+                                                        fontFamily = MonoFont,
+                                                        fontSize = 12.sp,
+                                                    )
+                                                    mode.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                                        Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                modeMenuExpanded = false
+                                                services.agentRuns.setAcpSessionMode(task.id, mode.id)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     ChatImageAttachButton(
                         onImagesAttached = { added ->
                             followUpImagePaths = attachChatImages(followUpImagePaths, added)
                         },
                     )
-                    Text(
-                        if (copiedHint) "Opened" else "Terminal",
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable {
-                                services.agentRuns.interactiveResumeCommand(task.id)?.let {
-                                    copyText(it)
-                                    copiedHint = true
-                                }
-                                scope.launch { services.agentRuns.openInTerminal(task.id) }
+                    OutlinedButton(
+                        onClick = {
+                            services.agentRuns.interactiveResumeCommand(task.id)?.let {
+                                copyText(it)
+                                copiedHint = true
                             }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
+                            scope.launch { services.agentRuns.openInTerminal(task.id) }
+                        },
+                    ) {
+                        Text(if (copiedHint) "opened" else "terminal", fontSize = 11.sp)
+                    }
                     if (task.userInputRequest == null) {
                         ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
                     }

@@ -103,6 +103,7 @@ private data class TranscriptEvent(
     val usedTokens: Long = 0,
     val windowTokens: Long = 0,
     val plan: List<TranscriptPlanEntry> = emptyList(),
+    val planMarkdown: String = "",
     val modeId: String = "",
     val commands: List<TranscriptCommand> = emptyList(),
     val modes: List<TranscriptMode> = emptyList(),
@@ -133,7 +134,12 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
     is AgentEvent.TaskError -> TranscriptEvent("error", atMillis, text = message)
     is AgentEvent.TaskResult -> TranscriptEvent("result", atMillis, success = success, finalText = finalText.orEmpty(), costUsd = costUsd ?: 0.0, costIsEstimated = costIsEstimated, inputTokens = inputTokens ?: 0, outputTokens = outputTokens ?: 0, durationMs = durationMs ?: 0)
     is AgentEvent.ContextUsage -> TranscriptEvent("usage", atMillis, usedTokens = usedTokens ?: 0, windowTokens = windowTokens ?: 0)
-    is AgentEvent.PlanUpdate -> TranscriptEvent("plan", atMillis, plan = entries.map { TranscriptPlanEntry(it.content, it.status) })
+    is AgentEvent.PlanUpdate -> TranscriptEvent(
+        "plan",
+        atMillis,
+        plan = entries.map { TranscriptPlanEntry(it.content, it.status) },
+        planMarkdown = markdown.orEmpty(),
+    )
     is AgentEvent.ModeChanged -> TranscriptEvent("mode", atMillis, modeId = modeId)
     is AgentEvent.AvailableCommands -> TranscriptEvent("commands", atMillis, commands = commands.map { TranscriptCommand(it.name, it.description, it.inputHint) })
     is AgentEvent.AvailableModes -> TranscriptEvent("modes", atMillis, modes = modes.map { TranscriptMode(it.id, it.name, it.description) }, currentModeId = currentModeId.orEmpty())
@@ -152,7 +158,11 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "error" -> AgentEvent.TaskError(atMillis, text)
     "result" -> AgentEvent.TaskResult(atMillis, success, finalText.takeIf { it.isNotBlank() }, costUsd.takeIf { it != 0.0 }, costIsEstimated, inputTokens.takeIf { it != 0L }, outputTokens.takeIf { it != 0L }, durationMs.takeIf { it != 0L })
     "usage" -> AgentEvent.ContextUsage(atMillis, usedTokens.takeIf { it != 0L }, windowTokens.takeIf { it != 0L })
-    "plan" -> AgentEvent.PlanUpdate(atMillis, plan.map { AgentPlanEntry(it.content, it.status) })
+    "plan" -> AgentEvent.PlanUpdate(
+        atMillis,
+        plan.map { AgentPlanEntry(it.content, it.status) },
+        planMarkdown.takeIf { it.isNotBlank() },
+    )
     "mode" -> AgentEvent.ModeChanged(atMillis, modeId)
     "commands" -> AgentEvent.AvailableCommands(atMillis, commands.map { AgentSlashCommand(it.name, it.description, it.inputHint) })
     "modes" -> AgentEvent.AvailableModes(atMillis, modes.map { app.andy.model.AgentSessionMode(it.id, it.name, it.description) }, currentModeId.takeIf { it.isNotBlank() })

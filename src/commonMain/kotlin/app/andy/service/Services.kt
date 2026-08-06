@@ -499,8 +499,12 @@ interface AgentRunService {
     )
     /** Removes an unsent follow-up at [queueIndex]. */
     fun removeQueuedFollowUp(taskId: String, queueIndex: Int)
+    /** Starts the next queued follow-up when the chat is idle. */
+    fun sendNextQueuedFollowUp(taskId: String) = Unit
     /** Updates Andy's persisted task goal; providers receive it with subsequent prompts. */
     fun updateGoal(taskId: String, goal: String?)
+    /** Toggles Andy plan mode for follow-ups; syncs the live ACP session mode when supported. */
+    fun updatePlanMode(taskId: String, planMode: Boolean)
     suspend fun delete(taskId: String, removeWorktree: Boolean)
     /** Clears the unread indicator for a finished chat (e.g. when opened). */
     fun markRead(taskId: String)
