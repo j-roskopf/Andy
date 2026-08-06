@@ -227,6 +227,24 @@ fun Server.registerAgentProjectTools(
                                 })
                             })
                         }
+                        put("planMode", task.planMode)
+                        if (task.queuedFollowUps.isNotEmpty()) {
+                            put(
+                                "queuedFollowUps",
+                                buildJsonArray {
+                                    task.queuedFollowUps.forEach { queued ->
+                                        add(
+                                            buildJsonObject {
+                                                put("text", queued.text)
+                                                put("contextBundleIds", buildJsonArray {
+                                                    queued.contextBundleIds.forEach { id -> add(JsonPrimitive(id)) }
+                                                })
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        }
                         put("tmuxSession", TmuxAndy.sessionName(task.id))
                         put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(task.id))
                     },
@@ -583,6 +601,71 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "chat.queue_follow_up",
+        description = "Queue a follow-up message for an agent chat instead of sending immediately",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "followUp" to buildJsonObject { put("type", "string") },
+            "contextBundleIds" to buildJsonObject {
+                put("type", "array")
+                put("items", buildJsonObject { put("type", "string") })
+                put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
+            },
+        ),
+        required = listOf("taskId", "followUp"),
+    ) { args ->
+        rejectRawEvidencePaths(args)
+        val id = str(args, "taskId") ?: error("taskId required")
+        val followUp = str(args, "followUp") ?: error("followUp required")
+        agentRuns.queueFollowUp(id, followUp, contextBundleIds = strList(args, "contextBundleIds"))
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.remove_queued_follow_up",
+        description = "Remove a queued follow-up at the given index",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "queueIndex" to buildJsonObject { put("type", "integer") },
+        ),
+        required = listOf("taskId", "queueIndex"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val queueIndex = args["queueIndex"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: error("queueIndex required")
+        agentRuns.removeQueuedFollowUp(id, queueIndex)
+        textResult("""{"ok":true,"id":"$id","queueIndex":$queueIndex}""")
+    }
+
+    register(
+        name = "chat.send_next_queued_follow_up",
+        description = "Send the next queued follow-up when the chat is idle",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("taskId"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        agentRuns.sendNextQueuedFollowUp(id)
+        textResult("""{"ok":true,"id":"$id"}""")
+    }
+
+    register(
+        name = "chat.update_plan_mode",
+        description = "Toggle Andy plan mode for follow-ups and sync the live ACP session when supported",
+        properties = mapOf(
+            "taskId" to buildJsonObject { put("type", "string") },
+            "planMode" to buildJsonObject { put("type", "boolean") },
+        ),
+        required = listOf("taskId", "planMode"),
+    ) { args ->
+        val id = str(args, "taskId") ?: error("taskId required")
+        val planMode = args["planMode"]?.jsonPrimitive?.booleanOrNull ?: error("planMode required")
+        agentRuns.updatePlanMode(id, planMode)
+        textResult("""{"ok":true,"id":"$id","planMode":$planMode}""")
+    }
+
+    register(
         name = "chat.set_mode",
         description = "Switch the live ACP session mode for providers that advertise modes",
         properties = mapOf(
@@ -877,6 +960,10 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.reconcile",
     "chat.delete",
     "chat.resume",
+    "chat.queue_follow_up",
+    "chat.remove_queued_follow_up",
+    "chat.send_next_queued_follow_up",
+    "chat.update_plan_mode",
     "chat.set_mode",
     "chat.respond",
     "chat.status",

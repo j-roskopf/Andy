@@ -314,6 +314,64 @@ class AgentQueuedFollowUpTest {
     }
 
     @Test
+    fun stopWithQueuedFollowUpDoesNotAutoResume() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-stop-queue", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue)),
+                actionConfig = FakeActionConfig(),
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "stop queue test",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
+            }
+
+            service.queueFollowUp(task.id, "queued follow-up")
+            delay(100)
+            service.stop(task.id)
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status == AgentStatus.Working) delay(25)
+            }
+
+            val current = service.tasks.value.first { it.id == task.id }
+            assertEquals(AgentStatus.Done, current.status)
+            assertTrue(current.stoppedByUser)
+            assertEquals(listOf("queued follow-up"), current.queuedFollowUps.map { it.text })
+            assertTrue(
+                service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().none { it.text == "queued follow-up" },
+            )
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun queueModeHoldsFollowUpsWhileTheRunIsActive() = runBlocking {
         val shell = File("/bin/sh")
         if (!shell.canExecute()) return@runBlocking

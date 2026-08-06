@@ -28,6 +28,7 @@ import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentModelOption
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
+import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
@@ -277,6 +278,17 @@ class McpAgentRunClient(
             unread = obj.bool("unread"),
             archived = obj.bool("archived"),
             transcriptCompressed = obj.bool("transcriptCompressed"),
+            planMode = obj.bool("planMode"),
+            queuedFollowUps = obj["queuedFollowUps"]?.jsonArray?.mapNotNull { element ->
+                val queued = element.jsonObject
+                val text = queued.string("text") ?: return@mapNotNull null
+                AgentQueuedFollowUp(
+                    text = text,
+                    contextBundleIds = queued["contextBundleIds"]?.jsonArray
+                        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                        .orEmpty(),
+                )
+            }.orEmpty(),
         )
     }
 
@@ -729,11 +741,50 @@ class McpAgentRunClient(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
-    ) = resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance)
+    ) {
+        scope.launch {
+            callTool(
+                "chat.queue_follow_up",
+                buildMap {
+                    put("taskId", JsonPrimitive(taskId))
+                    put("followUp", JsonPrimitive(followUp))
+                    if (contextBundleIds.isNotEmpty()) {
+                        put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
+                    }
+                },
+            )
+        }
+    }
 
-    override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
+    override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) {
+        scope.launch {
+            callTool(
+                "chat.remove_queued_follow_up",
+                mapOf(
+                    "taskId" to JsonPrimitive(taskId),
+                    "queueIndex" to JsonPrimitive(queueIndex),
+                ),
+            )
+        }
+    }
+
+    override fun sendNextQueuedFollowUp(taskId: String) {
+        scope.launch { callTool("chat.send_next_queued_follow_up", mapOf("taskId" to JsonPrimitive(taskId))) }
+    }
+
     override fun updateGoal(taskId: String, goal: String?) = Unit
-    override fun updatePlanMode(taskId: String, planMode: Boolean) = Unit
+
+    override fun updatePlanMode(taskId: String, planMode: Boolean) {
+        scope.launch {
+            callTool(
+                "chat.update_plan_mode",
+                mapOf(
+                    "taskId" to JsonPrimitive(taskId),
+                    "planMode" to JsonPrimitive(planMode),
+                ),
+            )
+        }
+    }
     override suspend fun delete(taskId: String, removeWorktree: Boolean) {
         callTool(
             "chat.delete",

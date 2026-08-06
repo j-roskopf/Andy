@@ -4516,7 +4516,7 @@ class DesktopAgentRunService(
             }
         }
         previousTaskStatuses.remove(taskId)
-        if (status == AgentStatus.Done && queuedFollowUp != null) {
+        if (status == AgentStatus.Done && queuedFollowUp != null && !stoppedByUser) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(
                 taskId,
