@@ -60,6 +60,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -97,8 +98,11 @@ import app.andy.model.ProjectNote
 import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
+import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeNode
 import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
+import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.UnavailableKanbanService
 import app.andy.currentTimeMillis
@@ -125,6 +129,7 @@ import app.andy.ui.components.StatusTag
 import app.andy.ui.shell.RetainedDestination
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -159,7 +164,13 @@ private data class ProjectChatLists(val active: List<AgentTask>, val archived: L
 private val ProjectChatSort =
     compareByDescending<AgentTask> { it.createdAtMillis }
 
-private enum class ProjectCanvas(val label: String) { Chat("chat"), Tasks("tasks"), Runbook("runbook"), Scratchpad("scratchpad") }
+private enum class ProjectCanvas(val label: String) {
+    Chat("chat"),
+    Tasks("tasks"),
+    Runbook("runbook"),
+    Scratchpad("scratchpad"),
+    Worktrees("worktrees"),
+}
 
 private const val RecentSessionsPerProject = 5
 
@@ -222,16 +233,39 @@ private fun ProjectCockpit(
         project?.id?.let { projectId -> scope.launch { services.projectWorkflows.ensureProject(projectId) } }
     }
 
-    fun requestDeleteChat(task: AgentTask) {
+    fun requestDeleteChat(task: AgentTask, force: Boolean = false) {
+        if (force) {
+            scope.launch {
+                transcriptScrollMemory.remove(task.id)
+                services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
+                if (selectedTaskId == task.id) selectedTaskId = null
+            }
+            return
+        }
         pendingConfirmation = PendingConfirmation(
             title = "Delete chat?",
             message = "Permanently removes \"${task.title}\" and its saved transcript.",
             confirmLabel = "Delete",
         ) {
             scope.launch {
-                transcriptScrollMemory.remove(task.id)
-                services.agentRuns.delete(task.id, task.ownsWorktree)
-                if (selectedTaskId == task.id) selectedTaskId = null
+                when (
+                    val outcome = services.agentRuns.delete(task.id, task.ownsWorktree)
+                ) {
+                    WorktreeDeleteOutcome.Deleted -> {
+                        transcriptScrollMemory.remove(task.id)
+                        if (selectedTaskId == task.id) selectedTaskId = null
+                    }
+                    is WorktreeDeleteOutcome.BlockedByChildren -> {
+                        val childList = outcome.children.joinToString("\n") { child ->
+                            "• ${child.title} (${child.branch})"
+                        }
+                        pendingConfirmation = PendingConfirmation(
+                            title = "Delete worktree with children?",
+                            message = "\"${task.title}\" still has nested worktrees:\n$childList\n\nDelete anyway? Child worktrees become roots and keep their branches.",
+                            confirmLabel = "Delete anyway",
+                        ) { requestDeleteChat(task, force = true) }
+                    }
+                }
             }
         }
     }
@@ -561,6 +595,17 @@ private fun ProjectCockpit(
                                     persistedText = effectiveProjectWorkflow?.scratchpad.orEmpty(),
                                     modifier = Modifier.fillMaxSize(),
                                 )
+                                ProjectCanvas.Worktrees -> ProjectWorktrees(
+                                    services = services,
+                                    project = current,
+                                    onOpenTask = { taskId ->
+                                        selectedTaskId = taskId
+                                        canvas = ProjectCanvas.Chat
+                                        services.agentRuns.setChatViewing(taskId, viewing = true)
+                                    },
+                                    onConfirm = { pendingConfirmation = it },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                         }
                         }
@@ -587,7 +632,7 @@ private fun ProjectCockpit(
                             services.projectWorkflows.deleteProject(project.id)
                             sessions.forEach { task ->
                                 runCatching {
-                                    services.agentRuns.delete(task.id, task.ownsWorktree)
+                                    services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
                                 }
                             }
                             if (selectedProjectId == project.id) {
@@ -684,32 +729,40 @@ internal fun ActionsScreen(
                 selected = pageTab,
                 onSelect = { pageTab = it },
                 label = { it.label },
-                trailing = if (pageTab == ProjectsPageTab.Kanban && kanbanAvailable) {
-                    { KanbanAddLaneAction(onClick = { showAddLaneDialog = true }) }
+                trailing = if (kanbanAvailable) {
+                    {
+                        val kanbanVisible = pageTab == ProjectsPageTab.Kanban
+                        KanbanAddLaneAction(
+                            onClick = { if (kanbanVisible) showAddLaneDialog = true },
+                            modifier = Modifier.alpha(if (kanbanVisible) 1f else 0f),
+                        )
+                    }
                 } else {
                     null
                 },
             )
-            when (pageTab) {
-                ProjectsPageTab.Projects -> ProjectCockpit(
-                    services = services,
-                    config = config,
-                    onConfigChange = onConfigChange,
-                    agentTasks = agentTasks,
-                    preferredProjectId = preferredProjectId,
-                    onPreferredProjectChange = onPreferredProjectChange,
-                    workspaceReady = workspaceReady,
-                    initialWorkflowTaskId = initialWorkflowTaskId,
-                    initialCanvasLabel = initialCanvasLabel,
-                    requestedAgentTaskId = requestedAgentTaskId,
-                    requestedProjectId = requestedProjectId,
-                    onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
-                    onNotifyTerminalRun = onNotifyTerminalRun,
-                    active = active,
-                    workspaceState = workspaceState,
-                    onUpdateWorkspace = onUpdateWorkspace,
-                )
-                ProjectsPageTab.Kanban -> KanbanBoardScreen(services = services)
+            Box(Modifier.weight(1f).fillMaxWidth().padding(top = AndySpace.Space2)) {
+                when (pageTab) {
+                    ProjectsPageTab.Projects -> ProjectCockpit(
+                        services = services,
+                        config = config,
+                        onConfigChange = onConfigChange,
+                        agentTasks = agentTasks,
+                        preferredProjectId = preferredProjectId,
+                        onPreferredProjectChange = onPreferredProjectChange,
+                        workspaceReady = workspaceReady,
+                        initialWorkflowTaskId = initialWorkflowTaskId,
+                        initialCanvasLabel = initialCanvasLabel,
+                        requestedAgentTaskId = requestedAgentTaskId,
+                        requestedProjectId = requestedProjectId,
+                        onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
+                        onNotifyTerminalRun = onNotifyTerminalRun,
+                        active = active,
+                        workspaceState = workspaceState,
+                        onUpdateWorkspace = onUpdateWorkspace,
+                    )
+                    ProjectsPageTab.Kanban -> KanbanBoardScreen(services = services)
+                }
             }
         }
     }
@@ -1321,6 +1374,221 @@ private fun NewProjectChatButton(onClick: () -> Unit, size: androidx.compose.ui.
             .testTag("project-new-chat")
             .clickable(onClick = onClick),
     )
+}
+
+@Composable
+private fun ProjectWorktrees(
+    services: AndyServices,
+    project: ActionProject,
+    onOpenTask: (String) -> Unit,
+    onConfirm: (PendingConfirmation) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scope = rememberCoroutineScope()
+    val copyText = rememberCopyText()
+    var nodes by remember(project.id) { mutableStateOf<List<WorktreeNode>>(emptyList()) }
+    var loading by remember(project.id) { mutableStateOf(true) }
+    var refreshTick by remember(project.id) { mutableStateOf(0) }
+
+    suspend fun reload() {
+        loading = true
+        nodes = services.agentRuns.worktreeTree(project.contextDir)
+        loading = false
+    }
+
+    LaunchedEffect(project.id, project.contextDir, refreshTick) {
+        reload()
+    }
+
+    val rows = remember(nodes) { worktreeDisplayRows(nodes) }
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Worktrees", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                Text(
+                    "Andy-tracked lineage plus anything `git worktree list` still sees.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+            OutlinedButton(onClick = { refreshTick += 1 }) { Text("refresh", fontSize = 11.sp) }
+        }
+        when {
+            loading && nodes.isEmpty() -> {
+                Text("loading worktrees…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+            }
+            rows.isEmpty() -> EmptyState("No worktrees found for this project")
+            else -> {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(rows, key = { it.node.path }) { row ->
+                        WorktreeTreeRow(
+                            row = row,
+                            project = project,
+                            services = services,
+                            onOpenTask = onOpenTask,
+                            onCopyPath = { copyText(it) },
+                            onCopyMerge = { copyText(it) },
+                            onDelete = { taskId ->
+                                scope.launch {
+                                    when (val outcome = services.agentRuns.delete(taskId, removeWorktree = true)) {
+                                        WorktreeDeleteOutcome.Deleted -> refreshTick += 1
+                                        is WorktreeDeleteOutcome.BlockedByChildren -> {
+                                            val childList = outcome.children.joinToString("\n") { child ->
+                                                "• ${child.title} (${child.branch})"
+                                            }
+                                            onConfirm(
+                                                PendingConfirmation(
+                                                    title = "Delete worktree with children?",
+                                                    message = "This worktree still has nested children:\n$childList\n\nDelete anyway? Child worktrees become roots and keep their branches.",
+                                                    confirmLabel = "Delete anyway",
+                                                ) {
+                                                    scope.launch {
+                                                        services.agentRuns.delete(taskId, removeWorktree = true, force = true)
+                                                        refreshTick += 1
+                                                    }
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class WorktreeDisplayRow(val node: WorktreeNode, val depth: Int, val parent: WorktreeNode?)
+
+private fun worktreeDisplayRows(nodes: List<WorktreeNode>): List<WorktreeDisplayRow> {
+    if (nodes.isEmpty()) return emptyList()
+    val byTaskId = nodes.mapNotNull { node -> node.taskId?.let { it to node } }.toMap()
+    val childrenByParent = nodes
+        .filter { it.parentTaskId != null }
+        .groupBy { it.parentTaskId }
+    val roots = nodes.filter { node ->
+        node.isMain || node.parentTaskId == null || node.parentTaskId !in byTaskId
+    }.sortedWith(compareByDescending<WorktreeNode> { it.isMain }.thenBy { it.branch.orEmpty() }.thenBy { it.path })
+    val rows = mutableListOf<WorktreeDisplayRow>()
+    val visited = mutableSetOf<String>()
+    fun walk(node: WorktreeNode, depth: Int, parent: WorktreeNode?) {
+        if (!visited.add(node.path)) return
+        rows += WorktreeDisplayRow(node, depth, parent)
+        val children = childrenByParent[node.taskId].orEmpty()
+            .sortedWith(compareBy({ it.branch.orEmpty() }, { it.path }))
+        children.forEach { child -> walk(child, depth + 1, node) }
+    }
+    roots.forEach { walk(it, 0, null) }
+    nodes.filter { it.path !in visited }
+        .sortedBy { it.path }
+        .forEach { walk(it, 0, null) }
+    return rows
+}
+
+@Composable
+private fun WorktreeTreeRow(
+    row: WorktreeDisplayRow,
+    project: ActionProject,
+    services: AndyServices,
+    onOpenTask: (String) -> Unit,
+    onCopyPath: (String) -> Unit,
+    onCopyMerge: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val node = row.node
+    val indent = (row.depth * 16).dp
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = indent)
+            .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .then(
+                if (node.taskId != null) {
+                    Modifier.clickable { onOpenTask(node.taskId) }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                node.branch ?: "detached HEAD",
+                color = TextPrimary,
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (node.isMain) StatusTag("main", Cyan)
+            if (!node.tracked) StatusTag("untracked", Rust)
+            node.taskTitle?.takeIf { it.isNotBlank() }?.let { title ->
+                Text(
+                    title,
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Text(
+            node.path,
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clickable { onCopyPath(node.path) },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { onCopyPath(node.path) },
+                modifier = Modifier.height(28.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            ) { Text("copy path", fontSize = 10.sp) }
+            if (node.tracked && !node.isMain && node.taskId != null && node.branch != null) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val parent = row.parent
+                            val targetDir = parent?.path ?: project.contextDir
+                            val cmd = services.agentRuns.mergeCommand(targetDir, node.branch)
+                            onCopyMerge(cmd)
+                        }
+                    },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("copy merge cmd", fontSize = 10.sp) }
+                OutlinedButton(
+                    onClick = { onDelete(node.taskId) },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("delete", fontSize = 10.sp, color = Red) }
+            }
+        }
+    }
 }
 
 @Composable

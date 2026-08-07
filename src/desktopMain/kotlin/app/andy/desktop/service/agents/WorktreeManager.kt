@@ -14,17 +14,101 @@ class WorktreeManager(
 ) {
     data class Worktree(val path: String, val branch: String)
 
+    data class WorktreeInfo(
+        val path: String,
+        val branch: String?,
+        val isMain: Boolean,
+        val locked: Boolean,
+        val prunable: Boolean,
+    )
+
     fun isGitRepo(dir: String): Boolean =
         File(dir).isDirectory && git(dir, "rev-parse", "--git-dir").exitCode == 0
 
-    fun create(originDir: String, taskId: String, agent: AgentKind, title: String): Result<Worktree> {
+    /** Current branch of [dir], or null when detached HEAD or not a repo. */
+    fun currentBranch(dir: String): String? =
+        git(dir, "branch", "--show-current").takeIf { it.exitCode == 0 }?.output?.trim()?.ifBlank { null }
+
+    /** True when [worktreePath] is still registered for [originDir]'s repo and present on disk. */
+    fun isLiveWorktree(originDir: String, worktreePath: String): Boolean {
+        if (!File(worktreePath).isDirectory) return false
+        val want = runCatching { File(worktreePath).canonicalPath }.getOrElse { worktreePath }
+        return listAll(originDir).any { info ->
+            runCatching { File(info.path).canonicalPath }.getOrElse { info.path } == want
+        }
+    }
+
+    /**
+     * Every worktree sharing [dir]'s repo — main checkout plus all linked worktrees — regardless of
+     * which one [dir] itself is. `git worktree list` is repo-scoped, so this is what gives the
+     * "base on" picker and the Worktrees tab correct scoping for free, including nested ones.
+     */
+    fun listAll(dir: String): List<WorktreeInfo> {
+        val result = git(dir, "worktree", "list", "--porcelain")
+        if (result.exitCode != 0) return emptyList()
+        val infos = mutableListOf<WorktreeInfo>()
+        var path: String? = null
+        var branch: String? = null
+        var locked = false
+        var prunable = false
+        var sawDetached = false
+        fun flush() {
+            val worktreePath = path ?: return
+            infos += WorktreeInfo(
+                path = worktreePath,
+                branch = if (sawDetached) null else branch,
+                isMain = infos.isEmpty(),
+                locked = locked,
+                prunable = prunable,
+            )
+            path = null
+            branch = null
+            locked = false
+            prunable = false
+            sawDetached = false
+        }
+        for (raw in result.output.lineSequence()) {
+            val line = raw.trimEnd()
+            when {
+                line.isEmpty() -> flush()
+                line.startsWith("worktree ") -> {
+                    flush()
+                    path = line.removePrefix("worktree ").trim()
+                }
+                line.startsWith("branch ") -> {
+                    val ref = line.removePrefix("branch ").trim()
+                    branch = ref.removePrefix("refs/heads/")
+                }
+                line == "detached" -> {
+                    sawDetached = true
+                    branch = null
+                }
+                line.startsWith("locked") -> locked = true
+                line.startsWith("prunable") -> prunable = true
+            }
+        }
+        flush()
+        return infos
+    }
+
+    fun create(
+        originDir: String,
+        taskId: String,
+        agent: AgentKind,
+        title: String,
+        startPoint: String? = null,
+    ): Result<Worktree> {
         val repoName = File(originDir).name.ifBlank { "repo" }
         val shortId = taskId.substringAfterLast('-').take(8)
         val slug = title.lowercase().replace(Regex("""[^a-z0-9]+"""), "-").trim('-').take(32).ifBlank { "task" }
         val branch = "andy/${agent.cliName}/$slug-$shortId"
         val path = File(worktreesRoot, "$repoName-$shortId")
         worktreesRoot.mkdirs()
-        val result = git(originDir, "worktree", "add", path.absolutePath, "-b", branch)
+        val args = buildList {
+            addAll(listOf("worktree", "add", path.absolutePath, "-b", branch))
+            if (startPoint != null) add(startPoint)
+        }
+        val result = git(originDir, *args.toTypedArray())
         return if (result.exitCode == 0) {
             Result.success(Worktree(path.absolutePath, branch))
         } else {
@@ -118,8 +202,9 @@ class WorktreeManager(
         return parseUnifiedDiff(result.output, relativePath)
     }
 
-    fun mergeCommand(originDir: String, branch: String): String =
-        "git -C ${shellQuote(originDir)} merge ${shellQuote(branch)}"
+    /** [targetDir] is originDir for a root worktree, or the parent's worktree path for a nested one. */
+    fun mergeCommand(targetDir: String, branch: String): String =
+        "git -C ${shellQuote(targetDir)} merge ${shellQuote(branch)}"
 
     fun remove(originDir: String, worktreePath: String, branch: String?): Result<Unit> {
         val removed = git(originDir, "worktree", "remove", "--force", worktreePath)

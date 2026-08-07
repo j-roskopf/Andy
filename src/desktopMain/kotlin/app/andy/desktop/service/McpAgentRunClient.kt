@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
+import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.discoverAgentSkills
@@ -34,6 +35,9 @@ import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.WorktreeBaseOption
+import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeNode
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectSpecDraft
@@ -93,6 +97,7 @@ class McpAgentRunClient(
 ) : AgentRunService, ProjectWorkflowService {
     private val json = Json { ignoreUnknownKeys = true }
     private val idSeq = AtomicLong(1)
+    private val localWorktrees = WorktreeManager()
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
     override val tasks: StateFlow<List<AgentTask>> = _tasks.asStateFlow()
@@ -289,6 +294,12 @@ class McpAgentRunClient(
                         .orEmpty(),
                 )
             }.orEmpty(),
+            originDir = obj.string("originDir")?.takeIf { it.isNotBlank() },
+            useWorktree = obj.bool("useWorktree"),
+            worktreePath = obj.string("worktreePath")?.takeIf { it.isNotBlank() },
+            branchName = obj.string("branchName")?.takeIf { it.isNotBlank() },
+            ownsWorktree = obj.bool("ownsWorktree"),
+            parentWorktreeTaskId = obj.string("parentWorktreeTaskId")?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -603,6 +614,10 @@ class McpAgentRunClient(
         }
     }
 
+    override fun slashCommands(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<AgentSlashCommand>())
+
+    override fun refreshSlashCommands(agent: AgentKind, directory: String?) = Unit
+
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
         val raw = callTool(
             "chat.start",
@@ -612,6 +627,8 @@ class McpAgentRunClient(
                 put("title", JsonPrimitive(draft.title))
                 draft.projectId?.let { put("projectId", JsonPrimitive(it)) }
                 draft.directory?.let { put("directory", JsonPrimitive(it)) }
+                put("useWorktree", JsonPrimitive(draft.useWorktree))
+                draft.baseWorktreeTaskId?.let { put("baseWorktreeTaskId", JsonPrimitive(it)) }
                 // Managed evidence bundle ids only (§4) — never a local filesystem path.
                 if (draft.contextBundleIds.isNotEmpty()) {
                     put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
@@ -785,19 +802,28 @@ class McpAgentRunClient(
             )
         }
     }
-    override suspend fun delete(taskId: String, removeWorktree: Boolean) {
-        callTool(
+    override suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean): WorktreeDeleteOutcome {
+        val result = callTool(
             "chat.delete",
             mapOf(
                 "taskId" to JsonPrimitive(taskId),
                 "removeWorktree" to JsonPrimitive(removeWorktree),
+                "force" to JsonPrimitive(force),
             ),
         )
+        parseBlockedByChildren(result)?.let { return it }
         // The daemon has confirmed deletion. Publish it immediately rather than blocking the
         // interaction on two follow-up RPCs (composer options + the full chat list).
         locallyDeletedTaskIds += taskId
-        _tasks.value = _tasks.value.filterNot { it.id == taskId }
+        _tasks.value = _tasks.value.mapNotNull { task ->
+            when {
+                task.id == taskId -> null
+                task.parentWorktreeTaskId == taskId -> task.copy(parentWorktreeTaskId = null)
+                else -> task
+            }
+        }
         scope.launch { runCatching { refreshTasks() } }
+        return WorktreeDeleteOutcome.Deleted
     }
 
     override fun markRead(taskId: String) {
@@ -913,7 +939,76 @@ class McpAgentRunClient(
     override suspend fun refreshCliStatuses() {
         refreshComposerOptions()
     }
-    override suspend fun isGitRepo(dir: String): Boolean = File(dir, ".git").exists()
+    override suspend fun isGitRepo(dir: String): Boolean = withContext(Dispatchers.IO) {
+        localWorktrees.isGitRepo(dir)
+    }
+    override suspend fun currentBranch(dir: String): String? = withContext(Dispatchers.IO) {
+        localWorktrees.currentBranch(dir)
+    }
+    override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> {
+        val onDiskPaths = withContext(Dispatchers.IO) {
+            localWorktrees.listAll(originDir).mapTo(linkedSetOf()) { canonicalPath(it.path) }
+        }
+        return _tasks.value.filter { task ->
+            task.originDir == originDir &&
+                !task.archived &&
+                task.branchName != null &&
+                task.worktreePath != null &&
+                canonicalPath(task.worktreePath) in onDiskPaths
+        }.map { task ->
+            WorktreeBaseOption(
+                taskId = task.id,
+                title = task.title.ifBlank { task.id },
+                branch = task.branchName!!,
+                path = task.worktreePath!!,
+            )
+        }
+    }
+    override suspend fun worktreeTree(originDir: String): List<WorktreeNode> {
+        val onDisk = withContext(Dispatchers.IO) { localWorktrees.listAll(originDir) }
+        val trackedByPath = _tasks.value
+            .filter { it.originDir == originDir && it.worktreePath != null }
+            .groupBy { canonicalPath(it.worktreePath!!) }
+            .mapValues { (_, group) ->
+                group.firstOrNull { it.ownsWorktree }
+                    ?: group.minByOrNull { it.createdAtMillis }
+                    ?: group.first()
+            }
+        return onDisk.map { info ->
+            val task = trackedByPath[canonicalPath(info.path)]
+            WorktreeNode(
+                path = info.path,
+                branch = info.branch,
+                isMain = info.isMain,
+                taskId = task?.id,
+                taskTitle = task?.title,
+                parentTaskId = task?.parentWorktreeTaskId?.takeIf { pid ->
+                    onDisk.any { trackedByPath[canonicalPath(it.path)]?.id == pid }
+                },
+                tracked = task != null,
+            )
+        }
+    }
+    override fun mergeCommand(targetDir: String, branch: String): String =
+        localWorktrees.mergeCommand(targetDir, branch)
+
+    private fun canonicalPath(path: String): String =
+        runCatching { File(path).canonicalPath }.getOrElse { path }
+
+    private fun parseBlockedByChildren(raw: String): WorktreeDeleteOutcome.BlockedByChildren? {
+        val obj = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+        if (obj["blockedByChildren"]?.jsonPrimitive?.booleanOrNull != true) return null
+        val children = obj["children"]?.jsonArray.orEmpty().mapNotNull { element ->
+            val child = element as? JsonObject ?: return@mapNotNull null
+            WorktreeBaseOption(
+                taskId = child["taskId"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+                title = child["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                branch = child["branch"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                path = child["path"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+        }
+        return WorktreeDeleteOutcome.BlockedByChildren(children)
+    }
 
     // ProjectWorkflowService — minimal remote stubs
     override suspend fun projectContextDir(projectId: String): String? = null

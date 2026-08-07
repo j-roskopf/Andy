@@ -76,6 +76,8 @@ import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
+import app.andy.model.composerSkillsForSlashMenu
+import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.AgentSkill
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
@@ -133,9 +135,12 @@ internal fun AgentTaskDetail(
     val availableSkills by remember(task.agent, skillDirectory) {
         services.agentRuns.skills(task.agent, skillDirectory)
     }.collectAsState()
-    val knownSkillNames by remember(skillDirectory) {
-        services.agentRuns.knownSkillNames(skillDirectory)
+    val providerSlashCommands by remember(task.agent, skillDirectory) {
+        services.agentRuns.slashCommands(task.agent, skillDirectory)
     }.collectAsState()
+    LaunchedEffect(task.agent, skillDirectory) {
+        services.agentRuns.refreshSlashCommands(task.agent, skillDirectory)
+    }
     var followUp by remember(task.id) { mutableStateOf("") }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
@@ -197,23 +202,20 @@ internal fun AgentTaskDetail(
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val queueMode = workspaceState.agentMessageDeliveryMode == AgentMessageDeliveryMode.Queue
     val slashCommand = findActiveSlashCommand(followUp)
-    val allowedSkillNames = remember(availableSkills) {
-        availableSkills.mapTo(linkedSetOf()) { it.name.trim().lowercase() }
-    }
-    val providerCommands = remember(transcriptEvents, knownSkillNames, allowedSkillNames) {
+    val sessionCommands = remember(transcriptEvents) {
         transcriptEvents.asReversed()
             .filterIsInstance<AgentEvent.AvailableCommands>()
             .firstOrNull()
             ?.commands
             .orEmpty()
-            .filter { command ->
-                val name = command.name.trim().trimStart('/', '$').lowercase()
-                name !in knownSkillNames || name in allowedSkillNames
-            }
-            .map { command -> AgentNativeSlashCommand(command.name, command.description) }
     }
-    val availableCommands = remember(task.agent, providerCommands) {
-        (AgentNativeSlashCommands.forAgent(task.agent) + providerCommands).distinctBy { it.name }
+    val availableCommands = remember(task.agent, providerSlashCommands, sessionCommands) {
+        mergedComposerSlashCommands(
+            agent = task.agent,
+            providerCommands = (providerSlashCommands + sessionCommands).distinctBy {
+                it.name.trim().trimStart('/', '$').lowercase()
+            },
+        )
     }
     val availableAcpModes = remember(transcriptEvents) {
         transcriptEvents.asReversed().filterIsInstance<AgentEvent.AvailableModes>().firstOrNull()?.modes.orEmpty()
@@ -233,6 +235,9 @@ internal fun AgentTaskDetail(
     }
     val acpPlanModeActive = currentAcpMode?.looksLikePlanMode() == true
     val planModeActive = task.planMode || acpPlanModeActive
+    val slashMenuSkills = remember(availableSkills, availableCommands) {
+        composerSkillsForSlashMenu(availableSkills, availableCommands)
+    }
     val matchingCommands = slashCommand?.let { command ->
         availableCommands.filter { nativeCommand ->
             nativeCommand.name.contains(command.query, ignoreCase = true) ||
@@ -240,7 +245,7 @@ internal fun AgentTaskDetail(
         }
     }.orEmpty()
     val matchingSkills = slashCommand?.let { command ->
-        availableSkills.filter { skill ->
+        slashMenuSkills.filter { skill ->
             skill.name.contains(command.query, ignoreCase = true) ||
                 skill.description.contains(command.query, ignoreCase = true)
         }.take(8)
@@ -254,6 +259,7 @@ internal fun AgentTaskDetail(
     val slashHighlight = rememberComposerSlashHighlight(
         agent = task.agent,
         availableSkills = availableSkills,
+        availableCommands = availableCommands,
     )
 
     fun selectSkill(skill: AgentSkill) {
@@ -838,8 +844,11 @@ internal fun AgentTaskDetail(
                     OutlinedButton(
                         onClick = {
                             val branch = task.branchName ?: return@OutlinedButton
-                            val originDir = task.originDir ?: return@OutlinedButton
-                            copyText("git -C '$originDir' merge '$branch'")
+                            val parentPath = task.parentWorktreeTaskId?.let { parentId ->
+                                services.agentRuns.tasks.value.firstOrNull { it.id == parentId }?.worktreePath
+                            }
+                            val targetDir = parentPath ?: task.originDir ?: return@OutlinedButton
+                            copyText(services.agentRuns.mergeCommand(targetDir, branch))
                         },
                         modifier = Modifier.height(28.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),

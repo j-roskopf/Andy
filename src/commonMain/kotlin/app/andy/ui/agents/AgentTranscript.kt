@@ -1197,7 +1197,7 @@ private fun ToolPathText(
     lineHeight: androidx.compose.ui.unit.TextUnit = 15.sp,
 ) {
     val path = fileContent?.path?.takeIf { it.isNotBlank() && it in text }
-    if (path == null || fileContent == null) {
+    if (path == null) {
         Text(
             text,
             color = color,

@@ -283,6 +283,8 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun refreshProviderQuotas() = Unit
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
     override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<AgentSkill>())
+    override fun slashCommands(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<AgentSlashCommand>())
+    override fun refreshSlashCommands(agent: AgentKind, directory: String?) = Unit
     override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask = error(BrowserUnavailable)
     override fun stop(taskId: String) = Unit
@@ -314,7 +316,7 @@ object UnavailableAgentRunService : AgentRunService {
     override fun sendNextQueuedFollowUp(taskId: String) = Unit
     override fun updateGoal(taskId: String, goal: String?) = Unit
     override fun updatePlanMode(taskId: String, planMode: Boolean) = Unit
-    override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit
+    override suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean) = WorktreeDeleteOutcome.Deleted
     override fun markRead(taskId: String) = Unit
     override fun markUnread(taskId: String) = Unit
     override fun setChatViewing(taskId: String?, viewing: Boolean) = Unit
@@ -329,6 +331,11 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = null
     override suspend fun refreshCliStatuses() = Unit
     override suspend fun isGitRepo(dir: String) = false
+    override suspend fun currentBranch(dir: String): String? = null
+    override suspend fun worktreeBaseOptions(originDir: String) = emptyList<WorktreeBaseOption>()
+    override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
+    override fun mergeCommand(targetDir: String, branch: String) =
+        "git -C '$targetDir' merge '$branch'"
 }
 
 object UnavailableAgentRetentionService : AgentRetentionService {

@@ -6,8 +6,11 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -40,12 +44,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
@@ -54,6 +63,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.git_branch
 import app.andy.model.ActionProject
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentCliStatus
@@ -62,11 +73,14 @@ import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
 import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
+import app.andy.model.composerSkillsForSlashMenu
+import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
+import app.andy.model.WorktreeBaseOption
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
@@ -105,6 +119,7 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
 
 @Composable
 internal fun AgentTaskComposerPane(
@@ -227,6 +242,9 @@ private class AgentTaskComposerFormState(
     var openClawNewSession by mutableStateOf(true)
     var budgetText by mutableStateOf("")
     var directoryIsGitRepo by mutableStateOf(false)
+    var currentBranch by mutableStateOf<String?>(null)
+    var baseWorktreeTaskId by mutableStateOf<String?>(null)
+    var availableBases by mutableStateOf<List<WorktreeBaseOption>>(emptyList())
     /** Last agent whose provider defaults were seeded into this draft; avoids clobbering restored drafts. */
     var defaultsSeededForAgent: AgentKind? = null
 
@@ -309,19 +327,31 @@ private fun rememberAgentTaskComposerForm(
     val availableSkills by remember(state.agent, directory) {
         services.agentRuns.skills(state.agent, directory)
     }.collectAsState()
+    val providerSlashCommands by remember(state.agent, directory) {
+        services.agentRuns.slashCommands(state.agent, directory)
+    }.collectAsState()
+    val availableCommands = remember(state.agent, providerSlashCommands) {
+        mergedComposerSlashCommands(state.agent, providerSlashCommands)
+    }
+    LaunchedEffect(state.agent, directory) {
+        services.agentRuns.refreshSlashCommands(state.agent, directory)
+    }
     val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.ready }
     val showModelSection = state.providerChosenInComposer && selectedCliAvailable
     val modelOptions = AgentModelCatalog.options(state.agent, providerModels)
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId, providerModels)
     val slashCommand = findComposerSlashCommand(state.prompt)
+    val slashMenuSkills = remember(availableSkills, availableCommands) {
+        composerSkillsForSlashMenu(availableSkills, availableCommands)
+    }
     val matchingCommands = slashCommand?.let { command ->
-        AgentNativeSlashCommands.forAgent(state.agent).filter { nativeCommand ->
+        availableCommands.filter { nativeCommand ->
             nativeCommand.name.contains(command.query, ignoreCase = true) ||
                 nativeCommand.description.contains(command.query, ignoreCase = true)
         }
     }.orEmpty()
     val matchingSkills = slashCommand?.let { command ->
-        availableSkills.filter { skill ->
+        slashMenuSkills.filter { skill ->
             skill.name.contains(command.query, ignoreCase = true) ||
                 skill.description.contains(command.query, ignoreCase = true)
         }.take(8)
@@ -361,7 +391,22 @@ private fun rememberAgentTaskComposerForm(
 
     LaunchedEffect(directory, state.useWorktree) {
         state.directoryIsGitRepo = directory?.let { services.agentRuns.isGitRepo(it) } == true
-        if (!state.directoryIsGitRepo) state.useWorktree = false
+        if (!state.directoryIsGitRepo) {
+            state.useWorktree = false
+            state.currentBranch = null
+            state.availableBases = emptyList()
+            state.baseWorktreeTaskId = null
+            return@LaunchedEffect
+        }
+        state.currentBranch = directory?.let { services.agentRuns.currentBranch(it) }
+        state.availableBases = if (state.useWorktree) {
+            directory?.let { services.agentRuns.worktreeBaseOptions(it) }.orEmpty()
+        } else {
+            emptyList()
+        }
+        if (state.baseWorktreeTaskId != null && state.availableBases.none { it.taskId == state.baseWorktreeTaskId }) {
+            state.baseWorktreeTaskId = null
+        }
     }
     LaunchedEffect(state.agent, state.modelId, selectedModel) {
         val model = selectedModel
@@ -390,6 +435,7 @@ private fun rememberAgentTaskComposerForm(
         showModelSection = showModelSection,
         selectedModel = selectedModel,
         availableSkills = availableSkills,
+        availableCommands = availableCommands,
         slashCommand = slashCommand,
         matchingCommands = matchingCommands,
         matchingSkills = matchingSkills,
@@ -410,6 +456,7 @@ private class AgentTaskComposerForm(
     val showModelSection: Boolean,
     val selectedModel: AgentModelOption?,
     val availableSkills: List<AgentSkill>,
+    val availableCommands: List<AgentNativeSlashCommand>,
     val slashCommand: ComposerSlashCommand?,
     val matchingCommands: List<AgentNativeSlashCommand>,
     val matchingSkills: List<AgentSkill>,
@@ -428,6 +475,7 @@ private class AgentTaskComposerForm(
             projectId = projectContext?.id,
             directory = directory?.trim()?.takeIf { it.isNotBlank() },
             useWorktree = state.useWorktree,
+            baseWorktreeTaskId = state.baseWorktreeTaskId,
             attachAndyMcp = state.attachMcp,
             autonomy = state.autonomy,
             sandboxMode = state.sandboxMode,
@@ -470,16 +518,21 @@ private fun rememberComposerSlashHighlight(form: AgentTaskComposerForm) =
     rememberComposerSlashHighlight(
         agent = form.state.agent,
         availableSkills = form.availableSkills,
+        availableCommands = form.availableCommands,
     )
 
 @Composable
 internal fun rememberComposerSlashHighlight(
     agent: AgentKind,
     availableSkills: List<AgentSkill>,
+    availableCommands: List<AgentNativeSlashCommand> = mergedComposerSlashCommands(agent, emptyList()),
 ): VisualTransformation {
-    val skillNames = remember(availableSkills) { availableSkills.mapTo(linkedSetOf()) { it.name } }
-    val commandNames = remember(agent) {
-        AgentNativeSlashCommands.forAgent(agent).mapTo(linkedSetOf()) { it.name }
+    val menuSkills = remember(availableSkills, availableCommands) {
+        composerSkillsForSlashMenu(availableSkills, availableCommands)
+    }
+    val skillNames = remember(menuSkills) { menuSkills.mapTo(linkedSetOf()) { it.name } }
+    val commandNames = remember(availableCommands) {
+        availableCommands.mapTo(linkedSetOf()) { it.name }
     }
     return rememberComposerSlashHighlight(
         skillNames = skillNames,
@@ -787,6 +840,13 @@ private fun AgentChatComposer(
                         AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
                     }
                 }
+                if (state.directoryIsGitRepo) {
+                    ComposerBranchWorktreeChip(
+                        branch = state.currentBranch,
+                        useWorktree = state.useWorktree,
+                        onUseWorktreeChange = { state.useWorktree = it },
+                    )
+                }
             }
             AgentQuotaMenu(services = form.services, agent = state.agent)
             ChatImageAttachButton(
@@ -995,12 +1055,32 @@ private fun AgentTaskComposerFields(
         }
 
         Text("Options", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (state.directoryIsGitRepo) {
-                FilterPill("isolate in git worktree", state.useWorktree, Green) { state.useWorktree = !state.useWorktree }
-            }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             FilterPill("andy device tools (mcp)", state.attachMcp, Cyan) { state.attachMcp = !state.attachMcp }
             FilterPill("confirm tool calls", state.confirmToolCalls, Rust) { state.confirmToolCalls = !state.confirmToolCalls }
+        }
+        if (state.useWorktree && state.availableBases.isNotEmpty()) {
+            Text("base on", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterPill(
+                    "origin (${state.currentBranch ?: "HEAD"})",
+                    state.baseWorktreeTaskId == null,
+                    Green,
+                ) { state.baseWorktreeTaskId = null }
+                state.availableBases.forEach { option ->
+                    FilterPill(
+                        "${option.title} (${option.branch})",
+                        state.baseWorktreeTaskId == option.taskId,
+                        Cyan,
+                    ) { state.baseWorktreeTaskId = option.taskId }
+                }
+            }
         }
 
         Text("Autonomy", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
@@ -1063,6 +1143,88 @@ private fun AgentTaskComposerFields(
         )
         if (form.showModelSection && state.agent == AgentKind.ClaudeCode) {
             LabeledField("Max budget USD (optional)", state.budgetText, { state.budgetText = it }, Modifier.fillMaxWidth(), placeholder = "e.g. 2.50")
+        }
+    }
+}
+
+@Composable
+private fun ComposerBranchWorktreeChip(
+    branch: String?,
+    useWorktree: Boolean,
+    onUseWorktreeChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val content = TextSecondary
+    Row(
+        modifier
+            .height(AndyLayout.ControlHeightSm)
+            .background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.Pill))
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Image(
+                painter = painterResource(Res.drawable.git_branch),
+                contentDescription = "git branch",
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                branch ?: "detached HEAD",
+                color = content,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+        Row(
+            Modifier.clickable(role = Role.Checkbox) { onUseWorktreeChange(!useWorktree) },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ComposerWorktreeCheckbox(checked = useWorktree, color = content)
+            Text(
+                "worktree",
+                color = content,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposerWorktreeCheckbox(
+    checked: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .size(12.dp)
+            .border(1.dp, color.copy(alpha = 0.85f), RoundedCornerShape(2.dp))
+            .background(
+                if (checked) color.copy(alpha = 0.18f) else Color.Transparent,
+                RoundedCornerShape(2.dp),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (checked) {
+            Canvas(Modifier.size(8.dp)) {
+                val stroke = Stroke(width = 1.6f, cap = StrokeCap.Round)
+                val path = Path().apply {
+                    moveTo(size.width * 0.15f, size.height * 0.55f)
+                    lineTo(size.width * 0.42f, size.height * 0.82f)
+                    lineTo(size.width * 0.88f, size.height * 0.22f)
+                }
+                drawPath(path, color, style = stroke)
+            }
         }
     }
 }

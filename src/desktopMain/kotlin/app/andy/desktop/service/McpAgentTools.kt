@@ -196,6 +196,12 @@ fun Server.registerAgentProjectTools(
                         put("status", task.status?.name.orEmpty())
                         put("projectId", task.projectId.orEmpty())
                         put("cwd", task.cwd.orEmpty())
+                        put("originDir", task.originDir.orEmpty())
+                        put("useWorktree", task.useWorktree)
+                        put("worktreePath", task.worktreePath.orEmpty())
+                        put("branchName", task.branchName.orEmpty())
+                        put("ownsWorktree", task.ownsWorktree)
+                        put("parentWorktreeTaskId", task.parentWorktreeTaskId.orEmpty())
                         put("unread", task.unread)
                         put("archived", task.archived)
                         put("transcriptCompressed", task.transcriptCompressed)
@@ -378,6 +384,14 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "Working directory")
             },
+            "useWorktree" to buildJsonObject {
+                put("type", "boolean")
+                put("description", "Create an isolated git worktree for this chat")
+            },
+            "baseWorktreeTaskId" to buildJsonObject {
+                put("type", "string")
+                put("description", "Optional Andy task id whose worktree branch to fork from")
+            },
             "model" to buildJsonObject {
                 put("type", "string")
                 put("description", "Optional model id (empty = provider default)")
@@ -414,6 +428,9 @@ fun Server.registerAgentProjectTools(
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
         } ?: AgentAutonomy.Standard
         val model = str(args, "model")?.takeIf { it.isNotBlank() }
+        val useWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: args["useWorktree"]?.jsonPrimitive?.booleanOrNull
+            ?: false
         val task = agentRuns.createAndStart(
             AgentTaskDraft(
                 title = str(args, "title")?.takeIf { it.isNotBlank() } ?: prompt.take(48),
@@ -421,6 +438,8 @@ fun Server.registerAgentProjectTools(
                 agent = agent,
                 projectId = str(args, "projectId")?.takeIf { it.isNotBlank() },
                 directory = str(args, "directory")?.takeIf { it.isNotBlank() },
+                useWorktree = useWorktree,
+                baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
                 autonomy = autonomy,
                 model = model,
                 contextBundleIds = strList(args, "contextBundleIds"),
@@ -568,6 +587,10 @@ fun Server.registerAgentProjectTools(
                 put("type", "boolean")
                 put("description", "Also remove an owned git worktree")
             },
+            "force" to buildJsonObject {
+                put("type", "boolean")
+                put("description", "Delete even when child worktrees still reference this task")
+            },
         ),
         required = listOf("taskId"),
     ) { args ->
@@ -575,8 +598,36 @@ fun Server.registerAgentProjectTools(
         val removeWorktree = args["removeWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["removeWorktree"]?.jsonPrimitive?.booleanOrNull
             ?: false
-        agentRuns.delete(id, removeWorktree)
-        textResult("""{"ok":true,"id":"$id"}""")
+        val force = args["force"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: args["force"]?.jsonPrimitive?.booleanOrNull
+            ?: false
+        when (val outcome = agentRuns.delete(id, removeWorktree, force)) {
+            is app.andy.model.WorktreeDeleteOutcome.BlockedByChildren -> {
+                textResult(
+                    buildJsonObject {
+                        put("ok", false)
+                        put("blockedByChildren", true)
+                        put("id", id)
+                        put(
+                            "children",
+                            buildJsonArray {
+                                outcome.children.forEach { child ->
+                                    add(
+                                        buildJsonObject {
+                                            put("taskId", child.taskId)
+                                            put("title", child.title)
+                                            put("branch", child.branch)
+                                            put("path", child.path)
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    }.toString(),
+                )
+            }
+            app.andy.model.WorktreeDeleteOutcome.Deleted -> textResult("""{"ok":true,"id":"$id"}""")
+        }
     }
 
     register(

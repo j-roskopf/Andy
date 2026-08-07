@@ -455,7 +455,6 @@ private val ClaudeScreenManifest: List<ScreenRule> = listOf(
         gate = ScreenGate(
             any = listOf(
                 ScreenGate(lineRegex = listOf(Regex(""">\s*$"""))),
-                ScreenGate(lineRegex = listOf(Regex("""╭─"""))),
             ),
             not = listOf(
                 ScreenGate(contains = listOf("perambulat")),

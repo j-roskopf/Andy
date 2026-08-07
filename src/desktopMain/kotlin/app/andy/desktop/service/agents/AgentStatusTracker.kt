@@ -348,16 +348,13 @@ class ScrapeStatusSource(
     fun isDoneConfident(): Boolean {
         if (showsWorkingIndicator()) return false
         if (pendingIdle.active) return false
-        if (lastVisibleIdle) return true
         val match = lastMatch ?: evaluateCurrent().also { lastMatch = it }
-        if (match.state == ScreenState.Idle && !match.idleFallback) return true
-        if (match.idleFallback || match.state == ScreenState.Idle) {
-            val screen = detectionInput().screen
-            if (terminalBufferLooksReadyForInput(screen)) return true
-            if (agent == AgentKind.Cursor && cursorChromeLooksIdle(screen)) return true
-            if (agent == AgentKind.OpenCode && openCodeChromeLooksIdle(screen)) return true
-            return false
-        }
+        val screen = detectionInput().screen
+        if (terminalBufferLooksReadyForInput(screen)) return true
+        if (agent == AgentKind.Cursor && cursorChromeLooksIdle(screen)) return true
+        if (agent == AgentKind.OpenCode && openCodeChromeLooksIdle(screen)) return true
+        // tmux OSC title/progress can lead the visible buffer; only when the screen is empty.
+        if (match.state == ScreenState.Idle && !match.idleFallback && screen.isBlank()) return true
         return false
     }
 

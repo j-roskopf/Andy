@@ -91,7 +91,7 @@ internal object CodexSessionIds {
             if (launchedPrompt != null && !rolloutContainsPrompt(file, VendorSessionMatching.firstLine(launchedPrompt).orEmpty())) {
                 return@forEach
             }
-            if (best == null || mtime > best!!.first) best = mtime to sessionId
+            if (best == null || mtime > best.first) best = mtime to sessionId
         }
         return best?.second
     }
