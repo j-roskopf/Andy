@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,6 +121,7 @@ internal fun HostFilesScreen(
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(service) { HostFilesScreenState(service) }
+    val hostFileRoots by rememberUpdatedState(workspaceState.hostFileRoots)
     var selectedRoot by remember(workspaceState.hostFileRoots, workspaceState.lastHostFilePath) {
         mutableStateOf(resolveHostRootForPath(workspaceState.lastHostFilePath, workspaceState.hostFileRoots) ?: workspaceState.hostFileRoots.firstOrNull())
     }
@@ -155,6 +157,7 @@ internal fun HostFilesScreen(
         scope.launch {
             runCatching { state.service.list(path) }
                 .onSuccess {
+                    if (resolveHostRootForPath(path, hostFileRoots) == null) return@onSuccess
                     selectedPath = path
                     state.treeChildren[path] = it
                     if (state.message.endsWith("entries")) state.message = ""
@@ -168,6 +171,7 @@ internal fun HostFilesScreen(
         scope.launch {
             runCatching { state.service.read(path) }
                 .onSuccess { doc ->
+                    if (resolveHostRootForPath(doc.path, hostFileRoots) == null) return@onSuccess
                     val next = HostEditorTab(doc.path, doc.content, doc.content, doc.modifiedMillis, doc.sizeBytes, doc.languageHint)
                     state.tabs = (state.tabs.filterNot { it.path == doc.path } + next)
                     state.activePath = doc.path
@@ -259,6 +263,32 @@ internal fun HostFilesScreen(
         }
         state.expandedPaths[path] = true
         loadPath(path)
+    }
+
+    fun removeRoot(root: String) {
+        val remaining = workspaceState.hostFileRoots.filterNot { it == root }
+        onUpdateWorkspace { ws ->
+            ws.copy(
+                hostFileRoots = remaining,
+                lastHostFilePath = ws.lastHostFilePath?.takeIf { path -> resolveHostRootForPath(path, remaining) != null },
+                recentHostFiles = ws.recentHostFiles.filter { path -> resolveHostRootForPath(path, remaining) != null },
+            )
+        }
+        state.statuses.remove(root)
+        (state.expandedPaths.keys + state.treeChildren.keys)
+            .filter { resolveHostRootForPath(it, remaining) == null }
+            .forEach { path ->
+                state.expandedPaths.remove(path)
+                state.treeChildren.remove(path)
+            }
+        state.tabs = state.tabs.filter { resolveHostRootForPath(it.path, remaining) != null }
+        if (state.activePath != null && resolveHostRootForPath(state.activePath, remaining) == null) {
+            state.activePath = state.tabs.lastOrNull()?.path
+        }
+        if (selectedRoot == root) {
+            selectedRoot = remaining.firstOrNull()
+            selectedPath = selectedRoot.orEmpty()
+        }
     }
 
     LaunchedEffect(workspaceState.hostFileRoots) {
@@ -356,20 +386,34 @@ internal fun HostFilesScreen(
                 }
                 workspaceState.hostFileRoots.forEach { root ->
                     val status = state.statuses[root]
-                    Column(
+                    Row(
                         Modifier.fillMaxWidth()
                             .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.Control))
                             .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.Control))
-                            .clickable {
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            Modifier.weight(1f).clickable {
                                 selectedRoot = root
                                 selectedPath = root
                                 state.expandedPaths[root] = true
                                 loadPath(root)
-                            }
-                            .padding(8.dp),
-                    ) {
-                        Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                        ) {
+                            Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(
+                            "×",
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .clickable(onClick = { removeRoot(root) })
+                                .padding(start = 4.dp),
+                        )
                     }
                 }
                 AndyHorizontalDivider(color = Border)
