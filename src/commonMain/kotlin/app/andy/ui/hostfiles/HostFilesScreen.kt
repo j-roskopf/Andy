@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -120,6 +121,7 @@ internal fun HostFilesScreen(
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(service) { HostFilesScreenState(service) }
+    val hostFileRoots by rememberUpdatedState(workspaceState.hostFileRoots)
     var selectedRoot by remember(workspaceState.hostFileRoots, workspaceState.lastHostFilePath) {
         mutableStateOf(resolveHostRootForPath(workspaceState.lastHostFilePath, workspaceState.hostFileRoots) ?: workspaceState.hostFileRoots.firstOrNull())
     }
@@ -155,6 +157,7 @@ internal fun HostFilesScreen(
         scope.launch {
             runCatching { state.service.list(path) }
                 .onSuccess {
+                    if (resolveHostRootForPath(path, hostFileRoots) == null) return@onSuccess
                     selectedPath = path
                     state.treeChildren[path] = it
                     if (state.message.endsWith("entries")) state.message = ""
@@ -168,6 +171,7 @@ internal fun HostFilesScreen(
         scope.launch {
             runCatching { state.service.read(path) }
                 .onSuccess { doc ->
+                    if (resolveHostRootForPath(doc.path, hostFileRoots) == null) return@onSuccess
                     val next = HostEditorTab(doc.path, doc.content, doc.content, doc.modifiedMillis, doc.sizeBytes, doc.languageHint)
                     state.tabs = (state.tabs.filterNot { it.path == doc.path } + next)
                     state.activePath = doc.path
@@ -272,13 +276,13 @@ internal fun HostFilesScreen(
         }
         state.statuses.remove(root)
         (state.expandedPaths.keys + state.treeChildren.keys)
-            .filter { hostPathStartsWith(it, root) }
+            .filter { resolveHostRootForPath(it, remaining) == null }
             .forEach { path ->
                 state.expandedPaths.remove(path)
                 state.treeChildren.remove(path)
             }
-        state.tabs = state.tabs.filterNot { hostPathStartsWith(it.path, root) }
-        if (state.activePath != null && hostPathStartsWith(state.activePath!!, root)) {
+        state.tabs = state.tabs.filter { resolveHostRootForPath(it.path, remaining) != null }
+        if (state.activePath != null && resolveHostRootForPath(state.activePath, remaining) == null) {
             state.activePath = state.tabs.lastOrNull()?.path
         }
         if (selectedRoot == root) {
