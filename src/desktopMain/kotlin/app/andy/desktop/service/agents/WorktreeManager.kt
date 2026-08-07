@@ -206,6 +206,58 @@ class WorktreeManager(
     fun mergeCommand(targetDir: String, branch: String): String =
         "git -C ${shellQuote(targetDir)} merge ${shellQuote(branch)}"
 
+    /**
+     * Brings [branch] (and any dirty work in [sourceWorktreePath]) into [targetDir]'s working
+     * tree **without committing**. HEAD stays put so the user can review and commit themselves.
+     *
+     * Dirty source edits are checkpoint-committed onto [branch] only so git can see them; that
+     * commit lives on the worktree branch (removed with the worktree), not on the target branch.
+     */
+    fun merge(targetDir: String, branch: String, sourceWorktreePath: String? = null): Result<Unit> {
+        if (sourceWorktreePath != null) {
+            commitDirtyForMerge(sourceWorktreePath).onFailure { return Result.failure(it) }
+        }
+        // --no-ff avoids fast-forwarding HEAD; --no-commit leaves the result in the index/worktree.
+        val merge = git(targetDir, "merge", "--no-commit", "--no-ff", branch)
+        if (merge.exitCode != 0) {
+            git(targetDir, "merge", "--abort")
+            return Result.failure(IllegalStateException(merge.output.ifBlank { "git merge failed" }))
+        }
+        // Mixed reset clears MERGE_HEAD / the index back to HEAD while keeping the merged files
+        // in the working tree as unstaged (or untracked) changes.
+        val reset = git(targetDir, "reset")
+        return if (reset.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException(reset.output.ifBlank { "git reset failed" }))
+        }
+    }
+
+    /** Commits tracked + untracked (non-ignored) changes in [worktreePath] so a later merge can see them. */
+    private fun commitDirtyForMerge(worktreePath: String): Result<Unit> {
+        val status = git(worktreePath, "status", "--porcelain")
+        if (status.exitCode != 0) {
+            return Result.failure(IllegalStateException(status.output.ifBlank { "git status failed" }))
+        }
+        if (status.output.isBlank()) return Result.success(Unit)
+        val add = git(worktreePath, "add", "-A")
+        if (add.exitCode != 0) {
+            return Result.failure(IllegalStateException(add.output.ifBlank { "git add failed" }))
+        }
+        // exit 0 = nothing staged; exit 1 = staged diff present. Other codes are real failures.
+        val cached = git(worktreePath, "diff", "--cached", "--quiet")
+        if (cached.exitCode == 0) return Result.success(Unit)
+        if (cached.exitCode != 1) {
+            return Result.failure(IllegalStateException(cached.output.ifBlank { "git diff --cached failed" }))
+        }
+        val commit = git(worktreePath, "commit", "-m", "andy: checkpoint before merge")
+        return if (commit.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException(commit.output.ifBlank { "git commit failed" }))
+        }
+    }
+
     fun remove(originDir: String, worktreePath: String, branch: String?): Result<Unit> {
         val removed = git(originDir, "worktree", "remove", "--force", worktreePath)
         if (removed.exitCode != 0) {

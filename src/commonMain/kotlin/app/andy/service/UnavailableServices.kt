@@ -336,6 +336,12 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
     override fun mergeCommand(targetDir: String, branch: String) =
         "git -C '$targetDir' merge '$branch'"
+    override suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String?,
+    ): Result<Unit> =
+        Result.failure(IllegalStateException("unavailable"))
 }
 
 object UnavailableAgentRetentionService : AgentRetentionService {

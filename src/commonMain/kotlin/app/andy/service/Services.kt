@@ -547,6 +547,15 @@ interface AgentRunService {
     suspend fun worktreeTree(originDir: String): List<WorktreeNode>
     /** Shell command that merges [branch] into whatever is checked out in [targetDir]. */
     fun mergeCommand(targetDir: String, branch: String): String
+    /**
+     * Applies [branch] into [targetDir]'s working tree without committing (HEAD unchanged).
+     * When [sourceWorktreePath] is set, dirty worktree changes are included.
+     */
+    suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String? = null,
+    ): Result<Unit>
 }
 
 data class RetentionSweepResult(

@@ -79,6 +79,34 @@ class NestedWorktreeServiceTest {
     }
 
     @Test
+    fun mergeBranchAppliesDirtyWorkToWorkingTreeWithoutCommittingThenDeleteClearsWorktree() = runBlocking {
+        withHarness { harness ->
+            val task = harness.startWorktreeTask(title = "feature")
+            val worktreePath = assertNotNull(task.worktreePath)
+            val branch = assertNotNull(task.branchName)
+            val headBefore = revParse(harness.repo, "HEAD")
+
+            File(worktreePath, "from-agent.txt").writeText("agent work\n")
+
+            harness.service.mergeBranch(
+                targetDir = harness.repo.absolutePath,
+                branch = branch,
+                sourceWorktreePath = worktreePath,
+            ).getOrThrow()
+            assertTrue(File(harness.repo, "from-agent.txt").isFile)
+            assertEquals("main", harness.service.currentBranch(harness.repo.absolutePath))
+            assertEquals(headBefore, revParse(harness.repo, "HEAD"))
+            assertTrue(gitOutput(harness.repo, "status", "--porcelain").contains("from-agent.txt"))
+
+            assertEquals(WorktreeDeleteOutcome.Deleted, harness.service.delete(task.id, removeWorktree = true))
+            assertTrue(harness.service.tasks.value.none { it.id == task.id })
+            assertFalse(File(worktreePath).exists())
+            assertTrue(File(harness.repo, "from-agent.txt").isFile)
+            assertEquals(headBefore, revParse(harness.repo, "HEAD"))
+        }
+    }
+
+    @Test
     fun deleteBlockedByChildrenUnlessForced() = runBlocking {
         withHarness { harness ->
             val parent = harness.startWorktreeTask(title = "parent")

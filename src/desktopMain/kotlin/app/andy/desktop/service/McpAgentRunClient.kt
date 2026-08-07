@@ -992,6 +992,13 @@ class McpAgentRunClient(
     override fun mergeCommand(targetDir: String, branch: String): String =
         localWorktrees.mergeCommand(targetDir, branch)
 
+    override suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String?,
+    ): Result<Unit> =
+        withContext(Dispatchers.IO) { localWorktrees.merge(targetDir, branch, sourceWorktreePath) }
+
     private fun canonicalPath(path: String): String =
         runCatching { File(path).canonicalPath }.getOrElse { path }
 

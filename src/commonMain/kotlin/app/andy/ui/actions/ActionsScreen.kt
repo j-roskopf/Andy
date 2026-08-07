@@ -1389,11 +1389,41 @@ private fun ProjectWorktrees(
     var nodes by remember(project.id) { mutableStateOf<List<WorktreeNode>>(emptyList()) }
     var loading by remember(project.id) { mutableStateOf(true) }
     var refreshTick by remember(project.id) { mutableStateOf(0) }
+    var actionError by remember(project.id) { mutableStateOf<String?>(null) }
 
     suspend fun reload() {
         loading = true
         nodes = services.agentRuns.worktreeTree(project.contextDir)
         loading = false
+    }
+
+    fun deleteWorktree(taskId: String) {
+        scope.launch {
+            when (val outcome = services.agentRuns.delete(taskId, removeWorktree = true)) {
+                WorktreeDeleteOutcome.Deleted -> {
+                    actionError = null
+                    refreshTick += 1
+                }
+                is WorktreeDeleteOutcome.BlockedByChildren -> {
+                    val childList = outcome.children.joinToString("\n") { child ->
+                        "• ${child.title} (${child.branch})"
+                    }
+                    onConfirm(
+                        PendingConfirmation(
+                            title = "Delete worktree with children?",
+                            message = "This worktree still has nested children:\n$childList\n\nDelete anyway? Child worktrees become roots and keep their branches.",
+                            confirmLabel = "Delete anyway",
+                        ) {
+                            scope.launch {
+                                services.agentRuns.delete(taskId, removeWorktree = true, force = true)
+                                actionError = null
+                                refreshTick += 1
+                            }
+                        },
+                    )
+                }
+            }
+        }
     }
 
     LaunchedEffect(project.id, project.contextDir, refreshTick) {
@@ -1419,6 +1449,9 @@ private fun ProjectWorktrees(
             }
             OutlinedButton(onClick = { refreshTick += 1 }) { Text("refresh", fontSize = 11.sp) }
         }
+        actionError?.let { error ->
+            Text(error, color = Red, fontFamily = MonoFont, fontSize = 11.sp)
+        }
         when {
             loading && nodes.isEmpty() -> {
                 Text("loading worktrees…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
@@ -1436,31 +1469,30 @@ private fun ProjectWorktrees(
                             services = services,
                             onOpenTask = onOpenTask,
                             onCopyPath = { copyText(it) },
-                            onCopyMerge = { copyText(it) },
-                            onDelete = { taskId ->
-                                scope.launch {
-                                    when (val outcome = services.agentRuns.delete(taskId, removeWorktree = true)) {
-                                        WorktreeDeleteOutcome.Deleted -> refreshTick += 1
-                                        is WorktreeDeleteOutcome.BlockedByChildren -> {
-                                            val childList = outcome.children.joinToString("\n") { child ->
-                                                "• ${child.title} (${child.branch})"
-                                            }
-                                            onConfirm(
-                                                PendingConfirmation(
-                                                    title = "Delete worktree with children?",
-                                                    message = "This worktree still has nested children:\n$childList\n\nDelete anyway? Child worktrees become roots and keep their branches.",
-                                                    confirmLabel = "Delete anyway",
-                                                ) {
-                                                    scope.launch {
-                                                        services.agentRuns.delete(taskId, removeWorktree = true, force = true)
-                                                        refreshTick += 1
-                                                    }
-                                                },
+                            onMerge = { taskId, sourcePath, branch, targetLabel ->
+                                onConfirm(
+                                    PendingConfirmation(
+                                        title = "Apply worktree?",
+                                        message = "Apply `$branch` into `$targetLabel` as uncommitted working-tree changes?\n\nNothing is committed on your branch. On success, the worktree and its chat will be deleted.",
+                                        confirmLabel = "Apply & delete",
+                                    ) {
+                                        scope.launch {
+                                            val merged = services.agentRuns.mergeBranch(
+                                                targetDir = project.contextDir,
+                                                branch = branch,
+                                                sourceWorktreePath = sourcePath,
                                             )
+                                            merged.onFailure { error ->
+                                                actionError = error.message?.takeIf { it.isNotBlank() } ?: "git merge failed"
+                                                return@launch
+                                            }
+                                            actionError = null
+                                            deleteWorktree(taskId)
                                         }
-                                    }
-                                }
+                                    },
+                                )
                             },
+                            onDelete = ::deleteWorktree,
                         )
                     }
                 }
@@ -1503,7 +1535,7 @@ private fun WorktreeTreeRow(
     services: AndyServices,
     onOpenTask: (String) -> Unit,
     onCopyPath: (String) -> Unit,
-    onCopyMerge: (String) -> Unit,
+    onMerge: (taskId: String, sourcePath: String, branch: String, targetLabel: String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -1572,15 +1604,13 @@ private fun WorktreeTreeRow(
                 OutlinedButton(
                     onClick = {
                         scope.launch {
-                            val parent = row.parent
-                            val targetDir = parent?.path ?: project.contextDir
-                            val cmd = services.agentRuns.mergeCommand(targetDir, node.branch)
-                            onCopyMerge(cmd)
+                            val targetLabel = services.agentRuns.currentBranch(project.contextDir) ?: "HEAD"
+                            onMerge(node.taskId, node.path, node.branch, targetLabel)
                         }
                     },
                     modifier = Modifier.height(28.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                ) { Text("copy merge cmd", fontSize = 10.sp) }
+                ) { Text("merge", fontSize = 10.sp) }
                 OutlinedButton(
                     onClick = { onDelete(node.taskId) },
                     modifier = Modifier.height(28.dp),

@@ -718,6 +718,11 @@ internal object ScreenshotServices {
         override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
         override fun mergeCommand(targetDir: String, branch: String) =
             "git -C '$targetDir' merge '$branch'"
+        override suspend fun mergeBranch(
+            targetDir: String,
+            branch: String,
+            sourceWorktreePath: String?,
+        ): Result<Unit> = Result.success(Unit)
     }
 
     private object ScreenshotProjectWorkflows : ProjectWorkflowService {

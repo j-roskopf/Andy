@@ -107,6 +107,48 @@ class WorktreeManagerTest {
     }
 
     @Test
+    fun mergeAppliesUncommittedSourceChangesIntoWorkingTreeWithoutCommitting() {
+        val repo = File.createTempFile("andy-wt-merge", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            git(repo, "checkout", "-B", "main")
+            File(repo, "root.txt").writeText("root\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "root")
+            val headBefore = revParse(repo, "HEAD")
+
+            val linked = File(repo, "linked-wt")
+            git(repo, "worktree", "add", "-b", "feature-branch", linked.absolutePath)
+            // Dirty working tree — the common Andy case (agent edits, never committed).
+            File(linked, "from-agent.txt").writeText("agent work\n")
+            File(linked, "root.txt").writeText("root\nedited\n")
+
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            manager.merge(
+                targetDir = repo.absolutePath,
+                branch = "feature-branch",
+                sourceWorktreePath = linked.absolutePath,
+            ).getOrThrow()
+
+            assertTrue(File(repo, "from-agent.txt").isFile)
+            assertEquals("root\nedited\n", File(repo, "root.txt").readText())
+            assertEquals("main", manager.currentBranch(repo.absolutePath))
+            // Target branch must not move — changes stay uncommitted in the working tree.
+            assertEquals(headBefore, revParse(repo, "HEAD"))
+            val status = gitOutput(repo, "status", "--porcelain")
+            assertTrue(status.contains("from-agent.txt"), status)
+            assertTrue(status.contains("root.txt"), status)
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
     fun currentBranchReturnsNullWhenDetached() {
         val repo = File.createTempFile("andy-wt-detached", null).also {
             it.delete()

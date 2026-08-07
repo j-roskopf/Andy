@@ -3021,6 +3021,13 @@ class DesktopAgentRunService(
     override fun mergeCommand(targetDir: String, branch: String): String =
         worktrees.mergeCommand(targetDir, branch)
 
+    override suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String?,
+    ): Result<Unit> =
+        withContext(Dispatchers.IO) { worktrees.merge(targetDir, branch, sourceWorktreePath) }
+
     /** Prefer the owning task when workflow runs reuse one worktree path. */
     private fun trackedWorktreeOwnerByPath(originDir: String): Map<String, AgentTask> =
         tasks.value
