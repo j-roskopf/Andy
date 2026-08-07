@@ -261,6 +261,32 @@ internal fun HostFilesScreen(
         loadPath(path)
     }
 
+    fun removeRoot(root: String) {
+        val remaining = workspaceState.hostFileRoots.filterNot { it == root }
+        onUpdateWorkspace { ws ->
+            ws.copy(
+                hostFileRoots = remaining,
+                lastHostFilePath = ws.lastHostFilePath?.takeIf { path -> resolveHostRootForPath(path, remaining) != null },
+                recentHostFiles = ws.recentHostFiles.filter { path -> resolveHostRootForPath(path, remaining) != null },
+            )
+        }
+        state.statuses.remove(root)
+        (state.expandedPaths.keys + state.treeChildren.keys)
+            .filter { hostPathStartsWith(it, root) }
+            .forEach { path ->
+                state.expandedPaths.remove(path)
+                state.treeChildren.remove(path)
+            }
+        state.tabs = state.tabs.filterNot { hostPathStartsWith(it.path, root) }
+        if (state.activePath != null && hostPathStartsWith(state.activePath!!, root)) {
+            state.activePath = state.tabs.lastOrNull()?.path
+        }
+        if (selectedRoot == root) {
+            selectedRoot = remaining.firstOrNull()
+            selectedPath = selectedRoot.orEmpty()
+        }
+    }
+
     LaunchedEffect(workspaceState.hostFileRoots) {
         workspaceState.hostFileRoots.forEach { root ->
             state.expandedPaths[root] = true
@@ -356,20 +382,34 @@ internal fun HostFilesScreen(
                 }
                 workspaceState.hostFileRoots.forEach { root ->
                     val status = state.statuses[root]
-                    Column(
+                    Row(
                         Modifier.fillMaxWidth()
                             .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.Control))
                             .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.Control))
-                            .clickable {
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            Modifier.weight(1f).clickable {
                                 selectedRoot = root
                                 selectedPath = root
                                 state.expandedPaths[root] = true
                                 loadPath(root)
-                            }
-                            .padding(8.dp),
-                    ) {
-                        Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            },
+                        ) {
+                            Text(hostFileName(root).ifBlank { root }, color = if (root == selectedRoot) Rust else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(status?.message ?: "Queued", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(
+                            "×",
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .clickable(onClick = { removeRoot(root) })
+                                .padding(start = 4.dp),
+                        )
                     }
                 }
                 AndyHorizontalDivider(color = Border)
