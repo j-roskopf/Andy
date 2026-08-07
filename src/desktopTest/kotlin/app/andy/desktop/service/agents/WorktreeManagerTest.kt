@@ -1,10 +1,12 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.WorktreeMergeOutcome
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -129,11 +131,14 @@ class WorktreeManagerTest {
             File(linked, "root.txt").writeText("root\nedited\n")
 
             val manager = WorktreeManager(File(repo, "worktrees"))
-            manager.merge(
-                targetDir = repo.absolutePath,
-                branch = "feature-branch",
-                sourceWorktreePath = linked.absolutePath,
-            ).getOrThrow()
+            assertEquals(
+                WorktreeMergeOutcome.Applied,
+                manager.merge(
+                    targetDir = repo.absolutePath,
+                    branch = "feature-branch",
+                    sourceWorktreePath = linked.absolutePath,
+                ),
+            )
 
             assertTrue(File(repo, "from-agent.txt").isFile)
             assertEquals("root\nedited\n", File(repo, "root.txt").readText())
@@ -143,6 +148,55 @@ class WorktreeManagerTest {
             val status = gitOutput(repo, "status", "--porcelain")
             assertTrue(status.contains("from-agent.txt"), status)
             assertTrue(status.contains("root.txt"), status)
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun mergeConflictsCanBeKeptOrAborted() {
+        val repo = File.createTempFile("andy-wt-conflict", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            git(repo, "checkout", "-B", "main")
+            File(repo, "conflict.txt").writeText("base\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "base")
+
+            val linked = File(repo, "linked-wt")
+            git(repo, "worktree", "add", "-b", "feature-branch", linked.absolutePath)
+            File(linked, "conflict.txt").writeText("from feature\n")
+            git(linked, "add", ".")
+            git(linked, "commit", "-m", "feature edit")
+
+            File(repo, "conflict.txt").writeText("from main\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "main edit")
+            val headBefore = revParse(repo, "HEAD")
+
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val outcome = manager.merge(
+                targetDir = repo.absolutePath,
+                branch = "feature-branch",
+                sourceWorktreePath = linked.absolutePath,
+            )
+            assertIs<WorktreeMergeOutcome.Conflicts>(outcome)
+            assertTrue(File(repo, "conflict.txt").readText().contains("<<<<<<<"))
+            assertEquals(headBefore, revParse(repo, "HEAD"))
+
+            manager.abortMerge(repo.absolutePath).getOrThrow()
+            assertEquals("from main\n", File(repo, "conflict.txt").readText())
+            assertEquals(headBefore, revParse(repo, "HEAD"))
+            assertFalse(
+                ProcessBuilder(listOf("git", "-C", repo.absolutePath, "rev-parse", "-q", "--verify", "MERGE_HEAD"))
+                    .start()
+                    .waitFor() == 0,
+            )
         } finally {
             repo.deleteRecursively()
         }

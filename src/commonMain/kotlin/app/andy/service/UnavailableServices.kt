@@ -340,7 +340,9 @@ object UnavailableAgentRunService : AgentRunService {
         targetDir: String,
         branch: String,
         sourceWorktreePath: String?,
-    ): Result<Unit> =
+    ): WorktreeMergeOutcome =
+        WorktreeMergeOutcome.Failed("unavailable")
+    override suspend fun abortMerge(targetDir: String): Result<Unit> =
         Result.failure(IllegalStateException("unavailable"))
 }
 

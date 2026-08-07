@@ -550,12 +550,16 @@ interface AgentRunService {
     /**
      * Applies [branch] into [targetDir]'s working tree without committing (HEAD unchanged).
      * When [sourceWorktreePath] is set, dirty worktree changes are included.
+     * On [WorktreeMergeOutcome.Conflicts], conflict markers remain until the user keeps them
+     * or [abortMerge] is called.
      */
     suspend fun mergeBranch(
         targetDir: String,
         branch: String,
         sourceWorktreePath: String? = null,
-    ): Result<Unit>
+    ): WorktreeMergeOutcome
+    /** Aborts an in-progress merge left by a conflicted [mergeBranch] call. */
+    suspend fun abortMerge(targetDir: String): Result<Unit>
 }
 
 data class RetentionSweepResult(

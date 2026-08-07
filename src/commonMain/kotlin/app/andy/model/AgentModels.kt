@@ -684,6 +684,19 @@ sealed interface WorktreeDeleteOutcome {
     data class BlockedByChildren(val children: List<WorktreeBaseOption>) : WorktreeDeleteOutcome
 }
 
+/** Outcome of applying a worktree branch into a target working tree. */
+sealed interface WorktreeMergeOutcome {
+    /** Changes applied; HEAD unchanged. */
+    data object Applied : WorktreeMergeOutcome
+    /**
+     * Merge stopped with conflicts; conflict markers remain in the target dir.
+     * Caller must leave them for the user or call abort.
+     */
+    data class Conflicts(val detail: String) : WorktreeMergeOutcome
+    /** Failed without leaving a merge in progress. */
+    data class Failed(val detail: String) : WorktreeMergeOutcome
+}
+
 /** Last-used launch settings, stored independently for each provider. */
 data class AgentProviderDefaults(
     val model: String? = null,

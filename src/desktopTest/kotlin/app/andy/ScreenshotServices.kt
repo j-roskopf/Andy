@@ -722,7 +722,8 @@ internal object ScreenshotServices {
             targetDir: String,
             branch: String,
             sourceWorktreePath: String?,
-        ): Result<Unit> = Result.success(Unit)
+        ) = app.andy.model.WorktreeMergeOutcome.Applied
+        override suspend fun abortMerge(targetDir: String): Result<Unit> = Result.success(Unit)
     }
 
     private object ScreenshotProjectWorkflows : ProjectWorkflowService {

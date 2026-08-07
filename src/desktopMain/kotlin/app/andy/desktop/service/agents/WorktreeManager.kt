@@ -6,6 +6,7 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.WorktreeMergeOutcome
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -212,26 +213,50 @@ class WorktreeManager(
      *
      * Dirty source edits are checkpoint-committed onto [branch] only so git can see them; that
      * commit lives on the worktree branch (removed with the worktree), not on the target branch.
+     *
+     * On conflicts, conflict markers are left in place ([WorktreeMergeOutcome.Conflicts]); call
+     * [abortMerge] if the user declines to keep them.
      */
-    fun merge(targetDir: String, branch: String, sourceWorktreePath: String? = null): Result<Unit> {
+    fun merge(targetDir: String, branch: String, sourceWorktreePath: String? = null): WorktreeMergeOutcome {
         if (sourceWorktreePath != null) {
-            commitDirtyForMerge(sourceWorktreePath).onFailure { return Result.failure(it) }
+            commitDirtyForMerge(sourceWorktreePath).onFailure {
+                return WorktreeMergeOutcome.Failed(it.message?.ifBlank { null } ?: "checkpoint commit failed")
+            }
         }
         // --no-ff avoids fast-forwarding HEAD; --no-commit leaves the result in the index/worktree.
         val merge = git(targetDir, "merge", "--no-commit", "--no-ff", branch)
         if (merge.exitCode != 0) {
-            git(targetDir, "merge", "--abort")
-            return Result.failure(IllegalStateException(merge.output.ifBlank { "git merge failed" }))
+            val detail = merge.output.ifBlank { "git merge failed" }
+            // Leave conflicted merges for the caller to keep or abort; clean up other failures.
+            return if (mergeInProgress(targetDir)) {
+                WorktreeMergeOutcome.Conflicts(detail)
+            } else {
+                git(targetDir, "merge", "--abort")
+                WorktreeMergeOutcome.Failed(detail)
+            }
         }
         // Mixed reset clears MERGE_HEAD / the index back to HEAD while keeping the merged files
         // in the working tree as unstaged (or untracked) changes.
         val reset = git(targetDir, "reset")
         return if (reset.exitCode == 0) {
-            Result.success(Unit)
+            WorktreeMergeOutcome.Applied
         } else {
-            Result.failure(IllegalStateException(reset.output.ifBlank { "git reset failed" }))
+            WorktreeMergeOutcome.Failed(reset.output.ifBlank { "git reset failed" })
         }
     }
+
+    fun abortMerge(targetDir: String): Result<Unit> {
+        if (!mergeInProgress(targetDir)) return Result.success(Unit)
+        val result = git(targetDir, "merge", "--abort")
+        return if (result.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException(result.output.ifBlank { "git merge --abort failed" }))
+        }
+    }
+
+    private fun mergeInProgress(dir: String): Boolean =
+        git(dir, "rev-parse", "-q", "--verify", "MERGE_HEAD").exitCode == 0
 
     /** Commits tracked + untracked (non-ignored) changes in [worktreePath] so a later merge can see them. */
     private fun commitDirtyForMerge(worktreePath: String): Result<Unit> {

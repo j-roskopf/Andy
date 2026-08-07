@@ -11,6 +11,8 @@ internal data class PendingConfirmation(
     val title: String,
     val message: String,
     val confirmLabel: String = "Confirm",
+    /** Invoked when the user cancels / closes the dialog without confirming. */
+    val onCancel: (() -> Unit)? = null,
     val onConfirm: () -> Unit,
 )
 

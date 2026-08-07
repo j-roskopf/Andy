@@ -37,6 +37,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
@@ -996,8 +997,11 @@ class McpAgentRunClient(
         targetDir: String,
         branch: String,
         sourceWorktreePath: String?,
-    ): Result<Unit> =
+    ): WorktreeMergeOutcome =
         withContext(Dispatchers.IO) { localWorktrees.merge(targetDir, branch, sourceWorktreePath) }
+
+    override suspend fun abortMerge(targetDir: String): Result<Unit> =
+        withContext(Dispatchers.IO) { localWorktrees.abortMerge(targetDir) }
 
     private fun canonicalPath(path: String): String =
         runCatching { File(path).canonicalPath }.getOrElse { path }

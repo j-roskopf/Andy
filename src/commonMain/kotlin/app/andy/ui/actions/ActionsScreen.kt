@@ -99,6 +99,7 @@ import app.andy.model.ProjectTask
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
 import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
@@ -678,7 +679,10 @@ private fun ProjectCockpit(
     pendingConfirmation?.let { confirmation ->
         ConfirmationDialog(
             confirmation = confirmation,
-            onDismiss = { pendingConfirmation = null },
+            onDismiss = {
+                pendingConfirmation = null
+                confirmation.onCancel?.invoke()
+            },
             onConfirm = {
                 pendingConfirmation = null
                 confirmation.onConfirm()
@@ -1477,17 +1481,50 @@ private fun ProjectWorktrees(
                                         confirmLabel = "Apply & delete",
                                     ) {
                                         scope.launch {
-                                            val merged = services.agentRuns.mergeBranch(
-                                                targetDir = project.contextDir,
-                                                branch = branch,
-                                                sourceWorktreePath = sourcePath,
-                                            )
-                                            merged.onFailure { error ->
-                                                actionError = error.message?.takeIf { it.isNotBlank() } ?: "git merge failed"
-                                                return@launch
+                                            when (
+                                                val outcome = services.agentRuns.mergeBranch(
+                                                    targetDir = project.contextDir,
+                                                    branch = branch,
+                                                    sourceWorktreePath = sourcePath,
+                                                )
+                                            ) {
+                                                WorktreeMergeOutcome.Applied -> {
+                                                    actionError = null
+                                                    deleteWorktree(taskId)
+                                                }
+                                                is WorktreeMergeOutcome.Conflicts -> {
+                                                    val detail = outcome.detail.trim().take(600)
+                                                    onConfirm(
+                                                        PendingConfirmation(
+                                                            title = "Merge has conflicts",
+                                                            message = buildString {
+                                                                append("Git reported conflicts while applying `$branch`.")
+                                                                if (detail.isNotBlank()) {
+                                                                    append("\n\n")
+                                                                    append(detail)
+                                                                }
+                                                                append("\n\nKeep the conflicted files in your project directory so you can resolve them? Cancel aborts and leaves the project unchanged. The worktree is left in place either way.")
+                                                            },
+                                                            confirmLabel = "Keep conflicts",
+                                                            onCancel = {
+                                                                scope.launch {
+                                                                    services.agentRuns.abortMerge(project.contextDir)
+                                                                        .onFailure { error ->
+                                                                            actionError = error.message?.ifBlank { null }
+                                                                                ?: "git merge --abort failed"
+                                                                        }
+                                                                }
+                                                            },
+                                                        ) {
+                                                            actionError = "Conflicts kept in the project directory — resolve them, then commit."
+                                                            refreshTick += 1
+                                                        },
+                                                    )
+                                                }
+                                                is WorktreeMergeOutcome.Failed -> {
+                                                    actionError = outcome.detail.ifBlank { "git merge failed" }
+                                                }
                                             }
-                                            actionError = null
-                                            deleteWorktree(taskId)
                                         }
                                     },
                                 )

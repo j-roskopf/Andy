@@ -26,6 +26,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
 import app.andy.model.fallbackTitle
 import app.andy.model.AgentStatus
@@ -3025,8 +3026,11 @@ class DesktopAgentRunService(
         targetDir: String,
         branch: String,
         sourceWorktreePath: String?,
-    ): Result<Unit> =
+    ): WorktreeMergeOutcome =
         withContext(Dispatchers.IO) { worktrees.merge(targetDir, branch, sourceWorktreePath) }
+
+    override suspend fun abortMerge(targetDir: String): Result<Unit> =
+        withContext(Dispatchers.IO) { worktrees.abortMerge(targetDir) }
 
     /** Prefer the owning task when workflow runs reuse one worktree path. */
     private fun trackedWorktreeOwnerByPath(originDir: String): Map<String, AgentTask> =

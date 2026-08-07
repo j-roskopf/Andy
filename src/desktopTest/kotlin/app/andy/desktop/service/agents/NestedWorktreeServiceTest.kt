@@ -7,6 +7,7 @@ import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorkspaceState
 import app.andy.service.ActionConfigStore
 import app.andy.service.CommandResult
@@ -88,11 +89,14 @@ class NestedWorktreeServiceTest {
 
             File(worktreePath, "from-agent.txt").writeText("agent work\n")
 
-            harness.service.mergeBranch(
-                targetDir = harness.repo.absolutePath,
-                branch = branch,
-                sourceWorktreePath = worktreePath,
-            ).getOrThrow()
+            assertEquals(
+                WorktreeMergeOutcome.Applied,
+                harness.service.mergeBranch(
+                    targetDir = harness.repo.absolutePath,
+                    branch = branch,
+                    sourceWorktreePath = worktreePath,
+                ),
+            )
             assertTrue(File(harness.repo, "from-agent.txt").isFile)
             assertEquals("main", harness.service.currentBranch(harness.repo.absolutePath))
             assertEquals(headBefore, revParse(harness.repo, "HEAD"))
