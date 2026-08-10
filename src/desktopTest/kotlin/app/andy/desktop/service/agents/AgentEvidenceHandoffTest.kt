@@ -292,7 +292,8 @@ private class EvidenceQueueTestAdapter : AgentCliAdapter {
         listOf(
             binary,
             "-c",
-            "while [ ! -f '${task.cwd}/.queue-evidence-ready' ]; do sleep 0.05; done",
+            // Relative to the launched cwd so path canonicalization cannot desync the ready file.
+            "while [ ! -f .queue-evidence-ready ]; do sleep 0.05; done",
         )
 
     override fun buildInteractiveResumeCommand(

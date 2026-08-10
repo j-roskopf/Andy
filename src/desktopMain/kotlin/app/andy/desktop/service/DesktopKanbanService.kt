@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class DesktopKanbanService(
     private val store: DesktopAgentTaskStore,
@@ -22,6 +24,7 @@ class DesktopKanbanService(
 ) : KanbanService {
     private val _board = MutableStateFlow(store.loadKanbanBoard() ?: KanbanBoard())
     override val board: StateFlow<KanbanBoard> = _board.asStateFlow()
+    private val saveMutex = Mutex()
 
     override fun addLane(name: String) {
         val trimmed = name.trim()
@@ -148,7 +151,13 @@ class DesktopKanbanService(
         val updated = transform(_board.value)
         if (updated == _board.value) return
         _board.value = updated
-        scope.launch { store.saveKanbanBoard(updated) }
+        // Persist the latest board under a mutex. Saving the mutate-time snapshot can
+        // reorder and let an older write clobber a newer one under test/CI load.
+        scope.launch {
+            saveMutex.withLock {
+                store.saveKanbanBoard(_board.value)
+            }
+        }
     }
 
     private fun nextId(prefix: String, board: KanbanBoard): String {
