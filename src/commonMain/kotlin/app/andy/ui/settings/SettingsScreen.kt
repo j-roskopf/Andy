@@ -1102,8 +1102,12 @@ private fun VoiceDictationPanel(
                             deleting = true
                             try {
                                 voiceSetup.deleteDownloads()
-                                onUpdateWorkspace { it.copy(voiceDictationShortcut = null) }
                                 downloadsEpoch += 1
+                                // Only clear the shortcut after a full wipe; partial deletes leave
+                                // VoiceSetupState.Failed and keep the existing binding.
+                                if (voiceSetup.state.value is VoiceSetupState.NotEnabled) {
+                                    onUpdateWorkspace { it.copy(voiceDictationShortcut = null) }
+                                }
                             } finally {
                                 deleting = false
                                 confirmReset = false

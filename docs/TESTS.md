@@ -6,9 +6,10 @@ Default PR CI fans out into parallel jobs (see `.github/workflows/pr-checks.yml`
 CLI build on macOS. Most unit and fixture tests always run. Ordinary
 `desktopTest` excludes the Roborazzi screenshot suite (use
 `verifyRoborazziDesktop` / `recordRoborazziDesktop` for visuals) and runs with
-multiple JVM forks (`maxParallelForks`, override with
-`-PandyDesktopTestParallelForks=N`). Each fork gets its own `tmux -L andy-test-w*`
-socket so agent/tmux tests do not collide.
+multiple JVM forks on Linux/Windows (`maxParallelForks`, override with
+`-PandyDesktopTestParallelForks=N`). macOS defaults to one fork because GPU
+mirror tests share the host AWT pointer/screen. Each fork gets its own
+`tmux -L andy-test-w*` socket so agent/tmux tests do not collide.
 
 A smaller set of tests needs a live device, a logged-in vendor CLI, or a slow
 local mitmproxy matrix. Those are gated so a cold laptop / CI image does not

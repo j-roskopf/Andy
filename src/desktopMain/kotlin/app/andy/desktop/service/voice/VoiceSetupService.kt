@@ -112,7 +112,16 @@ class DesktopVoiceSetupService(
                 stateFile.delete()
                 File(voiceRoot, "debug.log").delete()
             }
-            _state.value = VoiceSetupState.NotEnabled
+            // deleteRecursively()/delete() return false when a file is locked (e.g. whisper-cli
+            // still running on Windows). Do not claim a completed reset while leftovers remain.
+            _state.value = if (hasDownloads()) {
+                VoiceSetupState.Failed(
+                    "delete",
+                    "Could not remove all voice downloads — close any active transcription and try again",
+                )
+            } else {
+                VoiceSetupState.NotEnabled
+            }
         }
     }
 

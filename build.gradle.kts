@@ -488,10 +488,17 @@ val isRoborazziTaskRequested =
 
 // Roborazzi Compose captures must stay single-process (shared renderer). Unit/fixture desktopTest
 // can fan out across JVMs; TmuxAndy uniquifies ANDY_TMUX_SOCKET per org.gradle.test.worker.
+// macOS defaults to 1 fork: GpuMirror* tests drive real AWT Robot + overlapping JFrames that
+// share the host pointer/screen across JVMs. Override with -PandyDesktopTestParallelForks=N.
+val andyDesktopTestParallelForksProperty = providers.gradleProperty("andyDesktopTestParallelForks")
+val hostIsMacOs = System.getProperty("os.name").lowercase().contains("mac")
 val andyDesktopTestParallelForks =
-    providers.gradleProperty("andyDesktopTestParallelForks")
-        .map(String::toInt)
-        .getOrElse((Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4))
+    when {
+        andyDesktopTestParallelForksProperty.isPresent ->
+            andyDesktopTestParallelForksProperty.get().toInt().coerceAtLeast(1)
+        hostIsMacOs -> 1
+        else -> (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
+    }
 
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1

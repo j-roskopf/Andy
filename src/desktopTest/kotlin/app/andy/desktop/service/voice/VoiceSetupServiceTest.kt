@@ -18,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 
 class VoiceSetupServiceTest {
     @Test
@@ -431,6 +432,39 @@ class VoiceSetupServiceTest {
         assertFalse(File(home, ".andy/voice/debug.log").exists())
         assertTrue(nativeBridge.isFile, "packaged native bridge must survive deleteDownloads")
         home.deleteRecursively()
+        Unit
+    }
+
+    @Test
+    fun deleteDownloadsReportsFailureWhenArtifactsRemainLocked() = runBlocking {
+        // macOS uchg makes File.delete() fail the same way a locked whisper-cli.exe does on Windows.
+        assumeTrue(
+            "immutable-file fixture uses macOS chflags",
+            System.getProperty("os.name").contains("mac", ignoreCase = true),
+        )
+        val home = tempHome()
+        val locked = File(home, ".andy/voice/bin/whisper-cli").apply {
+            parentFile?.mkdirs()
+            writeText("bin")
+            setExecutable(true)
+        }
+        val chflags = ProcessBuilder("chflags", "uchg", locked.absolutePath).start()
+        assertEquals(0, chflags.waitFor(), "chflags uchg failed")
+        try {
+            val service = DesktopVoiceSetupService(
+                home = home,
+                platform = VoiceArtifacts.Platform.MacOsArm64,
+            )
+            assertTrue(service.hasDownloads())
+            service.deleteDownloads()
+            val failed = assertIs<VoiceSetupState.Failed>(service.state.value)
+            assertEquals("delete", failed.what)
+            assertTrue(service.hasDownloads(), "locked binary must remain after failed delete")
+            assertTrue(locked.isFile)
+        } finally {
+            ProcessBuilder("chflags", "nouchg", locked.absolutePath).start().waitFor()
+            home.deleteRecursively()
+        }
         Unit
     }
 
