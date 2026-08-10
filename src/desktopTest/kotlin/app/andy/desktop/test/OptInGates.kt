@@ -39,7 +39,7 @@ object OptInGates {
 
     fun requireIosSimSmokeUdid(udid: String?) {
         assumeTrue(
-            "iOS sim smoke needs ANDY_IOS_SIM_SMOKE=1 and a Booted simulator (CI sets both on macOS)",
+            "iOS sim smoke needs ANDY_IOS_SIM_SMOKE=1 and a Booted simulator (not on PR CI; can hang macOS runners)",
             !udid.isNullOrBlank(),
         )
     }

@@ -424,7 +424,14 @@ internal class ShellState(
     fun refreshDevices() {
         scope.launch {
             refreshDevicesNow()
+            refreshActionsConfigNow()
         }
+    }
+
+    /** Re-reads global + repo action configs so newly added project actions appear. */
+    private suspend fun refreshActionsConfigNow() {
+        if (!services.capabilities.hostAutomation) return
+        runCatching { actionsConfig = services.actionConfig.load() }
     }
 
     fun stopEmulator(device: AndroidDevice) {

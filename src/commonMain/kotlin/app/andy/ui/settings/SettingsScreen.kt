@@ -1001,6 +1001,12 @@ private fun VoiceDictationPanel(
     val state by voiceSetup.state.collectAsState()
     val enabled = state !is VoiceSetupState.NotEnabled
     val shortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    // Bump after delete so enablement refreshes even when state stays NotEnabled.
+    var downloadsEpoch by remember { mutableStateOf(0) }
+    val hasDownloads = remember(state, downloadsEpoch) { voiceSetup.hasDownloads() }
+    val canResetVoice = hasDownloads || shortcut != null || enabled
     PanelCard {
         SettingsSectionHeader(
             title = "Voice dictation",
@@ -1053,6 +1059,71 @@ private fun VoiceDictationPanel(
         VoiceDictationShortcutRow(
             shortcut = shortcut,
             onChange = { combo -> onUpdateWorkspace { it.copy(voiceDictationShortcut = combo?.encode()) } },
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = { confirmReset = true },
+                enabled = canResetVoice && !deleting,
+            ) {
+                if (deleting) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Resetting…")
+                } else {
+                    Text("Delete downloads & reset")
+                }
+            }
+            Text(
+                "Removes the downloaded whisper binary and model (~150 MB). Keeps packaged Andy natives. Clears the mic shortcut and turns dictation off.",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { if (!deleting) confirmReset = false },
+            title = { Text("Delete voice downloads and reset?") },
+            text = {
+                Text(
+                    "This deletes on-demand voice files under ~/.andy/voice (binary, libraries, model, and setup state). " +
+                        "Packaged native bridges that ship with Andy are kept. Voice dictation turns off and the mic shortcut is cleared.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            deleting = true
+                            try {
+                                voiceSetup.deleteDownloads()
+                                downloadsEpoch += 1
+                                // Only clear the shortcut after a full wipe; partial deletes leave
+                                // VoiceSetupState.Failed and keep the existing binding.
+                                if (voiceSetup.state.value is VoiceSetupState.NotEnabled) {
+                                    onUpdateWorkspace { it.copy(voiceDictationShortcut = null) }
+                                }
+                            } finally {
+                                deleting = false
+                                confirmReset = false
+                            }
+                        }
+                    },
+                    enabled = !deleting,
+                ) { Text("Delete & reset", color = Rust) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirmReset = false },
+                    enabled = !deleting,
+                ) { Text("Cancel", color = TextSecondary) }
+            },
+            containerColor = PanelSoft,
         )
     }
 }

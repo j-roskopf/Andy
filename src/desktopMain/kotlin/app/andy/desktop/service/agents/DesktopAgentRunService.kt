@@ -113,8 +113,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Terminal-lane transcript cap; ACP transcripts are coalesced and bounded by disk (8 MB). */
 private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
-/** Review/verify agents can look idle on screen before the JSON artifact lands on disk. */
-private const val WORKFLOW_ARTIFACT_WAIT_MS = 3 * 60 * 1000L
+/**
+ * Review/verify agents can look idle on screen before the JSON artifact lands on disk.
+ * Production waits this long after process exit; tests inject a short value so missing
+ * artifacts fail fast into NeedsAttention instead of sleeping for minutes.
+ */
+private const val DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS = 3 * 60 * 1000L
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
 private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
 private val CursorChatIdRegex = Regex(
@@ -132,7 +136,8 @@ class DesktopAgentRunService(
     private val actionConfig: ActionConfigStore,
     private val enableProbes: Boolean = true,
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
-    artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
+    private val artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
+    private val artifactWaitMs: Long = DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS,
     /**
      * False for the GUI attach bridge in daemon-client mode — that process must not
      * kill `tmux -L andy` sessions owned by a running `andyd`.
@@ -2200,11 +2205,15 @@ class DesktopAgentRunService(
         val planFromDisk = artifacts.planFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
         var reviewFromDisk = artifacts.reviewFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
         var verificationFromDisk = artifacts.verificationFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        // Only grace-wait for a late artifact when the process exited cleanly. A non-zero
+        // exit already means the stage failed — sitting on the 3-minute grace window just
+        // delays NeedsAttention for crashed review/verify agents.
+        val awaitLateArtifact = exitCode == 0 && !handle.stopRequested
         when (current.workflowStage) {
-            ProjectWorkflowStage.Review -> if (reviewFromDisk == null) {
+            ProjectWorkflowStage.Review -> if (reviewFromDisk == null && awaitLateArtifact) {
                 reviewFromDisk = awaitWorkflowArtifactText(artifacts.reviewFile)
             }
-            ProjectWorkflowStage.Verification -> if (verificationFromDisk == null) {
+            ProjectWorkflowStage.Verification -> if (verificationFromDisk == null && awaitLateArtifact) {
                 verificationFromDisk = awaitWorkflowArtifactText(artifacts.verificationFile)
             }
             else -> Unit
@@ -4099,10 +4108,10 @@ class DesktopAgentRunService(
         file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
 
     private suspend fun awaitWorkflowArtifactText(file: File): String? {
-        val deadline = System.currentTimeMillis() + WORKFLOW_ARTIFACT_WAIT_MS
+        val deadline = System.currentTimeMillis() + artifactWaitMs
         while (System.currentTimeMillis() < deadline) {
             readWorkflowArtifactText(file)?.let { return it }
-            delay(AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS)
+            delay(artifactPollIntervalMs)
         }
         return readWorkflowArtifactText(file)
     }

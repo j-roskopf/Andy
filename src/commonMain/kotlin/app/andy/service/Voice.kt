@@ -14,6 +14,14 @@ interface VoiceSetupService {
     val state: StateFlow<VoiceSetupState>
     suspend fun enable()
     fun disable()
+    /**
+     * Deletes on-demand voice downloads (whisper binary, libs, model, state).
+     * Does not remove packaged native bridges extracted from the Andy binary.
+     * Leaves dictation disabled afterward.
+     */
+    suspend fun deleteDownloads()
+    /** True when any on-demand download artifact is present under `~/.andy/voice`. */
+    fun hasDownloads(): Boolean
 }
 
 /**
@@ -41,6 +49,8 @@ object UnavailableVoiceSetupService : VoiceSetupService {
     override val state = MutableStateFlow<VoiceSetupState>(VoiceSetupState.NotEnabled)
     override suspend fun enable() = Unit
     override fun disable() = Unit
+    override suspend fun deleteDownloads() = Unit
+    override fun hasDownloads(): Boolean = false
 }
 
 object UnavailableVoiceDictationService : VoiceDictationService {

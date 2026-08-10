@@ -1048,7 +1048,12 @@ class AgentTerminalManager(
         // stop() always means terminate, unlike session.close() which a reattached
         // TmuxAttachBackend honors with killTmuxOnClose = false. Force it here so a
         // chat that was reattached after a dropped handle doesn't leak its tmux session.
-        if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
+        // DirectPty never creates tmux sessions — skip the has-session fork (and its
+        // up-to-30s wait) so test/harness teardown cannot stall on a wedged tmux.
+        if (mode != AgentTerminalMode.DirectPty &&
+            TmuxAndy.isAvailable() &&
+            TmuxAndy.hasSession(taskId)
+        ) {
             TmuxAndy.killSession(taskId)
         }
         bumpSessionsRevision()

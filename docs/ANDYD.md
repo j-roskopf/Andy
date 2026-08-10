@@ -31,7 +31,7 @@ Optional override: `ANDY_TMUX=/path/to/tmux`
 | `$PWD/.andy/active-task` | Gitignored pointer to the active task id for status hooks |
 | `$PWD/.andy/<taskId>/` | Per-task artifacts (`status.json`, plan/review, …) |
 | `tmux -L andy` | Dedicated Andy tmux server (live agents / GUI / andyd) |
-| `tmux -L andy-test` | Isolated socket used by `desktopTest` so tests cannot `kill-server` live chats |
+| `tmux -L andy-test[-wN]` | Isolated socket(s) used by `desktopTest` so tests cannot `kill-server` live chats; parallel forks append `-w<worker>` |
 | `andy-task-<taskId>` | Per-task tmux session name |
 
 Optional socket override: `ANDY_TMUX_SOCKET=name` (defaults to `andy`).

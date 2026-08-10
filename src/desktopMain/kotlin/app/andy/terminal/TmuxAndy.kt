@@ -14,17 +14,17 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Override the socket with env `ANDY_TMUX_SOCKET` or [useIsolatedServerForTests] so
  * desktopTest never shares the live GUI/`andyd` server (a `kill-server` there
- * prints `[server exited]` in every attached agent chat).
+ * prints `[server exited]` in every attached agent chat). Under Gradle parallel
+ * test workers (`org.gradle.test.worker`), the socket name is further uniquified
+ * so forks do not share one `andy-test` server.
  */
 object TmuxAndy {
     const val PRODUCTION_SERVER = "andy"
     const val TEST_SERVER = "andy-test"
 
-    private val serverName = AtomicReference(
-        System.getenv("ANDY_TMUX_SOCKET")?.takeIf { it.isNotBlank() } ?: PRODUCTION_SERVER,
-    )
+    private val serverName = AtomicReference(defaultIsolatedOrProductionServer())
 
-    /** Active tmux `-L` socket name (`andy` in production, `andy-test` under desktopTest). */
+    /** Active tmux `-L` socket name (`andy` in production, `andy-test[-wN]` under desktopTest). */
     val SERVER: String get() = serverName.get()
 
     /**
@@ -32,12 +32,28 @@ object TmuxAndy {
      * tmux work so they cannot SIGTERM live agent sessions on [PRODUCTION_SERVER].
      */
     fun useIsolatedServerForTests(
-        name: String = System.getenv("ANDY_TMUX_SOCKET")?.takeIf { it.isNotBlank() } ?: TEST_SERVER,
+        name: String = defaultIsolatedOrProductionServer().takeUnless { it == PRODUCTION_SERVER }
+            ?: TEST_SERVER,
     ) {
         if (serverName.get() == name) return
         serverName.set(name)
         serverConfigured.set(false)
         sessionCache.set(null)
+    }
+
+    /**
+     * Prefer `ANDY_TMUX_SOCKET`, then append Gradle's per-fork worker id when present so
+     * `maxParallelForks > 1` does not make every worker `kill-server` the others.
+     */
+    internal fun defaultIsolatedOrProductionServer(): String {
+        val base = System.getenv("ANDY_TMUX_SOCKET")?.takeIf { it.isNotBlank() }
+        val worker = System.getProperty("org.gradle.test.worker")?.takeIf { it.isNotBlank() }
+        return when {
+            base != null && worker != null -> "$base-w$worker"
+            base != null -> base
+            worker != null -> "$TEST_SERVER-w$worker"
+            else -> PRODUCTION_SERVER
+        }
     }
 
     /**
@@ -264,8 +280,12 @@ object TmuxAndy {
         }
     }
 
+    /**
+     * Per-server directory so parallel desktopTest forks (`andy-test-wN`) cannot wipe each
+     * other's launch scripts when one worker calls [killServer].
+     */
     private fun launchScriptDir(): File =
-        File(System.getProperty("user.home"), ".andy/tmux-launch")
+        File(System.getProperty("user.home"), ".andy/tmux-launch/$SERVER")
 
     private fun launchScriptFile(sessionName: String): File =
         File(launchScriptDir(), "$sessionName.sh")

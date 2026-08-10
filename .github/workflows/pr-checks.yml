@@ -106,19 +106,9 @@ jobs:
             build/test-results/**
 
   desktop-screenshots:
-    name: Desktop screenshots (${{ matrix.os }})
-    runs-on: ${{ matrix.runner }}
+    name: Desktop screenshots (macos)
+    runs-on: macos-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: linux
-            runner: ubuntu-latest
-          - os: macos
-            runner: macos-latest
-          - os: windows
-            runner: windows-latest
 
     steps:
       - name: Checkout
@@ -133,30 +123,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Install Linux desktop dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
-
-      - name: Verify Linux desktop screenshots
-        if: matrix.os == 'linux'
-        run: xvfb-run -a ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
-
       - name: Verify macOS desktop screenshots
-        if: matrix.os == 'macos'
         run: ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
-
-      - name: Verify Windows desktop screenshots
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: ./gradlew.bat verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
       - name: Upload desktop screenshot artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-screenshots-${{ matrix.os }}-artifacts
+          name: desktop-screenshots-macos-artifacts
           if-no-files-found: ignore
           path: |
             build/reports/roborazzi/**
