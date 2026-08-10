@@ -136,6 +136,8 @@ internal fun AgentTaskComposerPane(
     onCancel: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     workspaceState: WorkspaceState = WorkspaceState(),
+    /** False while this pane is retained but not visible (e.g. under [RetainedDestination]). */
+    dictationActive: Boolean = true,
 ) {
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
@@ -181,6 +183,7 @@ internal fun AgentTaskComposerPane(
             onShowOptionsChange = { showOptions = it },
             onCancel = onCancel,
             voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
+            dictationActive = dictationActive,
             onSubmit = {
                 onSubmit(form.buildDraft())
                 form.clearPrompt()
@@ -569,6 +572,7 @@ private fun AgentChatComposer(
     onShowOptionsChange: (Boolean) -> Unit,
     onCancel: (() -> Unit)?,
     voiceShortcut: KeyCombo?,
+    dictationActive: Boolean,
     onSubmit: () -> Unit,
 ) {
     val state = form.state
@@ -586,6 +590,7 @@ private fun AgentChatComposer(
             state.promptValue = insertTextAtCursor(state.promptValue, spoken)
         },
         onError = { voiceError = it },
+        active = dictationActive,
     )
 
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)

@@ -508,6 +508,7 @@ private fun ProjectCockpit(
                                                 onSubmit = { draft -> scope.launch { selectedTaskId = services.agentRuns.createAndStart(draft).id } },
                                                 modifier = Modifier.fillMaxSize(),
                                                 workspaceState = workspaceState,
+                                                dictationActive = selected == null,
                                             )
                                         }
                                         if (selected != null) {
@@ -1474,7 +1475,7 @@ private fun ProjectWorktrees(
                             services = services,
                             onOpenTask = onOpenTask,
                             onCopyPath = { copyText(it) },
-                            onMerge = { taskId, sourcePath, branch, targetLabel ->
+                            onMerge = { taskId, sourcePath, branch, targetDir, targetLabel ->
                                 onConfirm(
                                     PendingConfirmation(
                                         title = "Apply worktree?",
@@ -1484,7 +1485,7 @@ private fun ProjectWorktrees(
                                         scope.launch {
                                             when (
                                                 val outcome = services.agentRuns.mergeBranch(
-                                                    targetDir = project.contextDir,
+                                                    targetDir = targetDir,
                                                     branch = branch,
                                                     sourceWorktreePath = sourcePath,
                                                 )
@@ -1504,12 +1505,12 @@ private fun ProjectWorktrees(
                                                                     append("\n\n")
                                                                     append(detail)
                                                                 }
-                                                                append("\n\nKeep the conflicted files in your project directory so you can resolve them? Cancel aborts and leaves the project unchanged. The worktree is left in place either way.")
+                                                                append("\n\nKeep the conflicted files in `$targetLabel` so you can resolve them? Cancel aborts and leaves that checkout unchanged. The worktree is left in place either way.")
                                                             },
                                                             confirmLabel = "Keep conflicts",
                                                             onCancel = {
                                                                 scope.launch {
-                                                                    services.agentRuns.abortMerge(project.contextDir)
+                                                                    services.agentRuns.abortMerge(targetDir)
                                                                         .onFailure { error ->
                                                                             actionError = error.message?.ifBlank { null }
                                                                                 ?: "git merge --abort failed"
@@ -1517,7 +1518,7 @@ private fun ProjectWorktrees(
                                                                 }
                                                             },
                                                         ) {
-                                                            actionError = "Conflicts kept in the project directory — resolve them, then commit."
+                                                            actionError = "Conflicts kept in `$targetLabel` — resolve them, then commit."
                                                             refreshTick += 1
                                                         },
                                                     )
@@ -1573,7 +1574,7 @@ private fun WorktreeTreeRow(
     services: AndyServices,
     onOpenTask: (String) -> Unit,
     onCopyPath: (String) -> Unit,
-    onMerge: (taskId: String, sourcePath: String, branch: String, targetLabel: String) -> Unit,
+    onMerge: (taskId: String, sourcePath: String, branch: String, targetDir: String, targetLabel: String) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -1642,8 +1643,10 @@ private fun WorktreeTreeRow(
                 OutlinedButton(
                     onClick = {
                         scope.launch {
-                            val targetLabel = services.agentRuns.currentBranch(project.contextDir) ?: "HEAD"
-                            onMerge(node.taskId, node.path, node.branch, targetLabel)
+                            // Nested worktrees merge into their parent checkout, not the project root.
+                            val targetDir = row.parent?.path ?: project.contextDir
+                            val targetLabel = services.agentRuns.currentBranch(targetDir) ?: "HEAD"
+                            onMerge(node.taskId, node.path, node.branch, targetDir, targetLabel)
                         }
                     },
                     modifier = Modifier.height(28.dp),

@@ -52,6 +52,14 @@ class VoiceRecorderTest {
     }
 
     @Test
+    fun abandonRecordingWithoutStartIsNoOp() {
+        val recorder = JavaxSoundVoiceRecorder(
+            ensureMicPermission = { MacOsMicPermission.Granted },
+        )
+        recorder.abandonRecording()
+    }
+
+    @Test
     fun macOsMicrophoneResourcePathUsesArch() {
         assertEquals(
             "andy-voice/macos-arm64/andy-voice-jni.dylib",

@@ -88,12 +88,16 @@ internal object ActiveVoiceDictationShortcut {
 /**
  * Hoisted push-to-talk state so both the mic button's press-hold gesture and an
  * external trigger (e.g. a keyboard shortcut) can drive the same recording session.
+ *
+ * [active] must be true only for the visible composer. Retained inactive destinations
+ * stay composed, so they pass false to avoid stealing the global shortcut slot.
  */
 @Composable
 internal fun rememberVoiceDictationController(
     voice: VoiceDictationService,
     onText: (String) -> Unit,
     onError: (String) -> Unit = {},
+    active: Boolean = true,
 ): VoiceDictationController {
     val scope = rememberCoroutineScope()
     val currentOnText by rememberUpdatedState(onText)
@@ -101,9 +105,16 @@ internal fun rememberVoiceDictationController(
     val controller = remember(voice) {
         VoiceDictationController(voice, scope, { currentOnText(it) }, { currentOnError(it) })
     }
-    DisposableEffect(controller) {
-        ActiveVoiceDictationShortcut.bind(controller)
-        onDispose { ActiveVoiceDictationShortcut.unbind(controller) }
+    DisposableEffect(controller, active) {
+        if (active) {
+            ActiveVoiceDictationShortcut.bind(controller)
+        } else {
+            controller.discardActiveCapture()
+        }
+        onDispose {
+            ActiveVoiceDictationShortcut.unbind(controller)
+            controller.discardActiveCapture()
+        }
     }
     return controller
 }
@@ -153,7 +164,18 @@ internal class VoiceDictationController(
     fun cancelRecording() {
         if (!recording) return
         recording = false
-        scope.launch { runCatching { voice.finishRecording() } }
+        // Prefer the sync cancel path so UI-scope cancellation cannot leave the mic open.
+        voice.cancelRecording()
+    }
+
+    /**
+     * Stops capture without relying on the composition [scope]. Used when the owning
+     * composer is disposed or becomes inactive while a shortcut-started session is live.
+     */
+    fun discardActiveCapture() {
+        if (!recording) return
+        recording = false
+        voice.cancelRecording()
     }
 
     private var lastToggleAtMillis = 0L

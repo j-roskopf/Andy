@@ -238,6 +238,7 @@ private fun AgentCommandCenter(
                         },
                         modifier = Modifier.fillMaxSize(),
                         workspaceState = workspaceState,
+                        dictationActive = composing,
                     )
                 }
                 if (!composing) {

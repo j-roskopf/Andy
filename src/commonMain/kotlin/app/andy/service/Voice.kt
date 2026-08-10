@@ -28,6 +28,11 @@ interface VoiceDictationService {
     suspend fun startRecording(): Boolean
     /** Stops recording and returns transcribed text, or null for short/empty/cancelled. */
     suspend fun finishRecording(): String?
+    /**
+     * Drops an in-progress capture without transcription.
+     * Safe to call from composition disposal (must not depend on a cancelled UI scope).
+     */
+    fun cancelRecording()
     /** Soft error message from the last failed start/finish, if any. */
     val lastError: StateFlow<String?>
 }
@@ -43,5 +48,6 @@ object UnavailableVoiceDictationService : VoiceDictationService {
     override val isReady: Boolean = false
     override suspend fun startRecording(): Boolean = false
     override suspend fun finishRecording(): String? = null
+    override fun cancelRecording() = Unit
     override val lastError = MutableStateFlow<String?>(null)
 }

@@ -96,6 +96,16 @@ class DesktopVoiceDictationService(
         }
     }
 
+    override fun cancelRecording() {
+        if (!recording.getAndSet(false)) {
+            busy.set(false)
+            return
+        }
+        runCatching { recorder.abandonRecording() }
+        busy.set(false)
+        voiceDebugLog("cancelRecording: abandoned in-progress capture")
+    }
+
     private fun micAccessDeniedMessage(): String =
         "Microphone access denied — macOS never prompted (common for unsigned debug builds). " +
             "Quit Andy, run ./gradlew runDistributable, then Allow when asked. " +

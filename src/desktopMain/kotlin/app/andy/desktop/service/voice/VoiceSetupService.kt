@@ -427,12 +427,22 @@ class DesktopVoiceSetupService(
             env["GGML_BACKEND_PATH"] = backend.absolutePath
         }
         val process = pb.start()
-        val out = process.inputStream.bufferedReader().readText()
+        // Drain stdout concurrently — sequential readText() blocks on EOF and would make the
+        // 30s waitFor unreachable if whisper-cli hangs with an open pipe.
+        val outBuffer = StringBuilder()
+        val drain = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().use { outBuffer.append(it.readText()) }
+            }
+        }.apply { isDaemon = true; name = "whisper-smoke-stdout"; start() }
         val finished = process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
+            drain.join(1_000)
             error("whisper-cli smoke check timed out")
         }
+        drain.join(5_000)
+        val out = outBuffer.toString()
         val code = process.exitValue()
         if (code != 0) {
             error("whisper-cli smoke check failed ($code): ${out.take(400)}")

@@ -18,6 +18,8 @@ interface VoiceRecorder {
     suspend fun startRecording(): Boolean
     /** Stops capture; returns temp WAV or null when under [MIN_DURATION_MS]. */
     suspend fun stopRecording(): File?
+    /** Closes the capture line immediately without producing a WAV. */
+    fun abandonRecording()
 }
 
 /** Appends timestamped diagnostics to ~/.andy/voice/debug.log for capture-path troubleshooting. */
@@ -173,6 +175,21 @@ class JavaxSoundVoiceRecorder(
         val wav = File(tempDir, "andy-voice-${clock()}.wav")
         writeWav(wav, pcm, SAMPLE_RATE, channels = 1, bitsPerSample = 16)
         wav
+    }
+
+    override fun abandonRecording() {
+        synchronized(lock) {
+            val active = line ?: return
+            runCatching {
+                active.stop()
+                active.close()
+            }
+            line = null
+            captureThread?.join(500)
+            captureThread = null
+            pcmBuffer.reset()
+            voiceDebugLog("abandonRecording: capture line closed without WAV")
+        }
     }
 
     companion object {

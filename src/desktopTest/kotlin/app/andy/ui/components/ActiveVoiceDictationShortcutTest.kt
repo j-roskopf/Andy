@@ -42,4 +42,22 @@ class ActiveVoiceDictationShortcutTest {
             ActiveVoiceDictationShortcut.unbind(controller)
         }
     }
+
+    @Test
+    fun unbindOnlyClearsMatchingController() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val first = VoiceDictationController(UnavailableVoiceDictationService, scope, {}, {})
+        val second = VoiceDictationController(UnavailableVoiceDictationService, scope, {}, {})
+        val shortcut = KeyCombo(Key.E, meta = true)
+        val event = KeyEvent(key = Key.E, type = KeyEventType.KeyDown, isMetaPressed = true)
+
+        ActiveVoiceDictationShortcut.bind(first)
+        ActiveVoiceDictationShortcut.bind(second)
+        ActiveVoiceDictationShortcut.unbind(first)
+        try {
+            assertTrue(ActiveVoiceDictationShortcut.handle(event, shortcut))
+        } finally {
+            ActiveVoiceDictationShortcut.unbind(second)
+        }
+    }
 }
