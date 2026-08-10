@@ -133,9 +133,10 @@ class DesktopHostFileService(
         val entries = mutableMapOf<String, IndexedFile>()
         var bytes = 0L
         rootFile.toPath().walkIndexedFiles { path ->
-            val file = path.toFile()
+            val file = path.toStableAbsolutePath().toFile()
             bytes += file.length()
-            entries[file.absolutePath] = indexFile(root, file)
+            val indexed = indexFile(root, file)
+            entries[indexed.path] = indexed
             if (entries.size % 250 == 0) {
                 status.value = HostIndexStatus(root, entries.size, bytes, indexing = true, message = "Indexing ${entries.size} files", updatedAtMillis = System.currentTimeMillis())
             }
@@ -169,9 +170,10 @@ class DesktopHostFileService(
     }
 
     private fun indexFile(root: String, file: File): IndexedFile {
-        val relative = file.toPath().let { path ->
-            runCatching { File(root).toPath().relativize(path).toString() }.getOrDefault(file.name)
-        }
+        val stablePath = file.toPath().toStableAbsolutePath()
+        val relative = runCatching {
+            File(root).toPath().toStableAbsolutePath().relativize(stablePath).toString()
+        }.getOrDefault(file.name)
         val textLines = runCatching {
             val bytes = file.readBytes()
             if (bytes.size > MaxIndexedBytes || looksBinary(bytes)) emptyList() else bytes.toString(detectCharset(bytes)).lineSequence()
@@ -182,7 +184,7 @@ class DesktopHostFileService(
         }.getOrDefault(emptyList())
         val name = file.name
         return IndexedFile(
-            path = file.absolutePath,
+            path = stablePath.toString(),
             relativePath = relative,
             name = name,
             modifiedMillis = file.lastModified(),
@@ -244,11 +246,12 @@ class DesktopHostFileService(
         // FSEvents (via directory-watcher) often yields /private/var/... while File.absolutePath is /var/...
         val normalized = path.toStableAbsolutePath()
         val file = normalized.toFile()
+        val key = normalized.toString()
         if (!file.exists() || shouldExclude(normalized)) {
-            index.files.remove(file.absolutePath)
+            index.files.remove(key)
             removeIndexedDescendants(index, normalized)
         } else if (file.isFile) {
-            index.files[file.absolutePath] = indexFile(root, file)
+            index.files[key] = indexFile(root, file)
         }
         saveIndex(index)
         rootStatus(root).value = HostIndexStatus(root, index.files.size, index.files.values.sumOf { it.sizeBytes }, indexing = false, message = "Updated ${file.name}", updatedAtMillis = System.currentTimeMillis())
@@ -433,12 +436,25 @@ private object ExcludingFileTreeVisitor : FileTreeVisitor {
     }
 }
 
-/** Collapse macOS /private/var (FSEvents) to /var so watcher paths match File.absolutePath index keys. */
+private val isMacOs: Boolean =
+    System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
+
+/** macOS keeps /tmp, /var, and /etc as symlinks into /private; FSEvents reports the /private form. */
+private val MacOsPrivateAliasPrefixes = listOf("/private/tmp", "/private/var", "/private/etc")
+
+/**
+ * Collapse macOS FSEvents `/private/{tmp,var,etc}` paths to the symlink form so watcher events
+ * match indexed keys. Leaves real `/private/...` paths alone on Linux and for non-alias macOS paths.
+ */
 private fun Path.toStableAbsolutePath(): Path {
     val absolute = toAbsolutePath().normalize().toString()
-    return Path.of(
-        if (absolute.startsWith("/private/")) absolute.removePrefix("/private") else absolute,
-    )
+    if (!isMacOs) return Path.of(absolute)
+    for (prefix in MacOsPrivateAliasPrefixes) {
+        if (absolute == prefix || absolute.startsWith("$prefix/")) {
+            return Path.of(absolute.removePrefix("/private"))
+        }
+    }
+    return Path.of(absolute)
 }
 
 private fun moveReplacing(source: Path, target: Path) {
@@ -469,7 +485,13 @@ private fun languageHintForFile(file: File): String {
     }
 }
 
-private fun normalizeRoot(root: String): String = File(root.ifBlank { System.getProperty("user.home") }).absoluteFile.normalize().absolutePath
+private fun normalizeRoot(root: String): String =
+    File(root.ifBlank { System.getProperty("user.home") })
+        .absoluteFile
+        .normalize()
+        .toPath()
+        .toStableAbsolutePath()
+        .toString()
 
 private fun tokenize(value: String): Set<String> = value.lowercase()
     .split(Regex("[^a-z0-9_.$-]+|(?=[A-Z])"))
