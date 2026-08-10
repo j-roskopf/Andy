@@ -1,9 +1,14 @@
 # Desktop opt-in / CI-skipped tests
 
 Default PR CI fans out into parallel jobs (see `.github/workflows/pr-checks.yml`):
-`desktopTest` on Linux, macOS, and Windows; `verifyRoborazziDesktop` per OS;
+`desktopTest` on Linux, macOS, and Windows; macOS-only `verifyRoborazziDesktop`;
 `assemble` per OS; `:agent-store:build`; `:web-launcher:test`; and the Rust
-CLI build on macOS. Most unit and fixture tests always run.
+CLI build on macOS. Most unit and fixture tests always run. Ordinary
+`desktopTest` excludes the Roborazzi screenshot suite (use
+`verifyRoborazziDesktop` / `recordRoborazziDesktop` for visuals) and runs with
+multiple JVM forks (`maxParallelForks`, override with
+`-PandyDesktopTestParallelForks=N`). Each fork gets its own `tmux -L andy-test-w*`
+socket so agent/tmux tests do not collide.
 
 A smaller set of tests needs a live device, a logged-in vendor CLI, or a slow
 local mitmproxy matrix. Those are gated so a cold laptop / CI image does not
@@ -18,7 +23,7 @@ prerequisites show as **skipped** in the test report (not a silent green pass).
 | Ordinary `desktopTest` unit/fixture tests | Mock ADB, golden JSON, diagnosis, etc. |
 | `ProxyConformanceTest` | Enabled with `ANDY_PROXY_CONFORMANCE=1` + Python 3.12 (CI provisions Andy’s pinned mitmproxy venv). |
 | `MitmAddonHookRegistrationTest` / `MitmRuntimeTest` | Import/version guards; provision or use a supported system `mitmdump`. |
-| `IosSimMirrorDeviceSmokeTest` (macOS) | CI boots an available iPhone Simulator and sets `ANDY_IOS_SIM_SMOKE=1` / `ANDY_IOS_SIM_UDID`. The iOS↔Android switch case still skips without an online Android device. |
+| `IosSimMirrorDeviceSmokeTest` (macOS) | Opt-in only (`ANDY_IOS_SIM_SMOKE=1`). Not run on PR CI — real GPU mirror + AWT Robot HID has hung macOS jobs. |
 
 ## Opt-in gates (skipped unless set)
 
@@ -39,7 +44,7 @@ ANDY_PROXY_CONFORMANCE=1 ./gradlew desktopTest --tests '*ProxyConformanceTest*'
 | | |
 | --- | --- |
 | **Why gated** | Needs macOS arm64, SimulatorKit / mirror JNI, and a Booted simulator. |
-| **CI** | **On** for the macOS desktop job (boots a sim first and sets the env vars). |
+| **CI** | **Off** (can hang the macOS job). |
 | **Tests** | `app.andy.desktop.service.ios.IosSimMirrorDeviceSmokeTest` |
 
 ```sh
@@ -131,7 +136,7 @@ These are not env-gated; they stay ignored until someone deliberately re-enables
 | --- | --- | --- |
 | (default `desktopTest`) | Yes | JDK 21 |
 | `ANDY_PROXY_CONFORMANCE=1` | Yes (all OS) | Python 3.12+, pip/network once for `~/.andy/proxy/venv` |
-| `ANDY_IOS_SIM_SMOKE=1` (+ Booted sim) | Yes (macOS) | Xcode Simulator, Andy mirror JNI |
+| `ANDY_IOS_SIM_SMOKE=1` (+ Booted sim) | No (can hang macOS CI) | Xcode Simulator, Andy mirror JNI |
 | `ANDY_DEVICE_SMOKE=1` | No | Online Android device/emulator |
 | `ANDY_DEVICE_NATIVE_SMOKE=1` | No | Online Android + native/GPU presenter |
 | `ANDY_AGENT_E2E=1` | No | Vendor CLIs + login (costs usage) |

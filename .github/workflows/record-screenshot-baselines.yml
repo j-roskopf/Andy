@@ -2,15 +2,6 @@ name: Record desktop screenshot baselines
 
 on:
   workflow_dispatch:
-    inputs:
-      platform:
-        description: Platform whose renderer-specific baseline should be recorded
-        required: true
-        type: choice
-        options:
-          - linux
-          - macos
-          - windows
 
 permissions:
   contents: read
@@ -21,8 +12,8 @@ env:
 
 jobs:
   record:
-    name: Record ${{ inputs.platform }} baselines
-    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-latest' || inputs.platform == 'macos' && 'macos-latest' || 'windows-latest' }}
+    name: Record macOS baselines
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -33,36 +24,20 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Install Linux desktop dependencies
-        if: inputs.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
-
-      - name: Record Linux baselines
-        if: inputs.platform == 'linux'
-        run: xvfb-run -a ./gradlew --rerun-tasks recordRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
-
       - name: Record macOS baselines
-        if: inputs.platform == 'macos'
         run: ./gradlew --rerun-tasks recordRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
-
-      - name: Record Windows baselines
-        if: inputs.platform == 'windows'
-        shell: pwsh
-        run: ./gradlew.bat --rerun-tasks recordRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
       - name: Upload recorded baselines
         uses: actions/upload-artifact@v4
         with:
-          name: roborazzi-${{ inputs.platform }}-baselines
-          path: src/screenshotTest/roborazzi/${{ inputs.platform }}/
+          name: roborazzi-macos-baselines
+          path: src/screenshotTest/roborazzi/macos/
           if-no-files-found: error
 
       - name: Upload Roborazzi report
         uses: actions/upload-artifact@v4
         with:
-          name: roborazzi-${{ inputs.platform }}-report
+          name: roborazzi-macos-report
           path: |
             build/reports/roborazzi/**
             build/test-results/roborazzi/**

@@ -25,6 +25,7 @@ import app.andy.ui.screenshots.AndyScreenshotApp
 import app.andy.ui.screenshots.AndyScreenshotScenario
 import com.github.takahirom.roborazzi.RoborazziOptions
 import io.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Assume.assumeTrue
 import kotlin.test.Test
 
 class AndyDesktopScreenshotTest {
@@ -127,6 +128,10 @@ class AndyDesktopScreenshotTest {
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     private fun capture(scenarios: List<AndyScreenshotScenario>) {
+        assumeTrue(
+            "Desktop screenshot baselines are macOS-only; record/verify on macOS",
+            System.getProperty("os.name").contains("mac", ignoreCase = true),
+        )
         val previousRenderer = System.getProperty("andy.screenshot.renderer")
         System.setProperty("andy.screenshot.renderer", "compose")
         try {
@@ -215,7 +220,7 @@ class AndyDesktopScreenshotTest {
                         else -> onNode(isRoot() and hasAnyDescendant(hasText("Devices")))
                     }
                     captureTarget.captureRoboImage(
-                        filePath = "src/screenshotTest/roborazzi/${baselinePlatform()}/${scenario.fileName}",
+                        filePath = "src/screenshotTest/roborazzi/macos/${scenario.fileName}",
                         roborazziOptions = screenshotOptions,
                     )
                 }
@@ -224,11 +229,5 @@ class AndyDesktopScreenshotTest {
             if (previousRenderer == null) System.clearProperty("andy.screenshot.renderer")
             else System.setProperty("andy.screenshot.renderer", previousRenderer)
         }
-    }
-
-    private fun baselinePlatform(): String = when {
-        System.getProperty("os.name").contains("mac", ignoreCase = true) -> "macos"
-        System.getProperty("os.name").contains("windows", ignoreCase = true) -> "windows"
-        else -> "linux"
     }
 }

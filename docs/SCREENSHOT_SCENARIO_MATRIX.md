@@ -4,9 +4,9 @@ The desktop visual-regression suite captures Andy at a fixed 1365×900 viewport.
 Each capture uses `ScreenshotServices`, a no-I/O fixture: it does not invoke ADB,
 the emulator, mitmproxy, host files, terminals, agent CLIs, or the updater.
 
-Baselines are renderer-specific and live under
-`src/screenshotTest/roborazzi/{macos,windows,linux}/`. Do not copy an image from
-one operating system into another directory. Capture it on that platform instead.
+Baselines are macOS-only and live under `src/screenshotTest/roborazzi/macos/`.
+Record and verify on macOS (local or the `Record desktop screenshot baselines`
+Actions workflow). PR CI runs `verifyRoborazziDesktop` on `macos-latest` only.
 
 | Scenario | Owner | Fixture state | Filename | README |
 | --- | --- | --- | --- | --- |
@@ -49,7 +49,7 @@ and Logcat surfaces and needs a re-record.
 
 ## Local workflow
 
-Record only the current operating system's baselines after reviewing each image:
+Record macOS baselines after reviewing each image:
 
 ```sh
 ./gradlew recordRoborazziDesktop
@@ -57,10 +57,11 @@ Record only the current operating system's baselines after reviewing each image:
 ./gradlew desktopTest
 ```
 
-When a UI change intentionally affects a visual surface, re-record and commit only
-the affected platform directory. The manual `Record desktop screenshot baselines`
-workflow produces a platform-specific artifact for Linux, macOS, or Windows; use
-that runner to regenerate its matching directory.
+`desktopTest` excludes the Roborazzi suite; use `verifyRoborazziDesktop` /
+`recordRoborazziDesktop` for visual baselines. When a UI change intentionally
+affects a visual surface, re-record and commit only the changed files under
+`src/screenshotTest/roborazzi/macos/`. The manual `Record desktop screenshot
+baselines` workflow produces a macOS artifact when local recording drifts from CI.
 
 For local recording, use either of these equivalent actions:
 

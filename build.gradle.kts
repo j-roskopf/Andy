@@ -469,8 +469,6 @@ val buildAndyVoiceJniMacX64 by tasks.registering(Exec::class) {
     )
 }
 
-// Compose Desktop screenshots share one renderer per process. Running them serially
-// keeps their viewport, fonts, and image output deterministic on every CI runner.
 // Enable test retries via an explicit Gradle property the CI workflow passes
 // (`-PandyRetryTests=true`). A property is propagated to the daemon reliably, unlike env vars
 // such as CI, which are not part of daemon compatibility and can be missing on the runner — that
@@ -480,6 +478,20 @@ val buildAndyVoiceJniMacX64 by tasks.registering(Exec::class) {
 val andyRetryTests =
     providers.gradleProperty("andyRetryTests").map(String::toBoolean).getOrElse(false) ||
         System.getenv("CI") != null
+
+// Ordinary `desktopTest` / `check` should not also run the Roborazzi suite. Those captures are
+// slow, silent for long stretches, and already covered by verify/recordRoborazziDesktop on macOS.
+// Detect Roborazzi task names from the start parameters so `./gradlew verifyRoborazziDesktop`
+// still exercises AndyDesktopScreenshotTest through the shared desktopTest task.
+val isRoborazziTaskRequested =
+    gradle.startParameter.taskNames.any { it.contains("Roborazzi", ignoreCase = true) }
+
+// Roborazzi Compose captures must stay single-process (shared renderer). Unit/fixture desktopTest
+// can fan out across JVMs; TmuxAndy uniquifies ANDY_TMUX_SOCKET per org.gradle.test.worker.
+val andyDesktopTestParallelForks =
+    providers.gradleProperty("andyDesktopTestParallelForks")
+        .map(String::toInt)
+        .getOrElse((Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4))
 
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
@@ -491,12 +503,22 @@ tasks.withType<Test>().configureEach {
     System.getProperty("andy.voice.live.home")?.let { systemProperty("andy.voice.live.home", it) }
     // Keep desktopTest off the live `tmux -L andy` socket. Tests that recycle a poisoned
     // server call kill-server; sharing production would print `[server exited]` in every
-    // attached agent chat.
+    // attached agent chat. Socket name is further uniquified per Gradle test worker.
     if (name == "desktopTest") {
         environment("ANDY_TMUX_SOCKET", "andy-test")
         // Most desktop service tests inject fake terminal adapters. Keep those fixtures
         // on their intended lane; ACP behavior is covered by the dedicated ACP tests.
         environment("ANDY_AGENT_LANE", "terminal")
+        if (!isRoborazziTaskRequested) {
+            filter.excludeTestsMatching("app.andy.AndyDesktopScreenshotTest")
+            maxParallelForks = andyDesktopTestParallelForks
+        }
+        // Per-test progress: the suite is long and otherwise prints nothing for many minutes,
+        // which looks like a hang locally.
+        testLogging {
+            events("started", "passed", "skipped", "failed")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
     }
     // These desktop suites include real-subprocess agent/workflow tests and hardware-backed
     // mirror/simulator smoke tests whose timing is inherently variable on shared CI runners.

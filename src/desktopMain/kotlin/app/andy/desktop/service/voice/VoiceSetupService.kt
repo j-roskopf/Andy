@@ -95,6 +95,27 @@ class DesktopVoiceSetupService(
         _state.value = VoiceSetupState.NotEnabled
     }
 
+    override fun hasDownloads(): Boolean {
+        val downloadRoots = listOf(binDir, libDir, libexecDir, modelsDir, runtimeDir)
+        if (downloadRoots.any { dir -> dir.exists() && dir.walkTopDown().any { it.isFile } }) return true
+        if (stateFile.isFile) return true
+        val debugLog = File(voiceRoot, "debug.log")
+        return debugLog.isFile
+    }
+
+    override suspend fun deleteDownloads() {
+        enableAborted.set(true)
+        enableMutex.withLock {
+            withContext(Dispatchers.IO) {
+                // On-demand artifacts only — leave `native/` (packaged JNI extracted from the app).
+                listOf(binDir, libDir, libexecDir, modelsDir, runtimeDir).forEach { it.deleteRecursively() }
+                stateFile.delete()
+                File(voiceRoot, "debug.log").delete()
+            }
+            _state.value = VoiceSetupState.NotEnabled
+        }
+    }
+
     private fun aborted(): Boolean = enableAborted.get()
 
     private fun doEnable() {

@@ -6,6 +6,6 @@ When asked to regenerate Andy's desktop visual baselines, run:
 ./gradlew recordRoborazziDesktop
 ```
 
-This records only the current operating system's renderer-specific baseline
-directory under `src/screenshotTest/roborazzi/`. Review and commit only the
-intentional PNG changes.
+This records macOS baselines under `src/screenshotTest/roborazzi/macos/`.
+Review and commit only the intentional PNG changes. PR CI verifies screenshots
+on macOS only; do not introduce Linux/Windows baseline directories.

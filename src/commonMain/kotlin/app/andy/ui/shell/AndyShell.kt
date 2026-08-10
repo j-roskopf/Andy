@@ -295,7 +295,7 @@ internal fun AndyShell(
                     deviceLabels = state.workspaceState.deviceLabels,
                     onSelectDevice = { state.selectDevice(it) },
                     onSelectIosTarget = { state.selectIosTarget(it) },
-                    onRefresh = { state.refreshDevices() },
+                    onRefresh = state::refreshDevices,
                     onStopEmulator = { state.stopEmulator(it) },
                     stoppingEmulatorSerial = state.stoppingEmulatorSerial,
                     showDevicePopOut = capabilities.platform != app.andy.service.AndyPlatform.Web &&

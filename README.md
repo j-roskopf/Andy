@@ -176,7 +176,7 @@ maintained in [`tools/andy-tracebox`](tools/andy-tracebox/README.md).
 
 ## Screenshots
 
-The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state and the matching Linux/Windows baseline contract.
+The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state; PR CI verifies screenshots on macOS only.
 
 | Devices | Catalog |
 | --- | --- |
@@ -295,8 +295,9 @@ keybindings, remote access, and launchd packaging.
 
 ## Testing
 
-PR CI runs `./gradlew desktopTest` (plus screenshot verify). Opt-in suites that need a
-device, Simulator, or live agent CLI — and how to run them locally — are documented in
+PR CI runs `./gradlew desktopTest` on Linux/macOS/Windows, plus macOS-only
+`verifyRoborazziDesktop`. Opt-in suites that need a device, Simulator, or live
+agent CLI — and how to run them locally — are documented in
 [docs/TESTS.md](docs/TESTS.md).
 
 ## Runtime Requirements

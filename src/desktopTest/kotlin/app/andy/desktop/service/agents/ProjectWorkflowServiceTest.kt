@@ -1008,6 +1008,7 @@ class ProjectWorkflowServiceTest {
                 WorkflowFakeMcp, WorkflowWorkspaceStore, config, enableProbes = false,
                 terminalMode = AgentTerminalMode.DirectPty,
                 artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
+                artifactWaitMs = WORKFLOW_ARTIFACT_WAIT_MS,
             )
             service.ensureProject("project-1")
             await { config.value.projects.single().notes.isEmpty() }
@@ -1215,6 +1216,7 @@ class ProjectWorkflowServiceTest {
                 enableProbes = false,
                 terminalMode = AgentTerminalMode.DirectPty,
                 artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
+                artifactWaitMs = WORKFLOW_ARTIFACT_WAIT_MS,
             )
             service.ensureProject("project-1")
             // Recovery reconciles the interrupted run asynchronously; wait for it to settle to
@@ -1345,8 +1347,9 @@ private suspend fun withHarness(
             // Fast-exiting shell "agents" race the tmux-attach path; run them in-process.
             terminalMode = AgentTerminalMode.DirectPty,
             // Keep artifact detection tight so multi-stage workflows don't wait on the
-            // production 350ms poll between Spec/Review/Verification handoffs.
+            // production 350ms poll / 3-minute grace window between stage handoffs.
             artifactPollIntervalMs = WORKFLOW_ARTIFACT_POLL_MS,
+            artifactWaitMs = WORKFLOW_ARTIFACT_WAIT_MS,
         )
         service.ensureProject("project-1")
         block(WorkflowHarness(service, store, projectDir))
@@ -1560,6 +1563,9 @@ private fun isWindows(): Boolean = System.getProperty("os.name").contains("windo
 /** Fast artifact poll for multi-stage workflow harnesses (production default is 350ms). */
 private const val WORKFLOW_ARTIFACT_POLL_MS = 20L
 
+/** Missing review/verify JSON should fail into NeedsAttention quickly in tests (prod: 3 min). */
+private const val WORKFLOW_ARTIFACT_WAIT_MS = 250L
+
 private fun workflowShellBinary(): String = if (isWindows()) {
     checkNotNull(System.getenv("ComSpec")) { "ComSpec is required to run workflow tests on Windows" }
 } else {
@@ -1593,7 +1599,8 @@ private object WorkflowWorkspaceStore : WorkspaceStore {
 }
 
 private suspend fun await(
-    timeoutMillis: Long = harnessTimeoutMillis(360_000, 600_000, 900_000),
+    // Keep local waits tight so a stuck workflow fails in minutes, not half an hour of silence.
+    timeoutMillis: Long = harnessTimeoutMillis(120_000, 600_000, 900_000),
     condition: () -> Boolean,
 ) {
     withTimeout(timeoutMillis) {
@@ -1602,7 +1609,7 @@ private suspend fun await(
 }
 
 private suspend fun <T> awaitValue(
-    timeoutMillis: Long = harnessTimeoutMillis(360_000, 600_000, 900_000),
+    timeoutMillis: Long = harnessTimeoutMillis(120_000, 600_000, 900_000),
     supplier: () -> T?,
 ): T {
     var result: T? = null

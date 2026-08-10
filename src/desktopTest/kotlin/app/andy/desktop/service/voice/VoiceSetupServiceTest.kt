@@ -371,6 +371,70 @@ class VoiceSetupServiceTest {
     }
 
     @Test
+    fun deleteDownloadsRemovesOnDemandArtifactsButKeepsPackagedNative() = runBlocking {
+        val home = tempHome()
+        val modelBytes = byteArrayOf(3, 3, 3)
+        File(home, ".andy/voice/bin/whisper-cli").apply {
+            parentFile?.mkdirs()
+            writeText("bin")
+            setExecutable(true)
+        }
+        File(home, ".andy/voice/lib/libomp.dylib").apply {
+            parentFile?.mkdirs()
+            writeText("lib")
+        }
+        File(home, ".andy/voice/libexec/ggml-cpu.so").apply {
+            parentFile?.mkdirs()
+            writeText("backend")
+        }
+        File(home, ".andy/voice/models/${VoiceArtifacts.MODEL_NAME}").apply {
+            parentFile?.mkdirs()
+            writeBytes(modelBytes)
+        }
+        File(home, ".andy/voice/runtime/tmp").apply {
+            parentFile?.mkdirs()
+            writeText("scratch")
+        }
+        File(home, ".andy/voice/state.json").apply {
+            parentFile?.mkdirs()
+            writeText(
+                """{"binaryVersion":"${VoiceArtifacts.BINARY_VERSION}","model":"${VoiceArtifacts.MODEL_NAME}","enabled":true}""",
+            )
+        }
+        File(home, ".andy/voice/debug.log").apply {
+            parentFile?.mkdirs()
+            writeText("log")
+        }
+        val nativeBridge = File(home, ".andy/voice/native/andy-voice/macos-arm64/andy-voice-jni.dylib").apply {
+            parentFile?.mkdirs()
+            writeText("packaged")
+        }
+        val service = DesktopVoiceSetupService(
+            home = home,
+            platform = VoiceArtifacts.Platform.LinuxX64,
+            modelBytes = modelBytes.size.toLong(),
+            modelSha256 = sha256(modelBytes),
+        )
+        assertTrue(service.hasDownloads())
+        assertIs<VoiceSetupState.Ready>(service.state.value)
+
+        service.deleteDownloads()
+
+        assertIs<VoiceSetupState.NotEnabled>(service.state.value)
+        assertFalse(service.hasDownloads())
+        assertFalse(File(home, ".andy/voice/bin").exists())
+        assertFalse(File(home, ".andy/voice/lib").exists())
+        assertFalse(File(home, ".andy/voice/libexec").exists())
+        assertFalse(File(home, ".andy/voice/models").exists())
+        assertFalse(File(home, ".andy/voice/runtime").exists())
+        assertFalse(File(home, ".andy/voice/state.json").exists())
+        assertFalse(File(home, ".andy/voice/debug.log").exists())
+        assertTrue(nativeBridge.isFile, "packaged native bridge must survive deleteDownloads")
+        home.deleteRecursively()
+        Unit
+    }
+
+    @Test
     fun disableWhileDownloaderBlockedKeepsDisabled() = runBlocking {
         val home = tempHome()
         val started = CountDownLatch(1)

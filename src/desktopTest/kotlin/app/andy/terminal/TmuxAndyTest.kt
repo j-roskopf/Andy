@@ -30,7 +30,12 @@ class TmuxAndyTest {
             return
         }
         assertTrue(TmuxAndy.tmuxBinary().isNotBlank())
-        assertEquals(TmuxAndy.TEST_SERVER, TmuxAndy.SERVER)
+        assertTrue(
+            TmuxAndy.SERVER == TmuxAndy.TEST_SERVER ||
+                TmuxAndy.SERVER.startsWith("${TmuxAndy.TEST_SERVER}-w"),
+            "expected isolated test socket, got ${TmuxAndy.SERVER}",
+        )
+        assertTrue(TmuxAndy.SERVER != TmuxAndy.PRODUCTION_SERVER)
     }
 
     @Test
