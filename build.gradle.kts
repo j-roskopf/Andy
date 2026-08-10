@@ -146,6 +146,8 @@ kotlin {
                 // Win32 / shared native bindings for DHU window capture and input forwarding.
                 implementation("net.java.dev.jna:jna:5.18.1")
                 implementation("net.java.dev.jna:jna-platform:5.18.1")
+                // Recursive FSEvents-backed directory watching on macOS (replaces JDK polling WatchService).
+                implementation("io.methvin:directory-watcher:0.19.1")
 
                 // SQLDelight agent store (JVM-only module — avoids wasmJs)
                 implementation(project(":agent-store"))

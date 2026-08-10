@@ -103,14 +103,59 @@ class DesktopHostFileServiceTest {
                     delay(50)
                 }
             }
+            // Allow async watchAsync() registration to finish before deleting.
+            delay(500)
 
             deletedDir.deleteRecursively()
 
-            withTimeout(5_000) {
+            withTimeout(8_000) {
                 while (service.search("stale", HostSearchMode.Content, listOf(root.absolutePath), 10).isNotEmpty()) {
                     delay(50)
                 }
             }
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    @Test
+    fun watcherIndexesCreatesModifiesAndSkipsExcludedTrees() = runBlocking {
+        val root = createTempDirectory("andy-host-watch-root").toFile()
+        val indexDir = createTempDirectory("andy-host-watch-index").toFile()
+        root.resolve("seed.txt").writeText("seed")
+        val service = DesktopHostFileService(indexDir = indexDir)
+        val collector = launch { service.indexRoot(root.absolutePath).collect {} }
+        try {
+            withTimeout(5_000) {
+                while (service.search("seed", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
+                    delay(50)
+                }
+            }
+
+            val nested = root.resolve("nested/deep").apply { mkdirs() }
+            nested.resolve("fresh.kt").writeText("fun helloFresh() {}\n")
+            withTimeout(8_000) {
+                while (service.search("helloFresh", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
+                    delay(50)
+                }
+            }
+
+            nested.resolve("fresh.kt").writeText("fun helloFresh() { println(\"updatedNeedle\") }\n")
+            withTimeout(8_000) {
+                while (service.search("updatedNeedle", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
+                    delay(50)
+                }
+            }
+
+            listOf(".git", "node_modules", "build").forEach { excluded ->
+                root.resolve(excluded).apply { mkdirs() }
+                    .resolve("ignored.txt")
+                    .writeText("excludedNeedle should not index")
+            }
+            delay(1_200)
+            assertTrue(
+                service.search("excludedNeedle", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty(),
+            )
         } finally {
             collector.cancel()
         }

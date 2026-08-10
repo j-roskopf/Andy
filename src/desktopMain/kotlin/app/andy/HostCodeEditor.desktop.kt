@@ -11,16 +11,31 @@ import org.fife.ui.rtextarea.RTextScrollPane
 import org.fife.ui.rtextarea.SearchContext
 import org.fife.ui.rtextarea.SearchEngine
 import java.awt.BorderLayout
+import java.awt.Cursor
+import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.RenderingHints
+import java.awt.event.FocusAdapter
+import java.awt.event.FocusEvent
 import java.awt.event.InputEvent
+import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
-import javax.swing.JOptionPane
+import javax.swing.BorderFactory
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
+import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.plaf.basic.BasicButtonUI
 
 @Composable
 actual fun HostCodeEditor(
@@ -95,16 +110,29 @@ private class HostCodeEditorPanel(
         verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
         horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
     }
+    private val findBar = FindBar(
+        onFind = { forward -> findInFile(forward) },
+        onClose = { hideFindBar() },
+        onQueryChanged = { findInFile(forward = true, fromTyping = true) },
+    )
 
     init {
         applyEditorSyntaxTheme(editor, scrollPane, currentSyntaxThemeId)
+        findBar.applyTheme(editorFindBarColors(currentSyntaxThemeId, editor))
+        findBar.isVisible = false
+        add(findBar, BorderLayout.NORTH)
         add(scrollPane, BorderLayout.CENTER)
-        bindShortcut("save", KeyEvent.VK_S) { onSave(currentPath, editor.text) }
-        bindShortcut("close", KeyEvent.VK_W, action = onClose)
-        bindShortcut("find", KeyEvent.VK_F) { findInFile() }
-        bindShortcut("searchAll", KeyEvent.VK_A, shift = true) { onSearchAll() }
-        bindShortcut("searchNames", KeyEvent.VK_N, shift = true) { onSearchNames() }
-        bindShortcut("searchContents", KeyEvent.VK_F, shift = true) { onSearchContents() }
+        bindShortcut(editor, "save", KeyEvent.VK_S) { onSave(currentPath, editor.text) }
+        bindShortcut(editor, "close", KeyEvent.VK_W, action = onClose)
+        bindShortcut(editor, "find", KeyEvent.VK_F) { showFindBar() }
+        bindShortcut(editor, "findNext", KeyEvent.VK_G) { findInFile(forward = true) }
+        bindShortcut(editor, "findPrev", KeyEvent.VK_G, shift = true) { findInFile(forward = false) }
+        bindShortcut(editor, "searchAll", KeyEvent.VK_A, shift = true) { onSearchAll() }
+        bindShortcut(editor, "searchNames", KeyEvent.VK_N, shift = true) { onSearchNames() }
+        bindShortcut(editor, "searchContents", KeyEvent.VK_F, shift = true) { onSearchContents() }
+        bindShortcut(findBar.queryField, "find", KeyEvent.VK_F) { showFindBar() }
+        bindShortcut(findBar.queryField, "findNext", KeyEvent.VK_G) { findInFile(forward = true) }
+        bindShortcut(findBar.queryField, "findPrev", KeyEvent.VK_G, shift = true) { findInFile(forward = false) }
     }
 
     fun updateDocument(path: String, value: String) {
@@ -116,6 +144,9 @@ private class HostCodeEditorPanel(
         editor.text = value
         editor.caretPosition = if (pathChanged) 0 else caret.coerceAtMost(value.length)
         programmaticUpdate = false
+        if (findBar.isVisible && findBar.query.isNotBlank()) {
+            findInFile(forward = true, fromTyping = true)
+        }
     }
 
     /** Moves the caret to [line] (1-based) once per (path, line) pair, so recomposition doesn't fight manual scrolling. */
@@ -167,28 +198,305 @@ private class HostCodeEditorPanel(
         if (currentSyntaxThemeId == themeId) return
         currentSyntaxThemeId = themeId
         applyEditorSyntaxTheme(editor, scrollPane, themeId)
+        findBar.applyTheme(editorFindBarColors(themeId, editor))
     }
 
-    private fun bindShortcut(name: String, keyCode: Int, shift: Boolean = false, action: () -> Unit) {
-        val baseMask = if (System.getProperty("os.name").contains("mac", ignoreCase = true)) InputEvent.META_DOWN_MASK else InputEvent.CTRL_DOWN_MASK
-        val mask = if (shift) baseMask or InputEvent.SHIFT_DOWN_MASK else baseMask
-        editor.inputMap.put(KeyStroke.getKeyStroke(keyCode, mask), name)
-        editor.actionMap.put(name, object : javax.swing.AbstractAction() {
-            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
-                SwingUtilities.invokeLater(action)
-            }
-        })
+    private fun showFindBar() {
+        val selection = editor.selectedText.orEmpty()
+        if (selection.isNotBlank() && !selection.contains('\n')) {
+            findBar.query = selection
+        }
+        findBar.isVisible = true
+        revalidate()
+        SwingUtilities.invokeLater {
+            findBar.focusField()
+            if (findBar.query.isNotBlank()) findInFile(forward = true, fromTyping = true)
+        }
     }
 
-    private fun findInFile() {
-        val query = JOptionPane.showInputDialog(this, "Find", editor.selectedText.orEmpty())?.takeIf { it.isNotBlank() } ?: return
-        val context = SearchContext().apply {
-            searchFor = query
+    private fun hideFindBar() {
+        clearMarks()
+        findBar.setStatus("")
+        findBar.isVisible = false
+        revalidate()
+        SwingUtilities.invokeLater { editor.requestFocusInWindow() }
+    }
+
+    private fun findInFile(forward: Boolean, fromTyping: Boolean = false) {
+        val query = findBar.query
+        if (query.isBlank()) {
+            clearMarks()
+            findBar.setStatus("")
+            return
+        }
+        if (fromTyping) {
+            // Restart from the top so live typing always lands on the first match.
+            editor.caretPosition = 0
+        }
+        val context = SearchContext(query).apply {
             matchCase = false
             isRegularExpression = false
-            searchForward = true
+            searchForward = forward
+            searchWrap = true
             wholeWord = false
+            markAll = true
         }
-        SearchEngine.find(editor, context)
+        val result = SearchEngine.find(editor, context)
+        val marked = result.markedCount
+        findBar.setStatus(
+            when {
+                !result.wasFound() && marked == 0 -> "No results"
+                marked > 0 -> "$marked match${if (marked == 1) "" else "es"}"
+                result.wasFound() -> "1 match"
+                else -> ""
+            },
+        )
+    }
+
+    private fun clearMarks() {
+        SearchEngine.markAll(editor, SearchContext(""))
+    }
+
+    private fun bindShortcut(component: JComponent, name: String, keyCode: Int, shift: Boolean = false, action: () -> Unit) {
+        val baseMask = if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
+            InputEvent.META_DOWN_MASK
+        } else {
+            InputEvent.CTRL_DOWN_MASK
+        }
+        val mask = if (shift) baseMask or InputEvent.SHIFT_DOWN_MASK else baseMask
+        component.inputMap.put(KeyStroke.getKeyStroke(keyCode, mask), name)
+        component.actionMap.put(
+            name,
+            object : javax.swing.AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                    SwingUtilities.invokeLater(action)
+                }
+            },
+        )
+    }
+}
+
+private data class FindBarColors(
+    val background: java.awt.Color,
+    val foreground: java.awt.Color,
+    val secondary: java.awt.Color,
+    val fieldBackground: java.awt.Color,
+    val fieldBorder: java.awt.Color,
+    val fieldBorderFocused: java.awt.Color,
+    val buttonHover: java.awt.Color,
+)
+
+private fun editorFindBarColors(syntaxThemeId: String, editor: RSyntaxTextArea): FindBarColors {
+    return when (EditorSyntaxTheme.fromId(syntaxThemeId)) {
+        EditorSyntaxTheme.Andy, EditorSyntaxTheme.Dark, EditorSyntaxTheme.Monokai, EditorSyntaxTheme.Druid -> FindBarColors(
+            background = java.awt.Color(0x171511),
+            foreground = java.awt.Color(0xE4DED0),
+            secondary = java.awt.Color(0x8E8779),
+            fieldBackground = java.awt.Color(0x11100D),
+            fieldBorder = java.awt.Color(0x302D27),
+            fieldBorderFocused = java.awt.Color(0xD18A4B),
+            buttonHover = java.awt.Color(0x2C2117),
+        )
+        EditorSyntaxTheme.Idea -> FindBarColors(
+            background = java.awt.Color(0x313335),
+            foreground = java.awt.Color(0xA9B7C6),
+            secondary = java.awt.Color(0x808080),
+            fieldBackground = java.awt.Color(0x2B2B2B),
+            fieldBorder = java.awt.Color(0x555555),
+            fieldBorderFocused = java.awt.Color(0x6897BB),
+            buttonHover = java.awt.Color(0x3C3F41),
+        )
+        else -> {
+            val bg = editor.background ?: java.awt.Color.WHITE
+            val fg = editor.foreground ?: java.awt.Color.BLACK
+            val border = java.awt.Color(
+                (bg.red * 0.85 + fg.red * 0.15).toInt().coerceIn(0, 255),
+                (bg.green * 0.85 + fg.green * 0.15).toInt().coerceIn(0, 255),
+                (bg.blue * 0.85 + fg.blue * 0.15).toInt().coerceIn(0, 255),
+            )
+            FindBarColors(
+                background = blend(bg, fg, 0.06f),
+                foreground = fg,
+                secondary = blend(fg, bg, 0.35f),
+                fieldBackground = bg,
+                fieldBorder = border,
+                fieldBorderFocused = editor.caretColor ?: java.awt.Color(0x3875D7),
+                buttonHover = blend(bg, fg, 0.12f),
+            )
+        }
+    }
+}
+
+private fun blend(a: java.awt.Color, b: java.awt.Color, amount: Float): java.awt.Color {
+    val t = amount.coerceIn(0f, 1f)
+    return java.awt.Color(
+        (a.red + (b.red - a.red) * t).toInt().coerceIn(0, 255),
+        (a.green + (b.green - a.green) * t).toInt().coerceIn(0, 255),
+        (a.blue + (b.blue - a.blue) * t).toInt().coerceIn(0, 255),
+    )
+}
+
+private class FindBar(
+    private val onFind: (forward: Boolean) -> Unit,
+    private val onClose: () -> Unit,
+    private val onQueryChanged: () -> Unit,
+) : JPanel(BorderLayout()) {
+    private val label = JLabel("Find")
+    val queryField = JTextField()
+    private val status = JLabel(" ")
+    private val prevButton = flatButton("↑") { onFind(false) }
+    private val nextButton = flatButton("↓") { onFind(true) }
+    private val closeButton = flatButton("✕") { onClose() }
+    private var colors = FindBarColors(
+        background = java.awt.Color(0x171511),
+        foreground = java.awt.Color(0xE4DED0),
+        secondary = java.awt.Color(0x8E8779),
+        fieldBackground = java.awt.Color(0x11100D),
+        fieldBorder = java.awt.Color(0x302D27),
+        fieldBorderFocused = java.awt.Color(0xD18A4B),
+        buttonHover = java.awt.Color(0x2C2117),
+    )
+    private var suppressQueryCallback = false
+
+    var query: String
+        get() = queryField.text.orEmpty()
+        set(value) {
+            suppressQueryCallback = true
+            queryField.text = value
+            suppressQueryCallback = false
+        }
+
+    init {
+        border = EmptyBorder(6, 10, 6, 8)
+        isOpaque = true
+        label.border = EmptyBorder(0, 0, 0, 8)
+        status.border = EmptyBorder(0, 8, 0, 4)
+        queryField.preferredSize = Dimension(220, 26)
+        queryField.minimumSize = Dimension(120, 26)
+        queryField.columns = 18
+        queryField.border = fieldBorder(focused = false)
+        queryField.addFocusListener(object : FocusAdapter() {
+            override fun focusGained(e: FocusEvent?) {
+                queryField.border = fieldBorder(focused = true)
+            }
+
+            override fun focusLost(e: FocusEvent?) {
+                queryField.border = fieldBorder(focused = false)
+            }
+        })
+        queryField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = changed()
+            override fun removeUpdate(e: DocumentEvent) = changed()
+            override fun changedUpdate(e: DocumentEvent) = changed()
+            private fun changed() {
+                if (!suppressQueryCallback) onQueryChanged()
+            }
+        })
+        queryField.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                when {
+                    e.keyCode == KeyEvent.VK_ESCAPE -> {
+                        onClose()
+                        e.consume()
+                    }
+                    e.keyCode == KeyEvent.VK_ENTER && e.isShiftDown -> {
+                        onFind(false)
+                        e.consume()
+                    }
+                    e.keyCode == KeyEvent.VK_ENTER -> {
+                        onFind(true)
+                        e.consume()
+                    }
+                }
+            }
+        })
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+            isOpaque = false
+            add(label)
+            add(queryField)
+            add(prevButton)
+            add(nextButton)
+            add(status)
+        }
+        add(controls, BorderLayout.CENTER)
+        add(closeButton, BorderLayout.EAST)
+        preferredSize = Dimension(0, 40)
+    }
+
+    fun focusField() {
+        queryField.requestFocusInWindow()
+        queryField.selectAll()
+    }
+
+    fun setStatus(text: String) {
+        status.text = text.ifBlank { " " }
+    }
+
+    fun applyTheme(next: FindBarColors) {
+        colors = next
+        background = next.background
+        label.foreground = next.secondary
+        status.foreground = next.secondary
+        queryField.background = next.fieldBackground
+        queryField.foreground = next.foreground
+        queryField.caretColor = next.fieldBorderFocused
+        queryField.selectionColor = blend(next.fieldBorderFocused, next.fieldBackground, 0.55f)
+        queryField.selectedTextColor = next.foreground
+        queryField.border = fieldBorder(focused = queryField.hasFocus())
+        listOf(prevButton, nextButton, closeButton).forEach { button ->
+            button.foreground = next.foreground
+            button.background = next.background
+        }
+        repaint()
+    }
+
+    private fun fieldBorder(focused: Boolean) = BorderFactory.createCompoundBorder(
+        BorderFactory.createLineBorder(if (focused) colors.fieldBorderFocused else colors.fieldBorder, 1),
+        EmptyBorder(3, 8, 3, 8),
+    )
+
+    private fun flatButton(label: String, action: () -> Unit): JButton {
+        return object : JButton(label) {
+            private var hovered = false
+
+            init {
+                isOpaque = false
+                isContentAreaFilled = false
+                isBorderPainted = false
+                isFocusPainted = false
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                preferredSize = Dimension(28, 26)
+                font = font.deriveFont(Font.PLAIN, 12f)
+                toolTipText = when (label) {
+                    "↑" -> "Previous match"
+                    "↓" -> "Next match"
+                    else -> "Close"
+                }
+                ui = object : BasicButtonUI() {}
+                addActionListener { action() }
+                addMouseListener(object : java.awt.event.MouseAdapter() {
+                    override fun mouseEntered(e: java.awt.event.MouseEvent?) {
+                        hovered = true
+                        repaint()
+                    }
+
+                    override fun mouseExited(e: java.awt.event.MouseEvent?) {
+                        hovered = false
+                        repaint()
+                    }
+                })
+            }
+
+            override fun paintComponent(g: Graphics) {
+                val g2 = g.create() as Graphics2D
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                if (hovered || model.isArmed) {
+                    g2.color = colors.buttonHover
+                    g2.fillRoundRect(1, 1, width - 2, height - 2, 6, 6)
+                }
+                g2.dispose()
+                super.paintComponent(g)
+            }
+        }
     }
 }
