@@ -667,6 +667,8 @@ internal object ScreenshotServices {
         override suspend fun refreshProviderQuotas() = Unit
         override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
         override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(listOf(AgentSkill("compose-expert", "Compose UI guidance", "/skills/compose-expert/SKILL.md")))
+        override fun slashCommands(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<app.andy.model.AgentSlashCommand>())
+        override fun refreshSlashCommands(agent: AgentKind, directory: String?) = Unit
         override fun refreshSkills(agent: AgentKind, directory: String?) = Unit
         override suspend fun createAndStart(draft: AgentTaskDraft) = task
         override fun stop(taskId: String) = Unit
@@ -696,7 +698,7 @@ internal object ScreenshotServices {
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
         override fun updateGoal(taskId: String, goal: String?) = Unit
         override fun updatePlanMode(taskId: String, planMode: Boolean) = Unit
-        override suspend fun delete(taskId: String, removeWorktree: Boolean) = Unit
+        override suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean) = WorktreeDeleteOutcome.Deleted
         override fun markRead(taskId: String) = Unit
         override fun markUnread(taskId: String) = Unit
         override fun setChatViewing(taskId: String?, viewing: Boolean) = Unit
@@ -711,6 +713,17 @@ internal object ScreenshotServices {
         override suspend fun fileDiff(taskId: String, relativePath: String) = AgentFileDiff(relativePath, listOf(DiffLine(DiffLineKind.Context, "fun validatePostalCode(value: String) {", 12, 12), DiffLine(DiffLineKind.Deletion, "  return value.isNotBlank()", 13, null), DiffLine(DiffLineKind.Addition, "  return value.matches(POSTAL_CODE)", null, 13)))
         override suspend fun refreshCliStatuses() = Unit
         override suspend fun isGitRepo(dir: String) = true
+        override suspend fun currentBranch(dir: String) = "main"
+        override suspend fun worktreeBaseOptions(originDir: String) = emptyList<WorktreeBaseOption>()
+        override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
+        override fun mergeCommand(targetDir: String, branch: String) =
+            "git -C '$targetDir' merge '$branch'"
+        override suspend fun mergeBranch(
+            targetDir: String,
+            branch: String,
+            sourceWorktreePath: String?,
+        ) = app.andy.model.WorktreeMergeOutcome.Applied
+        override suspend fun abortMerge(targetDir: String): Result<Unit> = Result.success(Unit)
     }
 
     private object ScreenshotProjectWorkflows : ProjectWorkflowService {

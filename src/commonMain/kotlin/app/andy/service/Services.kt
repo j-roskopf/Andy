@@ -435,6 +435,13 @@ interface AgentRunService {
      * slash completion never offers skills from a different provider's convention.
      */
     fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>>
+    /**
+     * Slash commands advertised by the provider for [agent] in [directory]. Populated from
+     * live ACP sessions and refreshed on demand via a lightweight ACP probe.
+     */
+    fun slashCommands(agent: AgentKind, directory: String?): StateFlow<List<AgentSlashCommand>>
+    /** Re-fetches provider slash commands after CLI upgrades or workspace MCP changes. */
+    fun refreshSlashCommands(agent: AgentKind, directory: String?)
     /** All locally installed skill names, used to scope provider-advertised command history. */
     fun knownSkillNames(directory: String?): StateFlow<Set<String>> = MutableStateFlow(emptySet())
     /** Re-scans the provider's skill locations after an external installation. */
@@ -505,7 +512,7 @@ interface AgentRunService {
     fun updateGoal(taskId: String, goal: String?)
     /** Toggles Andy plan mode for follow-ups; syncs the live ACP session mode when supported. */
     fun updatePlanMode(taskId: String, planMode: Boolean)
-    suspend fun delete(taskId: String, removeWorktree: Boolean)
+    suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean = false): WorktreeDeleteOutcome
     /** Clears the unread indicator for a finished chat (e.g. when opened). */
     fun markRead(taskId: String)
     /** Marks a chat unread so list/dock badges show again. */
@@ -532,6 +539,27 @@ interface AgentRunService {
     suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff?
     suspend fun refreshCliStatuses()
     suspend fun isGitRepo(dir: String): Boolean
+    /** Current branch of [dir], or null when detached HEAD or not a repo. */
+    suspend fun currentBranch(dir: String): String?
+    /** Active Andy-tracked worktrees for [originDir]'s repo, for the composer's "base on" picker. */
+    suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption>
+    /** Full reconciled tree (Andy-tracked + untracked) for the Worktrees tab. */
+    suspend fun worktreeTree(originDir: String): List<WorktreeNode>
+    /** Shell command that merges [branch] into whatever is checked out in [targetDir]. */
+    fun mergeCommand(targetDir: String, branch: String): String
+    /**
+     * Applies [branch] into [targetDir]'s working tree without committing (HEAD unchanged).
+     * When [sourceWorktreePath] is set, dirty worktree changes are included.
+     * On [WorktreeMergeOutcome.Conflicts], conflict markers remain until the user keeps them
+     * or [abortMerge] is called.
+     */
+    suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String? = null,
+    ): WorktreeMergeOutcome
+    /** Aborts an in-progress merge left by a conflicted [mergeBranch] call. */
+    suspend fun abortMerge(targetDir: String): Result<Unit>
 }
 
 data class RetentionSweepResult(
@@ -879,6 +907,8 @@ data class AndyServices(
     val projectWorkflows: ProjectWorkflowService,
     val kanban: KanbanService = UnavailableKanbanService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
+    val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
+    val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

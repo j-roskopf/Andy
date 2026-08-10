@@ -111,10 +111,14 @@ class DesktopKanbanServiceTest {
             val service = DesktopKanbanService(store)
             service.addLane("QA")
             service.addCard("todo", "Persist me", "desc", listOf("save"))
+            // Force a synchronous write of the in-memory board so reload does not race
+            // still-queued async saves from mutate().
             store.saveKanbanBoard(service.board.value)
             val reloaded = DesktopKanbanService(DesktopAgentTaskStore(db))
             assertTrue(reloaded.board.value.lanes.any { it.name == "QA" })
-            assertEquals("Persist me", reloaded.board.value.lanes.first { it.id == "todo" }.cards.single().title)
+            val todoCards = reloaded.board.value.lanes.first { it.id == "todo" }.cards
+            assertEquals(1, todoCards.size, "todo cards=${todoCards.map { it.title }} board=${reloaded.board.value}")
+            assertEquals("Persist me", todoCards.single().title)
         } finally {
             dir.deleteRecursively()
         }

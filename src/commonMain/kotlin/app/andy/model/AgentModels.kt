@@ -502,6 +502,8 @@ data class AgentTask(
     val transcriptCompressed: Boolean = false,
     /** True only for the run that created and may remove [worktreePath]. */
     val ownsWorktree: Boolean = false,
+    /** Task id whose worktree branch this task's worktree was forked from. Null for root worktrees and non-worktree tasks. */
+    val parentWorktreeTaskId: String? = null,
     /** Optional typed project task that launched this raw agent session. */
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
@@ -644,6 +646,8 @@ data class AgentTaskDraft(
     /** Reuse an existing workflow worktree instead of creating a new one. */
     val existingWorktreePath: String? = null,
     val existingBranchName: String? = null,
+    /** When set (and useWorktree = true), the new worktree forks from this task's branch instead of originDir's current HEAD. */
+    val baseWorktreeTaskId: String? = null,
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
     val workflowAttempt: Int? = null,
@@ -654,6 +658,44 @@ data class AgentTaskDraft(
     /** Optional explicit lane override used by tests and rollout controls. */
     val lane: AgentLaneKind? = null,
 )
+
+/** A lightweight candidate for the composer's "base on" picker. */
+data class WorktreeBaseOption(
+    val taskId: String,
+    val title: String,
+    val branch: String,
+    val path: String,
+)
+
+/** One node in the reconciled worktree tree for a repo. */
+data class WorktreeNode(
+    val path: String,
+    val branch: String?,
+    val isMain: Boolean,
+    val taskId: String?,
+    val taskTitle: String?,
+    val parentTaskId: String?,
+    val tracked: Boolean,
+)
+
+/** Outcome of a delete attempt that may be blocked by child worktrees. */
+sealed interface WorktreeDeleteOutcome {
+    data object Deleted : WorktreeDeleteOutcome
+    data class BlockedByChildren(val children: List<WorktreeBaseOption>) : WorktreeDeleteOutcome
+}
+
+/** Outcome of applying a worktree branch into a target working tree. */
+sealed interface WorktreeMergeOutcome {
+    /** Changes applied; HEAD unchanged. */
+    data object Applied : WorktreeMergeOutcome
+    /**
+     * Merge stopped with conflicts; conflict markers remain in the target dir.
+     * Caller must leave them for the user or call abort.
+     */
+    data class Conflicts(val detail: String) : WorktreeMergeOutcome
+    /** Failed without leaving a merge in progress. */
+    data class Failed(val detail: String) : WorktreeMergeOutcome
+}
 
 /** Last-used launch settings, stored independently for each provider. */
 data class AgentProviderDefaults(
@@ -676,6 +718,11 @@ data class AgentSkill(
     val description: String,
     /** Absolute path to the skill's SKILL.md, so the agent and chat link use the same source. */
     val path: String,
+    /**
+     * When false, the skill is kept for provider reference loading but omitted from Andy's
+     * composer slash menu (honors SKILL.md `user-invocable: false`).
+     */
+    val userInvocable: Boolean = true,
 )
 
 /** A command implemented by Andy rather than forwarded as literal prompt text to a provider CLI. */
@@ -699,6 +746,34 @@ object AgentNativeSlashCommands {
 
     fun supportsGoal(agent: AgentKind): Boolean = agent == AgentKind.Codex || agent == AgentKind.ClaudeCode
 }
+
+/** Andy-native commands plus provider-advertised slash commands for composer autocomplete. */
+fun mergedComposerSlashCommands(
+    agent: AgentKind,
+    providerCommands: List<AgentSlashCommand>,
+): List<AgentNativeSlashCommand> =
+    (AgentNativeSlashCommands.forAgent(agent) + providerCommands.map { AgentNativeSlashCommand(it.name, it.description) })
+        .distinctBy { it.name.normalizedComposerSlashName() }
+
+/**
+ * Disk-discovered skills that are not already advertised as provider slash commands.
+ * Providers like Claude/Cursor surface installed skills via ACP; listing them again as
+ * Andy skills produces green+blue duplicates in the composer menu.
+ */
+fun composerSkillsForSlashMenu(
+    skills: List<AgentSkill>,
+    commands: List<AgentNativeSlashCommand>,
+): List<AgentSkill> {
+    if (skills.isEmpty()) return emptyList()
+    val invocable = skills.filter { it.userInvocable }
+    if (invocable.isEmpty()) return emptyList()
+    if (commands.isEmpty()) return invocable
+    val commandNames = commands.mapTo(linkedSetOf()) { it.name.normalizedComposerSlashName() }
+    return invocable.filter { it.name.normalizedComposerSlashName() !in commandNames }
+}
+
+internal fun String.normalizedComposerSlashName(): String =
+    trim().trimStart('/', '$').lowercase()
 
 enum class AgentGoalCommandAction { Set, Clear }
 

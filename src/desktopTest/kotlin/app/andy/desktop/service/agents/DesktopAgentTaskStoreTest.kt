@@ -122,6 +122,7 @@ class DesktopAgentTaskStoreTest {
             contextTokens = 120_000,
             contextWindowTokens = 272_000,
             ownsWorktree = true,
+            parentWorktreeTaskId = "task-parent-1",
             workflowTaskId = "build-1",
             workflowStage = ProjectWorkflowStage.Build,
             workflowAttempt = 2,

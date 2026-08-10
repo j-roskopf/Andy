@@ -105,7 +105,11 @@ Create ordered network rewrite rules that match URL patterns and optional HTTP m
 
 ### Projects
 
-Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context.
+Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context. The Projects screen also includes a Kanban tab for a lightweight board alongside your project spaces.
+
+### Kanban
+
+Track work on a drag-and-drop board from the Kanban tab under Projects. Andy starts you with To-Do, Doing, and Done lanes; add, rename, reorder, or delete lanes; and create cards with a title, description, and tags. Drag cards between lanes or reorder within a lane. The board persists locally with Andy's agent store. Desktop only — unavailable while Andy is connected to a running `andyd` (quit the daemon and restart Andy to edit the board).
 
 ### Agents
 
@@ -201,9 +205,9 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Project new spec | Project new build |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-new-spec.png" alt="Andy project new spec" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-new-build.png" alt="Andy project new build" width="480"> |
-| Project profiles | |
+| Project profiles | Project kanban |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-profiles.png" alt="Andy project profiles" width="480"> | |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-projects-profiles.png" alt="Andy project profiles" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-kanban-board.png" alt="Andy project kanban board" width="480"> |
 | Agents | Snapshots |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="480"> |

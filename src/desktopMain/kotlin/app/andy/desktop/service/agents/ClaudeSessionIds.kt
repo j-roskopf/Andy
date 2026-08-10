@@ -135,7 +135,7 @@ internal object ClaudeSessionIds {
                         return@forEach
                     }
                 }
-                if (best == null || mtime > best!!.first) best = mtime to id
+                if (best == null || mtime > best.first) best = mtime to id
             }
         return best?.second
     }

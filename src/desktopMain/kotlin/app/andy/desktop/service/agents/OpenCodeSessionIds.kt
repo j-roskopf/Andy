@@ -108,7 +108,7 @@ internal object OpenCodeSessionIds {
                     }
                 }
                 val mtime = file.lastModified()
-                if (best == null || mtime > best!!.first) best = mtime to id
+                if (best == null || mtime > best.first) best = mtime to id
             }
         }
         return best?.second

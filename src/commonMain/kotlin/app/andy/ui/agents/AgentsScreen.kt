@@ -93,16 +93,37 @@ private fun AgentCommandCenter(
     }
     LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
-    fun requestDelete(task: AgentTask) {
+    fun requestDelete(task: AgentTask, force: Boolean = false) {
+        if (force) {
+            scope.launch {
+                transcriptScrollMemory.remove(task.id)
+                services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
+                if (selectedTaskId == task.id) selectedTaskId = null
+            }
+            return
+        }
         pendingConfirmation = PendingConfirmation(
             title = "Delete chat?",
             message = "Permanently removes \"${task.title}\" and its saved transcript.",
             confirmLabel = "Delete",
         ) {
             scope.launch {
-                transcriptScrollMemory.remove(task.id)
-                services.agentRuns.delete(task.id, task.ownsWorktree)
-                if (selectedTaskId == task.id) selectedTaskId = null
+                when (val outcome = services.agentRuns.delete(task.id, task.ownsWorktree)) {
+                    app.andy.model.WorktreeDeleteOutcome.Deleted -> {
+                        transcriptScrollMemory.remove(task.id)
+                        if (selectedTaskId == task.id) selectedTaskId = null
+                    }
+                    is app.andy.model.WorktreeDeleteOutcome.BlockedByChildren -> {
+                        val childList = outcome.children.joinToString("\n") { child ->
+                            "• ${child.title} (${child.branch})"
+                        }
+                        pendingConfirmation = PendingConfirmation(
+                            title = "Delete worktree with children?",
+                            message = "\"${task.title}\" still has nested worktrees:\n$childList\n\nDelete anyway? Child worktrees become roots and keep their branches.",
+                            confirmLabel = "Delete anyway",
+                        ) { requestDelete(task, force = true) }
+                    }
+                }
             }
         }
     }
@@ -216,6 +237,8 @@ private fun AgentCommandCenter(
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
+                        workspaceState = workspaceState,
+                        dictationActive = composing,
                     )
                 }
                 if (!composing) {

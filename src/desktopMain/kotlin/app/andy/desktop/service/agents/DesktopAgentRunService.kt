@@ -7,6 +7,7 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.acpSupported
 import app.andy.model.defaultLane
 import app.andy.model.andyQuestionArtifactHint
 import app.andy.model.isGrillMeSkillName
@@ -20,8 +21,13 @@ import app.andy.model.AgentQuotaSource
 import app.andy.model.AgentQuotaAccess
 
 import app.andy.model.AgentSkill
+import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.WorktreeBaseOption
+import app.andy.model.WorktreeDeleteOutcome
+import app.andy.model.WorktreeMergeOutcome
+import app.andy.model.WorktreeNode
 import app.andy.model.fallbackTitle
 import app.andy.model.AgentStatus
 import app.andy.model.AgentUserInputRequest
@@ -67,6 +73,7 @@ import app.andy.desktop.service.agents.acp.AcpEventMapper
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.acp.AcpReplayFilterResult
 import app.andy.desktop.service.agents.acp.filterAcpProviderHistoryReplay
+import app.andy.desktop.service.agents.acp.AcpSlashCommandProbe
 import app.andy.desktop.service.agents.acp.NodeRuntimeLocator
 import app.andy.desktop.service.agents.acp.PendingAcpPermission
 import app.andy.model.TerminalAppearanceSnapshot
@@ -178,11 +185,15 @@ class DesktopAgentRunService(
 
     private data class SkillScope(val agent: AgentKind, val directory: String?)
     private data class KnownSkillScope(val directory: String?)
+    private data class SlashCommandScope(val agent: AgentKind, val directory: String?)
 
     private val skillFlows = ConcurrentHashMap<SkillScope, MutableStateFlow<List<AgentSkill>>>()
     private val loadedSkillScopes = ConcurrentHashMap.newKeySet<SkillScope>()
     private val knownSkillNameFlows = ConcurrentHashMap<KnownSkillScope, MutableStateFlow<Set<String>>>()
     private val loadedKnownSkillScopes = ConcurrentHashMap.newKeySet<KnownSkillScope>()
+    private val slashCommandFlows = ConcurrentHashMap<SlashCommandScope, MutableStateFlow<List<AgentSlashCommand>>>()
+    private val loadedSlashCommandScopes = ConcurrentHashMap.newKeySet<SlashCommandScope>()
+    private val slashCommandRefreshJobs = ConcurrentHashMap<SlashCommandScope, Job>()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
@@ -222,6 +233,7 @@ class DesktopAgentRunService(
     private val quotaRefreshMutex = Mutex()
     private val quotaProbe = ProviderQuotaProbe()
     private val modelProbe = ProviderModelProbe()
+    private val slashCommandProbe = AcpSlashCommandProbe()
     private val ready = CompletableDeferred<Unit>()
     private var binaryOverrides: Map<String, String> = emptyMap()
     private lateinit var slots: Semaphore
@@ -255,6 +267,7 @@ class DesktopAgentRunService(
             reconcileStuckWorkflowArtifacts()
             ready.complete(Unit)
             refreshCliStatuses()
+            refreshSlashCommandsForReadyProviders()
             if (enableProbes) {
                 refreshProviderQuotas()
                 while (isActive) {
@@ -431,6 +444,100 @@ class DesktopAgentRunService(
             flow.value = discoverAgentSkills(agent, normalizedDirectory)
             knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
                 discoverKnownAgentSkillNames(normalizedDirectory)
+        }
+    }
+
+    override fun slashCommands(agent: AgentKind, directory: String?): StateFlow<List<AgentSlashCommand>> {
+        val normalizedDirectory = normalizeSkillDirectory(directory)
+        val commandScope = SlashCommandScope(agent, normalizedDirectory)
+        val flow = slashCommandFlows.computeIfAbsent(commandScope) { MutableStateFlow(emptyList()) }
+        if (loadedSlashCommandScopes.add(commandScope)) {
+            refreshSlashCommands(agent, directory)
+        }
+        return flow
+    }
+
+    override fun refreshSlashCommands(agent: AgentKind, directory: String?) {
+        val normalizedDirectory = normalizeSkillDirectory(directory)
+        val commandScope = SlashCommandScope(agent, normalizedDirectory)
+        val flow = slashCommandFlows.computeIfAbsent(commandScope) { MutableStateFlow(emptyList()) }
+        loadedSlashCommandScopes.add(commandScope)
+        slashCommandRefreshJobs[commandScope]?.cancel()
+        slashCommandRefreshJobs[commandScope] = scope.launch(Dispatchers.IO) {
+            // Seed from prior ACP transcripts before probing so the new-chat composer is
+            // not empty while a slow provider probe runs (or times out).
+            bootstrapSlashCommands(agent, normalizedDirectory)?.let { cached ->
+                if (flow.value.isEmpty() || cached.size >= flow.value.size) {
+                    flow.value = cached
+                }
+            }
+            if (!agent.acpSupported) return@launch
+            val status = _cliStatuses.value.firstOrNull { it.kind == agent } ?: return@launch
+            if (!status.acpReady) return@launch
+            val cwd = normalizedDirectory?.let(::File)?.takeIf { it.isDirectory }
+                ?: File(System.getProperty("user.home"))
+            val probed = slashCommandProbe.probe(
+                agent = agent,
+                cwd = cwd,
+                binary = status.binaryPath,
+                env = buildAgentLaunchEnvironment(emptyMap()),
+            )
+            if (probed.isNotEmpty()) {
+                flow.value = probed
+            }
+        }
+    }
+
+    private fun refreshSlashCommandsForReadyProviders() {
+        AgentKind.entries.filter { it.acpSupported }.forEach { agent ->
+            refreshSlashCommands(agent, directory = null)
+        }
+    }
+
+    private fun normalizeSkillDirectory(directory: String?): String? =
+        directory
+            ?.takeIf { it.isNotBlank() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+
+    private fun bootstrapSlashCommands(agent: AgentKind, directory: String?): List<AgentSlashCommand>? {
+        val scoped = latestSlashCommandsFromTranscripts(agent, directory)
+        if (scoped != null) return scoped
+        if (directory != null) return latestSlashCommandsFromTranscripts(agent, directory = null)
+        return null
+    }
+
+    private fun latestSlashCommandsFromTranscripts(agent: AgentKind, directory: String?): List<AgentSlashCommand>? =
+        _tasks.value
+            .asSequence()
+            .filter { task ->
+                task.agent == agent &&
+                    task.lane == AgentLaneKind.Acp &&
+                    !task.archived &&
+                    (directory == null ||
+                        normalizeSkillDirectory(task.cwd) == directory ||
+                        normalizeSkillDirectory(task.worktreePath) == directory)
+            }
+            .sortedByDescending { it.createdAtMillis }
+            .mapNotNull { task ->
+                loadAcpEventsForDisplay(task.id)
+                    .asReversed()
+                    .filterIsInstance<AgentEvent.AvailableCommands>()
+                    .firstOrNull()
+                    ?.commands
+                    ?.takeIf { it.isNotEmpty() }
+            }
+            .firstOrNull()
+
+    private fun recordSlashCommands(agent: AgentKind, directory: String?, commands: List<AgentSlashCommand>) {
+        if (commands.isEmpty()) return
+        val normalizedDirectory = normalizeSkillDirectory(directory)
+        slashCommandFlows.computeIfAbsent(SlashCommandScope(agent, normalizedDirectory)) {
+            MutableStateFlow(emptyList())
+        }.value = commands
+        if (normalizedDirectory != null) {
+            slashCommandFlows.computeIfAbsent(SlashCommandScope(agent, directory = null)) {
+                MutableStateFlow(emptyList())
+            }.value = commands
         }
     }
 
@@ -935,8 +1042,62 @@ class DesktopAgentRunService(
         }
         val now = System.currentTimeMillis()
         val id = taskId ?: newAgentTaskId()
+        // Reuse path must exist as a directory. Never fall back to scratch when the caller
+        // asked for a specific worktree — that would report one path while editing another.
+        val existingWorktreePath = draft.existingWorktreePath?.takeIf { it.isNotBlank() }
+        val resolvedExistingWorktree = existingWorktreePath?.let { path ->
+            withContext(Dispatchers.IO) {
+                File(path).absoluteFile.normalize().takeIf { it.isDirectory }?.absolutePath
+            }
+        }
+        // Reuse wins over create: never persist useWorktree=true with a reused path, or a
+        // task-store reload (ownsWorktree := useWorktree && worktreePath) will claim ownership
+        // and later cleanup can delete someone else's worktree.
+        val useWorktree = draft.useWorktree && resolvedExistingWorktree == null
+        if (existingWorktreePath != null && resolvedExistingWorktree == null) {
+            val task = AgentTask(
+                id = id,
+                title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
+                prompt = draft.prompt,
+                agent = draft.agent,
+                projectId = draft.projectId,
+                cwd = null,
+                originDir = draft.directory,
+                useWorktree = false,
+                worktreePath = existingWorktreePath,
+                branchName = draft.existingBranchName,
+                ownsWorktree = false,
+                workflowTaskId = draft.workflowTaskId,
+                workflowStage = draft.workflowStage,
+                workflowAttempt = draft.workflowAttempt,
+                attachAndyMcp = draft.attachAndyMcp,
+                autonomy = draft.autonomy,
+                sandboxMode = draft.sandboxMode,
+                planMode = draft.planMode,
+                confirmToolCalls = draft.confirmToolCalls,
+                model = draft.model,
+                reasoningEffort = draft.reasoningEffort,
+                fastMode = draft.fastMode,
+                openClawNewSession = draft.openClawNewSession,
+                imagePaths = draft.imagePaths,
+                skills = draft.skills.filter { it.path in discoveredSkillPaths },
+                goal = draft.goal,
+                maxBudgetUsd = draft.maxBudgetUsd,
+                contextBundleIds = draft.contextBundleIds,
+                provenance = draft.provenance,
+                status = AgentStatus.Error,
+                errorMessage = "existing worktree path is missing or not a directory",
+                vendorSessionId = null,
+                lane = draft.lane ?: resolveLane(draft.agent),
+                createdAtMillis = now,
+                finishedAtMillis = now,
+            )
+            upsertTask(task)
+            persist()
+            return task
+        }
         val resolvedCwd = withContext(Dispatchers.IO) {
-            AgentScratchWorkspace.resolveCwd(draft.existingWorktreePath ?: draft.directory)
+            resolvedExistingWorktree ?: AgentScratchWorkspace.resolveCwd(draft.directory)
         }
         var task = AgentTask(
             id = id,
@@ -946,8 +1107,8 @@ class DesktopAgentRunService(
             projectId = draft.projectId,
             cwd = resolvedCwd,
             originDir = draft.directory,
-            useWorktree = draft.useWorktree,
-            worktreePath = draft.existingWorktreePath,
+            useWorktree = useWorktree,
+            worktreePath = resolvedExistingWorktree,
             branchName = draft.existingBranchName,
             ownsWorktree = false,
             workflowTaskId = draft.workflowTaskId,
@@ -986,7 +1147,9 @@ class DesktopAgentRunService(
             return task
         }
 
-        if (task.useWorktree) {
+        // existingWorktreePath reuses an on-disk worktree; never replace it with worktrees.create.
+        val createWorktree = useWorktree
+        if (createWorktree) {
             val originDir = task.originDir
             if (originDir == null) {
                 task = task.copy(
@@ -998,9 +1161,35 @@ class DesktopAgentRunService(
                 persist()
                 return task
             }
-            val created = withContext(Dispatchers.IO) { worktrees.create(originDir, task.id, task.agent, task.title) }
+            val baseTaskId = draft.baseWorktreeTaskId
+            val baseTask = baseTaskId?.let { id -> tasks.value.find { t -> t.id == id } }
+            val baseWorktreeAlive = baseTask != null &&
+                baseTask.branchName != null &&
+                baseTask.worktreePath != null &&
+                withContext(Dispatchers.IO) { worktrees.isLiveWorktree(originDir, baseTask.worktreePath) }
+            if (baseTaskId != null && !baseWorktreeAlive) {
+                task = task.copy(
+                    status = AgentStatus.Error,
+                    errorMessage = "base worktree no longer exists",
+                    finishedAtMillis = System.currentTimeMillis(),
+                )
+                upsertTask(task)
+                persist()
+                return task
+            }
+            val created = withContext(Dispatchers.IO) {
+                worktrees.create(originDir, task.id, task.agent, task.title, startPoint = baseTask?.branchName)
+            }
             task = created.fold(
-                onSuccess = { task.copy(cwd = it.path, worktreePath = it.path, branchName = it.branch, ownsWorktree = true) },
+                onSuccess = {
+                    task.copy(
+                        cwd = it.path,
+                        worktreePath = it.path,
+                        branchName = it.branch,
+                        ownsWorktree = true,
+                        parentWorktreeTaskId = baseTaskId,
+                    )
+                },
                 onFailure = {
                     task.copy(
                         status = AgentStatus.Error,
@@ -2628,8 +2817,31 @@ class DesktopAgentRunService(
         }
     }
 
-    override suspend fun delete(taskId: String, removeWorktree: Boolean) {
-        val task = currentTask(taskId) ?: return
+    override suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean): WorktreeDeleteOutcome {
+        val task = currentTask(taskId) ?: return WorktreeDeleteOutcome.Deleted
+        val worktreePath = task.worktreePath
+        val liveChildren = if (removeWorktree && task.ownsWorktree && worktreePath != null) {
+            tasks.value.filter { child ->
+                child.id != taskId &&
+                    child.parentWorktreeTaskId == taskId &&
+                    child.worktreePath != null &&
+                    File(child.worktreePath).isDirectory
+            }
+        } else {
+            emptyList()
+        }
+        if (liveChildren.isNotEmpty() && !force) {
+            return WorktreeDeleteOutcome.BlockedByChildren(
+                liveChildren.map { child ->
+                    WorktreeBaseOption(
+                        taskId = child.id,
+                        title = child.title.ifBlank { child.id },
+                        branch = child.branchName.orEmpty(),
+                        path = child.worktreePath.orEmpty(),
+                    )
+                },
+            )
+        }
         if (task.isActive) {
             stop(taskId)
         }
@@ -2640,16 +2852,24 @@ class DesktopAgentRunService(
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
         connectionStallAutoRetries.remove(taskId)
-        _tasks.update { list -> list.filterNot { it.id == taskId } }
+        _tasks.update { list ->
+            list.mapNotNull { existing ->
+                when {
+                    existing.id == taskId -> null
+                    existing.parentWorktreeTaskId == taskId -> existing.copy(parentWorktreeTaskId = null)
+                    else -> existing
+                }
+            }
+        }
         store.deleteTaskArtifacts(taskId)
         task.workflowTaskId?.let { projectTaskId -> detachDeletedWorkflowRun(projectTaskId, taskId) }
-        val worktreePath = task.worktreePath
         if (removeWorktree && task.ownsWorktree && worktreePath != null) {
             task.originDir?.let { originDir ->
                 withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
             }
         }
         persist(allowEmptyTaskList = true)
+        return WorktreeDeleteOutcome.Deleted
     }
 
     private fun detachDeletedWorkflowRun(projectTaskId: String, runId: String) {
@@ -2810,6 +3030,77 @@ class DesktopAgentRunService(
     }
 
     override suspend fun isGitRepo(dir: String): Boolean = withContext(Dispatchers.IO) { worktrees.isGitRepo(dir) }
+
+    override suspend fun currentBranch(dir: String): String? =
+        withContext(Dispatchers.IO) { worktrees.currentBranch(dir) }
+
+    override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> {
+        val onDiskPaths = withContext(Dispatchers.IO) {
+            worktrees.listAll(originDir).mapTo(linkedSetOf()) { canonicalPath(it.path) }
+        }
+        return tasks.value.filter { task ->
+            task.originDir == originDir &&
+                !task.archived &&
+                task.branchName != null &&
+                task.worktreePath != null &&
+                canonicalPath(task.worktreePath) in onDiskPaths
+        }.map { task ->
+            WorktreeBaseOption(
+                taskId = task.id,
+                title = task.title.ifBlank { task.id },
+                branch = task.branchName!!,
+                path = task.worktreePath!!,
+            )
+        }
+    }
+
+    override suspend fun worktreeTree(originDir: String): List<WorktreeNode> {
+        val onDisk = withContext(Dispatchers.IO) { worktrees.listAll(originDir) }
+        val trackedByPath = trackedWorktreeOwnerByPath(originDir)
+        return onDisk.map { info ->
+            val task = trackedByPath[canonicalPath(info.path)]
+            WorktreeNode(
+                path = info.path,
+                branch = info.branch,
+                isMain = info.isMain,
+                taskId = task?.id,
+                taskTitle = task?.title,
+                // Only honor lineage when the parent is still present on disk; otherwise this node is a root
+                // (covers manual deletion outside Andy, matching the forced-delete orphaning behavior).
+                parentTaskId = task?.parentWorktreeTaskId?.takeIf { pid ->
+                    onDisk.any { trackedByPath[canonicalPath(it.path)]?.id == pid }
+                },
+                tracked = task != null,
+            )
+        }
+    }
+
+    override fun mergeCommand(targetDir: String, branch: String): String =
+        worktrees.mergeCommand(targetDir, branch)
+
+    override suspend fun mergeBranch(
+        targetDir: String,
+        branch: String,
+        sourceWorktreePath: String?,
+    ): WorktreeMergeOutcome =
+        withContext(Dispatchers.IO) { worktrees.merge(targetDir, branch, sourceWorktreePath) }
+
+    override suspend fun abortMerge(targetDir: String): Result<Unit> =
+        withContext(Dispatchers.IO) { worktrees.abortMerge(targetDir) }
+
+    /** Prefer the owning task when workflow runs reuse one worktree path. */
+    private fun trackedWorktreeOwnerByPath(originDir: String): Map<String, AgentTask> =
+        tasks.value
+            .filter { it.originDir == originDir && it.worktreePath != null }
+            .groupBy { canonicalPath(it.worktreePath!!) }
+            .mapValues { (_, group) ->
+                group.firstOrNull { it.ownsWorktree }
+                    ?: group.minByOrNull { it.createdAtMillis }
+                    ?: group.first()
+            }
+
+    private fun canonicalPath(path: String): String =
+        runCatching { File(path).canonicalPath }.getOrElse { path }
 
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) {
         if (agent == AgentKind.Codex) return
@@ -4225,6 +4516,9 @@ class DesktopAgentRunService(
             }.first
         }
         if (accepted.isEmpty()) return
+        accepted.filterIsInstance<AgentEvent.AvailableCommands>().forEach { event ->
+            task?.let { recordSlashCommands(it.agent, it.worktreePath ?: it.cwd, event.commands) }
+        }
         if (isAcp) {
             accepted.forEach { event ->
                 if (event is AgentEvent.ToolCall) acpTranscriptStore.upsert(taskId, event)

@@ -155,6 +155,18 @@ class AgentAttentionCoordinatorTest {
     }
 
     @Test
+    fun suppressesDuplicateDoneWithinScrapeFlickerWindow() {
+        val fixture = Fixture()
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+
+        assertEquals(listOf("Done"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("chime"), fixture.sounds.played)
+    }
+
+    @Test
     fun usesLatestPromptForNotificationTitleWhenPresent() {
         val fixture = Fixture()
         val originalTask = task(AgentStatus.Working).copy(title = "Original task prompt")

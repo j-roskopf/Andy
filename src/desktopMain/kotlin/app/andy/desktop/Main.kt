@@ -36,6 +36,8 @@ import app.andy.model.IosTargetKind
 import app.andy.service.IosTargetRegistry
 import app.andy.service.MirrorEngine
 import app.andy.service.OpenAgentTaskRequest
+import app.andy.ui.components.ActiveVoiceDictationShortcut
+import app.andy.ui.components.KeyCombo
 import app.andy.ui.theme.windowBackgroundForTint
 import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
@@ -67,6 +69,7 @@ private data class MirrorPopOutWindow(
 fun main() {
     runCatching { app.andy.desktop.service.agents.AndyStatusHookInstaller.ensureInstalled() }
     runCatching { app.andy.desktop.service.agents.AndyPiExtensionInstaller.ensureInstalled() }
+    runCatching { app.andy.desktop.service.agents.OrchestrationSkillInstaller.ensureInstalled() }
     installRuntimeAppIcon()
     application {
         val runtime = remember { createDesktopRuntime() }
@@ -301,6 +304,10 @@ fun main() {
             state = windowState,
             title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
+            onPreviewKeyEvent = { event ->
+                val shortcut = KeyCombo.decode(workspaceStore.state.value.voiceDictationShortcut)
+                ActiveVoiceDictationShortcut.handle(event, shortcut)
+            },
         ) {
             LaunchedEffect(visible) {
                 appFocus.visible = visible

@@ -4,24 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -454,110 +450,52 @@ private fun AndroidDevicesTab(
     ) {
         if (filteredDevices.isNotEmpty()) {
             item {
-                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    "Connected devices",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
         items(filteredDevices, key = { it.serial }) { device ->
             val online = device.state == DeviceConnectionState.Online
-            val rowShape = RoundedCornerShape(AndyRadius.Row)
             var labelDialogOpen by remember(device.serial) { mutableStateOf(false) }
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val showStorage = maxWidth >= 900.dp
-                val showSpecs = maxWidth >= 720.dp
-                Row(
-                    Modifier.fillMaxWidth()
-                        .height(IntrinsicSize.Min)
-                        .heightIn(min = 76.dp)
-                        .background(if (online) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f), rowShape)
-                        .border(1.dp, if (online) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f), rowShape)
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Box(Modifier.width(2.dp).fillMaxHeight().background(if (online) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)))
-                    Column(Modifier.weight(1f).widthIn(min = 120.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                deviceLabels[device.serial] ?: device.displayName,
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                softWrap = false,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Text(
-                                "· label",
-                                color = Cyan,
-                                fontSize = 10.sp,
-                                modifier = Modifier.clickable { labelDialogOpen = true },
-                            )
-                        }
-                        Text(
-                            device.serial,
-                            color = TextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            softWrap = false,
-                        )
-                        if (!showSpecs) {
-                            Text(
-                                listOfNotNull(
-                                    device.apiLevel?.let { "API $it" },
-                                    device.abi,
-                                    device.storageSummary,
-                                ).joinToString(" · "),
-                                color = TextSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                softWrap = false,
-                            )
-                        }
-                    }
-                    if (showSpecs) {
-                        Text(
-                            "API ${device.apiLevel ?: "-"}\n${device.abi ?: "-"}",
-                            color = TextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            modifier = Modifier.widthIn(max = 140.dp),
-                            maxLines = 2,
-                        )
-                    }
-                    if (showStorage) {
-                        Text(
-                            device.storageSummary ?: "-",
-                            color = TextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            modifier = Modifier.widthIn(max = 140.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            softWrap = false,
-                        )
-                    }
-                    Row(
-                        Modifier.wrapContentWidth(unbounded = false),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+            ConnectedDeviceRow(
+                title = deviceLabels[device.serial] ?: device.displayName,
+                subtitle = device.serial,
+                isActive = online,
+                statusLabel = device.state.name,
+                statusColor = if (online) Green else TextSecondary,
+                compactDetails = listOfNotNull(
+                    device.apiLevel?.let { "API $it" },
+                    device.abi,
+                    device.storageSummary,
+                ).joinToString(" · ").ifBlank { null },
+                apiLevel = device.apiLevel,
+                abi = device.abi,
+                storageSummary = device.storageSummary,
+                titleTrailing = {
+                    Text(
+                        "· label",
+                        color = Cyan,
+                        fontSize = 10.sp,
+                        modifier = Modifier.clickable { labelDialogOpen = true },
+                    )
+                },
+                extraTags = if (device.transport == DeviceTransport.Wifi) {
+                    { StatusTag("Wi‑Fi", Cyan) }
+                } else {
+                    null
+                },
+            ) {
+                OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
+                if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
+                    OutlinedButton(
+                        onClick = { onStopEmulator(device) },
+                        enabled = stoppingEmulatorSerial != device.serial,
                     ) {
-                        StatusTag(device.state.name, if (online) Green else TextSecondary)
-                        if (device.transport == DeviceTransport.Wifi) {
-                            StatusTag("Wi‑Fi", Cyan)
-                        }
-                        OutlinedButton(onClick = { onLive(device.serial) }) { Text("Live") }
-                        if (allowAvdManagement && device.kind == DeviceKind.Emulator && online) {
-                            OutlinedButton(
-                                onClick = { onStopEmulator(device) },
-                                enabled = stoppingEmulatorSerial != device.serial,
-                            ) {
-                                Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
-                            }
-                        }
+                        Text(if (stoppingEmulatorSerial == device.serial) "Stopping" else "Stop")
                     }
                 }
             }
@@ -618,53 +556,21 @@ private fun AndroidDevicesTab(
             }
             items(stoppedAvds, key = { it.name }) { avd ->
                 val runningDevice = avdRunningDevice(avd)
-                Row(
-                    Modifier.fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                val isRunning = runningDevice != null || avd.running
+                VirtualDeviceRow(
+                    name = avd.name,
+                    subtitle = listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" },
+                    detail = avd.graphicsBackend?.let { backend ->
+                        listOfNotNull(
+                            "Graphics: $backend",
+                            avd.graphicsRenderer,
+                            "software renderer".takeIf { avd.graphicsSoftwareRendered },
+                        ).joinToString(" · ")
+                    },
+                    statusLabel = if (isRunning) "running" else "stopped",
+                    statusColor = if (isRunning) Green else TextSecondary,
+                    typeLabel = avd.deviceType.name.lowercase(),
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(avd.name, color = TextPrimary, fontWeight = FontWeight.Bold)
-                        Text(
-                            listOfNotNull(avd.target, avd.abi, avd.path).joinToString(" · ").ifBlank { "AVD" },
-                            color = TextSecondary,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        avd.graphicsBackend?.let { backend ->
-                            Text(
-                                listOfNotNull(
-                                    "Graphics: $backend",
-                                    avd.graphicsRenderer,
-                                    "software renderer".takeIf { avd.graphicsSoftwareRendered },
-                                ).joinToString(" · "),
-                                color = TextSecondary,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    Text(
-                        if (runningDevice != null || avd.running) "running" else "stopped",
-                        color = if (runningDevice != null || avd.running) Green else TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                    )
-                    Text(
-                        avd.deviceType.name.lowercase(),
-                        color = TextSecondary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        modifier = Modifier.width(80.dp),
-                    )
                     OutlinedButton(
                         onClick = {
                             runningDevice?.let {
@@ -831,6 +737,34 @@ private fun IosDevicesTab(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (connectedTargets.isNotEmpty()) {
+            item {
+                Text(
+                    "Connected devices",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            items(connectedTargets, key = { it.udid }) { target ->
+                IosConnectedTargetRow(
+                    target = target,
+                    starting = startingName == target.displayName,
+                    onBoot = { onBoot(target) },
+                    onShutdown = { onShutdown(target) },
+                    onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
+                    onLive = { onLive(target.udid) },
+                )
+            }
+        }
+        item {
+            Text(
+                "Simulators",
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(top = if (connectedTargets.isNotEmpty()) 8.dp else 0.dp),
+            )
+        }
         if (startStatus.isNotBlank()) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -846,24 +780,6 @@ private fun IosDevicesTab(
                 }
             }
         }
-        if (connectedTargets.isNotEmpty()) {
-            item {
-                Text("Connected devices", color = TextPrimary, fontWeight = FontWeight.Bold)
-            }
-            items(connectedTargets, key = { it.udid }) { target ->
-                IosTargetRow(
-                    target = target,
-                    starting = startingName == target.displayName,
-                    onBoot = { onBoot(target) },
-                    onShutdown = { onShutdown(target) },
-                    onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
-                    onLive = { onLive(target.udid) },
-                )
-            }
-        }
-        item {
-            Text("Simulators", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = if (connectedTargets.isNotEmpty()) 8.dp else 0.dp))
-        }
         if (stoppedSimulators.isEmpty()) {
             item {
                 Text(
@@ -878,7 +794,7 @@ private fun IosDevicesTab(
             }
         } else {
             items(stoppedSimulators, key = { it.udid }) { target ->
-                IosTargetRow(
+                IosSimulatorRow(
                     target = target,
                     starting = startingName == target.displayName,
                     onBoot = { onBoot(target) },
@@ -892,7 +808,7 @@ private fun IosDevicesTab(
 }
 
 @Composable
-private fun IosTargetRow(
+private fun IosConnectedTargetRow(
     target: IosTarget,
     starting: Boolean,
     onBoot: () -> Unit,
@@ -902,56 +818,18 @@ private fun IosTargetRow(
 ) {
     val booted = target.state == IosTargetState.Booted
     val liveReady = target.isLiveReady
-    val statusLabel = when {
-        target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> "network only"
-        target.kind == IosTargetKind.Physical -> null
-        target.state == IosTargetState.Unavailable -> "unavailable"
-        booted -> "booted"
-        target.state == IosTargetState.Shutdown -> "shutdown"
-        else -> target.state.name.lowercase()
-    }
-    val statusColor = when {
-        liveReady -> Green
-        target.state == IosTargetState.Unavailable -> TextSecondary
-        target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
-        else -> TextSecondary
-    }
-    val rowShape = RoundedCornerShape(AndyRadius.Row)
-    Row(
-        Modifier.fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .heightIn(min = if (liveReady) 76.dp else 48.dp)
-            .background(
-                if (liveReady) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f),
-                rowShape,
-            )
-            .border(
-                1.dp,
-                if (liveReady) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f),
-                rowShape,
-            )
-            .padding(horizontal = if (liveReady) 16.dp else 12.dp, vertical = if (liveReady) 10.dp else 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    val statusLabel = iosTargetStatusLabel(target)
+    val statusColor = iosTargetStatusColor(target)
+    ConnectedDeviceRow(
+        title = target.displayName,
+        subtitle = target.udid,
+        isActive = liveReady,
+        statusLabel = statusLabel,
+        statusColor = statusColor,
+        compactDetails = listOfNotNull(target.runtime, target.model).joinToString(" · ").ifBlank { null },
+        apiLevel = target.runtime,
+        abi = target.model,
     ) {
-        if (liveReady) {
-            Box(Modifier.width(2.dp).fillMaxHeight().background(Green, RoundedCornerShape(AndyRadius.Control)))
-            Spacer(Modifier.width(18.dp))
-        }
-        Column(Modifier.weight(1f)) {
-            Text(target.displayName, color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(
-                listOfNotNull(target.runtime, target.model, target.udid).joinToString(" · "),
-                color = TextSecondary,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (statusLabel != null) {
-            StatusTag(statusLabel, statusColor)
-        }
         if (target.kind == IosTargetKind.Simulator) {
             when {
                 booted -> {
@@ -971,6 +849,61 @@ private fun IosTargetRow(
             Text("USB required", color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
         }
     }
+}
+
+@Composable
+private fun IosSimulatorRow(
+    target: IosTarget,
+    starting: Boolean,
+    onBoot: () -> Unit,
+    onShutdown: () -> Unit,
+    onOpenInSimulatorApp: () -> Unit,
+    onLive: () -> Unit,
+) {
+    val booted = target.state == IosTargetState.Booted
+    val statusLabel = iosTargetStatusLabel(target)
+    val statusColor = iosTargetStatusColor(target)
+    VirtualDeviceRow(
+        name = target.displayName,
+        subtitle = listOfNotNull(target.runtime, target.model, target.udid).joinToString(" · "),
+        statusLabel = statusLabel,
+        statusColor = statusColor,
+        typeLabel = iosTargetTypeLabel(target),
+    ) {
+        when {
+            booted -> {
+                OutlinedButton(onClick = onLive, enabled = !starting) { Text("Live") }
+                OutlinedButton(onClick = onOpenInSimulatorApp, enabled = !starting) { Text("Simulator.app") }
+                OutlinedButton(onClick = onShutdown, enabled = !starting) { Text("Shutdown") }
+            }
+            target.state == IosTargetState.Shutdown -> {
+                OutlinedButton(onClick = onBoot, enabled = !starting) {
+                    Text(if (starting) "Booting" else "Boot")
+                }
+            }
+        }
+    }
+}
+
+private fun iosTargetStatusLabel(target: IosTarget): String = when {
+    target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> "network only"
+    target.kind == IosTargetKind.Physical -> "online"
+    target.state == IosTargetState.Unavailable -> "unavailable"
+    target.state == IosTargetState.Booted -> "booted"
+    target.state == IosTargetState.Shutdown -> "shutdown"
+    else -> target.state.name.lowercase()
+}
+
+private fun iosTargetStatusColor(target: IosTarget): Color = when {
+    target.isLiveReady -> Green
+    target.state == IosTargetState.Unavailable -> TextSecondary
+    target.kind == IosTargetKind.Physical && target.transport != IosTransport.Usb -> Yellow
+    else -> TextSecondary
+}
+
+private fun iosTargetTypeLabel(target: IosTarget): String = when (target.kind) {
+    IosTargetKind.Simulator -> "simulator"
+    IosTargetKind.Physical -> target.model?.substringBefore(" ")?.lowercase() ?: "device"
 }
 
 private fun VirtualDevice.matchesFilter(filter: DeviceListFilter): Boolean = when (filter) {

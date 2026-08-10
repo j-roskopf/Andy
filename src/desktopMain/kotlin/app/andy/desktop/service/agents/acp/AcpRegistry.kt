@@ -12,7 +12,7 @@ object AcpRegistry {
     private val specs = mapOf(
         AgentKind.ClaudeCode to AcpLaunchSpec.Npx(
             packageName = "@agentclientprotocol/claude-agent-acp",
-            version = "0.64.2",
+            version = "0.65.0",
         ),
         AgentKind.Codex to AcpLaunchSpec.Npx(
             packageName = "@agentclientprotocol/codex-acp",

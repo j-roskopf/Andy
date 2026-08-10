@@ -65,7 +65,7 @@ class AgentEvidenceHandoffTest {
                 terminalMode = AgentTerminalMode.DirectPty,
                 evidenceRootDir = evidenceRoot,
             )
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
             }
 
@@ -79,8 +79,8 @@ class AgentEvidenceHandoffTest {
                     contextBundleIds = listOf(bundleId),
                 ),
             )
-            withTimeout(10_000) { while (adapter.launchedTasks.isEmpty()) delay(25) }
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) { while (adapter.launchedTasks.isEmpty()) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
                 while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
             }
 
@@ -159,16 +159,16 @@ class AgentEvidenceHandoffTest {
                 terminalMode = AgentTerminalMode.DirectPty,
                 evidenceRootDir = evidenceRoot,
             )
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
                 while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
             }
-            withTimeout(10_000) { while (service.tasks.value.isEmpty()) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) { while (service.tasks.value.isEmpty()) delay(25) }
 
             service.resume(finished.id, "check the network trace", contextBundleIds = listOf(bundleId))
 
             val copiedManifest = File(store.taskEvidenceDir(finished.id), "$bundleId/manifest.json")
-            withTimeout(10_000) { while (!copiedManifest.isFile) delay(25) }
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) { while (!copiedManifest.isFile) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
                 while (service.tasks.value.first { it.id == finished.id }.isActive) delay(25)
             }
 
@@ -292,7 +292,8 @@ private class EvidenceQueueTestAdapter : AgentCliAdapter {
         listOf(
             binary,
             "-c",
-            "while [ ! -f '${task.cwd}/.queue-evidence-ready' ]; do sleep 0.05; done",
+            // Relative to the launched cwd so path canonicalization cannot desync the ready file.
+            "while [ ! -f .queue-evidence-ready ]; do sleep 0.05; done",
         )
 
     override fun buildInteractiveResumeCommand(

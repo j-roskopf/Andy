@@ -129,7 +129,6 @@ internal fun buildSafeHighlightedAnnotatedString(
             val spanStyle = when (highlight) {
                 is ColorHighlight -> SpanStyle(color = Color(highlight.rgb).copy(alpha = 1f))
                 is BoldHighlight -> SpanStyle(fontWeight = FontWeight.Bold)
-                else -> continue
             }
             addStyle(spanStyle, start, end)
         }

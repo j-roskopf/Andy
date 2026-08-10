@@ -3,10 +3,28 @@ package app.andy.ui.agents
 import androidx.compose.ui.graphics.Color
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AgentTaskComposerTest {
+    @Test
+    fun orchestrationSkillsForceMcpAttach() {
+        assertTrue(isOrchestrationSkillName("andy-handoff"))
+        assertTrue(isOrchestrationSkillName("Andy-Loop"))
+        assertTrue(isOrchestrationSkillName("andy-advisor"))
+        assertTrue(isOrchestrationSkillName("andy-committee"))
+        assertFalse(isOrchestrationSkillName("andy-orchestration"))
+        assertFalse(isOrchestrationSkillName("grill-me"))
+        assertFalse(isOrchestrationSkillName("babysit"))
+
+        assertTrue(attachMcpAfterSkillSelection("andy-handoff", currentAttachMcp = false))
+        assertTrue(attachMcpAfterSkillSelection("andy-loop", currentAttachMcp = false))
+        assertTrue(attachMcpAfterSkillSelection("andy-advisor", currentAttachMcp = true))
+        assertFalse(attachMcpAfterSkillSelection("babysit", currentAttachMcp = false))
+        assertTrue(attachMcpAfterSkillSelection("unrelated", currentAttachMcp = true))
+    }
+
     @Test
     fun parsesOnlyFiniteNonNegativeBudgets() {
         assertEquals(2.5, " 2.50 ".toMaxBudgetUsd())

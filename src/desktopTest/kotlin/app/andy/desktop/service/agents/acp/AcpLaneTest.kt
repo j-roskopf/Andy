@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
 
 class AcpLaneTest {
     @Test
-    fun providerCommandFilterKeepsBuiltInsAndCurrentProviderSkills() {
+    fun providerCommandFilterKeepsForeignSkillsOnly() {
         val commands = listOf(
             AgentSlashCommand("brandkit", "shared skill"),
             AgentSlashCommand("review", "provider built-in"),

@@ -1,3 +1,5 @@
+@file:OptIn(com.agentclientprotocol.annotations.UnstableApi::class)
+
 package app.andy.desktop.service.agents.acp
 
 import app.andy.desktop.service.agents.AgentStatusSnapshot

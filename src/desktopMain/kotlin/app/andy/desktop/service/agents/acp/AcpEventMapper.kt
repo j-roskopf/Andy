@@ -1,3 +1,5 @@
+@file:OptIn(com.agentclientprotocol.annotations.UnstableApi::class)
+
 package app.andy.desktop.service.agents.acp
 
 import app.andy.desktop.service.agents.normalizedAgentCommandName
@@ -69,25 +71,23 @@ object AcpEventMapper {
         is SessionUpdate.CurrentModeUpdate -> AgentEvent.ModeChanged(atMillis, update.currentModeId.toString())
         is SessionUpdate.AvailableCommandsUpdate -> AgentEvent.AvailableCommands(
             atMillis,
-            filterProviderCommands(
-                commands = update.availableCommands.map { command ->
-                    AgentSlashCommand(
-                        name = command.name,
-                        description = command.description,
-                        inputHint = command.input?.toString(),
-                    )
-                },
-                knownSkillNames = knownSkillNames,
-                allowedSkillNames = allowedSkillNames,
-            ),
+            mapSlashCommands(update),
         )
         is SessionUpdate.UsageUpdate -> AgentEvent.ContextUsage(atMillis, update.used, update.size)
         is SessionUpdate.SessionInfoUpdate -> AgentEvent.Raw(atMillis, "session: ${update.title}")
         is SessionUpdate.ConfigOptionUpdate -> AgentEvent.Raw(atMillis, "config options updated: ${update.configOptions}")
         is SessionUpdate.PlanUpdateV2 -> planUpdateFromVariant(update.plan, atMillis)
         is SessionUpdate.UnknownSessionUpdate -> AgentEvent.Raw(atMillis, update.toString())
-        else -> AgentEvent.Raw(atMillis, update.toString())
     }
+
+    fun mapSlashCommands(update: SessionUpdate.AvailableCommandsUpdate): List<AgentSlashCommand> =
+        update.availableCommands.map { command ->
+            AgentSlashCommand(
+                name = command.name,
+                description = command.description,
+                inputHint = command.input?.toString(),
+            )
+        }
 
     /**
      * ACP command discovery is provider-scoped, but some providers also surface every skill they
@@ -216,7 +216,6 @@ object AcpEventMapper {
             val output = terminalOutput(terminalId)
             if (output.isNullOrEmpty()) "terminal $terminalId" else "terminal $terminalId\n$output"
         }
-        else -> toString()
     }
 
     /** Human-readable stand-in for a content block. Never dumps binary payloads (e.g. image base64) as text. */
@@ -226,7 +225,6 @@ object AcpEventMapper {
         is ContentBlock.Audio -> "[audio]"
         is ContentBlock.Resource -> "[resource]"
         is ContentBlock.ResourceLink -> "[resource: ${title ?: name}]"
-        else -> toString()
     }
 
     private fun JsonElement?.payloadText(): String? = this?.let { element ->

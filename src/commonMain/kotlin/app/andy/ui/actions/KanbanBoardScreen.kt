@@ -194,8 +194,7 @@ internal fun KanbanBoardScreen(services: AndyServices) {
         Row(
             Modifier
                 .fillMaxSize()
-                .horizontalScroll(rememberScrollState())
-                .padding(vertical = AndySpace.Space2),
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space4),
         ) {
             board.lanes.forEachIndexed { laneIndex, lane ->
@@ -377,7 +376,7 @@ private fun KanbanLaneColumn(
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
-            val insertionIndex = if (isDropTarget) dropTarget?.index else null
+            val insertionIndex = if (isDropTarget) dropTarget.index else null
             if (lane.cards.isEmpty() && insertionIndex == 0) {
                 KanbanInsertionIndicator()
             }
@@ -439,7 +438,10 @@ private fun KanbanLaneColumn(
 }
 
 @Composable
-internal fun KanbanAddLaneAction(onClick: () -> Unit) {
+internal fun KanbanAddLaneAction(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val textColor = when {
@@ -451,7 +453,7 @@ internal fun KanbanAddLaneAction(onClick: () -> Unit) {
         color = textColor,
         fontFamily = DisplayFont,
         fontSize = 12.sp,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(AndyRadius.Control))
             .hoverable(interactionSource)
             .clickable(onClick = onClick)

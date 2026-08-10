@@ -761,7 +761,8 @@ private class QueueTestAdapter : AgentCliAdapter {
         listOf(
             binary,
             "-c",
-            "while [ ! -f '${task.cwd}/.queue-test-ready' ]; do sleep 0.05; done",
+            // Relative to the launched cwd so path canonicalization cannot desync the ready file.
+            "while [ ! -f .queue-test-ready ]; do sleep 0.05; done",
         )
 
     override fun buildInteractiveResumeCommand(
