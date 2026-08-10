@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.yield
 import java.io.File
 
 /**
@@ -220,7 +221,15 @@ class AgentStatusScenarioTest {
         val session: ScenarioSession,
         val statuses: MutableList<AgentStatus>,
     ) {
-        suspend fun screen(text: String): Expect = Expect(this).also { session.emitBuffer(text) }
+        suspend fun screen(text: String): Expect {
+            session.emitBuffer(text)
+            // Tracker collects bufferSnapshots asynchronously. Yield so the scrape runs before
+            // awaitStatus can short-circuit on a stale status that already matches (e.g.
+            // suppressPrematureIdle Working → Perambulating Working must arm the turn).
+            yield()
+            delay(30)
+            return Expect(this)
+        }
         suspend fun osc(title: String = "", progress: String = "") {
             session.setOsc(title, progress)
         }

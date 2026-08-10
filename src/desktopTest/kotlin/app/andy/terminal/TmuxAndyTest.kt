@@ -575,14 +575,17 @@ class TmuxAndyTest {
         }
 
         val taskId = "launch-script-" + UUID.randomUUID().toString().take(8)
-        val script = File(System.getProperty("user.home"), ".andy/tmux-launch/${TmuxAndy.sessionName(taskId)}.sh")
+        val script = File(
+            System.getProperty("user.home"),
+            ".andy/tmux-launch/${TmuxAndy.SERVER}/${TmuxAndy.sessionName(taskId)}.sh",
+        )
         try {
             TmuxAndy.newSession(
                 taskId = taskId,
                 cwd = System.getProperty("user.dir"),
                 argv = listOf("/bin/sh", "-c", "sleep 30"),
             )
-            assertTrue(script.isFile, "launch script must exist while session is running")
+            assertTrue(script.isFile, "launch script must exist while session is running at ${script.absolutePath}")
             val perms = java.nio.file.Files.getPosixFilePermissions(script.toPath())
             assertEquals(
                 setOf(

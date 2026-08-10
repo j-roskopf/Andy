@@ -353,7 +353,10 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun cursorStreamingProseKeepsTrackerWorking() = runBlocking {
+    fun cursorStreamingProseWithoutChromeSettlesIdleFallbackDone() = runBlocking {
+        // Cursor has no prose→Working rule (see cursorBodyTextWithoutWorkingRuleIsIdleFallbackDone).
+        // The tracker defaults to Working until the first scrape; wait for idle-fallback Done
+        // rather than racing the default Working snapshot.
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val artifactDir = File.createTempFile("andy-status", null).also { it.delete(); it.mkdirs() }
@@ -368,7 +371,7 @@ class AgentStatusTrackerTest {
             )
             tracker.start()
             session.emitBuffer("Thinking about the change…\nreading AgentStatusTracker.kt\n")
-            tracker.awaitStatus(AgentStatus.Working)
+            tracker.awaitStatus(AgentStatus.Done)
             assertFalse(tracker.status.value.confident)
             tracker.close()
         } finally {

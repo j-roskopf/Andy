@@ -280,8 +280,12 @@ object TmuxAndy {
         }
     }
 
+    /**
+     * Per-server directory so parallel desktopTest forks (`andy-test-wN`) cannot wipe each
+     * other's launch scripts when one worker calls [killServer].
+     */
     private fun launchScriptDir(): File =
-        File(System.getProperty("user.home"), ".andy/tmux-launch")
+        File(System.getProperty("user.home"), ".andy/tmux-launch/$SERVER")
 
     private fun launchScriptFile(sessionName: String): File =
         File(launchScriptDir(), "$sessionName.sh")
