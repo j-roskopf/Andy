@@ -257,7 +257,11 @@ class NestedWorktreeServiceTest {
             val parent = harness.startWorktreeTask(title = "parent")
             val parentPath = assertNotNull(parent.worktreePath)
             // Remove the on-disk worktree while leaving the Andy task record (and branch) intact.
-            git(harness.repo, "worktree", "remove", "--force", parentPath)
+            // Linux CI occasionally leaves residue after `git worktree remove --force` ("Directory not
+            // empty" or a surviving directory); force-delete + prune keeps the setup deterministic.
+            runCatching { git(harness.repo, "worktree", "remove", "--force", parentPath) }
+            File(parentPath).deleteRecursively()
+            git(harness.repo, "worktree", "prune")
             assertFalse(File(parentPath).exists())
             assertTrue(harness.service.tasks.value.any { it.id == parent.id && it.branchName != null })
 

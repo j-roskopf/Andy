@@ -8,31 +8,33 @@ import app.andy.model.HostSearchMatchKind
 import app.andy.model.HostSearchMode
 import app.andy.model.HostSearchResult
 import app.andy.service.HostFileService
+import io.methvin.watcher.DirectoryChangeEvent
+import io.methvin.watcher.DirectoryWatcher
+import io.methvin.watcher.visitor.FileTreeVisitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
-import java.nio.file.FileSystems
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
-import java.nio.file.StandardWatchEventKinds.ENTRY_CREATE
-import java.nio.file.StandardWatchEventKinds.ENTRY_DELETE
-import java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY
-import java.nio.file.WatchKey
-import java.nio.file.WatchService
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Base64
@@ -40,7 +42,6 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.exists
 import kotlin.io.path.extension
 import kotlin.io.path.isDirectory
-import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
 
 class DesktopHostFileService(
@@ -108,7 +109,7 @@ class DesktopHostFileService(
             indexer.cancel()
             watchers.remove(normalized)?.close()
         }
-    }
+    }.flowOn(Dispatchers.IO)
 
     override suspend fun search(query: String, mode: HostSearchMode, roots: List<String>, limit: Int): List<HostSearchResult> = withContext(Dispatchers.IO) {
         val terms = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
@@ -132,9 +133,10 @@ class DesktopHostFileService(
         val entries = mutableMapOf<String, IndexedFile>()
         var bytes = 0L
         rootFile.toPath().walkIndexedFiles { path ->
-            val file = path.toFile()
+            val file = path.toStableAbsolutePath().toFile()
             bytes += file.length()
-            entries[file.absolutePath] = indexFile(root, file)
+            val indexed = indexFile(root, file)
+            entries[indexed.path] = indexed
             if (entries.size % 250 == 0) {
                 status.value = HostIndexStatus(root, entries.size, bytes, indexing = true, message = "Indexing ${entries.size} files", updatedAtMillis = System.currentTimeMillis())
             }
@@ -168,9 +170,10 @@ class DesktopHostFileService(
     }
 
     private fun indexFile(root: String, file: File): IndexedFile {
-        val relative = file.toPath().let { path ->
-            runCatching { File(root).toPath().relativize(path).toString() }.getOrDefault(file.name)
-        }
+        val stablePath = file.toPath().toStableAbsolutePath()
+        val relative = runCatching {
+            File(root).toPath().toStableAbsolutePath().relativize(stablePath).toString()
+        }.getOrDefault(file.name)
         val textLines = runCatching {
             val bytes = file.readBytes()
             if (bytes.size > MaxIndexedBytes || looksBinary(bytes)) emptyList() else bytes.toString(detectCharset(bytes)).lineSequence()
@@ -181,7 +184,7 @@ class DesktopHostFileService(
         }.getOrDefault(emptyList())
         val name = file.name
         return IndexedFile(
-            path = file.absolutePath,
+            path = stablePath.toString(),
             relativePath = relative,
             name = name,
             modifiedMillis = file.lastModified(),
@@ -198,47 +201,67 @@ class DesktopHostFileService(
         watchers[root]?.close()
         val rootPath = File(root).toPath()
         if (!rootPath.isDirectory()) return
-        val watchService = FileSystems.getDefault().newWatchService()
-        val keys = ConcurrentHashMap<WatchKey, Path>()
-        fun register(dir: Path) {
-            runCatching {
-                keys[dir.register(watchService, ENTRY_CREATE, ENTRY_MODIFY, ENTRY_DELETE)] = dir
-            }
-        }
-        rootPath.walkDirectories { register(it) }
-        val job = scope.launch {
-            while (true) {
-                val key = runCatching { watchService.take() }.getOrNull() ?: break
-                val dir = keys[key]
-                val changed = key.pollEvents().mapNotNull { event -> dir?.resolve(event.context() as Path) }
-                key.reset()
-                delay(350)
-                changed.forEach { path ->
-                    if (path.isDirectory() && !shouldExclude(path)) path.walkDirectories { register(it) }
-                    refreshPath(root, path)
+        val events = Channel<Path>(Channel.UNLIMITED)
+        val watcher = runCatching {
+            DirectoryWatcher.builder()
+                .paths(listOf(rootPath))
+                // Skip hashing: init otherwise reads every file under the root on the caller thread.
+                .fileHashing(false)
+                // Prune excluded trees during registration (library has no include/exclude API).
+                .fileTreeVisitor(ExcludingFileTreeVisitor)
+                .listener { event ->
+                    if (event.eventType() == DirectoryChangeEvent.EventType.OVERFLOW) return@listener
+                    val path = event.path() ?: return@listener
+                    if (shouldExclude(path)) return@listener
+                    events.trySend(path)
                 }
+                .build()
+        }.getOrNull() ?: return
+        // watchAsync() blocks until registration finishes — keep that off the UI collector thread.
+        val job = scope.launch {
+            val watchFuture = runCatching { watcher.watchAsync() }.getOrElse {
+                runCatching { watcher.close() }
+                return@launch
+            }
+            try {
+                while (isActive) {
+                    val batch = linkedSetOf(events.receive())
+                    delay(350)
+                    while (true) {
+                        val next = events.tryReceive().getOrNull() ?: break
+                        batch.add(next)
+                    }
+                    batch.forEach { refreshPath(root, it) }
+                }
+            } finally {
+                events.close()
+                watchFuture.cancel(true)
             }
         }
-        watchers[root] = WatchHandle(watchService, job)
+        watchers[root] = WatchHandle(watcher, job)
     }
 
     private fun refreshPath(root: String, path: Path) {
         val index = roots[root] ?: loadIndex(root)
-        val file = path.toFile()
-        if (!file.exists() || shouldExclude(path)) {
-            index.files.remove(file.absolutePath)
-            removeIndexedDescendants(index, path)
+        // FSEvents (via directory-watcher) often yields /private/var/... while File.absolutePath is /var/...
+        val normalized = path.toStableAbsolutePath()
+        val file = normalized.toFile()
+        val key = normalized.toString()
+        if (!file.exists() || shouldExclude(normalized)) {
+            index.files.remove(key)
+            removeIndexedDescendants(index, normalized)
         } else if (file.isFile) {
-            index.files[file.absolutePath] = indexFile(root, file)
+            index.files[key] = indexFile(root, file)
         }
         saveIndex(index)
         rootStatus(root).value = HostIndexStatus(root, index.files.size, index.files.values.sumOf { it.sizeBytes }, indexing = false, message = "Updated ${file.name}", updatedAtMillis = System.currentTimeMillis())
     }
 
     private fun refreshFileInIndexes(path: Path) {
+        val normalized = path.toStableAbsolutePath()
         roots.keys.forEach { root ->
-            if (path.toAbsolutePath().normalize().startsWith(File(root).toPath().toAbsolutePath().normalize())) {
-                refreshPath(root, path)
+            if (normalized.startsWith(File(root).toPath().toStableAbsolutePath())) {
+                refreshPath(root, normalized)
             }
         }
     }
@@ -270,9 +293,9 @@ class DesktopHostFileService(
     }
 
     private fun removeIndexedDescendants(index: RootIndex, path: Path) {
-        val normalized = path.toAbsolutePath().normalize()
+        val normalized = path.toStableAbsolutePath()
         index.files.keys.removeIf { indexedPath ->
-            Path.of(indexedPath).toAbsolutePath().normalize().startsWith(normalized)
+            Path.of(indexedPath).toStableAbsolutePath().startsWith(normalized)
         }
     }
 
@@ -342,10 +365,10 @@ class DesktopHostFileService(
 
     private data class IndexedLine(val lineNumber: Int, val text: String, val textLower: String)
 
-    private data class WatchHandle(val watchService: WatchService, val job: kotlinx.coroutines.Job) {
+    private data class WatchHandle(val watcher: DirectoryWatcher, val job: Job) {
         fun close() {
             job.cancel()
-            runCatching { watchService.close() }
+            runCatching { watcher.close() }
         }
     }
 
@@ -379,21 +402,60 @@ private fun Path.walkIndexedFiles(onFile: (Path) -> Unit) {
     })
 }
 
-private fun Path.walkDirectories(onDirectory: (Path) -> Unit) {
-    if (!exists()) return
-    Files.walkFileTree(this, object : SimpleFileVisitor<Path>() {
-        override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
-            return if (dir != this@walkDirectories && dir.name in ExcludedNames) {
-                FileVisitResult.SKIP_SUBTREE
-            } else {
-                onDirectory(dir)
-                FileVisitResult.CONTINUE
+private fun shouldExclude(path: Path): Boolean = path.asSequence().any { it.name in ExcludedNames }
+
+/**
+ * DirectoryWatcher registration visitor that skips the same excluded directory names as indexing.
+ * Without this, watchAsync() walks (and previously hashed) node_modules/.git/build/etc.
+ */
+private object ExcludingFileTreeVisitor : FileTreeVisitor {
+    override fun recursiveVisitFiles(
+        file: Path,
+        onDirectory: FileTreeVisitor.Callback,
+        onFile: FileTreeVisitor.Callback,
+    ) {
+        if (!file.exists()) return
+        Files.walkFileTree(file, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                return if (dir != file && dir.name in ExcludedNames) {
+                    FileVisitResult.SKIP_SUBTREE
+                } else {
+                    onDirectory.call(dir)
+                    FileVisitResult.CONTINUE
+                }
             }
-        }
-    })
+
+            override fun visitFile(visited: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (visited.name !in ExcludedNames) onFile.call(visited)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(visited: Path, exc: IOException): FileVisitResult =
+                FileVisitResult.CONTINUE
+        })
+    }
 }
 
-private fun shouldExclude(path: Path): Boolean = path.asSequence().any { it.name in ExcludedNames }
+private val isMacOs: Boolean =
+    System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
+
+/** macOS keeps /tmp, /var, and /etc as symlinks into /private; FSEvents reports the /private form. */
+private val MacOsPrivateAliasPrefixes = listOf("/private/tmp", "/private/var", "/private/etc")
+
+/**
+ * Collapse macOS FSEvents `/private/{tmp,var,etc}` paths to the symlink form so watcher events
+ * match indexed keys. Leaves real `/private/...` paths alone on Linux and for non-alias macOS paths.
+ */
+private fun Path.toStableAbsolutePath(): Path {
+    val absolute = toAbsolutePath().normalize().toString()
+    if (!isMacOs) return Path.of(absolute)
+    for (prefix in MacOsPrivateAliasPrefixes) {
+        if (absolute == prefix || absolute.startsWith("$prefix/")) {
+            return Path.of(absolute.removePrefix("/private"))
+        }
+    }
+    return Path.of(absolute)
+}
 
 private fun moveReplacing(source: Path, target: Path) {
     try {
@@ -423,7 +485,13 @@ private fun languageHintForFile(file: File): String {
     }
 }
 
-private fun normalizeRoot(root: String): String = File(root.ifBlank { System.getProperty("user.home") }).absoluteFile.normalize().absolutePath
+private fun normalizeRoot(root: String): String =
+    File(root.ifBlank { System.getProperty("user.home") })
+        .absoluteFile
+        .normalize()
+        .toPath()
+        .toStableAbsolutePath()
+        .toString()
 
 private fun tokenize(value: String): Set<String> = value.lowercase()
     .split(Regex("[^a-z0-9_.$-]+|(?=[A-Z])"))
