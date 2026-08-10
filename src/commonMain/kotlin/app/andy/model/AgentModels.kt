@@ -718,6 +718,11 @@ data class AgentSkill(
     val description: String,
     /** Absolute path to the skill's SKILL.md, so the agent and chat link use the same source. */
     val path: String,
+    /**
+     * When false, the skill is kept for provider reference loading but omitted from Andy's
+     * composer slash menu (honors SKILL.md `user-invocable: false`).
+     */
+    val userInvocable: Boolean = true,
 )
 
 /** A command implemented by Andy rather than forwarded as literal prompt text to a provider CLI. */
@@ -760,9 +765,11 @@ fun composerSkillsForSlashMenu(
     commands: List<AgentNativeSlashCommand>,
 ): List<AgentSkill> {
     if (skills.isEmpty()) return emptyList()
-    if (commands.isEmpty()) return skills
+    val invocable = skills.filter { it.userInvocable }
+    if (invocable.isEmpty()) return emptyList()
+    if (commands.isEmpty()) return invocable
     val commandNames = commands.mapTo(linkedSetOf()) { it.name.normalizedComposerSlashName() }
-    return skills.filter { it.name.normalizedComposerSlashName() !in commandNames }
+    return invocable.filter { it.name.normalizedComposerSlashName() !in commandNames }
 }
 
 internal fun String.normalizedComposerSlashName(): String =

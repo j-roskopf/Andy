@@ -55,7 +55,9 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -91,6 +93,10 @@ import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
+import app.andy.ui.components.ChatVoiceDictationButton
+import app.andy.ui.components.KeyCombo
+import app.andy.ui.components.onVoiceDictationShortcut
+import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
@@ -100,6 +106,7 @@ import app.andy.ui.components.StatusTag
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
 import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
@@ -141,7 +148,7 @@ internal fun AgentTaskDetail(
     LaunchedEffect(task.agent, skillDirectory) {
         services.agentRuns.refreshSlashCommands(task.agent, skillDirectory)
     }
-    var followUp by remember(task.id) { mutableStateOf("") }
+    var followUpValue by remember(task.id) { mutableStateOf(TextFieldValue("")) }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
     var changeSummary by remember(task.id) { mutableStateOf<AgentChangeSummary?>(null) }
@@ -155,6 +162,16 @@ internal fun AgentTaskDetail(
     var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
+    var voiceError by remember(task.id) { mutableStateOf<String?>(null) }
+    val voiceController = rememberVoiceDictationController(
+        voice = services.voiceDictation,
+        onText = { spoken ->
+            voiceError = null
+            followUpValue = insertTextAtCursor(followUpValue, spoken)
+        },
+        onError = { voiceError = it },
+    )
+    val voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
     var scrollToLatestRequest by remember(task.id) { mutableStateOf(0) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
@@ -199,6 +216,7 @@ internal fun AgentTaskDetail(
     } else {
         supportsResume && showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
     }
+    val followUp = followUpValue.text
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
     val queueMode = workspaceState.agentMessageDeliveryMode == AgentMessageDeliveryMode.Queue
     val slashCommand = findActiveSlashCommand(followUp)
@@ -264,13 +282,21 @@ internal fun AgentTaskDetail(
 
     fun selectSkill(skill: AgentSkill) {
         val command = findActiveSlashCommand(followUp) ?: return
-        followUp = followUp.replaceRange(command.start, command.end, "/${skill.name} ")
+        val insertion = "/${skill.name} "
+        followUpValue = TextFieldValue(
+            text = followUp.replaceRange(command.start, command.end, insertion),
+            selection = TextRange(command.start + insertion.length),
+        )
         skillMenuDismissed = true
     }
 
     fun selectCommand(command: AgentNativeSlashCommand) {
         val slash = findActiveSlashCommand(followUp) ?: return
-        followUp = followUp.replaceRange(slash.start, slash.end, "/${command.name} ")
+        val insertion = "/${command.name} "
+        followUpValue = TextFieldValue(
+            text = followUp.replaceRange(slash.start, slash.end, insertion),
+            selection = TextRange(slash.start + insertion.length),
+        )
         skillMenuDismissed = true
     }
 
@@ -291,7 +317,7 @@ internal fun AgentTaskDetail(
             services.agentRuns.updateGoal(task.id, goalCommand.goal)
             val remainder = goalCommand.remainingPrompt
             if (remainder.isBlank()) {
-                followUp = ""
+                followUpValue = TextFieldValue("")
                 followUpImagePaths = emptyList()
                 return
             }
@@ -299,7 +325,7 @@ internal fun AgentTaskDetail(
         } else {
             sendOrQueue(followUp.trim(), selectedSkills)
         }
-        followUp = ""
+        followUpValue = TextFieldValue("")
         followUpImagePaths = emptyList()
         scrollToLatestRequest++
     }
@@ -571,7 +597,7 @@ internal fun AgentTaskDetail(
 
         if (showFollowUpComposer) {
             PanelCard(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
                 background = AndyColors.SurfaceRaised,
                 borderColor = if (followUpImageDragActive) Cyan else null,
                 contentPadding = PaddingValues(16.dp),
@@ -644,9 +670,9 @@ internal fun AgentTaskDetail(
                     }
                     Box(Modifier.fillMaxWidth()) {
                         TextField(
-                            followUp,
+                            followUpValue,
                             {
-                                followUp = it
+                                followUpValue = it
                                 skillMenuDismissed = false
                             },
                             singleLine = false,
@@ -654,6 +680,7 @@ internal fun AgentTaskDetail(
                             maxLines = 7,
                             modifier = Modifier.fillMaxWidth()
                                 .heightIn(min = 94.dp, max = 180.dp)
+                                .onVoiceDictationShortcut(voiceShortcut, voiceController)
                                 .onPreviewKeyEvent { event ->
                                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                     if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
@@ -742,7 +769,7 @@ internal fun AgentTaskDetail(
                             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 selectedSkills.forEach { skill ->
                                     FilterPill("/${skill.name} ×", true, Cyan) {
-                                        followUp = followUp.removeSelectedSkill(skill)
+                                        followUpValue = TextFieldValue(followUp.removeSelectedSkill(skill))
                                     }
                                 }
                             }
@@ -820,8 +847,12 @@ internal fun AgentTaskDetail(
                         Text(if (copiedHint) "opened" else "terminal", fontSize = 11.sp)
                     }
                     if (task.userInputRequest == null) {
+                        ChatVoiceDictationButton(controller = voiceController)
                         ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
                     }
+                }
+                voiceError?.let { err ->
+                    Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
                 }
             }
         }

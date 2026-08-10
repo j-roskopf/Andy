@@ -35,4 +35,16 @@ class MergedComposerSlashCommandsTest {
             composerSkillsForSlashMenu(skills, commands).map { it.name },
         )
     }
+
+    @Test
+    fun slashMenuHidesNonUserInvocableSkills() {
+        val skills = listOf(
+            AgentSkill("andy-orchestration", "reference", "/skills/andy-orchestration/SKILL.md", userInvocable = false),
+            AgentSkill("andy-handoff", "handoff", "/skills/andy-handoff/SKILL.md", userInvocable = true),
+        )
+        assertEquals(
+            listOf("andy-handoff"),
+            composerSkillsForSlashMenu(skills, commands = emptyList()).map { it.name },
+        )
+    }
 }

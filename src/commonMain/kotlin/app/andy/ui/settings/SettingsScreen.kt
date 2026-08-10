@@ -33,6 +33,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,7 +49,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -74,8 +86,12 @@ import app.andy.service.McpServerService
 import app.andy.service.ProxyService
 import app.andy.service.RetentionSweepResult
 import app.andy.service.UnavailableAgentRetentionService
+import app.andy.service.UnavailableVoiceSetupService
+import app.andy.service.VoiceSetupService
+import app.andy.service.VoiceSetupState
 import app.andy.service.WebServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
@@ -178,6 +194,9 @@ internal fun SettingsScreen(
                     AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
                 }
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
+                if (services.voiceSetup !is UnavailableVoiceSetupService) {
+                    VoiceDictationPanel(services.voiceSetup, workspaceState, onUpdateWorkspace)
+                }
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
                 workspaceState = workspaceState,
@@ -600,10 +619,11 @@ private fun SettingsChoicePill(
     selected: Boolean,
     contentDescription: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(AndyRadius.Control)
     Box(
-        Modifier
+        modifier
             .height(AndyLayout.ControlHeightSm)
             .background(
                 if (selected) AndyColors.SurfaceSelected else Color.Transparent,
@@ -969,6 +989,135 @@ private fun AgentNotificationsPanel(
             )
         }
     }
+}
+
+@Composable
+private fun VoiceDictationPanel(
+    voiceSetup: VoiceSetupService,
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val state by voiceSetup.state.collectAsState()
+    val enabled = state !is VoiceSetupState.NotEnabled
+    val shortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Voice dictation",
+            description = "Push-to-talk mic in the new-task and follow-up composers. Downloads a local whisper.cpp binary and English model on first enable (~150 MB).",
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(
+                    checked = enabled,
+                    onCheckedChange = { checked ->
+                        if (checked) scope.launch { voiceSetup.enable() }
+                        else voiceSetup.disable()
+                    },
+                )
+                Text("Voice dictation", color = TextPrimary, fontSize = 13.sp)
+            }
+            when (val s = state) {
+                is VoiceSetupState.Downloading -> {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Downloading ${s.what}…", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+                        LinearProgressIndicator(
+                            progress = { s.progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                        )
+                    }
+                }
+                is VoiceSetupState.Failed -> {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("${s.what}: ${s.message}", color = Rust, fontSize = 12.sp, fontFamily = MonoFont)
+                        TextButton(onClick = { scope.launch { voiceSetup.enable() } }) {
+                            Text("Retry")
+                        }
+                    }
+                }
+                VoiceSetupState.Ready -> {
+                    Text("Ready", color = Green, fontSize = 12.sp, fontFamily = MonoFont)
+                }
+                VoiceSetupState.NotEnabled -> {
+                    Text("Off", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+                }
+            }
+        }
+        VoiceDictationShortcutRow(
+            shortcut = shortcut,
+            onChange = { combo -> onUpdateWorkspace { it.copy(voiceDictationShortcut = combo?.encode()) } },
+        )
+    }
+}
+
+@Composable
+internal fun VoiceDictationShortcutRow(
+    shortcut: KeyCombo?,
+    onChange: (KeyCombo?) -> Unit,
+) {
+    var capturing by remember { mutableStateOf(false) }
+    var heldModifiers by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(capturing) {
+        if (capturing) focusRequester.requestFocus() else heldModifiers = ""
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Toggle mic shortcut", color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        SettingsChoicePill(
+            label = when {
+                capturing && heldModifiers.isNotEmpty() -> "$heldModifiers…"
+                capturing -> "press keys…"
+                shortcut != null -> shortcut.label()
+                else -> "not set"
+            },
+            selected = shortcut != null || capturing,
+            contentDescription = "Voice dictation shortcut",
+            onClick = { capturing = true },
+            modifier = Modifier
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { event ->
+                    if (!capturing) return@onPreviewKeyEvent false
+                    if (event.type == KeyEventType.KeyUp) {
+                        heldModifiers = modifierPrefix(event)
+                        return@onPreviewKeyEvent true
+                    }
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    if (event.key == Key.Escape) {
+                        capturing = false
+                        return@onPreviewKeyEvent true
+                    }
+                    val combo = KeyCombo.fromKeyDown(event)
+                    if (combo == null) {
+                        heldModifiers = modifierPrefix(event)
+                        return@onPreviewKeyEvent true
+                    }
+                    onChange(combo)
+                    capturing = false
+                    true
+                },
+        )
+        if (shortcut != null) {
+            TextButton(onClick = { onChange(null) }) { Text("clear") }
+        }
+    }
+}
+
+private fun modifierPrefix(event: androidx.compose.ui.input.key.KeyEvent): String = buildString {
+    if (event.isCtrlPressed) append("Ctrl+")
+    if (event.isAltPressed) append("Alt+")
+    if (event.isShiftPressed) append("Shift+")
+    if (event.isMetaPressed) append("Cmd+")
 }
 
 @Composable

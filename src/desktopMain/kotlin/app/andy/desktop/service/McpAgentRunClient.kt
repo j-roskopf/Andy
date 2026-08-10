@@ -301,6 +301,7 @@ class McpAgentRunClient(
             branchName = obj.string("branchName")?.takeIf { it.isNotBlank() },
             ownsWorktree = obj.bool("ownsWorktree"),
             parentWorktreeTaskId = obj.string("parentWorktreeTaskId")?.takeIf { it.isNotBlank() },
+            attachAndyMcp = obj.bool("attachAndyMcp"),
         )
     }
 
@@ -629,7 +630,13 @@ class McpAgentRunClient(
                 draft.projectId?.let { put("projectId", JsonPrimitive(it)) }
                 draft.directory?.let { put("directory", JsonPrimitive(it)) }
                 put("useWorktree", JsonPrimitive(draft.useWorktree))
+                draft.existingWorktreePath?.takeIf { it.isNotBlank() }?.let {
+                    put("existingWorktreePath", JsonPrimitive(it))
+                }
                 draft.baseWorktreeTaskId?.let { put("baseWorktreeTaskId", JsonPrimitive(it)) }
+                put("attachAndyMcp", JsonPrimitive(draft.attachAndyMcp))
+                put("autonomy", JsonPrimitive(draft.autonomy.name))
+                draft.model?.takeIf { it.isNotBlank() }?.let { put("model", JsonPrimitive(it)) }
                 // Managed evidence bundle ids only (§4) — never a local filesystem path.
                 if (draft.contextBundleIds.isNotEmpty()) {
                     put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
@@ -649,6 +656,7 @@ class McpAgentRunClient(
                 agent = draft.agent,
                 projectId = draft.projectId,
                 cwd = draft.directory,
+                attachAndyMcp = draft.attachAndyMcp,
                 status = app.andy.model.AgentStatus.Working,
                 createdAtMillis = System.currentTimeMillis(),
             )

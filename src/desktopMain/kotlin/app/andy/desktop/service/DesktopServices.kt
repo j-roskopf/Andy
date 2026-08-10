@@ -28,6 +28,8 @@ import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.dhu.DesktopDhuService
 import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
+import app.andy.desktop.service.voice.DesktopVoiceDictationService
+import app.andy.desktop.service.voice.DesktopVoiceSetupService
 import app.andy.model.AgentKind
 import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
@@ -45,6 +47,11 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 
 fun createDesktopServices(): AndyServices = createDesktopRuntime().services
+
+private fun createDesktopVoicePair(): Pair<DesktopVoiceSetupService, DesktopVoiceDictationService> {
+    val setup = DesktopVoiceSetupService()
+    return setup to DesktopVoiceDictationService(setup)
+}
 
 data class DesktopRuntime(
     val services: AndyServices,
@@ -192,6 +199,7 @@ fun createDaemonRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     ).also { it.start() }
     val kanban = DesktopKanbanService(agentTaskStore)
+    val (voiceSetup, voiceDictation) = createDesktopVoicePair()
 
     val services = AndyServices(
         devices = devices,
@@ -228,6 +236,8 @@ fun createDaemonRuntime(
         projectWorkflows = agentRuns,
         kanban = kanban,
         notificationSounds = DesktopNotificationSoundPlayer(),
+        voiceSetup = voiceSetup,
+        voiceDictation = voiceDictation,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -410,6 +420,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     // Do not open a second writer here — use UnavailableKanbanService until the daemon
     // exposes kanban over the socket (same constraint as localAttach's per-pid DB).
     val kanban = UnavailableKanbanService
+    val (voiceSetup, voiceDictation) = createDesktopVoicePair()
 
     updatesScope.launch {
         store.state
@@ -455,6 +466,8 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         projectWorkflows = remoteAgents,
         kanban = kanban,
         notificationSounds = DesktopNotificationSoundPlayer(),
+        voiceSetup = voiceSetup,
+        voiceDictation = voiceDictation,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -577,6 +590,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     ).also { it.start() }
     val kanban = DesktopKanbanService(agentTaskStore)
+    val (voiceSetup, voiceDictation) = createDesktopVoicePair()
 
     // Live sessions pick up terminal theme/font changes from Settings.
     updatesScope.launch {
@@ -640,6 +654,8 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         projectWorkflows = agentRuns,
         kanban = kanban,
         notificationSounds = DesktopNotificationSoundPlayer(),
+        voiceSetup = voiceSetup,
+        voiceDictation = voiceDictation,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),

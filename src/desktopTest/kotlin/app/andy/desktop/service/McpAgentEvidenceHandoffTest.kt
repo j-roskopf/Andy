@@ -79,6 +79,53 @@ class McpAgentEvidenceHandoffTest {
     }
 
     @Test
+    fun chatStartForwardsAttachAndyMcpThroughDaemonClient() = runBlocking {
+        withMcpHarness { fakeAgentRuns, client, _ ->
+            client.createAndStart(
+                AgentTaskDraft(
+                    title = "orchestrate",
+                    prompt = "/andy-handoff do the thing",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    attachAndyMcp = true,
+                ),
+            )
+            withTimeout(10_000) { while (fakeAgentRuns.startCalls.isEmpty()) delay(25) }
+            val call = fakeAgentRuns.startCalls.single()
+            assertTrue(call.draft.attachAndyMcp, "attachAndyMcp must reach the daemon-side createAndStart")
+            assertTrue(
+                fakeAgentRuns.tasks.value.single().attachAndyMcp,
+                "created task must retain attachAndyMcp for MCP attach on launch",
+            )
+        }
+    }
+
+    @Test
+    fun chatStartForwardsExistingWorktreePathThroughDaemonClient() = runBlocking {
+        withMcpHarness { fakeAgentRuns, client, _ ->
+            client.createAndStart(
+                AgentTaskDraft(
+                    title = "reuse wt",
+                    prompt = "/andy-handoff continue in worktree",
+                    agent = AgentKind.Codex,
+                    projectId = "proj-1",
+                    directory = "/tmp/project",
+                    useWorktree = true,
+                    existingWorktreePath = "/tmp/project/.andy-worktrees/x",
+                    attachAndyMcp = true,
+                    autonomy = app.andy.model.AgentAutonomy.ReadOnly,
+                ),
+            )
+            withTimeout(10_000) { while (fakeAgentRuns.startCalls.isEmpty()) delay(25) }
+            val draft = fakeAgentRuns.startCalls.single().draft
+            assertEquals("/tmp/project/.andy-worktrees/x", draft.existingWorktreePath)
+            assertEquals(app.andy.model.AgentAutonomy.ReadOnly, draft.autonomy)
+            // chat.start clears useWorktree when reuse path is present (create must not run).
+            assertFalse(draft.useWorktree)
+        }
+    }
+
+    @Test
     fun chatResumeForwardsContextBundleIdsToTheAgentRunService() = runBlocking {
         withMcpHarness { fakeAgentRuns, client, _ ->
             client.resume("task-1", "check the logs", contextBundleIds = listOf("bundle-c"))
@@ -255,6 +302,7 @@ private class FakeEvidenceAgentRunService : AgentRunService by UnavailableAgentR
             projectId = draft.projectId,
             status = AgentStatus.Working,
             createdAtMillis = 1,
+            attachAndyMcp = draft.attachAndyMcp,
             contextBundleIds = draft.contextBundleIds,
             provenance = draft.provenance,
         )

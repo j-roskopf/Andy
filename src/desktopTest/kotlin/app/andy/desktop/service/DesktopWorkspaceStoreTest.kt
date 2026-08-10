@@ -25,6 +25,13 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved)
         assertEquals(saved, DesktopWorkspaceStore(file).load())
 
+        val withVoiceShortcut = saved.copy(voiceDictationShortcut = "69|0|1|0|0")
+        DesktopWorkspaceStore(file).save(withVoiceShortcut)
+        assertEquals("69|0|1|0|0", DesktopWorkspaceStore(file).load().voiceDictationShortcut)
+
+        DesktopWorkspaceStore(file).save(withVoiceShortcut.copy(voiceDictationShortcut = null))
+        assertEquals(null, DesktopWorkspaceStore(file).load().voiceDictationShortcut)
+
         DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
 

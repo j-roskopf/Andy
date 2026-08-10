@@ -1042,8 +1042,62 @@ class DesktopAgentRunService(
         }
         val now = System.currentTimeMillis()
         val id = taskId ?: newAgentTaskId()
+        // Reuse path must exist as a directory. Never fall back to scratch when the caller
+        // asked for a specific worktree — that would report one path while editing another.
+        val existingWorktreePath = draft.existingWorktreePath?.takeIf { it.isNotBlank() }
+        val resolvedExistingWorktree = existingWorktreePath?.let { path ->
+            withContext(Dispatchers.IO) {
+                File(path).absoluteFile.normalize().takeIf { it.isDirectory }?.absolutePath
+            }
+        }
+        // Reuse wins over create: never persist useWorktree=true with a reused path, or a
+        // task-store reload (ownsWorktree := useWorktree && worktreePath) will claim ownership
+        // and later cleanup can delete someone else's worktree.
+        val useWorktree = draft.useWorktree && resolvedExistingWorktree == null
+        if (existingWorktreePath != null && resolvedExistingWorktree == null) {
+            val task = AgentTask(
+                id = id,
+                title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
+                prompt = draft.prompt,
+                agent = draft.agent,
+                projectId = draft.projectId,
+                cwd = null,
+                originDir = draft.directory,
+                useWorktree = false,
+                worktreePath = existingWorktreePath,
+                branchName = draft.existingBranchName,
+                ownsWorktree = false,
+                workflowTaskId = draft.workflowTaskId,
+                workflowStage = draft.workflowStage,
+                workflowAttempt = draft.workflowAttempt,
+                attachAndyMcp = draft.attachAndyMcp,
+                autonomy = draft.autonomy,
+                sandboxMode = draft.sandboxMode,
+                planMode = draft.planMode,
+                confirmToolCalls = draft.confirmToolCalls,
+                model = draft.model,
+                reasoningEffort = draft.reasoningEffort,
+                fastMode = draft.fastMode,
+                openClawNewSession = draft.openClawNewSession,
+                imagePaths = draft.imagePaths,
+                skills = draft.skills.filter { it.path in discoveredSkillPaths },
+                goal = draft.goal,
+                maxBudgetUsd = draft.maxBudgetUsd,
+                contextBundleIds = draft.contextBundleIds,
+                provenance = draft.provenance,
+                status = AgentStatus.Error,
+                errorMessage = "existing worktree path is missing or not a directory",
+                vendorSessionId = null,
+                lane = draft.lane ?: resolveLane(draft.agent),
+                createdAtMillis = now,
+                finishedAtMillis = now,
+            )
+            upsertTask(task)
+            persist()
+            return task
+        }
         val resolvedCwd = withContext(Dispatchers.IO) {
-            AgentScratchWorkspace.resolveCwd(draft.existingWorktreePath ?: draft.directory)
+            resolvedExistingWorktree ?: AgentScratchWorkspace.resolveCwd(draft.directory)
         }
         var task = AgentTask(
             id = id,
@@ -1053,8 +1107,8 @@ class DesktopAgentRunService(
             projectId = draft.projectId,
             cwd = resolvedCwd,
             originDir = draft.directory,
-            useWorktree = draft.useWorktree,
-            worktreePath = draft.existingWorktreePath,
+            useWorktree = useWorktree,
+            worktreePath = resolvedExistingWorktree,
             branchName = draft.existingBranchName,
             ownsWorktree = false,
             workflowTaskId = draft.workflowTaskId,
@@ -1093,7 +1147,9 @@ class DesktopAgentRunService(
             return task
         }
 
-        if (task.useWorktree) {
+        // existingWorktreePath reuses an on-disk worktree; never replace it with worktrees.create.
+        val createWorktree = useWorktree
+        if (createWorktree) {
             val originDir = task.originDir
             if (originDir == null) {
                 task = task.copy(

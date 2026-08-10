@@ -29,7 +29,18 @@ internal fun discoverAgentSkills(agent: AgentKind, directory: String?): List<Age
                 val description = header.firstOrNull { it.startsWith("description:") }
                     ?.substringAfter(':')?.trim()?.trim('"', '\'')
                     .orEmpty()
-                discovered.putIfAbsent(name.lowercase(), AgentSkill(name, description, file.absolutePath))
+                val userInvocable = header
+                    .firstOrNull { it.startsWith("user-invocable:") }
+                    ?.substringAfter(':')
+                    ?.trim()
+                    ?.trim('"', '\'')
+                    ?.lowercase()
+                    ?.let { it != "false" }
+                    ?: true
+                discovered.putIfAbsent(
+                    name.lowercase(),
+                    AgentSkill(name, description, file.absolutePath, userInvocable = userInvocable),
+                )
             }
     }
     return discovered.values.sortedBy { it.name.lowercase() }

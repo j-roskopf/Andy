@@ -237,6 +237,7 @@ private fun AgentCommandCenter(
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
+                        workspaceState = workspaceState,
                     )
                 }
                 if (!composing) {

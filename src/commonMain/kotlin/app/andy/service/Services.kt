@@ -907,6 +907,8 @@ data class AndyServices(
     val projectWorkflows: ProjectWorkflowService,
     val kanban: KanbanService = UnavailableKanbanService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
+    val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
+    val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

@@ -105,6 +105,8 @@ data class WorkspaceState(
     val agentOsNotificationsEnabled: Boolean = true,
     val agentNotificationSoundEnabled: Boolean = true,
     val agentIconBadgeEnabled: Boolean = true,
+    /** Encoded [app.andy.ui.components.KeyCombo] that toggles voice dictation from any chat composer. */
+    val voiceDictationShortcut: String? = null,
     /** When false (default), quitting Andy kills all `tmux -L andy` agent sessions. */
     val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,

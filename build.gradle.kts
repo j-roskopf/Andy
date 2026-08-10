@@ -252,6 +252,8 @@ tasks.named<Copy>("desktopProcessResources") {
         "buildAndyMirrorJniMacX64",
         "buildAndyNotificationsJniMacArm64",
         "buildAndyNotificationsJniMacX64",
+        "buildAndyVoiceJniMacArm64",
+        "buildAndyVoiceJniMacX64",
         verifyScrcpyServer,
     )
     from(layout.buildDirectory.dir("native/andy-mirror")) {
@@ -261,6 +263,10 @@ tasks.named<Copy>("desktopProcessResources") {
     from(layout.buildDirectory.dir("native/andy-notifications")) {
         include("**/andy-notifications-jni.dylib")
         into("andy-notifications")
+    }
+    from(layout.buildDirectory.dir("native/andy-voice")) {
+        include("**/andy-voice-jni.dylib")
+        into("andy-voice")
     }
 }
 
@@ -379,6 +385,34 @@ val buildAndyNotificationsJniMacArm64 by tasks.registering(Exec::class) {
     )
 }
 
+val buildAndyVoiceJniMacArm64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS arm64 AVFoundation microphone TCC bridge."
+    val source = layout.projectDirectory.file("native/andy-voice/jni/andy_voice_jni.m")
+    val output = layout.buildDirectory.file("native/andy-voice/macos-arm64/andy-voice-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "arm64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AVFoundation",
+        "-framework", "Foundation",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
 val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS x64 Notification Center bridge."
@@ -407,6 +441,34 @@ val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
     )
 }
 
+val buildAndyVoiceJniMacX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS x64 AVFoundation microphone TCC bridge."
+    val source = layout.projectDirectory.file("native/andy-voice/jni/andy_voice_jni.m")
+    val output = layout.buildDirectory.file("native/andy-voice/macos-x86_64/andy-voice-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("x86_64", "amd64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "x86_64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AVFoundation",
+        "-framework", "Foundation",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
 // Compose Desktop screenshots share one renderer per process. Running them serially
 // keeps their viewport, fonts, and image output deterministic on every CI runner.
 // Enable test retries via an explicit Gradle property the CI workflow passes
@@ -424,6 +486,9 @@ tasks.withType<Test>().configureEach {
     systemProperty("java.awt.headless", "false")
     // TEMPORARY (perf investigation): forward -Dandy.bench to the test JVM.
     System.getProperty("andy.bench")?.let { systemProperty("andy.bench", it) }
+    // Opt-in live macOS whisper bottle install smoke (downloads Homebrew bottles).
+    System.getProperty("andy.voice.live.smoke")?.let { systemProperty("andy.voice.live.smoke", it) }
+    System.getProperty("andy.voice.live.home")?.let { systemProperty("andy.voice.live.home", it) }
     // Keep desktopTest off the live `tmux -L andy` socket. Tests that recycle a poisoned
     // server call kill-server; sharing production would print `[server exited]` in every
     // attached agent chat.
@@ -486,10 +551,17 @@ compose.desktop {
             macOS {
                 bundleID = andyPackageId
                 iconFile.set(project.file("src/desktopMain/resources/icons/andy.icns"))
+                // Overrides the compose plugin's bundled default-entitlements.plist, which only
+                // grants JIT/unsigned-memory/library-validation. Without camera+mic entries here,
+                // jpackage's forced hardened runtime silently blocks device access on every build
+                // (dev runDistributable included), not just the signed release path.
+                entitlementsFile.set(project.file("packaging/macos/entitlements.plist"))
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSCameraUsageDescription</key>
                         <string>Andy uses the camera permission to receive video from a connected iPhone.</string>
+                        <key>NSMicrophoneUsageDescription</key>
+                        <string>Andy uses the microphone for voice dictation in the chat composer.</string>
                     """.trimIndent()
                 }
                 signing {
@@ -648,25 +720,9 @@ val resignMacReleaseApp by tasks.registering {
             ?.let { listOf("--keychain", it) }
             .orEmpty()
 
-        val entitlementsFile = temporaryDir.resolve("entitlements.plist")
-        entitlementsFile.writeText(
-            """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0">
-            <dict>
-                <key>com.apple.security.cs.allow-jit</key>
-                <true/>
-                <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-                <true/>
-                <key>com.apple.security.cs.disable-library-validation</key>
-                <true/>
-                <key>com.apple.security.device.camera</key>
-                <true/>
-            </dict>
-            </plist>
-            """.trimIndent()
-        )
+        // Reuses the same file the jpackage DSL points at (see the `macOS { entitlementsFile }`
+        // block above) so this re-sign step can never drift from what dev builds already ship.
+        val entitlementsFile = project.file("packaging/macos/entitlements.plist")
 
         fun runCommand(command: List<String>) {
             val exitCode = ProcessBuilder(command)
@@ -696,6 +752,90 @@ val resignMacReleaseApp by tasks.registering {
             runCommand(listOf("codesign", "--verify", "--deep", "--strict", "--verbose=2", app.absolutePath))
         }
     }
+}
+
+/**
+ * Ad-hoc + hardened-runtime packages get silent TCC denial for microphone (Denied with no
+ * System Settings row and no prompt). Re-sign the local distributable with a real identity
+ * whenever one is configured or discoverable so `runDistributable` can actually request mic.
+ */
+val resignMacDistributable by tasks.registering {
+    dependsOn("createDistributable")
+    group = "compose desktop"
+    description = "Re-sign the local macOS distributable so microphone TCC can prompt."
+
+    val signingIdentityProp = providers.gradleProperty("compose.desktop.mac.signing.identity")
+    val signingKeychain = providers.gradleProperty("compose.desktop.mac.signing.keychain")
+
+    onlyIf {
+        System.getProperty("os.name").contains("mac", ignoreCase = true)
+    }
+
+    doLast {
+        fun discoverDeveloperIdIdentity(): String? {
+            val proc = ProcessBuilder("security", "find-identity", "-v", "-p", "codesigning")
+                .redirectErrorStream(true)
+                .start()
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            val match = Regex("\"(Developer ID Application: [^\"]+)\"").find(out)
+            return match?.groupValues?.get(1)
+        }
+
+        val identity = signingIdentityProp.orNull?.takeIf { it.isNotBlank() }
+            ?: discoverDeveloperIdIdentity()
+            ?: run {
+                logger.lifecycle(
+                    "resignMacDistributable: no Developer ID identity found; " +
+                        "leaving ad-hoc signature (mic TCC will silently deny).",
+                )
+                return@doLast
+            }
+
+        val appDir = layout.buildDirectory.dir("compose/binaries/main/app").get().asFile
+        val apps = appDir.listFiles { file -> file.isDirectory && file.extension == "app" }.orEmpty()
+        if (apps.isEmpty()) {
+            logger.warn("resignMacDistributable: no .app found under ${appDir.absolutePath}")
+            return@doLast
+        }
+        val keychainArgs = signingKeychain.orNull
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf("--keychain", it) }
+            .orEmpty()
+        val entitlementsFile = project.file("packaging/macos/entitlements.plist")
+
+        fun runCommand(command: List<String>) {
+            val exitCode = ProcessBuilder(command)
+                .inheritIO()
+                .start()
+                .waitFor()
+            if (exitCode != 0) {
+                error("Command failed with exit code $exitCode: ${command.joinToString(" ")}")
+            }
+        }
+
+        apps.forEach { app ->
+            logger.lifecycle("resignMacDistributable: signing ${app.name} with $identity")
+            runCommand(
+                listOf(
+                    "codesign",
+                    "--force",
+                    "--deep",
+                    "--options",
+                    "runtime",
+                    "--entitlements",
+                    entitlementsFile.absolutePath,
+                    "--sign",
+                    identity,
+                ) + keychainArgs + app.absolutePath
+            )
+            runCommand(listOf("codesign", "--verify", "--deep", "--strict", "--verbose=2", app.absolutePath))
+        }
+    }
+}
+
+tasks.matching { it.name == "runDistributable" }.configureEach {
+    dependsOn(resignMacDistributable)
 }
 
 tasks.matching { it.name in setOf("packageReleaseDmg", "notarizeReleaseDmg") }

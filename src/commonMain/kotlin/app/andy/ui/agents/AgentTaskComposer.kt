@@ -82,6 +82,7 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.ProjectAgentProfile
+import app.andy.model.WorkspaceState
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
 import app.andy.model.groupedByModelFamily
@@ -95,6 +96,10 @@ import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
+import app.andy.ui.components.ChatVoiceDictationButton
+import app.andy.ui.components.KeyCombo
+import app.andy.ui.components.onVoiceDictationShortcut
+import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
@@ -102,6 +107,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
@@ -129,6 +135,7 @@ internal fun AgentTaskComposerPane(
     onSubmit: (AgentTaskDraft) -> Unit,
     onCancel: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    workspaceState: WorkspaceState = WorkspaceState(),
 ) {
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
@@ -173,6 +180,7 @@ internal fun AgentTaskComposerPane(
             showOptions = showOptions,
             onShowOptionsChange = { showOptions = it },
             onCancel = onCancel,
+            voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
             onSubmit = {
                 onSubmit(form.buildDraft())
                 form.clearPrompt()
@@ -500,6 +508,7 @@ private class AgentTaskComposerForm(
             selection = TextRange(command.start + insertion.length),
         )
         state.skillMenuDismissed = true
+        state.attachMcp = attachMcpAfterSkillSelection(skill.name, state.attachMcp)
     }
 
     fun selectCommand(command: AgentNativeSlashCommand) {
@@ -559,6 +568,7 @@ private fun AgentChatComposer(
     showOptions: Boolean,
     onShowOptionsChange: (Boolean) -> Unit,
     onCancel: (() -> Unit)?,
+    voiceShortcut: KeyCombo?,
     onSubmit: () -> Unit,
 ) {
     val state = form.state
@@ -566,14 +576,23 @@ private fun AgentChatComposer(
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
     var sandboxMenuExpanded by remember { mutableStateOf(false) }
+    var voiceError by remember { mutableStateOf<String?>(null) }
     val canSubmit = form.canSubmit
     val slashHighlight = rememberComposerSlashHighlight(form)
+    val voiceController = rememberVoiceDictationController(
+        voice = form.services.voiceDictation,
+        onText = { spoken ->
+            voiceError = null
+            state.promptValue = insertTextAtCursor(state.promptValue, spoken)
+        },
+        onError = { voiceError = it },
+    )
 
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
 
     PanelCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
         background = AndyColors.SurfaceRaised,
         borderColor = if (state.imageDragActive) Cyan else null,
         contentPadding = PaddingValues(16.dp),
@@ -591,6 +610,7 @@ private fun AgentChatComposer(
                 maxLines = 7,
                 modifier = Modifier.fillMaxWidth()
                     .heightIn(min = 94.dp, max = 180.dp)
+                    .onVoiceDictationShortcut(voiceShortcut, voiceController)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
@@ -858,7 +878,11 @@ private fun AgentChatComposer(
             onCancel?.let { cancel ->
                 OutlinedButton(onClick = cancel) { Text("cancel", fontSize = 11.sp) }
             }
+            ChatVoiceDictationButton(controller = voiceController)
             ChatSendButton(onClick = onSubmit, enabled = canSubmit)
+        }
+        voiceError?.let { err ->
+            Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
         }
     }
 }
@@ -1230,6 +1254,14 @@ private fun ComposerWorktreeCheckbox(
 }
 
 private const val CUSTOM_MODEL_ID = "__custom__"
+
+/** User-invocable orchestration skills that require Andy MCP attach on new-task submit. */
+internal fun isOrchestrationSkillName(name: String): Boolean =
+    name.lowercase() in setOf("andy-handoff", "andy-loop", "andy-advisor", "andy-committee")
+
+/** Returns the attachMcp value after selecting [skillName] in the new-task composer. */
+internal fun attachMcpAfterSkillSelection(skillName: String, currentAttachMcp: Boolean): Boolean =
+    if (isOrchestrationSkillName(skillName)) true else currentAttachMcp
 
 internal fun String.toMaxBudgetUsd(): Double? = trim()
     .toDoubleOrNull()

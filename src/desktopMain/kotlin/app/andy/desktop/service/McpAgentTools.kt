@@ -202,6 +202,7 @@ fun Server.registerAgentProjectTools(
                         put("branchName", task.branchName.orEmpty())
                         put("ownsWorktree", task.ownsWorktree)
                         put("parentWorktreeTaskId", task.parentWorktreeTaskId.orEmpty())
+                        put("attachAndyMcp", task.attachAndyMcp)
                         put("unread", task.unread)
                         put("archived", task.archived)
                         put("transcriptCompressed", task.transcriptCompressed)
@@ -386,11 +387,27 @@ fun Server.registerAgentProjectTools(
             },
             "useWorktree" to buildJsonObject {
                 put("type", "boolean")
-                put("description", "Create an isolated git worktree for this chat")
+                put("description", "Isolate the agent in a new git worktree")
+            },
+            "existingWorktreePath" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Reuse an existing worktree instead of creating a new one " +
+                        "(takes precedence over useWorktree when both are set)",
+                )
             },
             "baseWorktreeTaskId" to buildJsonObject {
                 put("type", "string")
                 put("description", "Optional Andy task id whose worktree branch to fork from")
+            },
+            "attachAndyMcp" to buildJsonObject {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "Attach Andy's own MCP server to the launched agent " +
+                        "(required for orchestration skills that call chat.* tools)",
+                )
             },
             "model" to buildJsonObject {
                 put("type", "string")
@@ -428,8 +445,14 @@ fun Server.registerAgentProjectTools(
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
         } ?: AgentAutonomy.Standard
         val model = str(args, "model")?.takeIf { it.isNotBlank() }
-        val useWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+        val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
+        val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["useWorktree"]?.jsonPrimitive?.booleanOrNull
+            ?: false
+        // Reuse wins over create when both are supplied (matches workflow draft normalization).
+        val useWorktree = requestedUseWorktree && existingWorktreePath == null
+        val attachAndyMcp = args["attachAndyMcp"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+            ?: args["attachAndyMcp"]?.jsonPrimitive?.booleanOrNull
             ?: false
         val task = agentRuns.createAndStart(
             AgentTaskDraft(
@@ -439,21 +462,34 @@ fun Server.registerAgentProjectTools(
                 projectId = str(args, "projectId")?.takeIf { it.isNotBlank() },
                 directory = str(args, "directory")?.takeIf { it.isNotBlank() },
                 useWorktree = useWorktree,
+                existingWorktreePath = existingWorktreePath,
                 baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
+                attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
                 model = model,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
             ),
         )
-        textResult(
-            buildJsonObject {
-                put("id", task.id)
-                put("status", task.status?.name.orEmpty())
-                put("tmuxSession", TmuxAndy.sessionName(task.id))
-                put("attach", "tmux -L andy attach -t ${TmuxAndy.sessionName(task.id)}")
-            }.toString(),
-        )
+        if (task.status == AgentStatus.Error) {
+            CallToolResult(
+                content = listOf(
+                    TextContent(
+                        text = task.errorMessage?.takeIf { it.isNotBlank() } ?: "task failed to start",
+                    ),
+                ),
+                isError = true,
+            )
+        } else {
+            textResult(
+                buildJsonObject {
+                    put("id", task.id)
+                    put("status", task.status?.name.orEmpty())
+                    put("tmuxSession", TmuxAndy.sessionName(task.id))
+                    put("attach", "tmux -L andy attach -t ${TmuxAndy.sessionName(task.id)}")
+                }.toString(),
+            )
+        }
     }
 
     register(

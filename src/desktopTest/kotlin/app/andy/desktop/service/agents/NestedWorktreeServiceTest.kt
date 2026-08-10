@@ -136,6 +136,85 @@ class NestedWorktreeServiceTest {
     }
 
     @Test
+    fun existingWorktreePathTakesPrecedenceWhenUseWorktreeAlsoTrue() = runBlocking {
+        withHarness { harness ->
+            val owner = harness.startWorktreeTask(title = "owner")
+            val path = assertNotNull(owner.worktreePath)
+            val branch = assertNotNull(owner.branchName)
+            val reused = harness.service.createAndStart(
+                AgentTaskDraft(
+                    title = "reuse with both flags",
+                    prompt = "noop",
+                    agent = AgentKind.Codex,
+                    projectId = "proj-1",
+                    directory = harness.repo.absolutePath,
+                    useWorktree = true,
+                    existingWorktreePath = path,
+                    existingBranchName = branch,
+                ),
+            )
+            withTimeout(15_000) {
+                while (true) {
+                    val current = harness.service.tasks.value.first { it.id == reused.id }
+                    if (current.worktreePath != null || current.status == AgentStatus.Error) break
+                    delay(25)
+                }
+            }
+            val reuseTask = harness.service.tasks.value.first { it.id == reused.id }
+            assertNull(reuseTask.errorMessage, reuseTask.errorMessage)
+            assertEquals(path, reuseTask.worktreePath)
+            assertFalse(reuseTask.ownsWorktree)
+            assertFalse(reuseTask.useWorktree, "reuse must clear useWorktree so reloads cannot claim ownership")
+            // Must not have created a second worktree under the manager root.
+            assertEquals(
+                1,
+                harness.service.tasks.value.count { it.ownsWorktree && it.worktreePath != null },
+            )
+        }
+    }
+
+    @Test
+    fun useWorktreeWithoutDirectoryReturnsErrorShapedTask() = runBlocking {
+        withHarness { harness ->
+            val task = harness.service.createAndStart(
+                AgentTaskDraft(
+                    title = "no directory",
+                    prompt = "noop",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    useWorktree = true,
+                ),
+            )
+            assertEquals(AgentStatus.Error, task.status)
+            assertEquals("a project directory is required to create a worktree", task.errorMessage)
+        }
+    }
+
+    @Test
+    fun invalidExistingWorktreePathReturnsErrorWithoutScratchFallback() = runBlocking {
+        withHarness { harness ->
+            val missing = File(harness.repo, "does-not-exist-worktree").absolutePath
+            val task = harness.service.createAndStart(
+                AgentTaskDraft(
+                    title = "bad reuse",
+                    prompt = "noop",
+                    agent = AgentKind.Codex,
+                    projectId = "proj-1",
+                    directory = harness.repo.absolutePath,
+                    existingWorktreePath = missing,
+                ),
+            )
+            assertEquals(AgentStatus.Error, task.status)
+            assertEquals("existing worktree path is missing or not a directory", task.errorMessage)
+            assertEquals(missing, task.worktreePath)
+            assertNull(task.cwd)
+            // Must not have launched against the scratch fallback directory.
+            val scratch = AgentScratchWorkspace.path().absolutePath
+            assertTrue(harness.service.tasks.value.none { it.id == task.id && it.cwd == scratch })
+        }
+    }
+
+    @Test
     fun worktreeTreePrefersOwnsWorktreeOwnerWhenPathIsShared() = runBlocking {
         withHarness { harness ->
             val owner = harness.startWorktreeTask(title = "owner")

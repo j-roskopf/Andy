@@ -507,6 +507,7 @@ private fun ProjectCockpit(
                                                 current,
                                                 onSubmit = { draft -> scope.launch { selectedTaskId = services.agentRuns.createAndStart(draft).id } },
                                                 modifier = Modifier.fillMaxSize(),
+                                                workspaceState = workspaceState,
                                             )
                                         }
                                         if (selected != null) {
