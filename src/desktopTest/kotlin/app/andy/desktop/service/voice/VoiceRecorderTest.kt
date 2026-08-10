@@ -133,7 +133,7 @@ class VoiceRecorderTest {
         val started = System.currentTimeMillis()
         val result = TimedWhisperProcessRunner(timeoutSeconds = 1).run(
             // Holds both pipes open past the timeout; sequential readText() would hang forever.
-            command = listOf("/bin/sh", "-c", "sleep 30"),
+            command = platformShellCommand(unix = "sleep 30", windows = "ping -n 31 127.0.0.1 >nul"),
             workingDir = null,
             environment = emptyMap(),
         )
@@ -145,13 +145,13 @@ class VoiceRecorderTest {
     @Test
     fun timedWhisperProcessRunnerDrainsStdoutAndStderr() {
         val result = TimedWhisperProcessRunner(timeoutSeconds = 10).run(
-            command = listOf("/bin/sh", "-c", "echo out; echo err >&2"),
+            command = platformShellCommand(unix = "echo out; echo err >&2", windows = "echo out& echo err 1>&2"),
             workingDir = null,
             environment = emptyMap(),
         )
         assertEquals(0, result.exitCode)
-        assertTrue(result.stdout.contains("out"))
-        assertTrue(result.stderr.contains("err"))
+        assertTrue(result.stdout.contains("out"), result.stdout)
+        assertTrue(result.stderr.contains("err"), result.stderr)
     }
 
     @Test
@@ -183,5 +183,14 @@ class VoiceRecorderTest {
         assertTrue(!wav.exists())
         dir.deleteRecursively()
         Unit
+    }
+}
+
+private fun platformShellCommand(unix: String, windows: String): List<String> {
+    val isWindows = System.getProperty("os.name").contains("windows", ignoreCase = true)
+    return if (isWindows) {
+        listOf("cmd.exe", "/c", windows)
+    } else {
+        listOf("/bin/sh", "-c", unix)
     }
 }

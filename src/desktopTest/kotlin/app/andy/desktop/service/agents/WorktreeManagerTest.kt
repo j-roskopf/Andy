@@ -141,7 +141,7 @@ class WorktreeManagerTest {
             )
 
             assertTrue(File(repo, "from-agent.txt").isFile)
-            assertEquals("root\nedited\n", File(repo, "root.txt").readText())
+            assertEquals("root\nedited\n", File(repo, "root.txt").readText().replace("\r\n", "\n"))
             assertEquals("main", manager.currentBranch(repo.absolutePath))
             // Target branch must not move — changes stay uncommitted in the working tree.
             assertEquals(headBefore, revParse(repo, "HEAD"))
@@ -190,7 +190,7 @@ class WorktreeManagerTest {
             assertEquals(headBefore, revParse(repo, "HEAD"))
 
             manager.abortMerge(repo.absolutePath).getOrThrow()
-            assertEquals("from main\n", File(repo, "conflict.txt").readText())
+            assertEquals("from main\n", File(repo, "conflict.txt").readText().replace("\r\n", "\n"))
             assertEquals(headBefore, revParse(repo, "HEAD"))
             assertFalse(
                 ProcessBuilder(listOf("git", "-C", repo.absolutePath, "rev-parse", "-q", "--verify", "MERGE_HEAD"))
