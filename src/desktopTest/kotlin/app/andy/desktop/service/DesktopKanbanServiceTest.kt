@@ -6,6 +6,7 @@ import app.andy.model.KanbanCard
 import app.andy.model.KanbanLane
 import app.andy.service.KanbanLaneDirection
 import java.io.File
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -111,9 +112,7 @@ class DesktopKanbanServiceTest {
             val service = DesktopKanbanService(store)
             service.addLane("QA")
             service.addCard("todo", "Persist me", "desc", listOf("save"))
-            // Force a synchronous write of the in-memory board so reload does not race
-            // still-queued async saves from mutate().
-            store.saveKanbanBoard(service.board.value)
+            runBlocking { service.flushPersist() }
             val reloaded = DesktopKanbanService(DesktopAgentTaskStore(db))
             assertTrue(reloaded.board.value.lanes.any { it.name == "QA" })
             val todoCards = reloaded.board.value.lanes.first { it.id == "todo" }.cards
