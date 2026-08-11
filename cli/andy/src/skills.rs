@@ -205,6 +205,56 @@ fn normalize_skill_name(name: &str) -> String {
     name.trim().trim_start_matches(['/', '$']).to_lowercase()
 }
 
+/// Orchestration skills that need Andy MCP (`chat.*`) attached on launch.
+pub fn is_orchestration_skill_name(name: &str) -> bool {
+    matches!(
+        normalize_skill_name(name).as_str(),
+        "andy-handoff" | "andy-loop" | "andy-advisor" | "andy-committee"
+    )
+}
+
+/// Skills referenced in [prompt] via `/name` tokens (same matching as the desktop composer).
+pub fn skills_referenced_in_prompt<'a>(
+    prompt: &str,
+    skills: &'a [AgentSkill],
+) -> Vec<&'a AgentSkill> {
+    skills
+        .iter()
+        .filter(|skill| {
+            let name = normalize_skill_name(&skill.name);
+            if name.is_empty() {
+                return false;
+            }
+            prompt.split_whitespace().any(|token| {
+                token
+                    .strip_prefix('/')
+                    .is_some_and(|rest| normalize_skill_name(rest) == name)
+            })
+        })
+        .collect()
+}
+
+/// Append portable skill path hints so providers that ignore bare `/name` still load SKILL.md.
+pub fn prompt_with_skill_hints(prompt: &str, skills: &[&AgentSkill]) -> String {
+    if skills.is_empty() {
+        return prompt.to_string();
+    }
+    let mut out = String::from(prompt.trim_end());
+    out.push_str("\n\nUse these local skill instructions before responding:\n");
+    let mut seen = std::collections::BTreeSet::new();
+    for skill in skills {
+        if !seen.insert(skill.path.as_str()) {
+            continue;
+        }
+        out.push_str("- ");
+        out.push_str(&skill.name);
+        out.push_str(": ");
+        out.push_str(&skill.path);
+        out.push('\n');
+    }
+    out
+}
+
 fn absolute_path(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -298,6 +348,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["gh-ship-pr"]
         );
+    }
+
+    #[test]
+    fn prompt_skill_hints_and_orchestration_detection() {
+        let skills = vec![
+            AgentSkill {
+                name: "andy-loop".into(),
+                description: "loop".into(),
+                path: "/tmp/andy-loop/SKILL.md".into(),
+                user_invocable: true,
+            },
+            AgentSkill {
+                name: "gh-ship-pr".into(),
+                description: "ship".into(),
+                path: "/tmp/gh-ship-pr/SKILL.md".into(),
+                user_invocable: true,
+            },
+        ];
+        assert!(is_orchestration_skill_name("andy-loop"));
+        assert!(!is_orchestration_skill_name("gh-ship-pr"));
+        let selected = skills_referenced_in_prompt("/andy-loop babysit CI", &skills);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "andy-loop");
+        let prompted = prompt_with_skill_hints("/andy-loop babysit CI", &selected);
+        assert!(prompted.contains("Use these local skill instructions before responding:"));
+        assert!(prompted.contains("andy-loop: /tmp/andy-loop/SKILL.md"));
     }
 
     #[test]

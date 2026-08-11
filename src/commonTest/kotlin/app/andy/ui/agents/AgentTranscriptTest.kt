@@ -246,6 +246,19 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun latestPlanHasPendingEntriesIgnoresPlanAfterLaterUserTurn() {
+        val events = listOf(
+            AgentEvent.PlanUpdate(
+                atMillis = 1,
+                entries = listOf(AgentPlanEntry("Ship feature", "pending")),
+            ),
+            AgentEvent.UserMessage(atMillis = 2, text = "Implement the plan."),
+            AgentEvent.AssistantText(atMillis = 3, text = "working", isStreamDelta = false),
+        )
+        assertFalse(latestPlanHasPendingEntries(events))
+    }
+
+    @Test
     fun latestPlanHasPendingEntriesIgnoresCompletedOrClearedPlans() {
         assertFalse(
             latestPlanHasPendingEntries(

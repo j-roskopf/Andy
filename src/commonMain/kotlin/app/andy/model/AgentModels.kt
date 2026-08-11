@@ -1239,12 +1239,18 @@ fun AgentSessionMode.looksLikePlanMode(): Boolean {
 }
 
 /**
- * True when the latest ACP [AgentEvent.PlanUpdate] still looks like an unconfirmed plan.
- * Cursor can emit Create Plan + plan entries and end the turn without flipping session mode.
+ * True when the latest ACP [AgentEvent.PlanUpdate] still looks like an unconfirmed plan
+ * for the current turn. Cursor can emit Create Plan + plan entries and end the turn
+ * without flipping session mode. A later [AgentEvent.UserMessage] (e.g. Implement)
+ * means that plan was already acted on, so it no longer counts as awaiting.
  */
 fun latestPlanHasPendingEntries(events: List<AgentEvent>): Boolean {
-    val plan = events.asReversed().firstOrNull { it is AgentEvent.PlanUpdate } as? AgentEvent.PlanUpdate
-        ?: return false
+    val planIndex = events.indexOfLast { it is AgentEvent.PlanUpdate }
+    if (planIndex < 0) return false
+    if (events.withIndex().any { (index, event) -> index > planIndex && event is AgentEvent.UserMessage }) {
+        return false
+    }
+    val plan = events[planIndex] as AgentEvent.PlanUpdate
     if (plan.entries.isEmpty()) {
         // PlanRemoved clears entries; markdown-only plans still count as awaiting.
         return !plan.markdown.isNullOrBlank()

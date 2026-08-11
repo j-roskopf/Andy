@@ -209,6 +209,8 @@ class DesktopAgentRunService(
     private val acpProviderReplayScratch = ConcurrentHashMap<String, StringBuilder>()
     /** One automatic resume per task turn after a provider connection stall. */
     private val connectionStallAutoRetries = ConcurrentHashMap<String, Int>()
+    /** Outstanding ACP session-mode syncs; [resume] awaits these so Implement doesn't race plan→agent. */
+    private val acpPlanModeSyncJobs = ConcurrentHashMap<String, Job>()
 
     /**
      * Window visibility/focus, pushed by the GUI. Terminal foreground cadence deliberately
@@ -1278,6 +1280,8 @@ class DesktopAgentRunService(
                 )
             }
             scope.launch(Dispatchers.IO) {
+                // PlanReady "Implement" flips plan mode then resumes; wait for setMode first.
+                acpPlanModeSyncJobs.remove(taskId)?.join()
                 val success = runAcpFollowUp(taskId, acpFollowUp, imagePaths)
                 if (!success && currentTask(taskId)?.lane == AgentLaneKind.Acp) {
                     updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, finishedAtMillis = null) }
@@ -1618,7 +1622,9 @@ class DesktopAgentRunService(
             updateTask(taskId) { it.copy(planMode = planMode) }
             scope.launch { persist() }
         }
-        scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, modeId) }
+        val job = scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, modeId) }
+        acpPlanModeSyncJobs[taskId] = job
+        job.invokeOnCompletion { acpPlanModeSyncJobs.remove(taskId, job) }
     }
 
     override fun queueFollowUp(
@@ -1814,7 +1820,9 @@ class DesktopAgentRunService(
         } else {
             modes.firstOrNull { !it.looksLikePlanMode() } ?: return
         }
-        scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, targetMode.id) }
+        val job = scope.launch(Dispatchers.IO) { acpManager.setMode(taskId, targetMode.id) }
+        acpPlanModeSyncJobs[taskId] = job
+        job.invokeOnCompletion { acpPlanModeSyncJobs.remove(taskId, job) }
     }
 
     private fun availableAcpModes(taskId: String): List<app.andy.model.AgentSessionMode> =

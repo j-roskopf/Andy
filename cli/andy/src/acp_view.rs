@@ -25,7 +25,9 @@ use tokio::task::JoinHandle;
 use crate::events::AgentEvent;
 use crate::file_picker;
 use crate::mcp::{McpClient, SubscribeMessage, SUBSCRIBE_MISSING_ERROR};
-use crate::skills::discover_agent_skills;
+use crate::skills::{
+    discover_agent_skills, prompt_with_skill_hints, skills_referenced_in_prompt, AgentSkill,
+};
 use crate::slash::{
     complete_command, menu_height, merge_commands_with_skills, native_commands_for_agent,
     render_menu, SlashCommand, SlashMenuAction, SlashMenuState,
@@ -74,6 +76,9 @@ struct ViewState {
     /// reconnecting after clearing the local transcript).
     loading_transcript: bool,
     slash_menu: SlashMenuState,
+    /// Disk skills cached outside the render/poll loop (keyed by provider + workspace).
+    cached_skills: Vec<AgentSkill>,
+    cached_skills_key: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +139,8 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             show_details: details_default_from_env(),
             loading_transcript: true,
             slash_menu: SlashMenuState::default(),
+            cached_skills: Vec::new(),
+            cached_skills_key: None,
         };
 
         loop {
@@ -697,9 +704,16 @@ async fn submit_follow_up(
         state.status = daemon_status;
     }
     let tool = follow_up_tool_for_status(&state.status);
+    refresh_cached_skills(meta, state);
+    let selected = skills_referenced_in_prompt(&text, &state.cached_skills);
+    let follow_up = if text.is_empty() {
+        "(image)".to_string()
+    } else {
+        prompt_with_skill_hints(&text, &selected)
+    };
     let mut args = json!({
         "taskId": meta.id,
-        "followUp": if text.is_empty() { "(image)" } else { text.as_str() },
+        "followUp": follow_up,
     });
     if !state.image_paths.is_empty() {
         args["imagePaths"] = json!(state.image_paths);
@@ -717,7 +731,34 @@ async fn submit_follow_up(
     Ok(!state.subscribe_open)
 }
 
-fn available_slash_commands(meta: &ChatMeta, state: &ViewState) -> Vec<SlashCommand> {
+fn workspace_for_meta(meta: &ChatMeta) -> Option<PathBuf> {
+    if !meta.cwd.trim().is_empty() {
+        Some(PathBuf::from(&meta.cwd))
+    } else if !meta.origin_dir.trim().is_empty() {
+        Some(PathBuf::from(&meta.origin_dir))
+    } else {
+        None
+    }
+}
+
+fn refresh_cached_skills(meta: &ChatMeta, state: &mut ViewState) {
+    let workspace = workspace_for_meta(meta)
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let key = (
+        meta.agent.clone().unwrap_or_default(),
+        workspace,
+    );
+    if state.cached_skills_key.as_ref() == Some(&key) {
+        return;
+    }
+    let workspace_path = workspace_for_meta(meta);
+    state.cached_skills =
+        discover_agent_skills(meta.agent.as_deref(), workspace_path.as_deref());
+    state.cached_skills_key = Some(key);
+}
+
+fn available_slash_commands(meta: &ChatMeta, state: &mut ViewState) -> Vec<SlashCommand> {
     let provider_commands = state
         .events
         .iter()
@@ -735,17 +776,11 @@ fn available_slash_commands(meta: &ChatMeta, state: &ViewState) -> Vec<SlashComm
             _ => None,
         })
         .unwrap_or_default();
-    let workspace = if !meta.cwd.trim().is_empty() {
-        Some(PathBuf::from(&meta.cwd))
-    } else if !meta.origin_dir.trim().is_empty() {
-        Some(PathBuf::from(&meta.origin_dir))
-    } else {
-        None
-    };
+    refresh_cached_skills(meta, state);
     merge_commands_with_skills(
         native_commands_for_agent(meta.agent.as_deref()),
         provider_commands,
-        discover_agent_skills(meta.agent.as_deref(), workspace.as_deref()),
+        state.cached_skills.clone(),
     )
 }
 
@@ -1270,6 +1305,8 @@ mod tests {
             show_details: false,
             loading_transcript: false,
             slash_menu: SlashMenuState::default(),
+            cached_skills: Vec::new(),
+            cached_skills_key: None,
         }
     }
 
