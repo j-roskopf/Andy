@@ -152,7 +152,7 @@ internal fun ComposerToolbarRow(
 internal fun ComposerPlaceholderHint(
     text: String,
     highlighted: Boolean = false,
-    focusHint: String? = "⌘L to focus",
+    focusHint: String? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
