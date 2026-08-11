@@ -149,6 +149,8 @@ jobs:
 
       - name: Build release CLI
         shell: bash
+        env:
+          ANDY_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --release --manifest-path cli/andy/Cargo.toml
 
       - name: Collect CLI artifact

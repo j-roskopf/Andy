@@ -63,8 +63,7 @@ object McpClientConfig {
             ClientType.Codex -> {
                 """
                 [mcp_servers.andy]
-                url = "http://127.0.0.1:$port/mcp"
-                type = "sse"
+                url = "http://127.0.0.1:$port/mcp-http"
                 """.trimIndent()
             }
             ClientType.ClaudeDesktop -> {
@@ -273,8 +272,7 @@ object McpClientConfig {
         val index = lines.indexOfFirst { it.trim() == targetHeader }
         val newBlock = listOf(
             "[mcp_servers.andy]",
-            "url = \"http://127.0.0.1:$port/mcp\"",
-            "type = \"sse\""
+            "url = \"http://127.0.0.1:$port/mcp-http\"",
         )
         if (index != -1) {
             var lastIdx = index + 1

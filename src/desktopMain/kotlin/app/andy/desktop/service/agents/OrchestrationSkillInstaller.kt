@@ -35,4 +35,15 @@ object OrchestrationSkillInstaller {
             }
         }
     }
+
+    /** True when at least one provider skill root has every Andy orchestration SKILL.md. */
+    fun isInstalled(home: File = File(System.getProperty("user.home"))): Boolean {
+        val codexHome = System.getenv("CODEX_HOME")?.takeIf { it.isNotBlank() }?.let(::File)
+            ?: File(home, ".codex")
+        return AgentKind.entries.any { kind ->
+            val root = skillRootsFor(kind, workspace = null, home = home, codexHome = codexHome)
+                .firstOrNull() ?: return@any false
+            skills.keys.all { name -> File(root, "$name/SKILL.md").isFile }
+        }
+    }
 }

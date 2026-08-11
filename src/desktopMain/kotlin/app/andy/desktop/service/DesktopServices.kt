@@ -9,6 +9,7 @@ import app.andy.desktop.service.agents.CursorAdapter
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentRetentionService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
+import app.andy.desktop.service.agents.DesktopOrchestrationPreferencesService
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.registerArchiveViewShutdownHook
 import app.andy.desktop.service.agents.OpenCodeAdapter
@@ -33,6 +34,7 @@ import app.andy.desktop.service.voice.DesktopVoiceSetupService
 import app.andy.model.AgentKind
 import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
+import app.andy.desktop.updates.DesktopRuntimeBundleService
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
 import app.andy.service.PlatformCapabilities
@@ -200,6 +202,7 @@ fun createDaemonRuntime(
     ).also { it.start() }
     val kanban = DesktopKanbanService(agentTaskStore)
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
+    val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 
     val services = AndyServices(
         devices = devices,
@@ -228,6 +231,7 @@ fun createDaemonRuntime(
         evidence = evidenceService,
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
+        runtimeBundle = DesktopRuntimeBundleService(),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
@@ -238,6 +242,7 @@ fun createDaemonRuntime(
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        orchestrationPreferences = orchestrationPreferences,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -314,6 +319,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
+    val runtimeBundle = DesktopRuntimeBundleService()
     val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
         val ws = store.state.value
         (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
@@ -421,6 +427,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     // exposes kanban over the socket (same constraint as localAttach's per-pid DB).
     val kanban = UnavailableKanbanService
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
+    val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 
     updatesScope.launch {
         store.state
@@ -459,6 +466,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         evidence = evidenceService,
         workspaceStore = store,
         updates = updates,
+        runtimeBundle = runtimeBundle,
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
@@ -468,6 +476,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        orchestrationPreferences = orchestrationPreferences,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -495,6 +504,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val logcat = DesktopLogcatService(runner, devices)
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
+    val runtimeBundle = DesktopRuntimeBundleService()
     val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
         val ws = store.state.value
         (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
@@ -591,6 +601,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     ).also { it.start() }
     val kanban = DesktopKanbanService(agentTaskStore)
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
+    val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 
     // Live sessions pick up terminal theme/font changes from Settings.
     updatesScope.launch {
@@ -646,6 +657,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         evidence = evidenceService,
         workspaceStore = store,
         updates = updates,
+        runtimeBundle = runtimeBundle,
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
@@ -656,6 +668,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        orchestrationPreferences = orchestrationPreferences,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),

@@ -899,6 +899,7 @@ data class AndyServices(
     val evidence: InvestigationEvidenceService = UnavailableInvestigationEvidenceService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
+    val runtimeBundle: RuntimeBundleService = UnavailableRuntimeBundleService,
     val mcp: McpServerService,
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
@@ -909,6 +910,7 @@ data class AndyServices(
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
+    val orchestrationPreferences: OrchestrationPreferencesService = UnavailableOrchestrationPreferencesService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

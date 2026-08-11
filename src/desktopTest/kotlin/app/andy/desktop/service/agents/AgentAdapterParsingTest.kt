@@ -338,9 +338,9 @@ class CodexInteractiveAdapterTest {
         val argv = adapter.buildInteractiveResumeCommand(
             "/bin/codex",
             task(AgentKind.Codex, sessionId = "t-42"),
-            mcpUrl = "http://127.0.0.1:8565/mcp",
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
         ).orEmpty()
-        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp\"" in argv)
+        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp-http\"" in argv)
     }
 }
 

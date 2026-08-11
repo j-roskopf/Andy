@@ -1,9 +1,12 @@
 [package]
 name = "andy"
+# Cargo forbids leading zeros (andy.versionName is calendar-style, e.g. 2026.0811.0422).
+# Runtime --version / MCP clientInfo use ANDY_VERSION_NAME from build.rs instead.
 version = "0.1.0"
 edition = "2021"
 description = "Andy CLI — MCP client for andyd over a Unix domain socket"
 license = "MIT"
+build = "build.rs"
 
 [lib]
 name = "andy_cli"

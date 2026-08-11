@@ -24,8 +24,15 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     MCP: `chat.start` — required `prompt`, `agent` (one of ClaudeCode, Codex, Cursor,
     Antigravity, OpenCode, Pi, Hermes, OpenClaw). Optional: `title`, `projectId`,
-    `directory`, `model`, `autonomy` (ReadOnly | Standard | Full, default Standard),
+    `directory`, `model`, `autonomy` (ReadOnly | Standard | Full), `callerTaskId`,
     `useWorktree`, `existingWorktreePath`.
+
+    **Autonomy inheritance:** when `autonomy` is omitted, Andy inherits the parent's
+    dial from `callerTaskId` or the MCP session's `andyTaskId` (wired automatically
+    when this task has Andy MCP attached). The `andy` CLI also injects
+    `ANDY_TASK_ID` as `callerTaskId`. So a Full-permission orchestrator spawns
+    Full workers without re-prompting — unless you override (e.g. verifiers must
+    set `autonomy: "ReadOnly"`). If no parent is known, default is Standard.
 
     CLI: `andy chat start --agent <Kind> [--title <t>] [--directory <path>] "<prompt>"`
     for the common case. For `autonomy`, `model`, or worktree params, use the escape
@@ -48,8 +55,9 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     1. User named one explicitly in this request → use it.
     2. Otherwise read `~/.andy/orchestration-preferences.json` (`providers` map:
-       `impl`, `ui`, `research`, `planning`, `audit` → AgentKind name). If missing,
-       use `impl=Codex, ui=ClaudeCode, research=ClaudeCode, planning=Codex, audit=Codex`
+       `impl`, `ui`, `research`, `planning`, `audit` → AgentKind name). Configure the
+       same file in Andy Settings → Agents → Orchestration. If missing, use
+       `impl=Codex, ui=ClaudeCode, research=ClaudeCode, planning=Codex, audit=Codex`
        and say once that you're using defaults.
     3. Before using a mapped provider, confirm it's actually usable: MCP
        `chat.composer_options` (or `andy tool call chat.composer_options`) returns
@@ -165,6 +173,9 @@ internal val ANDY_HANDOFF_SKILL: String =
        - `agent`: resolved AgentKind
        - `title`: `[Handoff] ` + short summary
        - `prompt`: the full briefing
+       - omit `autonomy` so the receiver inherits this task's dial (Full stays Full),
+         unless the handoff is investigate-only — then `autonomy: "ReadOnly"` +
+         no-edits suffix
        - `useWorktree: true` when worktree isolation was requested
        - `directory` / `projectId` from the current task context when available
        - `existingWorktreePath` only when reusing a known worktree
@@ -222,7 +233,10 @@ internal val ANDY_LOOP_SKILL: String =
     ## Each iteration
 
     1. Start the worker (`chat.start` first iteration, `chat.resume` after) with a
-       concrete, self-contained instruction for this iteration.
+       concrete, self-contained instruction for this iteration. Do **not** pass
+       `autonomy: "ReadOnly"` or `autonomy: "Standard"` for the worker — omit
+       `autonomy` so Andy inherits this loop task's dial (Full stays Full). Only
+       override when the user asked for a tighter worker.
     2. Wait (poll `chat.status`, see andy-orchestration).
     3. Verify: run the shell check yourself and/or spawn/resume a verifier agent
        with `autonomy: "ReadOnly"` and the no-edits suffix, asking it to cite the
@@ -235,7 +249,8 @@ internal val ANDY_LOOP_SKILL: String =
     ## Prompt rules
 
     **Worker** — self-contained, concrete (commands, files, branches, tests, PRs,
-    systems), explicit about what counts as progress this iteration.
+    systems), explicit about what counts as progress this iteration. Same
+    permissions as this parent task (inherited when `autonomy` is omitted).
 
     **Verifier** — checks facts, doesn't suggest fixes, cites commands/outputs/file
     evidence, specific about what "done" means. Always `autonomy: "ReadOnly"` +
@@ -426,7 +441,7 @@ internal val ANDY_COMMITTEE_SKILL: String =
     ## Phase 2: Implement
 
     Default: implement yourself. If the user said **"delegate"**, launch one impl
-    agent (`autonomy: Standard` or as appropriate) and pass the merged plan.
+    agent (omit `autonomy` so it inherits this task's dial) and pass the merged plan.
 
     The committee stays clean — not involved in implementation.
 

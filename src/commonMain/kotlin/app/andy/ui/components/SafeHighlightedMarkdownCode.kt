@@ -1,20 +1,41 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.markdown_copy
+import app.andy.rememberCopyText
+import app.andy.ui.theme.AndyStroke
 import com.mikepenz.markdown.compose.LocalMarkdownColors
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
 import com.mikepenz.markdown.compose.LocalMarkdownPadding
@@ -27,6 +48,7 @@ import dev.snipme.highlights.model.BoldHighlight
 import dev.snipme.highlights.model.ColorHighlight
 import dev.snipme.highlights.model.SyntaxLanguage
 import org.intellij.markdown.ast.ASTNode
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * Syntax-highlighted fenced code with range validation. The Highlights dependency can return
@@ -86,20 +108,68 @@ private fun SafeMarkdownHighlightedCode(
         buildSafeHighlightedAnnotatedString(code, language, highlightsBuilder)
     }
 
+    // Own header (not the library's): multiplatform-markdown-renderer copies via the
+    // deprecated LocalClipboardManager API, which is a no-op on desktop Compose.
     MarkdownCodeBackground(
         color = backgroundCodeColor,
         shape = RoundedCornerShape(codeBackgroundCornerSize),
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        showHeader = showHeader,
+        showHeader = false,
         language = language,
         code = code,
     ) {
-        MarkdownBasicText(
-            text = highlighted,
-            style = style,
+        Column {
+            if (showHeader) {
+                AndyMarkdownCodeTopBar(language = language, code = code)
+                HorizontalDivider(
+                    thickness = AndyStroke.Hairline,
+                    color = LocalMarkdownColors.current.dividerColor.copy(alpha = 0.3f),
+                )
+            }
+            MarkdownBasicText(
+                text = highlighted,
+                style = style,
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(codeBlockPadding),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AndyMarkdownCodeTopBar(
+    language: String?,
+    code: String,
+) {
+    val copyText = rememberCopyText()
+    val textColor = LocalMarkdownColors.current.text
+    val languageLabel = language?.takeIf { it.isNotBlank() }?.uppercase() ?: "CODE"
+    val iconTint = textColor.copy(alpha = 0.65f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = languageLabel,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = textColor.copy(alpha = 0.6f),
+        )
+        Image(
+            painter = painterResource(Res.drawable.markdown_copy),
+            contentDescription = "Copy code",
+            colorFilter = ColorFilter.tint(iconTint),
             modifier = Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(codeBlockPadding),
+                .size(24.dp)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .semantics { role = Role.Button }
+                .clickable(onClickLabel = "Copy code") { copyText(code) }
+                .padding(4.dp),
         )
     }
 }

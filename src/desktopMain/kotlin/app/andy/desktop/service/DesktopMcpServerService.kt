@@ -136,11 +136,11 @@ class DesktopMcpServerService(
             val engine = embeddedServer(Netty, host = "127.0.0.1", port = port) {
                 install(DoubleReceive)
                 mcpStreamableHttp("/mcp-http", enableDnsRebindingProtection = false) {
-                    createMcpServer()
+                    createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
                 }
                 routing {
                     mcp("/mcp", enableDnsRebindingProtection = false) {
-                        createMcpServer()
+                        createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
                     }
                 }
             }
@@ -235,7 +235,7 @@ class DesktopMcpServerService(
         "start_screen_recording", "stop_screen_recording", "export_recording",
     ) + agentProjectToolNames()
 
-    private fun createMcpServer(): Server {
+    private fun createMcpServer(callerTaskId: String? = null): Server {
         val mcpServer = Server(
             serverInfo = Implementation("andy", "1.0.0"),
             options = ServerOptions(
@@ -249,7 +249,11 @@ class DesktopMcpServerService(
         val agents = agentRuns
         val projects = projectWorkflows
         if (agents != null && projects != null) {
-            mcpServer.registerAgentProjectTools(agents, projects)
+            mcpServer.registerAgentProjectTools(
+                agents,
+                projects,
+                callerTaskId = callerTaskId?.takeIf { it.isNotBlank() },
+            )
         }
         return mcpServer
     }

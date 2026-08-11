@@ -22,4 +22,31 @@ class ChatMarkdownTest {
         val wrapped = "Monday, August\n**3,**"
         assertEquals("Monday, August  \n**3,**", wrapped.withChatLineBreaks())
     }
+
+    @Test
+    fun unwrapsWholeMessageMarkdownFenceWithNestedCodeFence() {
+        val text = "```markdown\n# Title\n\n```kotlin\nfun main() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |\n```"
+        assertEquals(
+            "# Title\n\n```kotlin\nfun main() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |",
+            text.unwrapOuterMarkdownFence(),
+        )
+    }
+
+    @Test
+    fun leavesNormalCodeFenceUntouched() {
+        val text = "```kotlin\nfun main() {}\n```"
+        assertEquals(text, text.unwrapOuterMarkdownFence())
+    }
+
+    @Test
+    fun leavesProseWithTrailingFenceUntouched() {
+        val text = "Some prose.\n\n```markdown\n# Title\n```"
+        assertEquals(text, text.unwrapOuterMarkdownFence())
+    }
+
+    @Test
+    fun leavesUnclosedMarkdownFenceUntouched() {
+        val text = "```markdown\n# Title\nno closing fence here"
+        assertEquals(text, text.unwrapOuterMarkdownFence())
+    }
 }

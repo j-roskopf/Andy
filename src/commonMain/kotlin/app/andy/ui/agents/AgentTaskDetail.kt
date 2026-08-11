@@ -73,6 +73,7 @@ import app.andy.model.AgentLaneKind
 import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentChangeSummary
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
+import app.andy.model.IMPLEMENT_PLAN_PROMPT
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
@@ -81,11 +82,13 @@ import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.composerSkillsForSlashMenu
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.AgentSkill
+import app.andy.model.ProjectWorkflowStage
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
+import app.andy.model.latestPlanHasPendingEntries
 import app.andy.model.looksLikePlanMode
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
@@ -253,6 +256,14 @@ internal fun AgentTaskDetail(
     }
     val acpPlanModeActive = currentAcpMode?.looksLikePlanMode() == true
     val planModeActive = task.planMode || acpPlanModeActive
+    val hasPendingPlanEntries = remember(transcriptEvents) {
+        latestPlanHasPendingEntries(transcriptEvents)
+    }
+    val awaitingPlanConfirmation = isAwaitingPlanConfirmation(
+        task = task,
+        planModeActive = planModeActive,
+        hasPendingPlanEntries = hasPendingPlanEntries,
+    )
     val slashMenuSkills = remember(availableSkills, availableCommands) {
         composerSkillsForSlashMenu(availableSkills, availableCommands)
     }
@@ -369,9 +380,11 @@ internal fun AgentTaskDetail(
         if (showHeader) {
             AgentTaskHeader(
                 task = task,
+                planModeActive = planModeActive,
+                hasPendingPlanEntries = hasPendingPlanEntries,
                 terminalLive = sessionActive,
                 onStop = { services.agentRuns.stop(task.id) },
-                onCompleteBuild = if (task.workflowStage == app.andy.model.ProjectWorkflowStage.Build && task.isActive) {
+                onCompleteBuild = if (task.workflowStage == ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
                 } else {
                     null
@@ -429,6 +442,15 @@ internal fun AgentTaskDetail(
                 },
             )
         }
+        if (awaitingPlanConfirmation && showFollowUpComposer) {
+            PlanReadyBanner(
+                showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
+                onImplement = {
+                    services.agentRuns.updatePlanMode(task.id, false)
+                    services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
+                },
+            )
+        }
         Box(
             Modifier
                 .weight(1f)
@@ -452,6 +474,7 @@ internal fun AgentTaskDetail(
                     AgentTranscript(
                         events = transcriptEvents,
                         isActive = task.isActive,
+                        awaitingPlanConfirmation = awaitingPlanConfirmation,
                         agentLabel = task.agent.cliName,
                         originalPrompt = task.prompt.ifBlank { task.title },
                         originalImagePaths = task.imagePaths,
@@ -709,6 +732,8 @@ internal fun AgentTaskDetail(
                                         followUpImageDragActive -> "release to attach images"
                                         followUpImagePaths.isNotEmpty() ->
                                             "add a message or send images — attach, paste, or drag more"
+                                        awaitingPlanConfirmation ->
+                                            "Refine the plan, or implement above"
                                         else ->
                                             "Follow up with ${task.agent.label} — attach, paste, or drag images"
                                     },
@@ -906,6 +931,8 @@ internal fun AgentTaskDetail(
 @Composable
 private fun AgentTaskHeader(
     task: AgentTask,
+    planModeActive: Boolean,
+    hasPendingPlanEntries: Boolean,
     terminalLive: Boolean,
     onStop: () -> Unit,
     onCompleteBuild: (() -> Unit)? = null,
@@ -968,7 +995,12 @@ private fun AgentTaskHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(agentStatusLabel(task), color = agentStatusColor(task.status), fontFamily = MonoFont, fontSize = 10.sp)
+                    Text(
+                        agentStatusLabel(task, planModeActive, hasPendingPlanEntries),
+                        color = agentStatusColor(task, planModeActive, hasPendingPlanEntries),
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                    )
                     if (!terminalLive) {
                         Text("read-only", color = TextSecondary.copy(alpha = 0.75f), fontFamily = MonoFont, fontSize = 10.sp)
                     }

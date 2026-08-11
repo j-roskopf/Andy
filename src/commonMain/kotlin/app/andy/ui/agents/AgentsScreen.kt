@@ -324,7 +324,7 @@ private fun AgentInboxRow(
                 if (task.status != AgentStatus.Blocked) {
                     Text(
                         agentStatusLabel(task),
-                        color = agentStatusColor(task.status).copy(alpha = 0.85f),
+                        color = agentStatusColor(task).copy(alpha = 0.85f),
                         fontFamily = MonoFont,
                         fontSize = 9.sp,
                         maxLines = 1,

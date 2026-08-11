@@ -650,54 +650,96 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
 
 @Composable
 private fun ReviewDetail(task: ProjectTask, runs: List<AgentTask>) {
-    DetailBlock(
-        "STANDARD RUBRIC",
-        "Correctness · plan alignment · maintainability · security · scope",
-    )
-    if (task.reviewInstructions.isNotBlank()) DetailBlock("CUSTOM REVIEW INSTRUCTIONS", task.reviewInstructions)
-    if (task.state == ProjectTaskState.Disabled) WorkflowNotice("Review is disabled. Prior findings and transcripts remain available for audit.", TextSecondary)
+    val attemptByRunId = remember(task.attempts) { task.attempts.associateBy { it.runId } }
+    val showGeneration = remember(task.reviewVerdicts) {
+        task.reviewVerdicts.map { it.reviewGeneration }.distinct().size > 1
+    }
     val latestRun = remember(task, runs) {
         task.attempts.maxByOrNull { it.createdAtMillis }?.runId?.let { runId -> runs.firstOrNull { it.id == runId } }
     }
-    latestRun?.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
-        DetailBlock("REVIEW WORKSPACE CHANGES", files.joinToString("\n") { "${it.path} (+${it.additions} -${it.deletions})" })
-    }
-    if (task.reviewVerdicts.isEmpty()) {
-        WorkflowNotice("No structured review verdict yet.", AndyColors.Blue)
-    } else {
-        task.reviewVerdicts.sortedByDescending { it.createdAtMillis }.forEachIndexed { index, verdict ->
-            WorkflowNotice(
-                "${if (index == 0) "Latest · " else ""}${reviewStatusLabel(verdict.status)} · generation ${verdict.reviewGeneration}\n${verdict.summary}",
-                if (verdict.status == ProjectReviewStatus.Approved) Green else Red,
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            DetailBlock(
+                "STANDARD RUBRIC",
+                "Correctness · plan alignment · maintainability · security · scope",
             )
-            ProjectReviewFindingSeverity.entries.forEach { severity ->
-                verdict.findings.filter { it.severity == severity }.takeIf { it.isNotEmpty() }?.let { findings ->
-                    DetailBlock(
-                        severity.name.uppercase(),
-                        findings.joinToString("\n\n") { finding ->
-                            buildString {
-                                append("• ").append(finding.title).append(" — ").append(finding.details)
-                                finding.file?.let { file ->
-                                    append("\n  ").append(file)
-                                    finding.line?.let { append(':').append(it) }
-                                }
-                            }
-                        },
+            if (task.reviewInstructions.isNotBlank()) DetailBlock("CUSTOM REVIEW INSTRUCTIONS", task.reviewInstructions)
+            if (task.state == ProjectTaskState.Disabled) {
+                WorkflowNotice("Review is disabled. Prior findings and transcripts remain available for audit.", TextSecondary)
+            }
+            latestRun?.completedChanges?.summary?.files?.takeIf { it.isNotEmpty() }?.let { files ->
+                DetailBlock(
+                    "REVIEW WORKSPACE CHANGES",
+                    files.joinToString("\n") { "${it.path} (+${it.additions} -${it.deletions})" },
+                )
+            }
+            if (task.reviewVerdicts.isEmpty()) {
+                WorkflowNotice("No structured review verdict yet.", AndyColors.Blue)
+            } else {
+                task.reviewVerdicts.sortedByDescending { it.createdAtMillis }.forEachIndexed { index, verdict ->
+                    val attempt = attemptByRunId[verdict.runId]
+                    WorkflowNotice(
+                        reviewVerdictHeadline(
+                            statusLabel = reviewStatusLabel(verdict.status),
+                            summary = verdict.summary,
+                            attempt = attempt?.attempt,
+                            reviewGeneration = verdict.reviewGeneration,
+                            latest = index == 0,
+                            showGeneration = showGeneration || verdict.reviewGeneration > 1,
+                        ),
+                        if (verdict.status == ProjectReviewStatus.Approved) Green else Red,
                     )
+                    ProjectReviewFindingSeverity.entries.forEach { severity ->
+                        verdict.findings.filter { it.severity == severity }.takeIf { it.isNotEmpty() }?.let { findings ->
+                            DetailBlock(
+                                severity.name.uppercase(),
+                                findings.joinToString("\n\n") { finding ->
+                                    buildString {
+                                        append("• ").append(finding.title).append(" — ").append(finding.details)
+                                        finding.file?.let { file ->
+                                            append("\n  ").append(file)
+                                            finding.line?.let { append(':').append(it) }
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+internal fun reviewVerdictHeadline(
+    statusLabel: String,
+    summary: String,
+    attempt: Int?,
+    reviewGeneration: Int,
+    latest: Boolean,
+    showGeneration: Boolean,
+): String = buildString {
+    if (latest) append("Latest · ")
+    append(statusLabel)
+    attempt?.let { append(" · attempt ").append(it) }
+    if (showGeneration) append(" · generation ").append(reviewGeneration)
+    append('\n').append(summary)
+}
+
 @Composable
 private fun VerificationDetail(task: ProjectTask) {
-    if (task.verificationInstructions.isNotBlank()) DetailBlock("VERIFICATION INSTRUCTIONS", task.verificationInstructions)
-    task.verdicts.lastOrNull()?.let { verdict ->
-        WorkflowNotice(verdict.summary, if (verdict.status == ProjectVerificationStatus.Passed) Green else Red)
-        if (verdict.evidence.isNotEmpty()) DetailBlock("EVIDENCE", verdict.evidence.joinToString("\n") { "• $it" })
-        if (verdict.failures.isNotEmpty()) DetailBlock("FAILURES", verdict.failures.joinToString("\n") { "• $it" })
-    } ?: WorkflowNotice("No structured verifier verdict yet.", Cyan)
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (task.verificationInstructions.isNotBlank()) {
+                DetailBlock("VERIFICATION INSTRUCTIONS", task.verificationInstructions)
+            }
+            task.verdicts.lastOrNull()?.let { verdict ->
+                WorkflowNotice(verdict.summary, if (verdict.status == ProjectVerificationStatus.Passed) Green else Red)
+                if (verdict.evidence.isNotEmpty()) DetailBlock("EVIDENCE", verdict.evidence.joinToString("\n") { "• $it" })
+                if (verdict.failures.isNotEmpty()) DetailBlock("FAILURES", verdict.failures.joinToString("\n") { "• $it" })
+            } ?: WorkflowNotice("No structured verifier verdict yet.", Cyan)
+        }
+    }
 }
 
 @Composable

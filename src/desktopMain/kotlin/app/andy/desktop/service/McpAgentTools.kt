@@ -51,10 +51,16 @@ private val agentToolsJson = Json { encodeDefaults = true; ignoreUnknownKeys = t
 /**
  * Registers agent/project/chat MCP tools that delegate to [AgentRunService] /
  * [ProjectWorkflowService].
+ *
+ * @param callerTaskId When this MCP session is bound to an Andy chat (HTTP URL
+ *   `?andyTaskId=` or an explicit `callerTaskId` arg), omitted `autonomy` on
+ *   [chat.start] inherits that parent's autonomy so orchestrated workers match
+ *   the parent's permission dial.
  */
 fun Server.registerAgentProjectTools(
     agentRuns: AgentRunService,
     projectWorkflows: ProjectWorkflowService,
+    callerTaskId: String? = null,
 ) {
     fun register(
         name: String,
@@ -154,6 +160,7 @@ fun Server.registerAgentProjectTools(
                         put("ownsWorktree", task.ownsWorktree)
                         put("parentWorktreeTaskId", task.parentWorktreeTaskId.orEmpty())
                         put("attachAndyMcp", task.attachAndyMcp)
+                        put("autonomy", task.autonomy.name)
                         put("unread", task.unread)
                         put("archived", task.archived)
                         put("transcriptCompressed", task.transcriptCompressed)
@@ -391,7 +398,21 @@ fun Server.registerAgentProjectTools(
             },
             "autonomy" to buildJsonObject {
                 put("type", "string")
-                put("description", "ReadOnly | Standard | Full")
+                put(
+                    "description",
+                    "ReadOnly | Standard | Full. When omitted, inherits from callerTaskId " +
+                        "(or the MCP session's andyTaskId) when that parent task is known; " +
+                        "otherwise Standard.",
+                )
+            },
+            "callerTaskId" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Optional Andy task id of the orchestrating parent. When autonomy is " +
+                        "omitted, the child inherits that parent's autonomy. The andy CLI " +
+                        "injects ANDY_TASK_ID here automatically.",
+                )
             },
             "contextBundleIds" to buildJsonObject {
                 put("type", "array")
@@ -420,7 +441,12 @@ fun Server.registerAgentProjectTools(
         val autonomyName = str(args, "autonomy")
         val autonomy = autonomyName?.let { name ->
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
-        } ?: AgentAutonomy.Standard
+                ?: error("unknown autonomy: $name")
+        } ?: inheritedAutonomy(
+            agentRuns = agentRuns,
+            explicitCallerTaskId = str(args, "callerTaskId"),
+            sessionCallerTaskId = callerTaskId,
+        )
         val model = str(args, "model")?.takeIf { it.isNotBlank() }
         val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
         val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
@@ -796,6 +822,7 @@ fun Server.registerAgentProjectTools(
                 put("id", id)
                 put("status", task?.status?.name.orEmpty())
                 put("lane", task?.lane?.name.orEmpty())
+                put("autonomy", task?.autonomy?.name.orEmpty())
                 put("statusConfident", task?.statusConfident ?: false)
                 put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
                 put("tmuxSession", TmuxAndy.sessionName(id))
@@ -1026,6 +1053,23 @@ fun Server.registerAgentProjectTools(
         projectWorkflows.startBuildPair(id)
         textResult("""{"ok":true,"buildTaskId":"$id"}""")
     }
+}
+
+/**
+ * When `chat.start` omits autonomy, prefer the orchestrating parent's dial so
+ * andy-loop / handoff workers keep Full (or whatever the parent was launched with).
+ * Explicit `autonomy` always wins; missing parent falls back to Standard.
+ */
+internal fun inheritedAutonomy(
+    agentRuns: AgentRunService,
+    explicitCallerTaskId: String?,
+    sessionCallerTaskId: String?,
+): AgentAutonomy {
+    val parentId = explicitCallerTaskId?.takeIf { it.isNotBlank() }
+        ?: sessionCallerTaskId?.takeIf { it.isNotBlank() }
+        ?: return AgentAutonomy.Standard
+    return agentRuns.tasks.value.firstOrNull { it.id == parentId }?.autonomy
+        ?: AgentAutonomy.Standard
 }
 
 /** Tool names added by [registerAgentProjectTools]. */
