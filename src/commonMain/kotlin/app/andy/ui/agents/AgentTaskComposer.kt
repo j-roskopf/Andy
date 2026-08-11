@@ -83,6 +83,8 @@ import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.WorkspaceState
+import app.andy.model.composerCommandName
+import app.andy.model.composerCommandToken
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
 import app.andy.model.groupedByModelFamily
@@ -516,7 +518,7 @@ private class AgentTaskComposerForm(
 
     fun selectCommand(command: AgentNativeSlashCommand) {
         val slash = slashCommand ?: return
-        val insertion = "/${command.name} "
+        val insertion = "${command.name.composerCommandToken()} "
         state.promptValue = TextFieldValue(
             text = state.prompt.replaceRange(slash.start, slash.end, insertion),
             selection = TextRange(slash.start + insertion.length),
@@ -544,7 +546,7 @@ internal fun rememberComposerSlashHighlight(
     }
     val skillNames = remember(menuSkills) { menuSkills.mapTo(linkedSetOf()) { it.name } }
     val commandNames = remember(availableCommands) {
-        availableCommands.mapTo(linkedSetOf()) { it.name }
+        availableCommands.mapTo(linkedSetOf()) { it.name.composerCommandName() }
     }
     return rememberComposerSlashHighlight(
         skillNames = skillNames,
@@ -672,7 +674,7 @@ private fun AgentChatComposer(
                     DropdownMenuItem(
                         text = {
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
                                 Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
                             }
                         },
@@ -999,7 +1001,7 @@ private fun AgentTaskComposerFields(
                         DropdownMenuItem(
                             text = {
                                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                    Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
                                     Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
                                 }
                             },

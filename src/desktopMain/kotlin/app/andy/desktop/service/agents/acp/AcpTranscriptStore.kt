@@ -5,6 +5,7 @@ import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentSkill
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import kotlinx.serialization.Serializable
@@ -84,6 +85,7 @@ private data class TranscriptEvent(
     val model: String = "",
     val skills: List<TranscriptSkill> = emptyList(),
     val images: List<String> = emptyList(),
+    val toolImages: List<String> = emptyList(),
     val toolName: String = "",
     val toolCallId: String = "",
     val summary: String = "",
@@ -129,7 +131,7 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
     is AgentEvent.AssistantText -> TranscriptEvent("assistant", atMillis, text = text, isStreamDelta = isStreamDelta)
     is AgentEvent.Thinking -> TranscriptEvent("thinking", atMillis, text = text, isStreamDelta = isStreamDelta)
     is AgentEvent.UserMessage -> TranscriptEvent("user", atMillis, text = text, skills = skills.map { TranscriptSkill(it.name, it.path) }, images = imagePaths)
-    is AgentEvent.ToolCall -> TranscriptEvent("tool", atMillis, toolName = toolName, toolCallId = toolCallId.orEmpty(), summary = summary, detail = detail, toolKind = kind?.name.orEmpty(), toolState = state.name, locations = locations)
+    is AgentEvent.ToolCall -> TranscriptEvent("tool", atMillis, toolName = toolName, toolCallId = toolCallId.orEmpty(), summary = summary, detail = detail, toolKind = kind?.name.orEmpty(), toolState = state.name, locations = locations, toolImages = images.map { it.dataUri })
     is AgentEvent.ToolResult -> TranscriptEvent("tool-result", atMillis, toolName = toolName.orEmpty(), summary = summary, detail = detail, isError = isError, quotaWindows = quotaWindows.map { TranscriptQuotaWindow(it.label, it.remainingFraction, it.resetAtMillis, it.detail) })
     is AgentEvent.TaskError -> TranscriptEvent("error", atMillis, text = message)
     is AgentEvent.TaskResult -> TranscriptEvent("result", atMillis, success = success, finalText = finalText.orEmpty(), costUsd = costUsd ?: 0.0, costIsEstimated = costIsEstimated, inputTokens = inputTokens ?: 0, outputTokens = outputTokens ?: 0, durationMs = durationMs ?: 0)
@@ -153,7 +155,7 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "assistant" -> AgentEvent.AssistantText(atMillis, text, isStreamDelta)
     "thinking" -> AgentEvent.Thinking(atMillis, text, isStreamDelta)
     "user" -> AgentEvent.UserMessage(atMillis, text, skills.map { AgentSkill(it.name, "", it.path) }, images)
-    "tool" -> AgentEvent.ToolCall(atMillis, toolName, summary, detail.ifBlank { summary }, toolCallId.takeIf { it.isNotBlank() }, AgentToolKind.entries.firstOrNull { it.name == toolKind }, AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed, locations)
+    "tool" -> AgentEvent.ToolCall(atMillis, toolName, summary, detail.ifBlank { summary }, toolCallId.takeIf { it.isNotBlank() }, AgentToolKind.entries.firstOrNull { it.name == toolKind }, AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed, locations, toolImages.map { AgentToolImage(it) })
     "tool-result" -> AgentEvent.ToolResult(atMillis, toolName.takeIf { it.isNotBlank() }, summary, detail.ifBlank { summary }, isError, quotaWindows.map { AgentQuotaWindow(it.label, it.fraction, it.resetAt, it.detail) })
     "error" -> AgentEvent.TaskError(atMillis, text)
     "result" -> AgentEvent.TaskResult(atMillis, success, finalText.takeIf { it.isNotBlank() }, costUsd.takeIf { it != 0.0 }, costIsEstimated, inputTokens.takeIf { it != 0L }, outputTokens.takeIf { it != 0L }, durationMs.takeIf { it != 0L })

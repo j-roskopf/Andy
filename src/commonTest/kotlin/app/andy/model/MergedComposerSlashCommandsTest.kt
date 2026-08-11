@@ -5,6 +5,14 @@ import kotlin.test.assertEquals
 
 class MergedComposerSlashCommandsTest {
     @Test
+    fun normalizesCodexSkillInvocationTokenToAndysSlashSyntax() {
+        assertEquals("design-taste-frontend", "${'$'}design-taste-frontend".composerCommandName())
+        assertEquals("/design-taste-frontend", "${'$'}design-taste-frontend".composerCommandToken())
+        assertEquals("/goal", "goal".composerCommandToken())
+        assertEquals("/review", "/review".composerCommandToken())
+    }
+
+    @Test
     fun mergesAndyNativeGoalWithProviderCommandsWithoutDuplicates() {
         val merged = mergedComposerSlashCommands(
             agent = AgentKind.ClaudeCode,

@@ -35,6 +35,7 @@ import app.andy.ui.components.AndyHorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import app.andy.HostCodeEditor
 import app.andy.rememberCopyText
 import app.andy.currentTimeMillis
 import app.andy.domain.ToolCallFileContent
@@ -82,10 +84,14 @@ import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.composerSkillsForSlashMenu
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.AgentSkill
+import app.andy.model.HostFileDocument
+import app.andy.model.HostFileSaveResult
+import app.andy.model.HostSearchMode
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
+import app.andy.model.composerCommandToken
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
 import app.andy.model.latestPlanHasPendingEntries
@@ -98,6 +104,7 @@ import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.KeyCombo
+import app.andy.ui.components.LocalOnOpenFileLink
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.ui.components.FilterPill
@@ -162,6 +169,10 @@ internal fun AgentTaskDetail(
     var loadingDiffPath by remember(task.id) { mutableStateOf<String?>(null) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
     var toolDiffPane by remember(task.id) { mutableStateOf<AgentFileDiff?>(null) }
+    var filePreviewPane by remember(task.id) { mutableStateOf<FileLinkPreviewState?>(null) }
+    val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
+        listOfNotNull(task.worktreePath, task.cwd, task.originDir).distinct()
+    }
     var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
@@ -303,7 +314,7 @@ internal fun AgentTaskDetail(
 
     fun selectCommand(command: AgentNativeSlashCommand) {
         val slash = findActiveSlashCommand(followUp) ?: return
-        val insertion = "/${command.name} "
+        val insertion = "${command.name.composerCommandToken()} "
         followUpValue = TextFieldValue(
             text = followUp.replaceRange(slash.start, slash.end, insertion),
             selection = TextRange(slash.start + insertion.length),
@@ -350,6 +361,34 @@ internal fun AgentTaskDetail(
         toolDiffPane = diffFromToolCallFileContent(content)
     }
 
+    /** Handles a markdown link click that isn't a real web URL — opens it in Andy's own code viewer instead. */
+    fun openFileLink(uri: String): Boolean {
+        filePreviewPane = FileLinkPreviewState(requestedPath = uri, loading = true)
+        scope.launch {
+            filePreviewPane = resolveFileLink(services, fileLinkRoots, uri)
+        }
+        return true
+    }
+
+    fun saveFilePreview(path: String, text: String) {
+        val current = filePreviewPane ?: return
+        scope.launch {
+            when (val result = services.hostFiles.save(path, text, current.document?.modifiedMillis ?: 0L)) {
+                is HostFileSaveResult.Saved -> {
+                    filePreviewPane = current.copy(
+                        document = current.document?.copy(content = text, modifiedMillis = result.modifiedMillis),
+                    )
+                }
+                is HostFileSaveResult.Conflict -> {
+                    filePreviewPane = current.copy(error = "Changed on disk since it was opened — not saved.")
+                }
+                is HostFileSaveResult.Failed -> {
+                    filePreviewPane = current.copy(error = result.message)
+                }
+            }
+        }
+    }
+
     fun toggleFileDiff(path: String) {
         if (expandedDiffPath == path) {
             expandedDiffPath = null
@@ -365,6 +404,7 @@ internal fun AgentTaskDetail(
         }
     }
 
+    CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
@@ -429,27 +469,6 @@ internal fun AgentTaskDetail(
                     onSubmit = { answers -> services.agentRuns.respondToUserInput(task.id, request.id, answers) },
                 )
             }
-        }
-        if (showConnectionStallBanner) {
-            ConnectionStallBanner(
-                onRetry = {
-                    scope.launch {
-                        services.agentRuns.resume(
-                            taskId = task.id,
-                            followUp = CONNECTION_STALL_RETRY_PROMPT,
-                        )
-                    }
-                },
-            )
-        }
-        if (awaitingPlanConfirmation && showFollowUpComposer) {
-            PlanReadyBanner(
-                showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
-                onImplement = {
-                    services.agentRuns.updatePlanMode(task.id, false)
-                    services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
-                },
-            )
         }
         Box(
             Modifier
@@ -517,7 +536,14 @@ internal fun AgentTaskDetail(
                         onToolFileOpen = ::openToolFile,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
-                    toolDiffPane?.let { diff ->
+                    filePreviewPane?.let { preview ->
+                        FileLinkPreviewPane(
+                            state = preview,
+                            onSave = ::saveFilePreview,
+                            onClose = { filePreviewPane = null },
+                            modifier = Modifier.width(420.dp).fillMaxHeight(),
+                        )
+                    } ?: toolDiffPane?.let { diff ->
                         AgentToolDiffSidePane(
                             diff = diff,
                             viewMode = diffViewMode,
@@ -616,6 +642,28 @@ internal fun AgentTaskDetail(
                     }
                 }
             }
+        }
+
+        if (showConnectionStallBanner) {
+            ConnectionStallBanner(
+                onRetry = {
+                    scope.launch {
+                        services.agentRuns.resume(
+                            taskId = task.id,
+                            followUp = CONNECTION_STALL_RETRY_PROMPT,
+                        )
+                    }
+                },
+            )
+        }
+        if (awaitingPlanConfirmation && showFollowUpComposer) {
+            PlanReadyBanner(
+                showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
+                onImplement = {
+                    services.agentRuns.updatePlanMode(task.id, false)
+                    services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
+                },
+            )
         }
 
         if (showFollowUpComposer) {
@@ -764,7 +812,7 @@ internal fun AgentTaskDetail(
                                 DropdownMenuItem(
                                     text = {
                                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text("/${command.name}", color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                            Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
                                             Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         }
                                     },
@@ -922,6 +970,119 @@ internal fun AgentTaskDetail(
                     fontSize = 11.sp,
                     lineHeight = 14.sp,
                     modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            }
+        }
+    }
+    }
+}
+
+/** One-shot request to preview a markdown file link, jumped to from assistant/tool text. */
+private data class FileLinkPreviewState(
+    val requestedPath: String,
+    val loading: Boolean = true,
+    val document: HostFileDocument? = null,
+    val error: String? = null,
+)
+
+private fun isAbsoluteHostPath(path: String): Boolean =
+    path.startsWith("/") || path.startsWith("~/") || Regex("""^[A-Za-z]:[\\/]""").containsMatchIn(path)
+
+/** Resolves a clicked markdown link against the task's project directories instead of the OS browser. */
+private suspend fun resolveFileLink(
+    services: AndyServices,
+    roots: List<String>,
+    uri: String,
+): FileLinkPreviewState {
+    val cleaned = uri.trim().removePrefix("file://").substringBefore('#')
+    if (cleaned.isBlank()) {
+        return FileLinkPreviewState(requestedPath = uri, loading = false, error = "Not a file link.")
+    }
+    val candidates = if (isAbsoluteHostPath(cleaned)) {
+        listOf(cleaned)
+    } else {
+        roots.map { root -> root.trimEnd('/', '\\') + "/" + cleaned.trimStart('/', '\\') }
+    }
+    candidates.forEach { candidate ->
+        runCatching { services.hostFiles.read(candidate) }.getOrNull()?.let { doc ->
+            return FileLinkPreviewState(requestedPath = doc.path, loading = false, document = doc)
+        }
+    }
+    val fileName = cleaned.substringAfterLast('/').substringAfterLast('\\')
+    if (fileName.isNotBlank()) {
+        val hit = runCatching {
+            services.hostFiles.search(fileName, HostSearchMode.FileName, roots.ifEmpty { listOf(".") }, limit = 5)
+                .firstOrNull { it.path.substringAfterLast('/').substringAfterLast('\\') == fileName }
+        }.getOrNull()
+        if (hit != null) {
+            runCatching { services.hostFiles.read(hit.path) }.getOrNull()?.let { doc ->
+                return FileLinkPreviewState(requestedPath = doc.path, loading = false, document = doc)
+            }
+        }
+    }
+    return FileLinkPreviewState(requestedPath = cleaned, loading = false, error = "Could not find \"$cleaned\" in this task's project.")
+}
+
+/** Embedded read/write preview of a host source file jumped to from a chat markdown link. */
+@Composable
+private fun FileLinkPreviewPane(
+    state: FileLinkPreviewState,
+    onSave: (path: String, text: String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    PanelCard(
+        modifier = modifier,
+        borderColor = Color.Transparent,
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "Code",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+                Text(
+                    state.requestedPath.substringAfterLast('/').ifBlank { state.requestedPath },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OutlinedButton(onClick = onClose) { Text("Close", fontSize = 11.sp) }
+        }
+        when {
+            state.loading -> Text(
+                "Loading…",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            state.error != null -> Text(
+                state.error,
+                color = Red,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            state.document != null -> Box(Modifier.fillMaxSize()) {
+                HostCodeEditor(
+                    path = state.document.path,
+                    text = state.document.content,
+                    languageHint = state.document.languageHint,
+                    modifier = Modifier.fillMaxSize(),
+                    onTextChange = { _, _ -> },
+                    onSave = onSave,
+                    onClose = onClose,
                 )
             }
         }

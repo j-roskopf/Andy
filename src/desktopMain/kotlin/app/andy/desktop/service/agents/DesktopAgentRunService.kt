@@ -56,7 +56,9 @@ import app.andy.model.ProjectVerificationVerdict
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.toProjectProfile
+import app.andy.model.CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
+import app.andy.model.MAX_CONNECTION_STALL_AUTO_RETRIES
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.hasRetriableConnectionStall
@@ -207,7 +209,7 @@ class DesktopAgentRunService(
     /** While reconnecting an ACP session, drop provider history replay into the transcript. */
     private val acpSuppressProviderReplay = ConcurrentHashMap.newKeySet<String>()
     private val acpProviderReplayScratch = ConcurrentHashMap<String, StringBuilder>()
-    /** One automatic resume per task turn after a provider connection stall. */
+    /** Automatic resume attempts per task turn after a provider connection stall. */
     private val connectionStallAutoRetries = ConcurrentHashMap<String, Int>()
     /** Outstanding ACP session-mode syncs; [resume] awaits these so Implement doesn't race plan→agent. */
     private val acpPlanModeSyncJobs = ConcurrentHashMap<String, Job>()
@@ -2356,7 +2358,7 @@ class DesktopAgentRunService(
         if (!success) {
             appendLaunchDiagnostics(taskId, "acpPromptFailed=true\n")
         }
-        completeAcpPromptTurn(taskId, success, isAutoRetry = false)
+        completeAcpPromptTurn(taskId, success)
     }
 
     private suspend fun runAcpFollowUp(taskId: String, prompt: String, imagePaths: List<String>): Boolean {
@@ -2381,7 +2383,7 @@ class DesktopAgentRunService(
             }
             acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
             val success = acpManager.prompt(taskId, prompt, imagePaths)
-            return completeAcpPromptTurn(taskId, success, isAutoRetry = false)
+            return completeAcpPromptTurn(taskId, success)
         } finally {
             acpSuppressProviderReplay.remove(taskId)
             acpProviderReplayScratch.remove(taskId)
@@ -2391,19 +2393,19 @@ class DesktopAgentRunService(
     private suspend fun completeAcpPromptTurn(
         taskId: String,
         promptSuccess: Boolean,
-        isAutoRetry: Boolean,
     ): Boolean {
         if (deferAcpFinishIfAwaitingInput(taskId)) return promptSuccess
 
         val stalled = transcriptHasConnectionStall(taskId)
+        val attempt = connectionStallAutoRetries.getOrDefault(taskId, 0)
         if (
             stalled &&
-            !isAutoRetry &&
-            connectionStallAutoRetries.getOrDefault(taskId, 0) < 1 &&
+            attempt < MAX_CONNECTION_STALL_AUTO_RETRIES &&
             acpManager.isAlive(taskId)
         ) {
-            connectionStallAutoRetries[taskId] = 1
-            appendLaunchDiagnostics(taskId, "connectionStallAutoRetry=true\n")
+            val nextAttempt = attempt + 1
+            connectionStallAutoRetries[taskId] = nextAttempt
+            appendLaunchDiagnostics(taskId, "connectionStallAutoRetry=$nextAttempt\n")
             updateTask(taskId) {
                 it.copy(
                     status = AgentStatus.Working,
@@ -2412,8 +2414,13 @@ class DesktopAgentRunService(
                     exitCode = null,
                 )
             }
+            appendEvents(
+                taskId,
+                listOf(AgentEvent.UserMessage(System.currentTimeMillis(), CONNECTION_STALL_RETRY_PROMPT)),
+            )
+            delay(CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS * nextAttempt)
             val retrySuccess = acpManager.prompt(taskId, CONNECTION_STALL_RETRY_PROMPT, emptyList())
-            return completeAcpPromptTurn(taskId, retrySuccess, isAutoRetry = true)
+            return completeAcpPromptTurn(taskId, retrySuccess)
         }
 
         connectionStallAutoRetries.remove(taskId)

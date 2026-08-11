@@ -135,7 +135,7 @@ private enum class DesktopSettingsCategory(
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
     Navigation("Navigation", "Show or hide sidebar pages"),
-    Agents("Agents", "Sessions, orchestration, transcript, and notifications"),
+    Agents("Agents", "Sessions, orchestration, and notifications"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
     Updates("Updates", "Version, desktop app, CLI, andyd, and extras"),
@@ -437,7 +437,7 @@ private fun AppearancePanel(
 ) {
     val selectedTint = AndyTint.fromId(workspace.tintId)
     val selectedSurface = AndySurfaceMode.fromId(workspace.surfaceModeId)
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Accent",
             description = "Punctuation for selection, links, and status. Surfaces stay neutral.",
@@ -471,7 +471,7 @@ private fun AppearancePanel(
         }
         Text("Selected: ${selectedTint.label}", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
     }
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Background",
             description = "Tinted washes chrome with the accent hue. Dark uses quiet macOS neutrals. Light uses an independently tuned bright palette.",
@@ -487,7 +487,7 @@ private fun AppearancePanel(
             }
         }
     }
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Code editor theme",
             description = "Syntax highlighting for Computer Files. Andy is the built-in scheme; the rest are RSyntaxTextArea presets.",
@@ -526,7 +526,7 @@ private fun TerminalAppearancePanel(
     val selectedFont = TerminalFontFamily.fromId(workspace.terminalFontFamilyId)
     val selectedSize = TerminalThemePreset.coerceFontSize(workspace.terminalFontSize)
 
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Terminal",
             description = "Terminal theme and font for agent and project terminals. Changes apply to new and live sessions.",
@@ -548,7 +548,6 @@ private fun TerminalAppearancePanel(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
         Text("Font", color = TextSecondary, fontSize = 12.sp)
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -565,7 +564,6 @@ private fun TerminalAppearancePanel(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
         Text("Font size", color = TextSecondary, fontSize = 12.sp)
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -582,7 +580,6 @@ private fun TerminalAppearancePanel(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
         Text("Preview", color = TextSecondary, fontSize = 12.sp)
         TerminalThemePreview(
             terminalThemeId = workspace.terminalThemeId,
@@ -599,37 +596,27 @@ private fun NavigationPanel(
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
     destinations: List<AndyDestination>,
 ) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Sidebar pages",
             description = "Choose which pages appear in the sidebar. Settings is always available.",
         )
         destinations.filter { it.isToggleableInSidebar() }.forEach { destination ->
             val enabled = destination.name !in workspace.disabledDestinations
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .toggleable(
-                        value = enabled,
-                        role = Role.Checkbox,
-                        onValueChange = { checked ->
-                            update { state ->
-                                val disabled = if (checked) {
-                                    state.disabledDestinations - destination.name
-                                } else {
-                                    state.disabledDestinations + destination.name
-                                }
-                                state.copy(disabledDestinations = disabled)
-                            }
-                        },
-                    )
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(checked = enabled, onCheckedChange = null)
-                Text(destination.label, color = TextPrimary, fontSize = 13.sp)
-            }
+            SettingsCheckboxRow(
+                label = destination.label,
+                checked = enabled,
+                onCheckedChange = { checked ->
+                    update { state ->
+                        val disabled = if (checked) {
+                            state.disabledDestinations - destination.name
+                        } else {
+                            state.disabledDestinations + destination.name
+                        }
+                        state.copy(disabledDestinations = disabled)
+                    }
+                },
+            )
         }
     }
 }
@@ -665,6 +652,76 @@ private fun SettingsChoicePill(
     }
 }
 
+/** Approximate checkbox glyph + gap width, used to indent helper text under a checkbox label. */
+private val CheckboxDescriptionIndent = 32.dp
+
+/**
+ * Standard checkbox settings row: full row is the click target, checkbox and label
+ * share one consistent gap, and optional helper text sits indented under the label.
+ */
+@Composable
+private fun SettingsCheckboxRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    description: String? = null,
+    enabled: Boolean = true,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = onCheckedChange,
+            ),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
+            Text(
+                label,
+                color = if (enabled) TextPrimary else AndyColors.TextDisabled,
+                fontSize = 13.sp,
+            )
+        }
+        if (description != null) {
+            Text(
+                description,
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(start = CheckboxDescriptionIndent),
+            )
+        }
+    }
+}
+
+/** Checkbox + label pair for use inside a larger custom row (status, port field, etc). */
+@Composable
+private fun SettingsInlineCheckbox(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        Text(
+            label,
+            color = if (enabled) TextPrimary else AndyColors.TextDisabled,
+            fontSize = 13.sp,
+        )
+    }
+}
+
 @Composable
 private fun OnboardingPanel(
     workspace: WorkspaceState,
@@ -672,7 +729,7 @@ private fun OnboardingPanel(
 ) {
     var status by remember { mutableStateOf<String?>(null) }
     val completed = workspace.projectsIntroductionCompleted
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Projects",
             description = "The Projects intro walks through specs, builds, verification, and runbooks. Reset it to show the guided tour again the next time you open Projects.",
@@ -705,42 +762,22 @@ private fun AgentTranscriptPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Transcript",
             description = "How thinking steps and tool calls appear in agent chats.",
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = workspace.agentTranscriptAutoExpandActivity,
-                onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandActivity = value) } },
-            )
-            Text(
-                "Auto-expand thinking and tool sections",
-                color = TextPrimary,
-                fontSize = 13.sp,
-            )
-        }
-        Text(
-            "Opens each thinking step and tool call when it appears. You can still collapse sections manually.",
-            color = TextSecondary,
-            fontSize = 12.sp,
+        SettingsCheckboxRow(
+            label = "Auto-expand thinking and tool sections",
+            checked = workspace.agentTranscriptAutoExpandActivity,
+            onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandActivity = value) } },
+            description = "Opens each thinking step and tool call when it appears. You can still collapse sections manually.",
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = workspace.agentTranscriptCollapseActivityBlocks,
-                onCheckedChange = { value -> update { it.copy(agentTranscriptCollapseActivityBlocks = value) } },
-            )
-            Text(
-                "Collapse activity between messages",
-                color = TextPrimary,
-                fontSize = 13.sp,
-            )
-        }
-        Text(
-            "Groups consecutive thinking and tool steps into one block between user and assistant messages.",
-            color = TextSecondary,
-            fontSize = 12.sp,
+        SettingsCheckboxRow(
+            label = "Collapse activity between messages",
+            checked = workspace.agentTranscriptCollapseActivityBlocks,
+            onCheckedChange = { value -> update { it.copy(agentTranscriptCollapseActivityBlocks = value) } },
+            description = "Groups consecutive thinking and tool steps into one block between user and assistant messages.",
         )
     }
 }
@@ -760,7 +797,7 @@ private fun OrchestrationPreferencesPanel(
         service.save(normalized)
     }
 
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Orchestration",
             description = "Default providers for /andy-loop, handoff, advisor, and committee. " +
@@ -780,12 +817,12 @@ private fun OrchestrationPreferencesPanel(
                     modifier = Modifier.width(180.dp),
                 )
                 Box {
-                    Button(
+                    SettingsChoicePill(
+                        label = prefs.agentFor(role).label,
+                        selected = true,
+                        contentDescription = "${role.label} provider",
                         onClick = { expandedRole = role },
-                        colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
-                    ) {
-                        Text(prefs.agentFor(role).label, color = TextPrimary)
-                    }
+                    )
                     DropdownMenu(
                         expanded = expandedRole == role,
                         onDismissRequest = { expandedRole = null },
@@ -830,7 +867,7 @@ private fun AgentChatMessagingPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Messaging",
             description = "How follow-up messages are delivered while an agent is working.",
@@ -863,26 +900,16 @@ private fun AgentSessionsPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Sessions",
             description = "What happens to running agent CLIs when you quit Andy or stop andyd.",
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = workspace.keepAgentSessionsOnShutdown,
-                onCheckedChange = { value -> update { it.copy(keepAgentSessionsOnShutdown = value) } },
-            )
-            Text(
-                "Keep agent sessions alive after quit",
-                color = TextPrimary,
-                fontSize = 13.sp,
-            )
-        }
-        Text(
-            "When off, Andy stops all tmux agent sessions on quit so claude, codex, and agy processes do not linger.",
-            color = TextSecondary,
-            fontSize = 12.sp,
+        SettingsCheckboxRow(
+            label = "Keep agent sessions alive after quit",
+            checked = workspace.keepAgentSessionsOnShutdown,
+            onCheckedChange = { value -> update { it.copy(keepAgentSessionsOnShutdown = value) } },
+            description = "When off, Andy stops all tmux agent sessions on quit so claude, codex, and agy processes do not linger.",
         )
     }
 }
@@ -903,22 +930,16 @@ private fun AgentRetentionPanel(
     var sweepInProgress by remember { mutableStateOf(false) }
     var lastResult by remember { mutableStateOf<RetentionSweepResult?>(null) }
 
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Cleanup",
             description = "Automatically compress and remove old chats.",
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = workspace.retentionCleanupEnabled,
-                onCheckedChange = { value -> update { it.copy(retentionCleanupEnabled = value) } },
-            )
-            Text("Automatically clean up old chats", color = TextPrimary, fontSize = 13.sp)
-        }
-        Text(
-            "Unread or active chats, and chats archived manually, are always kept.",
-            color = TextSecondary,
-            fontSize = 12.sp,
+        SettingsCheckboxRow(
+            label = "Automatically clean up old chats",
+            checked = workspace.retentionCleanupEnabled,
+            onCheckedChange = { value -> update { it.copy(retentionCleanupEnabled = value) } },
+            description = "Unread or active chats, and chats archived manually, are always kept.",
         )
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1036,25 +1057,26 @@ private fun AgentNotificationsPanel(
     var timingExpanded by remember { mutableStateOf(false) }
     var soundExpanded by remember { mutableStateOf(false) }
     val sound = AgentNotificationSound.entries.firstOrNull { it.id == workspace.agentNotificationSoundId } ?: AgentNotificationSound.Chime
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Notifications",
             description = "How Andy calls attention to completed work and input requests.",
         )
-        listOf(
-            "OS notifications" to workspace.agentOsNotificationsEnabled,
-            "Notification sound" to workspace.agentNotificationSoundEnabled,
-            "Dock icon badge" to workspace.agentIconBadgeEnabled,
-        ).forEach { (label, checked) ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked, { value -> update { state -> when (label) {
-                    "OS notifications" -> state.copy(agentOsNotificationsEnabled = value)
-                    "Notification sound" -> state.copy(agentNotificationSoundEnabled = value)
-                    else -> state.copy(agentIconBadgeEnabled = value)
-                } } })
-                Text(label, color = TextPrimary, fontSize = 13.sp)
-            }
-        }
+        SettingsCheckboxRow(
+            label = "OS notifications",
+            checked = workspace.agentOsNotificationsEnabled,
+            onCheckedChange = { value -> update { it.copy(agentOsNotificationsEnabled = value) } },
+        )
+        SettingsCheckboxRow(
+            label = "Notification sound",
+            checked = workspace.agentNotificationSoundEnabled,
+            onCheckedChange = { value -> update { it.copy(agentNotificationSoundEnabled = value) } },
+        )
+        SettingsCheckboxRow(
+            label = "Dock icon badge",
+            checked = workspace.agentIconBadgeEnabled,
+            onCheckedChange = { value -> update { it.copy(agentIconBadgeEnabled = value) } },
+        )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("When to notify", color = TextSecondary, fontSize = 13.sp)
             Box {
@@ -1064,7 +1086,11 @@ private fun AgentNotificationsPanel(
                     contentDescription = "When to notify",
                     onClick = { timingExpanded = true },
                 )
-                DropdownMenu(timingExpanded, { timingExpanded = false }) {
+                DropdownMenu(
+                    expanded = timingExpanded,
+                    onDismissRequest = { timingExpanded = false },
+                    containerColor = AndyColors.Neutral750,
+                ) {
                     AgentNotificationTiming.entries.forEach { timing -> DropdownMenuItem({ Text(if (timing == AgentNotificationTiming.Always) "Always" else "Background only") }, { update { it.copy(agentNotificationTiming = timing) }; timingExpanded = false }) }
                 }
             }
@@ -1078,7 +1104,11 @@ private fun AgentNotificationsPanel(
                     contentDescription = "Notification sound",
                     onClick = { if (workspace.agentNotificationSoundEnabled) soundExpanded = true },
                 )
-                DropdownMenu(soundExpanded, { soundExpanded = false }) {
+                DropdownMenu(
+                    expanded = soundExpanded,
+                    onDismissRequest = { soundExpanded = false },
+                    containerColor = AndyColors.Neutral750,
+                ) {
                     AgentNotificationSound.entries.forEach { option -> DropdownMenuItem({ Text(option.label) }, { update { it.copy(agentNotificationSoundId = option.id) }; soundExpanded = false }) }
                 }
             }
@@ -1108,7 +1138,7 @@ private fun VoiceDictationPanel(
     var downloadsEpoch by remember { mutableStateOf(0) }
     val hasDownloads = remember(state, downloadsEpoch) { voiceSetup.hasDownloads() }
     val canResetVoice = hasDownloads || shortcut != null || enabled
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Voice dictation",
             description = "Push-to-talk mic in the new-task and follow-up composers. Downloads a local whisper.cpp binary and English model on first enable (~150 MB).",
@@ -1118,19 +1148,14 @@ private fun VoiceDictationPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(
-                    checked = enabled,
-                    onCheckedChange = { checked ->
-                        if (checked) scope.launch { voiceSetup.enable() }
-                        else voiceSetup.disable()
-                    },
-                )
-                Text("Voice dictation", color = TextPrimary, fontSize = 13.sp)
-            }
+            SettingsInlineCheckbox(
+                label = "Voice dictation",
+                checked = enabled,
+                onCheckedChange = { checked ->
+                    if (checked) scope.launch { voiceSetup.enable() }
+                    else voiceSetup.disable()
+                },
+            )
             when (val s = state) {
                 is VoiceSetupState.Downloading -> {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1307,7 +1332,7 @@ private fun UpdatesPanel(
         }
     }
 
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "About",
             description = "This Andy build and where updates come from.",
@@ -1328,7 +1353,7 @@ private fun UpdatesPanel(
     }
 
     if (updates !is UnavailableUpdateService) {
-        PanelCard {
+        PanelCard(Modifier.fillMaxWidth()) {
             SettingsSectionHeader(
                 title = "Desktop app",
                 description = "Check GitHub for a newer Andy.app / installer for this platform.",
@@ -1424,7 +1449,7 @@ private fun RuntimeBundlePanel(
     val installing = state is RuntimeBundleState.Installing
     val checking = state is RuntimeBundleState.Checking
 
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "CLI, andyd, and extras",
             description = "Install or update ~/.andy from the latest GitHub release " +
@@ -1558,7 +1583,7 @@ private fun ProxyPanel(
     proxyRunning: Boolean,
 ) {
     val scope = rememberCoroutineScope()
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "HTTP debug proxy",
             description = "Start Andy's mitmdump capture proxy automatically when the app opens.",
@@ -1568,18 +1593,13 @@ private fun ProxyPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(
-                    checked = workspaceState.proxyStartOnLaunch,
-                    onCheckedChange = { checked ->
-                        onUpdateWorkspace { it.copy(proxyStartOnLaunch = checked) }
-                    },
-                )
-                Text("Start proxy on app launch", color = TextPrimary, fontSize = 13.sp)
-            }
+            SettingsInlineCheckbox(
+                label = "Start proxy on app launch",
+                checked = workspaceState.proxyStartOnLaunch,
+                onCheckedChange = { checked ->
+                    onUpdateWorkspace { it.copy(proxyStartOnLaunch = checked) }
+                },
+            )
             Spacer(Modifier.width(16.dp))
             Row(
                 Modifier.weight(1f),
@@ -1626,23 +1646,18 @@ private fun ProxyPanel(
             }
         }
     }
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Corporate TLS",
             description = "If your Mac routes through a security proxy that re-signs HTTPS, point Andy at the corporate root CA or enable insecure upstream.",
         )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Checkbox(
-                checked = workspaceState.proxySslInsecure,
-                onCheckedChange = { checked ->
-                    onUpdateWorkspace { it.copy(proxySslInsecure = checked) }
-                },
-            )
-            Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 13.sp)
-        }
+        SettingsCheckboxRow(
+            label = "Insecure upstream (--ssl-insecure)",
+            checked = workspaceState.proxySslInsecure,
+            onCheckedChange = { checked ->
+                onUpdateWorkspace { it.copy(proxySslInsecure = checked) }
+            },
+        )
         TextField(
             value = workspaceState.proxyUpstreamTrustedCaPath.orEmpty(),
             onValueChange = { value ->
@@ -1670,7 +1685,7 @@ private fun McpServerPanel(
     mcpStatus: String,
     mcpRunning: Boolean,
 ) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Server",
             description = "Expose Andy's Android control automation as an MCP server for Claude Code, Codex, Cursor, and similar tools.",
@@ -1680,18 +1695,13 @@ private fun McpServerPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Checkbox(
-                    workspaceState.mcpServerEnabled,
-                    { checked ->
-                        onUpdateWorkspace { it.copy(mcpServerEnabled = checked) }
-                    },
-                )
-                Text("Enable MCP Server", color = TextPrimary, fontSize = 13.sp)
-            }
+            SettingsInlineCheckbox(
+                label = "Enable MCP Server",
+                checked = workspaceState.mcpServerEnabled,
+                onCheckedChange = { checked ->
+                    onUpdateWorkspace { it.copy(mcpServerEnabled = checked) }
+                },
+            )
             Spacer(Modifier.width(16.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1729,7 +1739,7 @@ private fun McpServerPanel(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun McpToolsPanel(toolNames: List<String>) {
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Available tools",
             description = "${toolNames.size} MCP tool calls exposed by Andy",
@@ -1763,7 +1773,7 @@ private fun McpClientsPanel(
     var dropdownExpanded by remember { mutableStateOf(false) }
     var operationStatus by remember { mutableStateOf<String?>(null) }
     val copyText = rememberCopyText()
-    PanelCard {
+    PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Client configurations",
             description = "Configure your local AI coding tool to connect to Andy's MCP endpoint.",
@@ -1775,12 +1785,12 @@ private fun McpClientsPanel(
         ) {
             Text("Client:", color = TextSecondary, fontSize = 13.sp)
             Box {
-                Button(
+                SettingsChoicePill(
+                    label = selectedClientLabel,
+                    selected = true,
+                    contentDescription = "MCP client",
                     onClick = { dropdownExpanded = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
-                ) {
-                    Text(selectedClientLabel, color = TextPrimary)
-                }
+                )
                 DropdownMenu(
                     expanded = dropdownExpanded,
                     onDismissRequest = { dropdownExpanded = false },
@@ -1815,7 +1825,7 @@ private fun McpClientsPanel(
             ) {
                 Text("Add to config")
             }
-            Button(
+            OutlinedButton(
                 onClick = {
                     copyText(mcpService.getSnippet(selectedClientLabel, mcpServerPort))
                     operationStatus = "Snippet copied to clipboard"
@@ -1882,7 +1892,7 @@ private fun WebSettingsScreen(
                 destinations = destinations,
             )
             WebSettingsCategory.Connection -> {
-                PanelCard {
+                PanelCard(Modifier.fillMaxWidth()) {
                     SettingsSectionHeader(
                         title = "Connection",
                         description = "Connect through Andy tracebox on this computer, or directly to one USB device. The browser never starts either tool for you.",
@@ -1896,10 +1906,9 @@ private fun WebSettingsScreen(
                             onClick = { scope.launch { operationStatus = web.connection.requestWebUsb().webMessage() } },
                             enabled = !connection.connecting,
                         ) { Text("Use WebUSB") }
-                        Button(
+                        OutlinedButton(
                             onClick = { scope.launch { operationStatus = web.connection.retry().webMessage() } },
                             enabled = !connection.connecting,
-                            colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
                         ) { Text("Retry now") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1928,7 +1937,7 @@ private fun WebSettingsScreen(
                 operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
             }
             WebSettingsCategory.Data -> {
-                PanelCard {
+                PanelCard(Modifier.fillMaxWidth()) {
                     SettingsSectionHeader(
                         title = "Storage",
                         description = "Settings and authorization keys use IndexedDB. Bug recordings and large captures use origin-private storage (OPFS).",
@@ -1949,27 +1958,25 @@ private fun WebSettingsScreen(
                         Button(
                             onClick = { scope.launch { operationStatus = if (web.storage.requestPersistence()) "Persistent storage granted" else "Persistent storage was not granted" } },
                         ) { Text("Keep data") }
-                        Button(
+                        OutlinedButton(
                             onClick = { confirmClear = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
                         ) { Text("Clear site data") }
                     }
                     Text("Clearing site data permanently removes settings, captures, bug reports, and the saved WebUSB ADB key.", color = Rust, fontSize = 11.sp)
                 }
-                PanelCard {
+                PanelCard(Modifier.fillMaxWidth()) {
                     SettingsSectionHeader(
                         title = "Authorization",
                         description = "The WebUSB ADB private key is non-exportable and stored only for this browser origin.",
                     )
-                    Button(
+                    OutlinedButton(
                         onClick = { confirmForgetUsb = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
                     ) { Text("Forget WebUSB authorization") }
                 }
                 operationStatus?.let { Text(it, color = Rust, fontFamily = MonoFont, fontSize = 12.sp) }
             }
             WebSettingsCategory.About -> {
-                PanelCard {
+                PanelCard(Modifier.fillMaxWidth()) {
                     SettingsSectionHeader(
                         title = "About Andy for web",
                         description = "Supported origins and runtime requirements.",
