@@ -104,7 +104,7 @@ class McpChatSubscribeTest {
 
                 // Closing the socket + a subsequent event wakes the collector; the failed
                 // push cancels the lifetime token (SDK transport close can hang on writers).
-                channel.close()
+                disconnectClient(channel)
                 fake.appendEvent("task-1", AgentEvent.AssistantText(3, "after-disconnect"))
                 withTimeout(10_000) {
                     while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
@@ -165,7 +165,7 @@ class McpChatSubscribeTest {
                 assertEquals("assistant", live.array("events")[0].jsonObject.string("type"))
                 assertEquals("hello", live.array("events")[0].jsonObject.string("text"))
 
-                channel.close()
+                disconnectClient(channel)
                 fake.appendEvent("task-coalesce", AgentEvent.AssistantText(3, "after"))
                 withTimeout(10_000) {
                     while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
@@ -361,6 +361,12 @@ class McpChatSubscribeTest {
             assertTrue(text.contains("imagePaths[0] must be a string"), text)
             assertTrue(fake.resumeCalls.isEmpty())
         }
+    }
+
+    /** Half-close output before close so Windows UDS delivers EOF to the server reader. */
+    private fun disconnectClient(channel: SocketChannel) {
+        runCatching { channel.shutdownOutput() }
+        runCatching { channel.close() }
     }
 
     private suspend fun withMcpHarness(
