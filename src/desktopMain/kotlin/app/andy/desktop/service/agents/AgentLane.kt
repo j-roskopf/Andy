@@ -6,12 +6,19 @@ import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import java.io.File
 
-/** The local Andy MCP endpoint in both its HTTP and provider-specific forms. */
+/** The local Andy MCP streamable-HTTP endpoint for provider attach. */
 data class AndyMcpEndpoint(
     val port: Int,
     val httpUrl: String,
-    val ssePath: String = "/mcp",
 )
+
+/** Appends `andyTaskId` so chat.start can inherit the parent's autonomy dial. */
+internal fun mcpUrlWithCallerTaskId(baseUrl: String, taskId: String): String {
+    val id = taskId.trim()
+    if (id.isEmpty()) return baseUrl
+    val sep = if ('?' in baseUrl) '&' else '?'
+    return "$baseUrl${sep}andyTaskId=${java.net.URLEncoder.encode(id, Charsets.UTF_8)}"
+}
 
 data class LaneOutcome(
     val status: AgentStatus,
@@ -111,8 +118,10 @@ class TerminalLane(
     override fun artifacts(taskId: String): AgentWorkflowArtifacts? = terminals.get(taskId)?.artifacts
 }
 
-internal fun AgentKind.acpEndpointUrl(endpoint: AndyMcpEndpoint): String =
-    when (this) {
-        AgentKind.Codex -> "http://127.0.0.1:${endpoint.port}/mcp"
-        else -> endpoint.httpUrl
-    }
+/**
+ * HTTP MCP URL handed to ACP providers.
+ *
+ * Codex (CLI and ACP) speaks streamable HTTP only — legacy SSE `/mcp` is rejected
+ * with `sessionId query parameter is not provided` on initialize.
+ */
+internal fun AgentKind.acpEndpointUrl(endpoint: AndyMcpEndpoint): String = endpoint.httpUrl

@@ -969,6 +969,8 @@ tasks.register<Exec>("buildAndyCli") {
         System.getenv("PATH"),
     ).joinToString(pathSep)
     environment("PATH", pathWithCargo)
+    // Align `andy --version` with AndyBuildInfo / gradle.properties.
+    environment("ANDY_VERSION", andyVersionName)
     val cargo = sequenceOf(
         file("${cargoHomeBin.absolutePath}/cargo"),
         file("/opt/homebrew/bin/cargo"),
@@ -1034,10 +1036,23 @@ tasks.register<Copy>("installAndyCli") {
         ocPluginDest.parentFile.mkdirs()
         ocPluginDest.writeText(ocPluginSrc.readText())
 
+        val releaseMeta = file("${System.getProperty("user.home")}/.andy/installed-release.json")
+        releaseMeta.parentFile.mkdirs()
+        releaseMeta.writeText(
+            """
+            {
+              "version": "$andyVersionName",
+              "releasePageUrl": null,
+              "installedAtEpochMs": ${System.currentTimeMillis()}
+            }
+            """.trimIndent() + "\n",
+        )
+
         println("Installed ${dest.absolutePath}")
         println("Installed ${hookDest.absolutePath}")
         println("Installed ${piExtDest.absolutePath}")
         println("Installed ${ocPluginDest.absolutePath}")
+        println("Recorded ${releaseMeta.absolutePath}")
         println("Add ~/.andy/bin to PATH permanently if needed:")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")
@@ -1082,8 +1097,20 @@ tasks.register("installAndyd") {
         launcherDest.writeText(launcherSrc.readText())
         launcherDest.setExecutable(true, false)
 
+        val releaseMeta = file("$andyHome/installed-release.json")
+        releaseMeta.writeText(
+            """
+            {
+              "version": "$andyVersionName",
+              "releasePageUrl": null,
+              "installedAtEpochMs": ${System.currentTimeMillis()}
+            }
+            """.trimIndent() + "\n",
+        )
+
         println("Installed ${launcherDest.absolutePath}")
         println("Installed ${jarDest.absolutePath}")
+        println("Recorded ${releaseMeta.absolutePath}")
         println("Add ~/.andy/bin to PATH permanently if needed:")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")

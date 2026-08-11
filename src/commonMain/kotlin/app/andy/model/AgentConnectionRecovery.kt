@@ -3,6 +3,9 @@ package app.andy.model
 /** Follow-up Andy sends after a provider stream stalls mid-turn. */
 const val CONNECTION_STALL_RETRY_PROMPT = "Continue where you left off."
 
+/** Follow-up Andy sends when the user accepts a plan-mode turn and asks to implement. */
+const val IMPLEMENT_PLAN_PROMPT = "Implement the plan."
+
 private val RETRIABLE_CONNECTION_ERROR_PATTERNS = listOf(
     Regex("""(?i)(?:error:\s*)?(?:retriableerror:\s*)?connection\s+stalled(?:\s+repeatedly)?"""),
     Regex(

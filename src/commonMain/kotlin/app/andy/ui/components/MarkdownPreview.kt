@@ -129,6 +129,37 @@ internal fun String.withChatLineBreaks(): String {
     }.joinToString("\n")
 }
 
+/**
+ * Agents often demonstrate markdown by wrapping an entire reply in a single outer
+ * ` ```markdown ` fence, sometimes nesting further fences inside it (e.g. a code
+ * sample). Per CommonMark, a fence only closes on a bare line of backticks/tildes
+ * with no info string, so an inner ` ```lang ` line doesn't close it — the whole
+ * reply parses as one literal code block and nothing renders as real
+ * headings/lists/tables. If the whole message is exactly that pattern, strip the
+ * outer fence so the interior renders as markdown.
+ */
+internal fun String.unwrapOuterMarkdownFence(): String {
+    val trimmed = trim()
+    val lines = trimmed.lines()
+    if (lines.size < 3) return this
+
+    val first = lines.first().trim()
+    val fenceChar = when {
+        first.startsWith("```") -> '`'
+        first.startsWith("~~~") -> '~'
+        else -> return this
+    }
+    val openLen = first.takeWhile { it == fenceChar }.length
+    val info = first.substring(openLen).trim().lowercase()
+    if (info != "markdown" && info != "md") return this
+
+    val last = lines.last().trim()
+    val closesFence = last.isNotEmpty() && last.all { it == fenceChar } && last.length >= openLen
+    if (!closesFence) return this
+
+    return lines.subList(1, lines.size - 1).joinToString("\n")
+}
+
 internal enum class AndyMarkdownDensity {
     Preview,
     Chat,
@@ -148,7 +179,11 @@ private fun AndyMarkdown(
     },
     onTextChange: ((String) -> Unit)? = null,
 ) {
-    val markdownState = rememberMarkdownState(text, retainState = true)
+    // Only unwrap for read-only content: checkbox toggling below computes offsets
+    // into the parsed source and writes them straight back through onTextChange,
+    // so mutating what gets parsed would silently drop the fence from saved text.
+    val unwrapped = if (onTextChange == null) text.unwrapOuterMarkdownFence() else text
+    val markdownState = rememberMarkdownState(unwrapped, retainState = true)
     val highlightsBuilder = rememberAndyHighlightsBuilder()
     val thinking = density == AndyMarkdownDensity.Thinking
     val body = MaterialTheme.typography.bodyMedium.copy(

@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class McpClientConfigTest {
@@ -25,6 +26,42 @@ class McpClientConfigTest {
             )
         } finally {
             System.setProperty("os.name", originalOsName)
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun codexConfigUsesStreamableHttpNotLegacySse() {
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-mcp-home").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            val file = File(testHome, ".codex/config.toml")
+            file.parentFile.mkdirs()
+            file.writeText(
+                """
+                [mcp_servers.andy]
+                url = "http://127.0.0.1:1/mcp"
+                type = "sse"
+                """.trimIndent(),
+            )
+
+            val written = McpClientConfig.writeConfig(McpClientConfig.ClientType.Codex, 8565)
+
+            assertTrue(written)
+            val content = file.readText()
+            assertTrue(content.contains("""url = "http://127.0.0.1:8565/mcp-http""""))
+            assertFalse(content.contains("type = \"sse\""))
+            assertFalse(content.contains("""url = "http://127.0.0.1:8565/mcp""""))
+            assertEquals(
+                """
+                [mcp_servers.andy]
+                url = "http://127.0.0.1:8565/mcp-http"
+                """.trimIndent(),
+                McpClientConfig.getSnippet(McpClientConfig.ClientType.Codex, 8565),
+            )
+        } finally {
             System.setProperty("user.home", originalHome)
             testHome.deleteRecursively()
         }

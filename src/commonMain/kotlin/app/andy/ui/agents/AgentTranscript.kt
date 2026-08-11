@@ -139,6 +139,7 @@ internal class TranscriptScrollMemory {
 internal fun AgentTranscript(
     events: List<AgentEvent>,
     isActive: Boolean,
+    awaitingPlanConfirmation: Boolean = false,
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
     pendingContent: (@Composable () -> Unit)? = null,
@@ -171,6 +172,9 @@ internal fun AgentTranscript(
     val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths)
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
+    }
+    val latestPlanUpdateItemIndex = displayItems.indexOfLast { item ->
+        item is TranscriptDisplayItem.Event && item.event is AgentEvent.PlanUpdate
     }
     val taskId = restoreScrollKey
     // Freeze restore intent for this visit. A bottom-origin list makes index 0 the live edge;
@@ -394,6 +398,8 @@ internal fun AgentTranscript(
                                 ),
                                 agentLabel = agentLabel,
                                 completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
+                                awaitingPlanConfirmation = awaitingPlanConfirmation &&
+                                    itemIndex == latestPlanUpdateItemIndex,
                                 activePermissionRequestId = activePermissionRequestId,
                                 onToolExpandedChange = { key, expanded ->
                                     setActivityExpanded(key, expanded, expandedToolKeys) { expandedToolKeys = it }
@@ -584,6 +590,7 @@ private fun TranscriptEvent(
     thinkingExpanded: Boolean,
     agentLabel: String,
     completedContent: (@Composable () -> Unit)?,
+    awaitingPlanConfirmation: Boolean = false,
     activePermissionRequestId: String? = null,
     onToolExpandedChange: (String, Boolean) -> Unit,
     onThinkingExpandedChange: (String, Boolean) -> Unit,
@@ -676,6 +683,14 @@ private fun TranscriptEvent(
                     else -> entry.status
                 }
                 Text("$prefix  ${entry.content}", color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+            if (awaitingPlanConfirmation) {
+                Text(
+                    "Waiting for you to continue — refine below or implement the plan.",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
             }
         }
         is AgentEvent.ModeChanged -> Text(
@@ -1464,7 +1479,7 @@ internal fun ConnectionStallBanner(
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Text(
                 "Retry",
                 color = Cyan,
@@ -1474,6 +1489,48 @@ internal fun ConnectionStallBanner(
                     .clickable(onClick = onRetry)
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             )
+        }
+    }
+}
+
+@Composable
+internal fun PlanReadyBanner(
+    showImplementAction: Boolean,
+    onImplement: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Plan ready",
+            color = Green,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            if (showImplementAction) {
+                "This turn finished in plan mode — nothing was changed. Implement when you're ready, or reply to refine the plan."
+            } else {
+                "This turn finished in plan mode — nothing was changed. Review the plan in Projects, or reply to refine it here."
+            },
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+        )
+        if (showImplementAction) {
+            Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text(
+                    "Implement plan",
+                    color = Cyan,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onImplement)
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }

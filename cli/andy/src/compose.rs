@@ -9,6 +9,11 @@ use std::time::Duration;
 use crate::attach;
 use crate::file_picker;
 use crate::mcp::McpClient;
+use crate::skills::discover_agent_skills;
+use crate::slash::{
+    complete_command, menu_height, merge_commands_with_skills, native_commands_for_agent,
+    render_menu, SlashMenuAction, SlashMenuState,
+};
 
 #[derive(Clone, Debug)]
 struct OptionRow {
@@ -120,8 +125,29 @@ pub async fn run_composer(
     } else {
         "Esc cancel · Enter next".into()
     };
+    let mut slash_menu = SlashMenuState::default();
 
     loop {
+        let prompt_value = match (&view, step) {
+            (StepView::Text { value, .. }, Step::Prompt) => value.clone(),
+            _ => String::new(),
+        };
+        // Provider commands are not available until an ACP session emits them.
+        // New-chat still exposes native commands and locally discovered skills.
+        let slash_commands = if step == Step::Prompt {
+            merge_commands_with_skills(
+                native_commands_for_agent(Some(&draft.agent_id)),
+                Vec::new(),
+                discover_agent_skills(
+                    Some(&draft.agent_id),
+                    Some(std::path::Path::new(&draft.directory)),
+                ),
+            )
+        } else {
+            Vec::new()
+        };
+        slash_menu.sync(&prompt_value, &slash_commands);
+        let slash_menu_height = menu_height(&slash_menu);
         terminal.draw(|frame| {
             let area = frame.area();
             let chunks = Layout::default()
@@ -129,6 +155,7 @@ pub async fn run_composer(
                 .constraints([
                     Constraint::Length(3),
                     Constraint::Min(5),
+                    Constraint::Length(slash_menu_height),
                     Constraint::Length(3),
                 ])
                 .split(area);
@@ -226,9 +253,11 @@ pub async fn run_composer(
                 }
             }
 
+            render_menu(frame, chunks[2], &slash_menu);
+
             frame.render_widget(
                 Paragraph::new(status.as_str()).block(Block::default().borders(Borders::ALL)),
-                chunks[2],
+                chunks[3],
             );
         })?;
 
@@ -240,6 +269,32 @@ pub async fn run_composer(
         };
         if key.kind != KeyEventKind::Press {
             continue;
+        }
+
+        let slash_action = if step == Step::Prompt {
+            if let StepView::Text { value, .. } = &view {
+                slash_menu.handle_key(value, &slash_commands, key.code)
+            } else {
+                SlashMenuAction::Pass
+            }
+        } else {
+            SlashMenuAction::Pass
+        };
+        match slash_action {
+            SlashMenuAction::Complete => {
+                let Some(command) = slash_menu.selected_command().map(|c| c.name.clone()) else {
+                    continue;
+                };
+                if let StepView::Text { value, .. } = &mut view {
+                    if let Some(completed) = complete_command(value, &command) {
+                        *value = completed;
+                        status = format!("completed /{command} · Enter next · Esc back");
+                    }
+                }
+                continue;
+            }
+            SlashMenuAction::Dismiss | SlashMenuAction::Move => continue,
+            SlashMenuAction::Pass => {}
         }
 
         match key.code {

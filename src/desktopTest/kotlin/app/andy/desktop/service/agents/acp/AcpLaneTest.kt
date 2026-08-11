@@ -19,6 +19,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import app.andy.desktop.service.agents.AndyMcpEndpoint
+import app.andy.desktop.service.agents.acpEndpointUrl
 import app.andy.desktop.service.agents.inferAgentLaneFromArtifacts
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -28,6 +30,16 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class AcpLaneTest {
+    @Test
+    fun codexAcpUsesStreamableHttpEndpoint() {
+        val endpoint = AndyMcpEndpoint(
+            port = 8565,
+            httpUrl = "http://127.0.0.1:8565/mcp-http?andyTaskId=task-1",
+        )
+        assertEquals(endpoint.httpUrl, AgentKind.Codex.acpEndpointUrl(endpoint))
+        assertEquals(endpoint.httpUrl, AgentKind.ClaudeCode.acpEndpointUrl(endpoint))
+    }
+
     @Test
     fun providerCommandFilterKeepsForeignSkillsOnly() {
         val commands = listOf(

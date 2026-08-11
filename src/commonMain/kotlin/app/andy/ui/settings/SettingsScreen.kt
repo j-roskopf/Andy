@@ -73,23 +73,36 @@ import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
 import app.andy.isToggleableInSidebar
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentKind
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.OrchestrationPreferences
+import app.andy.model.OrchestrationProviderRole
 import app.andy.model.ProxyStartOptions
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.service.AppUpdateService
+import app.andy.service.AppUpdateState
 import app.andy.service.McpServerService
+import app.andy.service.OrchestrationPreferencesService
 import app.andy.service.ProxyService
 import app.andy.service.RetentionSweepResult
+import app.andy.service.RuntimeBundleService
+import app.andy.service.RuntimeBundleSnapshot
+import app.andy.service.RuntimeBundleState
 import app.andy.service.UnavailableAgentRetentionService
+import app.andy.service.UnavailableOrchestrationPreferencesService
+import app.andy.service.UnavailableRuntimeBundleService
+import app.andy.service.UnavailableUpdateService
 import app.andy.service.UnavailableVoiceSetupService
 import app.andy.service.VoiceSetupService
 import app.andy.service.VoiceSetupState
 import app.andy.service.WebServices
+import app.andy.updates.AndyBuildInfo
 import app.andy.ui.components.Button
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.OutlinedButton
@@ -122,9 +135,10 @@ private enum class DesktopSettingsCategory(
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
     Navigation("Navigation", "Show or hide sidebar pages"),
-    Agents("Agents", "Transcript and notification preferences"),
+    Agents("Agents", "Sessions, orchestration, transcript, and notifications"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
+    Updates("Updates", "Version, desktop app, CLI, andyd, and extras"),
     Onboarding("Onboarding", "Replay guided introductions"),
 }
 
@@ -187,6 +201,9 @@ internal fun SettingsScreen(
                 destinations = services.capabilities.destinations,
             )
             DesktopSettingsCategory.Agents -> {
+                if (services.orchestrationPreferences !is UnavailableOrchestrationPreferencesService) {
+                    OrchestrationPreferencesPanel(services.orchestrationPreferences)
+                }
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
@@ -220,6 +237,10 @@ internal fun SettingsScreen(
                     mcpServerPort = workspaceState.mcpServerPort,
                 )
             }
+            DesktopSettingsCategory.Updates -> UpdatesPanel(
+                updates = services.updates,
+                runtimeBundle = services.runtimeBundle,
+            )
             DesktopSettingsCategory.Onboarding -> OnboardingPanel(workspaceState, onUpdateWorkspace)
         }
     }
@@ -725,6 +746,86 @@ private fun AgentTranscriptPanel(
 }
 
 @Composable
+private fun OrchestrationPreferencesPanel(
+    service: OrchestrationPreferencesService,
+) {
+    var prefs by remember { mutableStateOf(service.load()) }
+    // Keep notes draft independent of normalized prefs so trailing newlines/spaces aren't wiped mid-edit.
+    var notesText by remember { mutableStateOf(prefs.preferences.joinToString("\n")) }
+    var expandedRole by remember { mutableStateOf<OrchestrationProviderRole?>(null) }
+
+    fun persist(next: OrchestrationPreferences) {
+        val normalized = next.normalized()
+        prefs = normalized
+        service.save(normalized)
+    }
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "Orchestration",
+            description = "Default providers for /andy-loop, handoff, advisor, and committee. " +
+                "Loop uses Implementation as the worker and Audit as the verifier. " +
+                "Saved to ~/.andy/orchestration-preferences.json.",
+        )
+        OrchestrationProviderRole.entries.forEach { role ->
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    role.label,
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.width(180.dp),
+                )
+                Box {
+                    Button(
+                        onClick = { expandedRole = role },
+                        colors = ButtonDefaults.buttonColors(containerColor = AndyColors.Neutral750),
+                    ) {
+                        Text(prefs.agentFor(role).label, color = TextPrimary)
+                    }
+                    DropdownMenu(
+                        expanded = expandedRole == role,
+                        onDismissRequest = { expandedRole = null },
+                        containerColor = AndyColors.Neutral750,
+                    ) {
+                        AgentKind.entries.forEach { kind ->
+                            DropdownMenuItem(
+                                text = { Text(kind.label, color = TextPrimary) },
+                                onClick = {
+                                    persist(prefs.withAgent(role, kind))
+                                    expandedRole = null
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            "Preference notes (one per line; woven into spawned agent prompts)",
+            color = TextSecondary,
+            fontSize = 12.sp,
+        )
+        TextField(
+            value = notesText,
+            onValueChange = { value ->
+                notesText = value
+                persist(prefs.withPreferenceNotes(value.lines()))
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 96.dp),
+            singleLine = false,
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
+            colors = fieldColors(),
+        )
+    }
+}
+
+@Composable
 private fun AgentChatMessagingPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
@@ -1189,6 +1290,263 @@ private fun modifierPrefix(event: androidx.compose.ui.input.key.KeyEvent): Strin
     if (event.isAltPressed) append("Alt+")
     if (event.isShiftPressed) append("Shift+")
     if (event.isMetaPressed) append("Cmd+")
+}
+
+@Composable
+private fun UpdatesPanel(
+    updates: AppUpdateService,
+    runtimeBundle: RuntimeBundleService,
+) {
+    val scope = rememberCoroutineScope()
+    val updateState by updates.state.collectAsState()
+    val bundleState by runtimeBundle.state.collectAsState()
+
+    LaunchedEffect(runtimeBundle) {
+        if (runtimeBundle !is UnavailableRuntimeBundleService) {
+            runtimeBundle.refresh(checkLatest = true)
+        }
+    }
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "About",
+            description = "This Andy build and where updates come from.",
+        )
+        Text(
+            "Andy ${AndyBuildInfo.versionName}",
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = MonoFont,
+        )
+        Text(
+            "github.com/${AndyBuildInfo.githubOwner}/${AndyBuildInfo.githubRepo}",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontFamily = MonoFont,
+        )
+    }
+
+    if (updates !is UnavailableUpdateService) {
+        PanelCard {
+            SettingsSectionHeader(
+                title = "Desktop app",
+                description = "Check GitHub for a newer Andy.app / installer for this platform.",
+            )
+            val statusText = when (val s = updateState) {
+                AppUpdateState.Idle -> "Not checked yet"
+                AppUpdateState.Checking -> "Checking for updates…"
+                AppUpdateState.Current -> "You're on the latest desktop release"
+                is AppUpdateState.Available -> "Update available: v${s.update.versionName}"
+                is AppUpdateState.Installing -> {
+                    val pct = s.progress?.let { " ${(it * 100).toInt()}%" } ?: ""
+                    "${s.message}$pct"
+                }
+                is AppUpdateState.Failed -> s.message
+            }
+            val statusColor = when (updateState) {
+                is AppUpdateState.Available -> Rust
+                is AppUpdateState.Failed -> Rust
+                AppUpdateState.Current -> Green
+                else -> TextSecondary
+            }
+            Text(statusText, color = statusColor, fontSize = 12.sp, fontFamily = MonoFont)
+            if (updateState is AppUpdateState.Available) {
+                val notes = (updateState as AppUpdateState.Available).update.releaseNotes
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                if (notes != null) {
+                    SelectionContainer {
+                        Text(
+                            notes.take(600) + if (notes.length > 600) "…" else "",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                        )
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val checking = updateState is AppUpdateState.Checking
+                val installing = updateState is AppUpdateState.Installing
+                OutlinedButton(
+                    onClick = { scope.launch { updates.checkForUpdates() } },
+                    enabled = !checking && !installing,
+                ) {
+                    Text(if (checking) "Checking…" else "Check for updates")
+                }
+                val canInstall = updateState is AppUpdateState.Available ||
+                    (updateState is AppUpdateState.Failed &&
+                        (updateState as AppUpdateState.Failed).lastKnownUpdate != null)
+                if (canInstall) {
+                    Button(
+                        onClick = { scope.launch { updates.installAvailableUpdate() } },
+                        enabled = !installing,
+                        colors = primaryButtonColors(),
+                    ) {
+                        Text(if (installing) "Installing…" else "Install update")
+                    }
+                }
+            }
+            if (updateState is AppUpdateState.Installing) {
+                val progress = (updateState as AppUpdateState.Installing).progress
+                if (progress != null) {
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    if (runtimeBundle !is UnavailableRuntimeBundleService) {
+        RuntimeBundlePanel(
+            state = bundleState,
+            onRefresh = { scope.launch { runtimeBundle.refresh(checkLatest = true) } },
+            onInstall = { scope.launch { runtimeBundle.installOrUpdateFromLatest() } },
+        )
+    }
+}
+
+@Composable
+private fun RuntimeBundlePanel(
+    state: RuntimeBundleState,
+    onRefresh: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    val snapshot: RuntimeBundleSnapshot? = when (state) {
+        is RuntimeBundleState.Ready -> state.snapshot
+        is RuntimeBundleState.Installing -> state.snapshot
+        is RuntimeBundleState.Failed -> state.snapshot
+        else -> null
+    }
+    val installing = state is RuntimeBundleState.Installing
+    val checking = state is RuntimeBundleState.Checking
+
+    PanelCard {
+        SettingsSectionHeader(
+            title = "CLI, andyd, and extras",
+            description = "Install or update ~/.andy from the latest GitHub release " +
+                "(andy, andyd, tmux, status hook). Pi extension and orchestration skills " +
+                "refresh from this Andy build.",
+        )
+
+        when (state) {
+            RuntimeBundleState.Idle, RuntimeBundleState.Checking -> {
+                Text(
+                    if (checking) "Checking installs…" else "Loading…",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                )
+            }
+            is RuntimeBundleState.Failed -> {
+                Text(state.message, color = Rust, fontSize = 12.sp, fontFamily = MonoFont)
+            }
+            is RuntimeBundleState.Installing -> {
+                Text(state.message, color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+                state.progress?.let { progress ->
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    )
+                }
+            }
+            is RuntimeBundleState.Ready -> Unit
+        }
+
+        snapshot?.let { snap ->
+            if (!snap.platformSupported) {
+                Text(
+                    "The andy CLI and andyd are only supported on macOS (arm64) and Linux (x86_64).",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+            } else {
+                val versionLine = buildString {
+                    append("Installed: ")
+                    append(snap.installedReleaseVersion?.let { "v$it" } ?: "unknown")
+                    snap.latestReleaseVersion?.let { latest ->
+                        append(" · Latest: v$latest")
+                    }
+                    if (snap.andydRunning) append(" · andyd running")
+                }
+                Text(
+                    versionLine,
+                    color = if (snap.updateAvailable) Rust else TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                )
+                if (snap.updateAvailable) {
+                    Text(
+                        "Update available for CLI / andyd.",
+                        color = Rust,
+                        fontSize = 12.sp,
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    snap.components.forEach { component ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (component.installed) "●" else "○",
+                                color = if (component.installed) Green else TextSecondary,
+                                fontSize = 11.sp,
+                            )
+                            Text(
+                                component.label,
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.width(140.dp),
+                            )
+                            Text(
+                                listOfNotNull(
+                                    if (component.installed) "installed" else "missing",
+                                    component.detail,
+                                ).joinToString(" · "),
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                                fontFamily = MonoFont,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+                snap.pathHint?.let { hint ->
+                    Text(hint, color = TextSecondary, fontSize = 11.sp)
+                }
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = !checking && !installing,
+            ) {
+                Text(if (checking) "Checking…" else "Check versions")
+            }
+            val canInstall = snapshot?.platformSupported == true
+            Button(
+                onClick = onInstall,
+                enabled = canInstall && !checking && !installing,
+                colors = primaryButtonColors(),
+            ) {
+                val cliInstalled = snapshot?.components?.any { it.id == "cli" && it.installed } == true
+                val label = when {
+                    installing -> "Installing…"
+                    !cliInstalled -> "Install from latest"
+                    snapshot?.updateAvailable == true -> "Update from latest"
+                    else -> "Reinstall from latest"
+                }
+                Text(label)
+            }
+        }
+    }
 }
 
 @Composable

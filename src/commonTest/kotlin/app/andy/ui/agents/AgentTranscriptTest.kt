@@ -1,9 +1,11 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentToolKind
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
+import app.andy.model.latestPlanHasPendingEntries
 import app.andy.model.planTextFromAcpTranscript
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -226,6 +228,65 @@ class AgentTranscriptTest {
         )
 
         assertEquals("## Plan\n\n1. First", planTextFromAcpTranscript(events))
+    }
+
+    @Test
+    fun latestPlanHasPendingEntriesDetectsCursorCreatePlan() {
+        val events = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "drafting", isStreamDelta = false),
+            AgentEvent.PlanUpdate(
+                atMillis = 2,
+                entries = listOf(
+                    AgentPlanEntry("Add Settings CLI panel", "pending"),
+                    AgentPlanEntry("Wire update service", "pending"),
+                ),
+            ),
+        )
+        assertTrue(latestPlanHasPendingEntries(events))
+    }
+
+    @Test
+    fun latestPlanHasPendingEntriesIgnoresCompletedOrClearedPlans() {
+        assertFalse(
+            latestPlanHasPendingEntries(
+                listOf(
+                    AgentEvent.PlanUpdate(
+                        atMillis = 1,
+                        entries = listOf(AgentPlanEntry("Done item", "completed")),
+                    ),
+                ),
+            ),
+        )
+        assertFalse(
+            latestPlanHasPendingEntries(
+                listOf(AgentEvent.PlanUpdate(atMillis = 1, entries = emptyList())),
+            ),
+        )
+        assertTrue(
+            latestPlanHasPendingEntries(
+                listOf(
+                    AgentEvent.PlanUpdate(
+                        atMillis = 1,
+                        entries = emptyList(),
+                        markdown = "## Plan\n\n1. First",
+                    ),
+                ),
+            ),
+        )
+        assertTrue(
+            latestPlanHasPendingEntries(
+                listOf(
+                    AgentEvent.PlanUpdate(
+                        atMillis = 1,
+                        entries = listOf(AgentPlanEntry("Old", "completed")),
+                    ),
+                    AgentEvent.PlanUpdate(
+                        atMillis = 2,
+                        entries = listOf(AgentPlanEntry("New", "pending")),
+                    ),
+                ),
+            ),
+        )
     }
 
     @Test

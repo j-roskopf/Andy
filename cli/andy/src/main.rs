@@ -18,6 +18,7 @@ use std::process::Command;
 #[derive(Parser, Debug)]
 #[command(
     name = "andy",
+    version = andy_cli::VERSION,
     about = "Andy CLI — drive andyd over ~/.andy/andyd.sock",
     long_about = "Scripting client for andyd. Device/emulator/network commands wrap MCP tools; \
 use `andy tool call` for any MCP tool by name. Device serial: --serial or ANDY_SERIAL."

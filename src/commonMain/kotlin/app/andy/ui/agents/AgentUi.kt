@@ -94,7 +94,35 @@ internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
     null -> Cyan
 }
 
-internal fun agentStatusLabel(task: AgentTask): String = when {
+/**
+ * True when a turn finished while still waiting on a plan — either Andy/ACP plan mode
+ * is active, or the latest transcript PlanUpdate still has pending entries (Cursor
+ * Create Plan can end_turn without flipping mode).
+ */
+internal fun isAwaitingPlanConfirmation(
+    task: AgentTask,
+    planModeActive: Boolean = task.planMode,
+    hasPendingPlanEntries: Boolean = false,
+): Boolean = task.status == AgentStatus.Done &&
+    !task.needsInput &&
+    (planModeActive || hasPendingPlanEntries)
+
+internal fun agentStatusColor(
+    task: AgentTask,
+    planModeActive: Boolean = task.planMode,
+    hasPendingPlanEntries: Boolean = false,
+): Color = if (isAwaitingPlanConfirmation(task, planModeActive, hasPendingPlanEntries)) {
+    Green
+} else {
+    agentStatusColor(task.status)
+}
+
+internal fun agentStatusLabel(
+    task: AgentTask,
+    planModeActive: Boolean = task.planMode,
+    hasPendingPlanEntries: Boolean = false,
+): String = when {
+    isAwaitingPlanConfirmation(task, planModeActive, hasPendingPlanEntries) -> "plan ready"
     // Prefer the lifecycle status when present so thin/partial clients cannot show
     // "queued" for a Done/Working chat that merely omitted startedAtMillis.
     task.status != null -> task.status.name.lowercase()

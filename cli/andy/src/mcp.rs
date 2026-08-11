@@ -130,6 +130,12 @@ impl McpClient {
     }
 
     pub async fn call_tool_result(&mut self, name: &str, arguments: Value) -> Result<ToolResult> {
+        let mut arguments = arguments;
+        // Orchestrated agents run with ANDY_TASK_ID set; stamp chat.start so
+        // omitted autonomy inherits the parent's permission dial.
+        if name == "chat.start" {
+            crate::args::inject_caller_task_id(&mut arguments);
+        }
         let root = self
             .rpc(
                 "tools/call",
@@ -237,7 +243,7 @@ impl McpClient {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": { "name": "andy-cli", "version": "0.1.0" }
+                "clientInfo": { "name": "andy-cli", "version": crate::VERSION }
             }
         });
         writer
@@ -410,7 +416,7 @@ impl McpClient {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": { "name": "andy-cli", "version": "0.1.0" }
+                "clientInfo": { "name": "andy-cli", "version": crate::VERSION }
             }
         });
         writer

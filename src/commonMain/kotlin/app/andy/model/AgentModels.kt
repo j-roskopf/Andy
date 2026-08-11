@@ -1239,6 +1239,25 @@ fun AgentSessionMode.looksLikePlanMode(): Boolean {
 }
 
 /**
+ * True when the latest ACP [AgentEvent.PlanUpdate] still looks like an unconfirmed plan.
+ * Cursor can emit Create Plan + plan entries and end the turn without flipping session mode.
+ */
+fun latestPlanHasPendingEntries(events: List<AgentEvent>): Boolean {
+    val plan = events.asReversed().firstOrNull { it is AgentEvent.PlanUpdate } as? AgentEvent.PlanUpdate
+        ?: return false
+    if (plan.entries.isEmpty()) {
+        // PlanRemoved clears entries; markdown-only plans still count as awaiting.
+        return !plan.markdown.isNullOrBlank()
+    }
+    return plan.entries.any { entry ->
+        when (entry.status.trim().lowercase()) {
+            "completed", "complete", "done", "cancelled", "canceled", "file" -> false
+            else -> true
+        }
+    }
+}
+
+/**
  * ACP providers sometimes emit whitespace-only text chunks. Older builds stored those as
  * [AgentEvent.Raw], which broke stream coalescing and dropped the whitespace itself.
  */

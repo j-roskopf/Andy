@@ -25,6 +25,11 @@ use tokio::task::JoinHandle;
 use crate::events::AgentEvent;
 use crate::file_picker;
 use crate::mcp::{McpClient, SubscribeMessage, SUBSCRIBE_MISSING_ERROR};
+use crate::skills::discover_agent_skills;
+use crate::slash::{
+    complete_command, menu_height, merge_commands_with_skills, native_commands_for_agent,
+    render_menu, SlashCommand, SlashMenuAction, SlashMenuState,
+};
 use crate::viewer_chrome::{self, Lane};
 
 const DETAIL_TRUNCATE_LINES: usize = 40;
@@ -34,6 +39,7 @@ struct ChatMeta {
     id: String,
     title: String,
     status: String,
+    agent: Option<String>,
     #[allow(dead_code)]
     lane: String,
     cwd: String,
@@ -64,6 +70,10 @@ struct ViewState {
     /// only the conversation transcript. Toggle with `v`; default on via
     /// `ANDY_ACP_VIEW_DETAILS=1`.
     show_details: bool,
+    /// True until the first subscribe batch/finish/disconnect arrives (or while
+    /// reconnecting after clearing the local transcript).
+    loading_transcript: bool,
+    slash_menu: SlashMenuState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,31 +85,35 @@ enum LoopAction {
 
 /// Native ACP chat viewer for `andy attach` on ACP-lane tasks.
 pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()> {
-    client.requires_chat_subscribe().await.map_err(|err| {
-        if err.to_string().contains("chat.subscribe") {
-            anyhow::anyhow!("{SUBSCRIBE_MISSING_ERROR}")
-        } else {
-            err
-        }
-    })?;
-
-    let meta = load_meta(client, task_id).await?;
-
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    let skin = MadSkin::default();
-    let syntax_set = SyntaxSet::load_defaults_newlines();
-    let theme_set = ThemeSet::load_defaults();
-    let theme = theme_set
-        .themes
-        .get("base16-ocean.dark")
-        .or_else(|| theme_set.themes.values().next())
-        .expect("syntect theme");
-
     let result = async {
+        draw_busy_screen(&mut terminal, task_id, "Loading chat…")?;
+
+        client.requires_chat_subscribe().await.map_err(|err| {
+            if err.to_string().contains("chat.subscribe") {
+                anyhow::anyhow!("{SUBSCRIBE_MISSING_ERROR}")
+            } else {
+                err
+            }
+        })?;
+
+        draw_busy_screen(&mut terminal, task_id, "Loading chat…")?;
+        let meta = load_meta(client, task_id).await?;
+
+        draw_busy_screen(&mut terminal, &meta.id, "Loading transcript…")?;
+        let skin = MadSkin::default();
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let theme_set = ThemeSet::load_defaults();
+        let theme = theme_set
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| theme_set.themes.values().next())
+            .expect("syntect theme");
+
         // Persist viewer state across subscribe reconnects (lost socket, or continuing
         // a completed chat). A fresh subscribe still delivers the full backlog; we only
         // reset connection flags / subscribe_open when opening a new stream.
@@ -118,6 +132,8 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             connection_error: None,
             status_flash: None,
             show_details: details_default_from_env(),
+            loading_transcript: true,
+            slash_menu: SlashMenuState::default(),
         };
 
         loop {
@@ -132,6 +148,7 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             state.subscribe_open = true;
             state.connection_issue = None;
             state.connection_error = None;
+            state.loading_transcript = true;
             // Re-enable after Lost disconnect; Done chats stay continuable, hard errors don't.
             if !matches!(state.status.as_str(), "Error" | "Failed" | "Stopped") {
                 state.composer_enabled = true;
@@ -181,6 +198,26 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
     result
 }
 
+fn draw_busy_screen(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    task_id: &str,
+    message: &str,
+) -> Result<()> {
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let text = format!("\n  {task_id}\n\n  {message}\n");
+        frame.render_widget(
+            Paragraph::new(text).block(
+                Block::default()
+                    .title(Lane::Acp.frame_title())
+                    .borders(Borders::ALL),
+            ),
+            area,
+        );
+    })?;
+    Ok(())
+}
+
 async fn run_loop(
     client: &mut McpClient,
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -195,6 +232,9 @@ async fn run_loop(
         while let Ok(msg) = rx.try_recv() {
             apply_subscribe_message(state, msg);
         }
+
+        let slash_commands = available_slash_commands(meta, state);
+        state.slash_menu.sync(&state.input, &slash_commands);
 
         terminal.draw(|frame| draw(frame, meta, state, skin, syntax_set, theme))?;
 
@@ -228,6 +268,7 @@ async fn run_loop(
 fn apply_subscribe_message(state: &mut ViewState, msg: SubscribeMessage) {
     match msg {
         SubscribeMessage::Batch(batch) => {
+            state.loading_transcript = false;
             if let Some(from) = batch.replace_from {
                 if from <= state.events.len() {
                     state.events.truncate(from);
@@ -289,6 +330,7 @@ fn apply_subscribe_message(state: &mut ViewState, msg: SubscribeMessage) {
             }
         }
         SubscribeMessage::Finished { reason } => {
+            state.loading_transcript = false;
             state.subscribe_open = false;
             state.status_flash = Some(format!("subscribe finished ({reason})"));
             if reason == "gone" {
@@ -307,6 +349,7 @@ fn apply_subscribe_message(state: &mut ViewState, msg: SubscribeMessage) {
             }
         }
         SubscribeMessage::Disconnected(msg) => {
+            state.loading_transcript = false;
             state.subscribe_open = false;
             if msg.contains("chat no longer exists") {
                 state.connection_issue = Some(ConnectionIssue::Gone);
@@ -326,6 +369,31 @@ async fn handle_key(
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<LoopAction> {
+    if state.composer_enabled
+        && state.pending_permission.is_none()
+        && state.connection_issue.is_none()
+    {
+        let commands = available_slash_commands(meta, state);
+        match state
+            .slash_menu
+            .handle_key(&state.input, &commands, key.code)
+        {
+            SlashMenuAction::Complete => {
+                if let Some(command) = state.slash_menu.selected_command().map(|c| c.name.clone()) {
+                    if let Some(completed) = complete_command(&state.input, &command) {
+                        state.input = completed;
+                        state.status_flash = Some(format!("completed /{command}"));
+                    }
+                }
+                return Ok(LoopAction::Continue);
+            }
+            SlashMenuAction::Dismiss | SlashMenuAction::Move => {
+                return Ok(LoopAction::Continue);
+            }
+            SlashMenuAction::Pass => {}
+        }
+    }
+
     match map_key_action(state, key) {
         MappedKey::Exit => return Ok(LoopAction::Exit),
         MappedKey::Retry => return Ok(LoopAction::Retry),
@@ -649,6 +717,38 @@ async fn submit_follow_up(
     Ok(!state.subscribe_open)
 }
 
+fn available_slash_commands(meta: &ChatMeta, state: &ViewState) -> Vec<SlashCommand> {
+    let provider_commands = state
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            AgentEvent::Commands { commands, .. } => Some(
+                commands
+                    .iter()
+                    .map(|(name, description)| SlashCommand {
+                        name: name.clone(),
+                        description: description.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let workspace = if !meta.cwd.trim().is_empty() {
+        Some(PathBuf::from(&meta.cwd))
+    } else if !meta.origin_dir.trim().is_empty() {
+        Some(PathBuf::from(&meta.origin_dir))
+    } else {
+        None
+    };
+    merge_commands_with_skills(
+        native_commands_for_agent(meta.agent.as_deref()),
+        provider_commands,
+        discover_agent_skills(meta.agent.as_deref(), workspace.as_deref()),
+    )
+}
+
 fn draw(
     frame: &mut Frame<'_>,
     meta: &ChatMeta,
@@ -663,6 +763,7 @@ fn draw(
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
+            Constraint::Length(menu_height(&state.slash_menu)),
             Constraint::Length(3),
             Constraint::Length(
                 if state.pending_permission.is_some()
@@ -725,8 +826,9 @@ fn draw(
     };
     frame.render_widget(
         Paragraph::new(composer).block(Block::default().borders(Borders::ALL).title(" Follow-up ")),
-        chunks[2],
+        chunks[3],
     );
+    render_menu(frame, chunks[2], &state.slash_menu);
 
     let footer = if state.connection_issue == Some(ConnectionIssue::Lost) {
         " Lost connection to andyd — press r to retry, q/Esc to quit ".to_string()
@@ -740,7 +842,7 @@ fn draw(
     } else {
         viewer_chrome::format_status_line(Lane::Acp, state.status_flash.as_deref())
     };
-    frame.render_widget(Paragraph::new(footer), chunks[3]);
+    frame.render_widget(Paragraph::new(footer), chunks[4]);
 }
 
 /// Conversation-only visibility (default). Mirrors the GUI hiding AvailableCommands /
@@ -771,6 +873,16 @@ fn render_transcript(
     theme: &syntect::highlighting::Theme,
     width: u16,
 ) -> Text<'static> {
+    if state.loading_transcript && state.events.is_empty() {
+        return Text::from(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Loading transcript…",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
+    }
+
     let display = AgentEvent::coalesce_for_display(&state.events);
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (idx, event) in display.iter().enumerate() {
@@ -948,13 +1060,55 @@ fn render_transcript(
 }
 
 fn markdown_lines(skin: &MadSkin, text: &str, width: u16) -> Vec<Line<'static>> {
+    // termimad renders markdown by writing crossterm ANSI escape codes
+    // directly into the string it returns. Ratatui doesn't interpret those
+    // sequences, so they must be parsed into real Spans/Styles here rather
+    // than handed to `Line::from` as literal text (which corrupts wrapping
+    // and alignment, since the escape bytes eat into the line's width).
+    let unwrapped = unwrap_outer_markdown_fence(text);
     let rendered = skin
-        .text(text, Some(width.saturating_sub(2) as usize))
+        .text(&unwrapped, Some(width.saturating_sub(2) as usize))
         .to_string();
-    rendered
-        .lines()
-        .map(|l| Line::from(l.to_string()))
-        .collect()
+    crate::ansi::ansi_text_to_lines(&rendered)
+}
+
+/// Agents often demonstrate markdown by wrapping an entire reply in a single
+/// outer ` ```markdown ` fence (sometimes nesting further fences inside it,
+/// e.g. a code sample). Per CommonMark, a fence only closes on a bare line of
+/// backticks/tildes with no info string, so an inner ` ```lang ` line doesn't
+/// close it — the whole reply parses as one literal code block and nothing
+/// renders as real headings/lists/tables. If the whole message is exactly
+/// that pattern, strip the outer fence so the interior renders as markdown.
+fn unwrap_outer_markdown_fence(text: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = text.trim();
+    let lines: Vec<&str> = trimmed.lines().collect();
+    if lines.len() < 3 {
+        return std::borrow::Cow::Borrowed(text);
+    }
+
+    let first = lines[0].trim();
+    let fence_char = if first.starts_with("```") {
+        '`'
+    } else if first.starts_with("~~~") {
+        '~'
+    } else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let open_len = first.chars().take_while(|&c| c == fence_char).count();
+    let info = first[open_len..].trim().to_ascii_lowercase();
+    if info != "markdown" && info != "md" {
+        return std::borrow::Cow::Borrowed(text);
+    }
+
+    let last = lines[lines.len() - 1].trim();
+    let closes_fence = !last.is_empty()
+        && last.chars().all(|c| c == fence_char)
+        && last.len() >= open_len;
+    if !closes_fence {
+        return std::borrow::Cow::Borrowed(text);
+    }
+
+    std::borrow::Cow::Owned(lines[1..lines.len() - 1].join("\n"))
 }
 
 fn highlight_detail(
@@ -1026,6 +1180,10 @@ async fn load_meta(client: &mut McpClient, task_id: &str) -> Result<ChatMeta> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        agent: row
+            .and_then(|r| r.get("agent"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         lane: status_v
             .get("lane")
             .or_else(|| row.and_then(|r| r.get("lane")))
@@ -1110,6 +1268,8 @@ mod tests {
             connection_error: None,
             status_flash: None,
             show_details: false,
+            loading_transcript: false,
+            slash_menu: SlashMenuState::default(),
         }
     }
 
@@ -1182,6 +1342,24 @@ mod tests {
             map_key_action(&typing, press(KeyCode::Char('v'))),
             MappedKey::Insert('v')
         );
+    }
+
+    #[test]
+    fn subscribe_batch_clears_loading_transcript() {
+        let mut state = empty_state();
+        state.loading_transcript = true;
+        apply_subscribe_message(
+            &mut state,
+            SubscribeMessage::Batch(crate::mcp::SubscribeBatch {
+                subscription_id: "s".into(),
+                task_id: "t".into(),
+                events: vec![],
+                replace_from: None,
+                done: false,
+                error: None,
+            }),
+        );
+        assert!(!state.loading_transcript);
     }
 
     #[test]
@@ -1482,5 +1660,58 @@ mod tests {
         state.status = "Stopping".into();
         apply_stop_success(&mut state, None);
         assert_eq!(state.status, "Done");
+    }
+
+    #[test]
+    fn unwraps_whole_message_markdown_fence_with_nested_code_fence() {
+        let text = "```markdown\n# Title\n\n```kotlin\nfun main() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |\n```";
+        let unwrapped = unwrap_outer_markdown_fence(text);
+        assert_eq!(
+            unwrapped,
+            "# Title\n\n```kotlin\nfun main() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+        );
+    }
+
+    #[test]
+    fn leaves_normal_code_fence_untouched() {
+        let text = "```kotlin\nfun main() {}\n```";
+        assert_eq!(unwrap_outer_markdown_fence(text), text);
+    }
+
+    #[test]
+    fn leaves_prose_with_trailing_fence_untouched() {
+        let text = "Some prose.\n\n```markdown\n# Title\n```";
+        assert_eq!(unwrap_outer_markdown_fence(text), text);
+    }
+
+    #[test]
+    fn leaves_unclosed_markdown_fence_untouched() {
+        let text = "```markdown\n# Title\nno closing fence here";
+        assert_eq!(unwrap_outer_markdown_fence(text), text);
+    }
+
+    /// Regression test for a real Codex reply that wrapped an entire markdown
+    /// demo (headings, list, blockquote, nested code fence, table) inside one
+    /// outer ` ```markdown ` fence. Before the unwrap fix, `markdown_lines`
+    /// rendered the whole reply as one literal, unstyled block; it should now
+    /// surface the interior elements (heading text without its `#`, the
+    /// nested kotlin snippet, and the table) as distinct lines.
+    #[test]
+    fn markdown_lines_unwraps_and_renders_real_agent_reply() {
+        let text = "```markdown\n# Sample Markdown\n\nThis is a paragraph with **bold text**, *italic text*, and a [link](https://example.com).\n\n## Features\n\n- Bullet list item\n- Another item\n  - Nested item\n\n1. First step\n2. Second step\n\n> This is a blockquote.\n\n```kotlin\nfun main() {\n    println(\"Hello, Markdown!\")\n}\n```\n\n| Name | Value |\n|------|-------|\n| Example | 42 |\n```";
+        let skin = MadSkin::default();
+        let lines = markdown_lines(&skin, text, 82);
+        let plain: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+
+        // The heading is rendered (no leading literal `#`), not dumped as raw fenced text.
+        assert!(plain.iter().any(|l| l.contains("Sample Markdown") && !l.contains('#')));
+        // The nested code sample still renders as code, without stray backtick fence markers.
+        assert!(plain.iter().any(|l| l.contains("fun main")));
+        assert!(!plain.iter().any(|l| l.trim() == "```kotlin"));
+        // The table renders with box-drawing borders rather than literal pipes.
+        assert!(plain.iter().any(|l| l.contains('│') && l.contains("Name")));
     }
 }

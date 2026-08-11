@@ -1423,9 +1423,12 @@ class DesktopAgentRunService(
                 val projectEnv = task.projectId?.let { projectId ->
                     runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
                 }.orEmpty()
-                val endpoint = if (task.attachAndyMcp) prepareAcpMcp() else null
+                val endpoint = if (task.attachAndyMcp) prepareAcpMcp(task.id) else null
+                val acpEnv = buildAgentLaunchEnvironment(projectEnv) + mapOf(
+                    AndyStatusHookInstaller.TASK_ID_ENV to task.id,
+                )
                 val started = runCatching {
-                    acpManager.start(task, buildAgentLaunchEnvironment(projectEnv), endpoint) { snapshot ->
+                    acpManager.start(task, acpEnv, endpoint) { snapshot ->
                         applyStatusSnapshot(taskId, snapshot)
                     }
                 }.isSuccess
@@ -1919,7 +1922,7 @@ class DesktopAgentRunService(
 
         val mcpUrl = if (taskForLaunch.attachAndyMcp) {
             runCatching {
-                prepareMcp(taskForLaunch.agent, taskForLaunch.cwd?.let(::File))
+                prepareMcp(taskForLaunch.agent, taskForLaunch.id, taskForLaunch.cwd?.let(::File))
             }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
                 return
@@ -2291,9 +2294,11 @@ class DesktopAgentRunService(
         val projectEnv = taskForLaunch.projectId?.let { projectId ->
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
-        val env = buildAgentLaunchEnvironment(projectEnv)
+        val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
+            AndyStatusHookInstaller.TASK_ID_ENV to taskForLaunch.id,
+        )
         val mcpEndpoint = if (taskForLaunch.attachAndyMcp) {
-            runCatching { prepareAcpMcp() }.getOrElse { error ->
+            runCatching { prepareAcpMcp(taskForLaunch.id) }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, null, "failed to prepare Andy MCP: ${error.message}")
                 return
             }
@@ -2355,8 +2360,10 @@ class DesktopAgentRunService(
                 val projectEnv = task.projectId?.let { projectId ->
                     runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
                 }.orEmpty()
-                val env = buildAgentLaunchEnvironment(projectEnv)
-                val endpoint = if (task.attachAndyMcp) prepareAcpMcp() else null
+                val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
+                    AndyStatusHookInstaller.TASK_ID_ENV to task.id,
+                )
+                val endpoint = if (task.attachAndyMcp) prepareAcpMcp(task.id) else null
                 runCatching {
                     acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
                 }.getOrElse {
@@ -3126,7 +3133,7 @@ class DesktopAgentRunService(
         }
     }
 
-    private suspend fun prepareMcp(agent: AgentKind, cwd: File? = null): String? = mcpMutex.withLock {
+    private suspend fun prepareMcp(agent: AgentKind, taskId: String, cwd: File? = null): String? = mcpMutex.withLock {
         val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
@@ -3134,10 +3141,13 @@ class DesktopAgentRunService(
             check(result.isSuccess) { result.stderr.ifBlank { "server failed to start" } }
         }
         when (agent) {
-            // Per-invocation wiring, no config file edits.
-            AgentKind.ClaudeCode -> "http://127.0.0.1:$port/mcp-http"
-            AgentKind.Codex -> "http://127.0.0.1:$port/mcp"
+            // Per-invocation wiring, no config file edits. Tag URL with andyTaskId so
+            // chat.start can inherit this parent's autonomy when the child omits it.
+            AgentKind.ClaudeCode -> mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
+            // Codex only supports streamable HTTP for remote MCP (not legacy SSE `/mcp`).
+            AgentKind.Codex -> mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             // These only support config-file registration; write it and pass no URL.
+            // Shared config cannot carry a per-task andyTaskId — CLI/ANDY_TASK_ID covers those.
             AgentKind.Cursor -> {
                 mcp.writeConfig("Cursor", port)
                 null
@@ -3154,7 +3164,7 @@ class DesktopAgentRunService(
             // and pass ANDY_MCP_URL to Andy's Pi extension.
             AgentKind.Pi -> {
                 McpClientConfig.writeConfig(McpClientConfig.ClientType.Pi, port, cwd)
-                "http://127.0.0.1:$port/mcp-http"
+                mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
             AgentKind.Hermes -> {
                 McpClientConfig.writeConfig(McpClientConfig.ClientType.Hermes, port, cwd)
@@ -3168,14 +3178,17 @@ class DesktopAgentRunService(
     }
 
     /** ACP receives an MCP server descriptor directly; it must not mutate provider config files. */
-    private suspend fun prepareAcpMcp(): AndyMcpEndpoint = mcpMutex.withLock {
+    private suspend fun prepareAcpMcp(taskId: String): AndyMcpEndpoint = mcpMutex.withLock {
         val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
             val result = mcp.start(port)
             check(result.isSuccess) { result.stderr.ifBlank { "server failed to start" } }
         }
-        AndyMcpEndpoint(port = port, httpUrl = "http://127.0.0.1:$port/mcp-http")
+        AndyMcpEndpoint(
+            port = port,
+            httpUrl = mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId),
+        )
     }
 
     private fun runOpenClawModelPreflight(binary: String, model: String, cwd: String?): Boolean = runCatching {

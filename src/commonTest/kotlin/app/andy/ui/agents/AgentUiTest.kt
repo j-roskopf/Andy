@@ -3,6 +3,10 @@ package app.andy.ui.agents
 import app.andy.model.AgentStatus
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
+import app.andy.model.AgentUserInputOrigin
+import app.andy.model.AgentUserInputQuestion
+import app.andy.model.AgentUserInputRequest
+import app.andy.model.ProjectWorkflowStage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -74,6 +78,67 @@ class AgentUiTest {
         assertEquals("blocked", agentStatusLabel(task(AgentStatus.Blocked)))
         assertEquals("error", agentStatusLabel(task(AgentStatus.Error).copy(interrupted = true)))
         assertEquals("done", agentStatusLabel(task(AgentStatus.Done).copy(stoppedByUser = true)))
+    }
+
+    @Test
+    fun donePlanModeShowsPlanReady() {
+        val planDone = task(AgentStatus.Done).copy(planMode = true)
+        assertTrue(isAwaitingPlanConfirmation(planDone))
+        assertEquals("plan ready", agentStatusLabel(planDone))
+        assertEquals(
+            "plan ready",
+            agentStatusLabel(planDone.copy(workflowStage = ProjectWorkflowStage.Spec)),
+        )
+    }
+
+    @Test
+    fun awaitingPlanConfirmationRequiresIdlePlanModeWithoutInput() {
+        assertFalse(isAwaitingPlanConfirmation(task(AgentStatus.Done)))
+        assertFalse(isAwaitingPlanConfirmation(task(AgentStatus.Working).copy(planMode = true)))
+        assertFalse(
+            isAwaitingPlanConfirmation(
+                task(AgentStatus.Done).copy(
+                    planMode = true,
+                    userInputRequest = AgentUserInputRequest(
+                        id = "q1",
+                        questions = listOf(
+                            AgentUserInputQuestion(
+                                id = "q",
+                                question = "Continue?",
+                                options = emptyList(),
+                            ),
+                        ),
+                        origin = AgentUserInputOrigin.Artifact,
+                    ),
+                ),
+            ),
+        )
+        assertTrue(isAwaitingPlanConfirmation(task(AgentStatus.Done), planModeActive = true))
+        assertEquals("done", agentStatusLabel(task(AgentStatus.Done)))
+    }
+
+    @Test
+    fun doneWithPendingPlanEntriesShowsPlanReadyWithoutPlanMode() {
+        // Cursor Create Plan can end_turn with pending plan rows while Andy planMode stays off.
+        val done = task(AgentStatus.Done)
+        assertTrue(
+            isAwaitingPlanConfirmation(
+                task = done,
+                planModeActive = false,
+                hasPendingPlanEntries = true,
+            ),
+        )
+        assertEquals(
+            "plan ready",
+            agentStatusLabel(done, planModeActive = false, hasPendingPlanEntries = true),
+        )
+        assertFalse(
+            isAwaitingPlanConfirmation(
+                task = task(AgentStatus.Working),
+                planModeActive = false,
+                hasPendingPlanEntries = true,
+            ),
+        )
     }
 
     @Test

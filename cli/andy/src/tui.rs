@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::io::{stdout, Stdout};
 use std::time::Duration;
 
+use crate::acp_view;
 use crate::attach;
 use crate::chats::{self, ListEntry, ProjectGroup};
 use crate::compose;
@@ -37,6 +38,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
 
     refresh(
         &mut client,
+        &mut terminal,
         &mut groups,
         &mut expanded,
         &mut entries,
@@ -44,7 +46,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
         &mut list_state,
         &mut status,
     )
-    .await;
+    .await?;
 
     loop {
         // Keep flash until the next keypress — take() every redraw made it vanish in ~250ms.
@@ -55,69 +57,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
             )
         });
 
-        terminal.draw(|frame| {
-            let area = frame.area();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(3)])
-                .split(area);
-
-            let list_items: Vec<ListItem> = entries
-                .iter()
-                .enumerate()
-                .map(|(i, entry)| {
-                    let item = match entry {
-                        ListEntry::Header {
-                            label,
-                            count,
-                            expanded,
-                            ..
-                        } => {
-                            let marker = if *expanded { "▾" } else { "▸" };
-                            ListItem::new(format!(" {marker} {label} ({count}) "))
-                                .style(Style::default().fg(Color::Cyan))
-                        }
-                        ListEntry::Chat(chat) => {
-                            let live = if chat.tmux_alive { " live" } else { "" };
-                            ListItem::new(format!(
-                                "   {}  [{}{}]  {}",
-                                chat.id, chat.status, live, chat.title
-                            ))
-                        }
-                    };
-                    if i == selected {
-                        item.style(Style::default().add_modifier(Modifier::REVERSED))
-                    } else {
-                        item
-                    }
-                })
-                .collect();
-
-            let refresh_button = Line::from(vec![
-                Span::styled("[", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    "r",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("] Refresh ", Style::default().fg(Color::Cyan)),
-            ])
-            .right_aligned();
-
-            let list = List::new(list_items).block(
-                Block::default()
-                    .title(" Andy chats (andyd) ")
-                    .title_top(refresh_button)
-                    .borders(Borders::ALL),
-            );
-            list_state.select(Some(selected));
-            frame.render_stateful_widget(list, chunks[0], &mut list_state);
-            frame.render_widget(
-                Paragraph::new(status.as_str()).block(Block::default().borders(Borders::ALL)),
-                chunks[1],
-            );
-        })?;
+        draw_dashboard(&mut terminal, &entries, &mut list_state, selected, &status)?;
 
         if event::poll(Duration::from_millis(250))? {
             match event::read()? {
@@ -146,6 +86,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                     expanded.insert(project_key);
                                     refresh(
                                         &mut client,
+                                        &mut terminal,
                                         &mut groups,
                                         &mut expanded,
                                         &mut entries,
@@ -153,7 +94,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                         &mut list_state,
                                         &mut status,
                                     )
-                                    .await;
+                                    .await?;
                                     if let Some(idx) = entries.iter().position(
                                         |e| matches!(e, ListEntry::Chat(c) if c.id == task_id),
                                     ) {
@@ -182,6 +123,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                         KeyCode::Char('r') => {
                             refresh(
                                 &mut client,
+                                &mut terminal,
                                 &mut groups,
                                 &mut expanded,
                                 &mut entries,
@@ -189,7 +131,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                 &mut list_state,
                                 &mut status,
                             )
-                            .await
+                            .await?;
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             move_selection(entries.len(), &mut selected, 1);
@@ -314,6 +256,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                         if mouse.row == 0 && mouse.column >= size.width.saturating_sub(15) {
                             refresh(
                                 &mut client,
+                                &mut terminal,
                                 &mut groups,
                                 &mut expanded,
                                 &mut entries,
@@ -321,7 +264,7 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                 &mut list_state,
                                 &mut status,
                             )
-                            .await;
+                            .await?;
                         } else if mouse.row > 0 && (mouse.row as usize) <= entries.len() {
                             let clicked_idx = (mouse.row as usize) - 1;
                             if clicked_idx < entries.len() {
@@ -442,15 +385,92 @@ fn collapse_current(
     }
 }
 
+fn draw_dashboard(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    entries: &[ListEntry],
+    list_state: &mut ListState,
+    selected: usize,
+    status: &str,
+) -> Result<()> {
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(3)])
+            .split(area);
+
+        let list_items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let item = match entry {
+                    ListEntry::Header {
+                        label,
+                        count,
+                        expanded,
+                        ..
+                    } => {
+                        let marker = if *expanded { "▾" } else { "▸" };
+                        ListItem::new(format!(" {marker} {label} ({count}) "))
+                            .style(Style::default().fg(Color::Cyan))
+                    }
+                    ListEntry::Chat(chat) => {
+                        let live = if chat.tmux_alive { " live" } else { "" };
+                        ListItem::new(format!(
+                            "   {}  [{}{}]  {}",
+                            chat.id, chat.status, live, chat.title
+                        ))
+                    }
+                };
+                if i == selected {
+                    item.style(Style::default().add_modifier(Modifier::REVERSED))
+                } else {
+                    item
+                }
+            })
+            .collect();
+
+        let refresh_button = Line::from(vec![
+            Span::styled("[", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("] Refresh ", Style::default().fg(Color::Cyan)),
+        ])
+        .right_aligned();
+
+        let list = List::new(list_items).block(
+            Block::default()
+                .title(" Andy chats (andyd) ")
+                .title_top(refresh_button)
+                .borders(Borders::ALL),
+        );
+        list_state.select(Some(selected));
+        frame.render_stateful_widget(list, chunks[0], list_state);
+        frame.render_widget(
+            Paragraph::new(status).block(Block::default().borders(Borders::ALL)),
+            chunks[1],
+        );
+    })?;
+    Ok(())
+}
+
 async fn refresh(
     client: &mut McpClient,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     groups: &mut Vec<ProjectGroup>,
     expanded: &mut HashSet<String>,
     entries: &mut Vec<ListEntry>,
     selected: &mut usize,
     list_state: &mut ListState,
     status: &mut String,
-) {
+) -> Result<()> {
+    *status = "Loading chats…".into();
+    draw_dashboard(terminal, entries, list_state, *selected, status)?;
+
     match client
         .call_tool("chat.list", Value::Object(Default::default()))
         .await
@@ -466,6 +486,7 @@ async fn refresh(
         }
         Err(err) => *status = format!("error: {err}"),
     }
+    Ok(())
 }
 
 fn footer_status(selected: Option<&ListEntry>, chat_count: usize) -> String {
@@ -540,15 +561,40 @@ async fn attach_selected_chat(
     status: &mut String,
     task_id: &str,
 ) -> Result<Option<String>> {
-    restore_terminal(terminal)?;
-    let attach_err = match attach::attach_or_reattach(client, task_id).await {
-        Ok(()) => None,
+    *status = format!("Opening {task_id}…");
+    draw_dashboard(terminal, entries, list_state, *selected, status)?;
+
+    // Resolve lane while the dashboard still owns the alt screen so opening a chat
+    // does not flash a blank terminal. ACP takes over that screen; Terminal needs
+    // a normal TTY for tmux.
+    let attach_err = match acp_view::resolve_lane(client, task_id).await {
+        Ok(lane) if lane.eq_ignore_ascii_case("Acp") => {
+            let err = match acp_view::run_acp_viewer(client, task_id).await {
+                Ok(()) => None,
+                Err(err) => Some(format!("{err:#}")),
+            };
+            // ACP viewer leaves the alt screen on exit; restore dashboard chrome.
+            enable_raw_mode()?;
+            stdout().execute(EnterAlternateScreen)?;
+            let _ = stdout().execute(EnableMouseCapture);
+            *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+            err
+        }
+        Ok(_) => {
+            restore_terminal(terminal)?;
+            let err = match attach::attach_or_reattach(client, task_id).await {
+                Ok(()) => None,
+                Err(err) => Some(format!("{err:#}")),
+            };
+            enable_raw_mode()?;
+            stdout().execute(EnterAlternateScreen)?;
+            let _ = stdout().execute(EnableMouseCapture);
+            *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+            err
+        }
         Err(err) => Some(format!("{err:#}")),
     };
-    enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
-    let _ = stdout().execute(EnableMouseCapture);
-    *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+
     let flash = if let Some(err) = attach_err {
         show_attach_error(terminal, task_id, &err)?;
         // Single-line footer summary; full text was already on the modal.
@@ -560,9 +606,9 @@ async fn attach_selected_chat(
         None
     };
     refresh(
-        client, groups, expanded, entries, selected, list_state, status,
+        client, terminal, groups, expanded, entries, selected, list_state, status,
     )
-    .await;
+    .await?;
     Ok(flash)
 }
 

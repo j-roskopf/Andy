@@ -31,7 +31,7 @@ In my own words as the author: I find myself in Android Studio less these days, 
 
 ### Devices
 
-Discover connected Android devices and created emulators in one place. Search and filter by device type or API level, start emulators, jump into a live session, and stop running emulators without leaving Andy.
+Discover connected Android devices and created emulators in one place. Search and filter by device type or API level, start emulators, jump into a live session, and stop running emulators without leaving Andy. Pair physical devices over Wi‑Fi from a QR/pairing dialog, then reconnect or forget saved pairs without re-plugging USB.
 
 Opt into multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, emulator start/stop, Controls toggles, and Screenshot across a primary device plus fan-out targets (bounded concurrency). Save device groups, labels, and notes so serials stay readable across many emulators.
 
@@ -51,11 +51,11 @@ Save, restore, and delete emulator snapshots for any created AVD. This makes it 
 
 ### Live Mirror
 
-Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI. Record from the Live toolbar into Andy's Recordings library (trim + GIF/WebP/MP4/PNG-sequence export), and annotate screenshots with redaction, shapes, text, and an optional device frame before saving.
+Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI. Record from the Live toolbar into Andy's Recordings library (trim + GIF/WebP/MP4/PNG-sequence export), and annotate screenshots with redaction, shapes, text, and an optional device frame before saving. Drag an APK onto the mirror to install it, pull clipboard text from the device, and tune max size, bitrate, FPS, and renderer mode (accelerated vs legacy) from the Live side panel. Foldable AVDs can switch hinge posture from Live or Controls.
 
 Grid mode mirrors up to four batch targets at once (lower resolution/FPS), with optional synchronized input scaled per device. Bug capture, network proxy, and Perfetto tracing remain single-target.
 
-On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
+Dock Live, Logcat, or a project Terminal beside or below the main content when you want the mirror and another workspace open at once. On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
 
 ### Recordings
 
@@ -105,7 +105,11 @@ Create ordered network rewrite rules that match URL patterns and optional HTTP m
 
 ### Projects
 
-Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Save reusable shell actions, keep notes, open a project terminal, and start agent chats that inherit the project's context. The Projects screen also includes a Kanban tab for a lightweight board alongside your project spaces.
+Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Each project canvas has tabs for chats, workflow tasks, runbook shell actions, a markdown scratchpad, and nested git worktrees. Start agent chats that inherit the project's context, run actions in a docked Terminal, and keep per-project agent profiles (provider, model, autonomy) for workflow stages. The Projects screen also includes a Kanban tab for a lightweight board alongside your project spaces.
+
+### Project Workflows
+
+Drive Spec → Build ↔ Review ↔ Verification from the project tasks tab. Create or refine specs (optional grill-me pass), open plan snapshots into builds, gate review verdicts, track verification criteria and attempt history, and jump into the related agent runs. Desktop only.
 
 ### Kanban
 
@@ -113,13 +117,13 @@ Track work on a drag-and-drop board from the Kanban tab under Projects. Andy sta
 
 ### Agents
 
-Dispatch coding tasks to Claude Code, Codex, Cursor, or Antigravity from Andy. Compose prompts with images and `/` skills, choose model and autonomy, optionally isolate the run in a git worktree, and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript, review file diffs when the task finishes, and send follow-ups without leaving the desktop UI.
+Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, or OpenClaw from Andy. Compose prompts with images and `/` skills, choose model, autonomy, and provider sandbox/approvals, optionally isolate the run in a git worktree, toggle plan mode, set a persistent `/goal` (Codex and Claude Code), and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript (thinking, tools, cost/tokens), review file diffs when the task finishes, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
 
 ### Controls
 
-Toggle common device state without memorizing `adb shell` commands. Andy includes controls for airplane mode, Wi-Fi, mobile data, Bluetooth, dark mode, font scale, animation scale, show taps, pointer location, layout bounds, and hardware buttons.
+Toggle common device state without memorizing `adb shell` commands. Andy includes controls for airplane mode, Wi-Fi, mobile data, Bluetooth, dark mode, font scale, animation scale, show taps, pointer location, layout bounds, TalkBack, don't-keep-activities, and hardware buttons.
 
-On emulators, Controls also injects GPS (including GPX/KML route playback), sensors, GSM calls/SMS/network type, and thermal status. Battery level/charging overrides work on physical devices too (with a prominent Reset). Runtime locale supports `cmd locale`, setprop+restart, per-app locales, and pseudo-locales (`en-XA` / `ar-XB`).
+On emulators, Controls also injects GPS (including GPX/KML route playback), sensors, GSM calls/SMS/network type, thermal status, and foldable hinge posture. Battery level/charging overrides work on physical devices too (with a prominent Reset). Runtime locale supports `cmd locale`, setprop+restart, per-app locales, and pseudo-locales (`en-XA` / `ar-XB`).
 
 ### Performance
 
@@ -131,7 +135,7 @@ Capture Perfetto traces from Android 9+ devices with quick-start presets for gen
 
 ### Design
 
-Overlay design tools on top of the live device mirror. Use a grid, ruler, zoom controls, configurable overlay colors, and a pointer color picker to inspect spacing and visual details while interacting with the app.
+Overlay design tools on top of the live device mirror. Use a grid, ruler, zoom controls, configurable overlay colors, a pointer color picker, and an optional imported image overlay to inspect spacing and visual details while interacting with the app.
 
 ### Accessibility
 
@@ -147,13 +151,17 @@ Capture reproducible bug reports from Live. Andy saves recent actions, live vide
 
 An "Explain…" action sits beside a selected crash, network exchange, hierarchy node, and investigation moment. It opens a confirmation sheet showing the editable prompt and exactly which evidence would be attached — events, time window, size, exclusions, and redactions — before starting a read-only agent chat. Nothing is sent to a provider until you confirm the sheet, and the resulting chat links back to the investigation moment it came from. Desktop only.
 
+### Settings
+
+Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, VS Code, and Windsurf.
+
 ### Updates
 
-Check for desktop app updates and confirm installation from inside Andy. Version metadata is generated at build time and the app can surface a close-and-install prompt when an update is ready.
+Check for desktop app updates and confirm installation from inside Andy. Version metadata is generated at build time and the app can surface a close-and-install prompt when an update is ready. The same Settings area can install or update the CLI runtime bundle (`andy`, `andyd`, managed tmux, status hook, and orchestration skills) without leaving the app.
 
 ### Computer File Browsing
 
-Very rudimentary file browsing / editing.
+Browse the host filesystem from multi-root folders, open files in a syntax-themed editor, and search across indexed roots without leaving Andy.
 
 ### Andy for web
 
@@ -274,6 +282,8 @@ andy tui # Main entry point into the CLI for chatting with Agents
 andy chat list
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
 andy attach <taskId>
+andy project list
+andy --remote user@host.local chat list   # SSH-tunnel ~/.andy/andyd.sock
 
 # Device / network scripting (same MCP socket)
 andy device list
@@ -283,15 +293,22 @@ andy device screenshot -o /tmp/screen.png
 andy tool list   # full MCP catalog; `andy tool call <name>` for any tool
 ```
 
-Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`.
+Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`,
+`Hermes`, `OpenClaw`.
+
+`andy tui` groups chats by project (`n` new chat, `a` / Enter attach). `andy attach`
+opens the ACP viewer or a tmux pane by lane — detach with Esc/`q` (ACP) or F12 /
+Alt+d / Ctrl-b then d (tmux) without stopping the agent. Chat start also accepts
+`--project`, `--title`, image paths, `--pick-image`, and `--no-attach`.
 
 Device targeting: `--serial` on a command, or `ANDY_SERIAL`. Use global `--json`
-for machine-readable output. Agent/workflow MCP tools stay under
-`andy tool call` (no curated chat lifecycle wrappers beyond the existing
+for machine-readable output. Curated groups cover `device`, `emulator`, `avd`,
+`system-image`, `snapshot`, `input`, `app`, `intent`, `file`, and `network`.
+Agent/workflow MCP tools stay under `andy tool call` (beyond the curated
 `andy chat` commands).
 
 See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
-keybindings, remote access, and launchd packaging.
+keybindings, remote access, GUI/daemon modes, and launchd packaging.
 
 ## Testing
 
@@ -310,7 +327,7 @@ agent CLI — and how to run them locally — are documented in
 - Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
   managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
   or the desktop app). Override with `ANDY_TMUX` if needed.
-- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), or Antigravity (`agy`).
+- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), or OpenClaw (`openclaw`).
 
 ## Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>

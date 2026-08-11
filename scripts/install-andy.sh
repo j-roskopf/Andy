@@ -237,6 +237,32 @@ HOOK
 fi
 chmod +x "${HOOK_DEST}"
 
+# Record installed release so Andy Settings → Updates can show the local version.
+RELEASE_TAG=""
+RELEASE_HTML_URL=""
+if command -v jq >/dev/null 2>&1; then
+  RELEASE_TAG="$(jq -r '.tag_name // empty' "${RELEASE_JSON}")"
+  RELEASE_HTML_URL="$(jq -r '.html_url // empty' "${RELEASE_JSON}")"
+else
+  RELEASE_TAG="$(tr '"' '\n' <"${RELEASE_JSON}" | grep -E '^[v0-9]' | head -n1 || true)"
+fi
+RELEASE_VERSION="$(printf '%s' "${RELEASE_TAG}" | sed -E 's#^(release/|v)##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+if [[ -z "${RELEASE_VERSION}" ]]; then
+  # Fall back to version embedded in the CLI asset name: andy-<version>-<target>
+  RELEASE_VERSION="$(printf '%s' "${ASSET_NAME}" | sed -E "s/^andy-(.+)-${TARGET}$/\1/")"
+fi
+if [[ -n "${RELEASE_VERSION}" ]]; then
+  mkdir -p "${ANDY_HOME}"
+  cat >"${ANDY_HOME}/installed-release.json" <<EOF
+{
+  "version": "${RELEASE_VERSION}",
+  "releasePageUrl": $(if [[ -n "${RELEASE_HTML_URL}" ]]; then printf '"%s"' "${RELEASE_HTML_URL}"; else printf 'null'; fi),
+  "installedAtEpochMs": $(date +%s000)
+}
+EOF
+  log "Recorded ${ANDY_HOME}/installed-release.json (v${RELEASE_VERSION})"
+fi
+
 log "Installed ${BIN_DIR}/andy"
 log "Installed ${HOOK_DEST}"
 if ! command -v andy >/dev/null 2>&1 || [[ "$(command -v andy)" != "${BIN_DIR}/andy" ]]; then
