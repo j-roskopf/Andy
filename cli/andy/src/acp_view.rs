@@ -530,13 +530,9 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
         KeyCode::Char('q') if state.input.is_empty() && modifiers_allow_typing(key.modifiers) => {
             MappedKey::Exit
         }
-        KeyCode::Char('s') if state.input.is_empty() && modifiers_allow_typing(key.modifiers) => {
-            MappedKey::Stop
-        }
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => MappedKey::Stop,
         KeyCode::Char('i')
-            if state.input.is_empty()
-                && state.composer_enabled
-                && modifiers_allow_typing(key.modifiers) =>
+            if key.modifiers.contains(KeyModifiers::CONTROL) && state.composer_enabled =>
         {
             MappedKey::PickImage
         }
@@ -584,25 +580,34 @@ async fn respond_permission(
 }
 
 fn pick_permission_label(options: &[(String, String)], choice: PermissionChoice) -> Option<String> {
-    let needle: &[&str] = match choice {
-        PermissionChoice::Yes => &["allow_once", "allow once", "allow"],
+    let ranked_needles: &[&str] = match choice {
+        PermissionChoice::Yes => &["allow_once", "allow once"],
         PermissionChoice::No => &["reject_once", "reject once", "reject", "deny"],
         PermissionChoice::Always => &["allow_always", "allow always", "always"],
     };
-    for (label, description) in options {
-        let blob = format!("{label} {description}").to_lowercase();
-        if needle.iter().any(|n| blob.contains(n)) {
-            return Some(label.clone());
+    for needle in ranked_needles {
+        for (label, description) in options {
+            let blob = format!("{label} {description}").to_lowercase();
+            if blob.contains(needle) {
+                return Some(label.clone());
+            }
         }
     }
     match choice {
-        PermissionChoice::Yes => options.first().map(|(l, _)| l.clone()),
-        PermissionChoice::No => options.last().map(|(l, _)| l.clone()),
+        PermissionChoice::Yes => options
+            .iter()
+            .find(|(label, description)| {
+                let blob = format!("{label} {description}").to_lowercase();
+                blob.contains("allow") && !blob.contains("always")
+            })
+            .map(|(label, _)| label.clone())
+            .or_else(|| options.first().map(|(label, _)| label.clone())),
+        PermissionChoice::No => options.last().map(|(label, _)| label.clone()),
         PermissionChoice::Always => options
             .iter()
-            .find(|(_, d)| d.to_lowercase().contains("always"))
-            .map(|(l, _)| l.clone())
-            .or_else(|| options.first().map(|(l, _)| l.clone())),
+            .find(|(_, description)| description.to_lowercase().contains("always"))
+            .map(|(label, _)| label.clone())
+            .or_else(|| options.first().map(|(label, _)| label.clone())),
     }
 }
 
@@ -1255,6 +1260,48 @@ mod tests {
         assert_eq!(
             map_key_action(&state, press(KeyCode::Char('c'))),
             MappedKey::Insert('c')
+        );
+    }
+
+    #[test]
+    fn plain_s_and_i_insert_into_composer() {
+        let state = empty_state();
+        assert_eq!(
+            map_key_action(&state, press(KeyCode::Char('s'))),
+            MappedKey::Insert('s')
+        );
+        assert_eq!(
+            map_key_action(&state, press(KeyCode::Char('i'))),
+            MappedKey::Insert('i')
+        );
+    }
+
+    #[test]
+    fn ctrl_s_stops_and_ctrl_i_picks_image() {
+        let state = empty_state();
+        assert_eq!(
+            map_key_action(&state, ctrl(KeyCode::Char('s'))),
+            MappedKey::Stop
+        );
+        assert_eq!(
+            map_key_action(&state, ctrl(KeyCode::Char('i'))),
+            MappedKey::PickImage
+        );
+    }
+
+    #[test]
+    fn permission_yes_prefers_allow_once_over_allow_always() {
+        let options = vec![
+            ("Allow always".into(), "allow_always".into()),
+            ("Allow once".into(), "allow_once".into()),
+        ];
+        assert_eq!(
+            pick_permission_label(&options, PermissionChoice::Yes).as_deref(),
+            Some("Allow once")
+        );
+        assert_eq!(
+            pick_permission_label(&options, PermissionChoice::Always).as_deref(),
+            Some("Allow always")
         );
     }
 

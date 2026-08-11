@@ -32,7 +32,7 @@ impl Lane {
 
     pub fn hotkey_hint(self) -> &'static str {
         match self {
-            Self::Acp => "Esc/q quit · s stop · i image · v details · Enter send",
+            Self::Acp => "Esc/q quit · Ctrl-s stop · Ctrl-i image · v details · Enter send",
             Self::Terminal => "F12/Alt+d/Ctrl-b d detach",
         }
     }
