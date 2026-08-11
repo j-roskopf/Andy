@@ -1150,6 +1150,7 @@ private fun CompactToolCallsBlock(
                         detail = event.detail,
                         kind = event.kind,
                         locations = event.locations,
+                        images = event.images,
                         color = Cyan,
                         indent = TranscriptAsideContentIndent,
                         onToolFileOpen = onToolFileOpen,

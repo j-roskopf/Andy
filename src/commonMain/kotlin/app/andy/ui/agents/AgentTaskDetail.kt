@@ -377,9 +377,12 @@ internal fun AgentTaskDetail(
                 is HostFileSaveResult.Saved -> {
                     filePreviewPane = current.copy(
                         document = current.document?.copy(content = text, modifiedMillis = result.modifiedMillis),
+                        draft = null,
+                        error = null,
                     )
                 }
                 is HostFileSaveResult.Conflict -> {
+                    // Keep the draft and error visible so the user's edits survive and a save can be retried.
                     filePreviewPane = current.copy(error = "Changed on disk since it was opened — not saved.")
                 }
                 is HostFileSaveResult.Failed -> {
@@ -539,6 +542,7 @@ internal fun AgentTaskDetail(
                     filePreviewPane?.let { preview ->
                         FileLinkPreviewPane(
                             state = preview,
+                            onTextChange = { _, text -> filePreviewPane = filePreviewPane?.copy(draft = text) },
                             onSave = ::saveFilePreview,
                             onClose = { filePreviewPane = null },
                             modifier = Modifier.width(420.dp).fillMaxHeight(),
@@ -982,6 +986,8 @@ private data class FileLinkPreviewState(
     val requestedPath: String,
     val loading: Boolean = true,
     val document: HostFileDocument? = null,
+    /** Unsaved edits typed into the preview editor, kept across failed saves so they are never lost. */
+    val draft: String? = null,
     val error: String? = null,
 )
 
@@ -1027,6 +1033,7 @@ private suspend fun resolveFileLink(
 @Composable
 private fun FileLinkPreviewPane(
     state: FileLinkPreviewState,
+    onTextChange: (path: String, text: String) -> Unit,
     onSave: (path: String, text: String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1068,23 +1075,31 @@ private fun FileLinkPreviewPane(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
+            state.document != null -> Column(Modifier.fillMaxSize()) {
+                state.error?.let { error ->
+                    Text(
+                        error,
+                        color = Red,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+                HostCodeEditor(
+                    path = state.document.path,
+                    text = state.draft ?: state.document.content,
+                    languageHint = state.document.languageHint,
+                    modifier = Modifier.fillMaxSize(),
+                    onTextChange = onTextChange,
+                    onSave = onSave,
+                    onClose = onClose,
+                )
+            }
             state.error != null -> Text(
                 state.error,
                 color = Red,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
-            state.document != null -> Box(Modifier.fillMaxSize()) {
-                HostCodeEditor(
-                    path = state.document.path,
-                    text = state.document.content,
-                    languageHint = state.document.languageHint,
-                    modifier = Modifier.fillMaxSize(),
-                    onTextChange = { _, _ -> },
-                    onSave = onSave,
-                    onClose = onClose,
-                )
-            }
         }
     }
 }
