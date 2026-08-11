@@ -1,27 +1,19 @@
-mod args;
-mod attach;
-mod chats;
-mod compose;
-mod daemon;
-mod device_cli;
-mod device_map;
-mod dispatch;
-mod mcp;
-mod tmux;
-mod tool_cmd;
-mod tui;
-
+use andy_cli::attach;
+use andy_cli::chats;
+use andy_cli::daemon;
+use andy_cli::device_cli::{
+    self, AppCmd, AvdCmd, DeviceCmd, EmulatorCmd, FileCmd, InputCmd, IntentCmd, NetworkCmd,
+    SnapshotCmd, SystemImageCmd,
+};
+use andy_cli::file_picker;
+use andy_cli::mcp::{default_socket_path, McpClient};
+use andy_cli::tool_cmd::{self, ToolCmd};
+use andy_cli::tui;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use device_cli::{
-    AppCmd, AvdCmd, DeviceCmd, EmulatorCmd, FileCmd, InputCmd, IntentCmd, NetworkCmd, SnapshotCmd,
-    SystemImageCmd,
-};
-use mcp::{default_socket_path, McpClient};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Command;
-use tool_cmd::ToolCmd;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -105,13 +97,23 @@ enum ChatCmd {
         directory: Option<String>,
         #[arg(long)]
         title: Option<String>,
+        /// Attach image file(s) to the first user message (repeatable).
+        #[arg(long = "image", value_name = "PATH")]
+        images: Vec<PathBuf>,
+        /// Open the filesystem image picker before starting (can combine with --image).
+        #[arg(long)]
+        pick_image: bool,
         /// Print the MCP response and exit without attaching to tmux.
         #[arg(long)]
         no_attach: bool,
         prompt: String,
     },
-    Stop { task_id: String },
-    Status { task_id: String },
+    Stop {
+        task_id: String,
+    },
+    Status {
+        task_id: String,
+    },
     Resume {
         task_id: String,
         follow_up: String,
@@ -153,9 +155,23 @@ async fn main() -> Result<()> {
             project,
             directory,
             title,
+            images,
+            pick_image,
             no_attach,
             prompt,
         }) => {
+            let mut image_paths: Vec<String> = images
+                .into_iter()
+                .map(|p| p.canonicalize().unwrap_or(p).display().to_string())
+                .collect();
+            if pick_image {
+                let start = directory.as_ref().map(PathBuf::from).unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+                if let Some(path) = file_picker::pick_image_standalone(start)? {
+                    image_paths.push(path.display().to_string());
+                }
+            }
             let mut args = json!({
                 "agent": agent,
                 "prompt": prompt,
@@ -168,6 +184,9 @@ async fn main() -> Result<()> {
             }
             if let Some(t) = title {
                 args["title"] = json!(t);
+            }
+            if !image_paths.is_empty() {
+                args["imagePaths"] = json!(image_paths);
             }
             let raw = client.call_tool("chat.start", args).await?;
             if no_attach {
@@ -199,10 +218,7 @@ async fn main() -> Result<()> {
                 .await?;
             println!("{raw}");
         }
-        Commands::Chat(ChatCmd::Resume {
-            task_id,
-            follow_up,
-        }) => {
+        Commands::Chat(ChatCmd::Resume { task_id, follow_up }) => {
             let raw = client
                 .call_tool(
                     "chat.resume",
@@ -241,7 +257,10 @@ async fn resolve_socket(cli: &Cli) -> Result<PathBuf> {
 
     // Always bind the forward to a fresh local path so an existing ~/.andy/andyd.sock
     // is never mistaken for the remote tunnel.
-    let local = PathBuf::from(format!("/tmp/andy-remote-local-{}.sock", std::process::id()));
+    let local = PathBuf::from(format!(
+        "/tmp/andy-remote-local-{}.sock",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&local);
     let remote_path = "~/.andy/andyd.sock";
     let status = Command::new("ssh")

@@ -10,8 +10,8 @@ pub fn merge_tool_args(
 ) -> Result<Value> {
     let mut map = base;
     if let Some(raw) = json_args {
-        let parsed: Value = serde_json::from_str(raw)
-            .map_err(|e| anyhow::anyhow!("invalid --json-args: {e}"))?;
+        let parsed: Value =
+            serde_json::from_str(raw).map_err(|e| anyhow::anyhow!("invalid --json-args: {e}"))?;
         let Value::Object(obj) = parsed else {
             bail!("--json-args must be a JSON object");
         };

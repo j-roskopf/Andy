@@ -284,7 +284,12 @@ private class FakeEvidenceAgentRunService : AgentRunService by UnavailableAgentR
         val contextBundleIds: List<String>,
         val provenance: AgentContextualProvenance?,
     )
-    data class ResumeCall(val taskId: String, val followUp: String, val contextBundleIds: List<String>)
+    data class ResumeCall(
+        val taskId: String,
+        val followUp: String,
+        val contextBundleIds: List<String>,
+        val imagePaths: List<String>,
+    )
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
     override val tasks: StateFlow<List<AgentTask>> = _tasks
@@ -318,6 +323,6 @@ private class FakeEvidenceAgentRunService : AgentRunService by UnavailableAgentR
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
     ) {
-        resumeCalls += ResumeCall(taskId, followUp, contextBundleIds)
+        resumeCalls += ResumeCall(taskId, followUp, contextBundleIds, imagePaths)
     }
 }

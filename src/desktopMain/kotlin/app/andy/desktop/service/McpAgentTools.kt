@@ -34,6 +34,15 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
 
+private val ImagePathsSchema = buildJsonObject {
+    put("type", "array")
+    put("items", buildJsonObject { put("type", "string") })
+    put(
+        "description",
+        "Raw local absolute image paths on the same host (jpg/jpeg/png/gif/webp)",
+    )
+}
+
 /** MCP argument keys that would smuggle a raw filesystem path in place of a managed evidence bundle id. */
 private val DisallowedRawPathKeys = listOf("evidencePath", "evidencePaths", "filePath", "filePaths", "localPath")
 
@@ -87,69 +96,11 @@ fun Server.registerAgentProjectTools(
     fun textResult(value: String) =
         CallToolResult(content = listOf(TextContent(text = value)))
 
-    fun AgentEvent.toWire(): JsonObject = buildJsonObject {
-        put("atMillis", atMillis)
-        when (this@toWire) {
-            is AgentEvent.SessionStarted -> { put("type", "session"); put("sessionId", sessionId.orEmpty()); put("model", model.orEmpty()) }
-            is AgentEvent.AssistantText -> { put("type", "assistant"); put("text", text); put("stream", isStreamDelta) }
-            is AgentEvent.Thinking -> { put("type", "thinking"); put("text", text); put("stream", isStreamDelta) }
-            is AgentEvent.UserMessage -> { put("type", "user"); put("text", text); put("images", JsonArray(imagePaths.map(::JsonPrimitive))) }
-            is AgentEvent.ToolCall -> {
-                put("type", "tool")
-                put("toolName", toolName)
-                put("toolCallId", toolCallId.orEmpty())
-                put("summary", summary)
-                put("detail", detail)
-                put("kind", kind?.name.orEmpty())
-                put("state", state.name)
-                put("locations", JsonArray(locations.map(::JsonPrimitive)))
-            }
-            is AgentEvent.ToolResult -> {
-                put("type", "tool-result"); put("toolName", toolName.orEmpty()); put("summary", summary)
-                put("detail", detail); put("isError", isError)
-            }
-            is AgentEvent.TaskError -> { put("type", "error"); put("text", message) }
-            is AgentEvent.TaskResult -> {
-                put("type", "result"); put("success", success); put("finalText", finalText.orEmpty())
-                put("costUsd", costUsd ?: 0.0); put("costEstimated", costIsEstimated)
-                put("inputTokens", inputTokens ?: 0L); put("outputTokens", outputTokens ?: 0L)
-                put("durationMs", durationMs ?: 0L)
-            }
-            is AgentEvent.ContextUsage -> { put("type", "usage"); put("usedTokens", usedTokens ?: 0L); put("windowTokens", windowTokens ?: 0L) }
-            is AgentEvent.PlanUpdate -> {
-                put("type", "plan")
-                put("entries", buildJsonArray { entries.forEach { entry -> add(buildJsonObject { put("content", entry.content); put("status", entry.status) }) } })
-                markdown?.let { put("markdown", it) }
-            }
-            is AgentEvent.ModeChanged -> { put("type", "mode"); put("modeId", modeId) }
-            is AgentEvent.AvailableCommands -> {
-                put("type", "commands")
-                put("commands", buildJsonArray { commands.forEach { command -> add(buildJsonObject { put("name", command.name); put("description", command.description); put("inputHint", command.inputHint.orEmpty()) }) } })
-            }
-            is AgentEvent.AvailableModes -> {
-                put("type", "modes")
-                put("currentModeId", currentModeId.orEmpty())
-                put("modes", buildJsonArray { modes.forEach { mode -> add(buildJsonObject { put("id", mode.id); put("name", mode.name); put("description", mode.description.orEmpty()) }) } })
-            }
-            is AgentEvent.PermissionRequest -> {
-                put("type", "permission"); put("requestId", requestId); put("toolName", toolName); put("question", question)
-                put("options", buildJsonArray { options.forEach { option -> add(buildJsonObject { put("label", option.label); put("description", option.description) }) } })
-            }
-            is AgentEvent.PermissionResolved -> {
-                put("type", "permission-resolved")
-                put("requestId", requestId)
-                put("optionId", optionId)
-                put("allowed", allowed)
-                note?.let { put("note", it) }
-            }
-            is AgentEvent.Raw -> { put("type", "raw"); put("line", line) }
-        }
-    }
-
     /**
      * Managed evidence bundle ids are the only way to attach investigation context over MCP
      * (§4/§5) — reject any argument that looks like it is trying to smuggle a raw filesystem
      * path instead, with a clear error pointing the caller at `contextBundleIds`.
+     * Chat image attachments use the separate `imagePaths` parameter and are not covered here.
      */
     fun rejectRawEvidencePaths(args: Map<String, JsonElement>) {
         val found = DisallowedRawPathKeys.firstOrNull { it in args }
@@ -361,6 +312,31 @@ fun Server.registerAgentProjectTools(
         textResult(buildJsonArray { events.forEach { add(it.toWire()) } }.toString())
     }
 
+    addTool(
+        "chat.subscribe",
+        "Stream structured transcript events for an ACP chat until cancelled",
+        ToolSchema(
+            properties = buildJsonObject {
+                put("taskId", buildJsonObject { put("type", "string") })
+            },
+            required = listOf("taskId"),
+        ),
+    ) { request ->
+        // Receiver is ClientConnection — required for mid-call notifications.
+        try {
+            val id = request.arguments?.get("taskId")?.jsonPrimitive?.contentOrNull
+                ?: error("taskId required")
+            runChatSubscribe(this, agentRuns, id)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            CallToolResult(
+                content = listOf(TextContent(text = "Error: ${e.message ?: e.toString()}")),
+                isError = true,
+            )
+        }
+    }
+
     register(
         name = "chat.start",
         description = "Start a new agent chat/task",
@@ -422,6 +398,7 @@ fun Server.registerAgentProjectTools(
                 put("items", buildJsonObject { put("type", "string") })
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
+            "imagePaths" to ImagePathsSchema,
             "provenance" to buildJsonObject {
                 put("type", "object")
                 put(
@@ -454,6 +431,7 @@ fun Server.registerAgentProjectTools(
         val attachAndyMcp = args["attachAndyMcp"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["attachAndyMcp"]?.jsonPrimitive?.booleanOrNull
             ?: false
+        val imagePaths = parseImagePathsArg(args)
         val task = agentRuns.createAndStart(
             AgentTaskDraft(
                 title = str(args, "title")?.takeIf { it.isNotBlank() } ?: prompt.take(48),
@@ -467,6 +445,7 @@ fun Server.registerAgentProjectTools(
                 attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
                 model = model,
+                imagePaths = imagePaths,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
             ),
@@ -677,13 +656,20 @@ fun Server.registerAgentProjectTools(
                 put("items", buildJsonObject { put("type", "string") })
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
+            "imagePaths" to ImagePathsSchema,
         ),
         required = listOf("taskId", "followUp"),
     ) { args ->
         rejectRawEvidencePaths(args)
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
-        agentRuns.resume(id, followUp, contextBundleIds = strList(args, "contextBundleIds"))
+        val imagePaths = parseImagePathsArg(args)
+        agentRuns.resume(
+            id,
+            followUp,
+            imagePaths = imagePaths,
+            contextBundleIds = strList(args, "contextBundleIds"),
+        )
         textResult("""{"ok":true,"id":"$id"}""")
     }
 
@@ -698,13 +684,20 @@ fun Server.registerAgentProjectTools(
                 put("items", buildJsonObject { put("type", "string") })
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
+            "imagePaths" to ImagePathsSchema,
         ),
         required = listOf("taskId", "followUp"),
     ) { args ->
         rejectRawEvidencePaths(args)
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
-        agentRuns.queueFollowUp(id, followUp, contextBundleIds = strList(args, "contextBundleIds"))
+        val imagePaths = parseImagePathsArg(args)
+        agentRuns.queueFollowUp(
+            id,
+            followUp,
+            imagePaths = imagePaths,
+            contextBundleIds = strList(args, "contextBundleIds"),
+        )
         textResult("""{"ok":true,"id":"$id"}""")
     }
 
@@ -802,9 +795,12 @@ fun Server.registerAgentProjectTools(
             buildJsonObject {
                 put("id", id)
                 put("status", task?.status?.name.orEmpty())
+                put("lane", task?.lane?.name.orEmpty())
                 put("statusConfident", task?.statusConfident ?: false)
                 put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
                 put("tmuxSession", TmuxAndy.sessionName(id))
+                put("cwd", task?.cwd.orEmpty())
+                put("originDir", task?.originDir.orEmpty())
             }.toString(),
         )
     }
@@ -1036,6 +1032,8 @@ fun Server.registerAgentProjectTools(
 fun agentProjectToolNames(): List<String> = listOf(
     "chat.list",
     "chat.composer_options",
+    "chat.events",
+    "chat.subscribe",
     "chat.start",
     "chat.stop",
     "chat.mark_read",

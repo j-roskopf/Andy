@@ -236,7 +236,7 @@ jobs:
         run: ./gradlew :web-launcher:test
 
   andy-cli:
-    name: Andy CLI build
+    name: Andy CLI build + test
     runs-on: macos-latest
     timeout-minutes: 15
 
@@ -244,10 +244,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Andy Rust CLI
+      - name: Build and test Andy Rust CLI
         run: |
           rustup show || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env" 2>/dev/null || true
+          cargo test --manifest-path cli/andy/Cargo.toml
           cargo build --manifest-path cli/andy/Cargo.toml
 
   web-preview-deploy:

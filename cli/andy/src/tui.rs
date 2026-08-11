@@ -3,7 +3,9 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEventKind,
 };
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -93,7 +95,12 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
 
             let refresh_button = Line::from(vec![
                 Span::styled("[", Style::default().fg(Color::DarkGray)),
-                Span::styled("r", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "r",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled("] Refresh ", Style::default().fg(Color::Cyan)),
             ])
             .right_aligned();
@@ -147,9 +154,9 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                         &mut status,
                                     )
                                     .await;
-                                    if let Some(idx) = entries.iter().position(|e| {
-                                        matches!(e, ListEntry::Chat(c) if c.id == task_id)
-                                    }) {
+                                    if let Some(idx) = entries.iter().position(
+                                        |e| matches!(e, ListEntry::Chat(c) if c.id == task_id),
+                                    ) {
                                         selected = idx;
                                         list_state.select(Some(selected));
                                     }
@@ -213,8 +220,11 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                             list_state.select(Some(selected));
                         }
                         KeyCode::Right | KeyCode::Char('l') => {
-                            if let Some(ListEntry::Header { key, expanded: open, .. }) =
-                                entries.get(selected)
+                            if let Some(ListEntry::Header {
+                                key,
+                                expanded: open,
+                                ..
+                            }) = entries.get(selected)
                             {
                                 if !*open {
                                     expanded.insert(key.clone());
@@ -246,37 +256,35 @@ pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
                                 &mut list_state,
                             );
                         }
-                        KeyCode::Enter => {
-                            match entries.get(selected) {
-                                Some(ListEntry::Header { .. }) => {
-                                    toggle_or_noop(
-                                        &groups,
+                        KeyCode::Enter => match entries.get(selected) {
+                            Some(ListEntry::Header { .. }) => {
+                                toggle_or_noop(
+                                    &groups,
+                                    &mut expanded,
+                                    &mut entries,
+                                    &mut selected,
+                                    &mut list_state,
+                                );
+                            }
+                            Some(ListEntry::Chat(chat)) => {
+                                let id = chat.id.clone();
+                                if confirm_attach(&mut terminal, &id)? {
+                                    flash = attach_selected_chat(
+                                        &mut client,
+                                        &mut terminal,
+                                        &mut groups,
                                         &mut expanded,
                                         &mut entries,
                                         &mut selected,
                                         &mut list_state,
-                                    );
+                                        &mut status,
+                                        &id,
+                                    )
+                                    .await?;
                                 }
-                                Some(ListEntry::Chat(chat)) => {
-                                    let id = chat.id.clone();
-                                    if confirm_attach(&mut terminal, &id)? {
-                                        flash = attach_selected_chat(
-                                            &mut client,
-                                            &mut terminal,
-                                            &mut groups,
-                                            &mut expanded,
-                                            &mut entries,
-                                            &mut selected,
-                                            &mut list_state,
-                                            &mut status,
-                                            &id,
-                                        )
-                                        .await?;
-                                    }
-                                }
-                                None => {}
                             }
-                        }
+                            None => {}
+                        },
                         KeyCode::Char('a') => {
                             if let Some(ListEntry::Chat(chat)) = entries.get(selected) {
                                 let id = chat.id.clone();
@@ -368,7 +376,9 @@ fn rebuild_visible(
     *entries = chats::visible_entries(groups, expanded);
 
     if let Some(chat_id) = prev_chat_id {
-        if let Some(idx) = entries.iter().position(|e| matches!(e, ListEntry::Chat(c) if c.id == chat_id))
+        if let Some(idx) = entries
+            .iter()
+            .position(|e| matches!(e, ListEntry::Chat(c) if c.id == chat_id))
         {
             *selected = idx;
             list_state.select(Some(*selected));
@@ -398,7 +408,12 @@ fn toggle_or_noop(
     selected: &mut usize,
     list_state: &mut ListState,
 ) {
-    let Some(ListEntry::Header { key, expanded: open, .. }) = entries.get(*selected) else {
+    let Some(ListEntry::Header {
+        key,
+        expanded: open,
+        ..
+    }) = entries.get(*selected)
+    else {
         return;
     };
     let key = key.clone();
@@ -477,7 +492,10 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 }
 
 /// Pause on a full-screen hint so users see how to get back before tmux takes over.
-fn confirm_attach(terminal: &mut Terminal<CrosstermBackend<Stdout>>, task_id: &str) -> Result<bool> {
+fn confirm_attach(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    task_id: &str,
+) -> Result<bool> {
     loop {
         terminal.draw(|frame| {
             let area = frame.area();
@@ -542,13 +560,7 @@ async fn attach_selected_chat(
         None
     };
     refresh(
-        client,
-        groups,
-        expanded,
-        entries,
-        selected,
-        list_state,
-        status,
+        client, groups, expanded, entries, selected, list_state, status,
     )
     .await;
     Ok(flash)

@@ -3,9 +3,11 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::attach;
+use crate::file_picker;
 use crate::mcp::McpClient;
 
 #[derive(Clone, Debug)]
@@ -41,6 +43,7 @@ pub struct ComposeDraft {
     project_label: String,
     directory: String,
     prompt: String,
+    image_paths: Vec<String>,
 }
 
 enum StepView {
@@ -103,6 +106,7 @@ pub async fn run_composer(
         project_label,
         directory: project_dir,
         prompt: String::new(),
+        image_paths: Vec::new(),
     };
 
     let mut step = Step::Agent;
@@ -186,13 +190,29 @@ pub async fn run_composer(
                     frame.render_widget(body, chunks[1]);
                 }
                 StepView::Confirm => {
+                    let images = if draft.image_paths.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        draft
+                            .image_paths
+                            .iter()
+                            .map(|p| {
+                                PathBuf::from(p)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| p.clone())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
                     let summary = format!(
-                        "Provider:  {}\nModel:     {}\nAutonomy:  {}\nProject:   {}\nDirectory: {}\n\nPrompt:\n{}",
+                        "Provider:  {}\nModel:     {}\nAutonomy:  {}\nProject:   {}\nDirectory: {}\nImages:    {}\n\nPrompt:\n{}",
                         draft.agent_label,
                         draft.model_label,
                         draft.autonomy_label,
                         draft.project_label,
                         draft.directory,
+                        images,
                         draft.prompt
                     );
                     let body = Paragraph::new(summary)
@@ -240,17 +260,43 @@ pub async fn run_composer(
                     value.pop();
                 }
             }
+            KeyCode::Char('a') if step == Step::Confirm => {
+                match start_and_attach(client, terminal, &draft, &mut status).await {
+                    Ok(outcome) => return Ok(Some(outcome)),
+                    Err(err) => status = format!("error: {err:#}"),
+                }
+            }
+            KeyCode::Char('i')
+                if step == Step::Prompt
+                    && matches!(&view, StepView::Text { value, .. } if value.is_empty())
+                    || step == Step::Confirm =>
+            {
+                // Empty prompt (or Confirm): open image picker. Typing 'i' still works once text exists.
+                let start = if !draft.directory.trim().is_empty() {
+                    PathBuf::from(draft.directory.trim())
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                };
+                match file_picker::pick_image(terminal, start) {
+                    Ok(Some(path)) => {
+                        draft.image_paths.push(path.display().to_string());
+                        status = format!(
+                            "attached {} image(s) · i attach another · Enter confirm",
+                            draft.image_paths.len()
+                        );
+                        if let StepView::Text { hint, .. } = &mut view {
+                            *hint = prompt_hint(&draft);
+                        }
+                    }
+                    Ok(None) => status = "image attach cancelled".into(),
+                    Err(err) => status = format!("image picker error: {err:#}"),
+                }
+            }
             KeyCode::Char(c) if matches!(view, StepView::Text { .. }) => {
                 if let StepView::Text { value, .. } = &mut view {
                     if !c.is_control() {
                         value.push(c);
                     }
-                }
-            }
-            KeyCode::Char('a') if step == Step::Confirm => {
-                match start_and_attach(client, terminal, &draft, &mut status).await {
-                    Ok(outcome) => return Ok(Some(outcome)),
-                    Err(err) => status = format!("error: {err:#}"),
                 }
             }
             KeyCode::Enter => match step {
@@ -315,7 +361,10 @@ async fn load_catalog(client: &mut McpClient) -> Result<Catalog> {
     let projects = parse_rows(v.get("projects"), /*with_directory*/ true);
     Ok(Catalog {
         agents,
-        models: v.get("models").cloned().unwrap_or(Value::Object(Default::default())),
+        models: v
+            .get("models")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default())),
         autonomies,
         projects,
     })
@@ -438,7 +487,11 @@ fn pick_view(title: &str, rows: Vec<OptionRow>, selected: usize) -> StepView {
 
 fn view_for_step(step: Step, catalog: &Catalog, draft: &ComposeDraft) -> StepView {
     match step {
-        Step::Agent => pick_view("Provider", catalog.agents.clone(), preferred_index(&catalog.agents)),
+        Step::Agent => pick_view(
+            "Provider",
+            catalog.agents.clone(),
+            preferred_index(&catalog.agents),
+        ),
         Step::Model => {
             let rows = models_for(catalog, &draft.agent_id);
             pick_view("Model", rows, 0)
@@ -467,9 +520,28 @@ fn view_for_step(step: Step, catalog: &Catalog, draft: &ComposeDraft) -> StepVie
         Step::Prompt => StepView::Text {
             title: "Prompt".into(),
             value: draft.prompt.clone(),
-            hint: "type prompt · Enter confirm · Esc back".into(),
+            hint: prompt_hint(draft),
         },
         Step::Confirm => StepView::Confirm,
+    }
+}
+
+fn prompt_hint(draft: &ComposeDraft) -> String {
+    if draft.image_paths.is_empty() {
+        "type prompt · i attach image · Enter confirm · Esc back".into()
+    } else {
+        let names = draft
+            .image_paths
+            .iter()
+            .map(|p| {
+                PathBuf::from(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.clone())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("images: {names} · i attach another · Enter confirm · Esc back")
     }
 }
 
@@ -548,14 +620,18 @@ fn step_label(step: Step) -> &'static str {
 fn step_status(step: Step) -> String {
     match step {
         Step::Confirm => "Enter / a  start + attach · Esc back".into(),
-        Step::Directory | Step::Prompt => "type · Enter next · Esc back".into(),
+        Step::Prompt => "type · i attach image · Enter next · Esc back".into(),
+        Step::Directory => "type · Enter next · Esc back".into(),
         _ => "↑↓ select · Enter next · Esc back".into(),
     }
 }
 
 fn move_pick(view: &mut StepView, delta: isize) {
     let StepView::Pick {
-        rows, selected, list_state, ..
+        rows,
+        selected,
+        list_state,
+        ..
     } = view
     else {
         return;
@@ -615,6 +691,9 @@ async fn start_chat(client: &mut McpClient, draft: &ComposeDraft) -> Result<Stri
     }
     if !draft.directory.trim().is_empty() {
         args["directory"] = json!(draft.directory.trim());
+    }
+    if !draft.image_paths.is_empty() {
+        args["imagePaths"] = json!(draft.image_paths);
     }
     let raw = client.call_tool("chat.start", args).await?;
     let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);

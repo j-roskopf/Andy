@@ -1,12 +1,13 @@
 package app.andy.desktop.service
 
 import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.io.asSink
 import kotlinx.io.asSource
@@ -74,6 +75,7 @@ class McpUnixSocketServer(
 
     fun stopBlocking() {
         if (!started.compareAndSet(true, false)) return
+        ChatSubscribeRegistry.cancelAll()
         runCatching { serverChannel?.close() }
         serverChannel = null
         acceptThread?.interrupt()
@@ -100,21 +102,34 @@ class McpUnixSocketServer(
     }
 
     private suspend fun handleClient(client: SocketChannel) {
+        var transport: StdioServerTransport? = null
+        var session: ServerSession? = null
         try {
             val input = Channels.newInputStream(client)
             val output = Channels.newOutputStream(client)
-            val transport = StdioServerTransport(
+            transport = StdioServerTransport(
                 input = input.asSource().buffered(),
                 output = output.asSink().buffered(),
             )
             val server = createServer()
-            server.createSession(transport)
-            while (client.isOpen && started.get() && scope.isActive) {
-                kotlinx.coroutines.delay(500)
+            // Peer disconnect does not flip SocketChannel.isOpen — wait on session close
+            // (transport EOF) so in-flight tools like chat.subscribe are cancelled.
+            val sessionClosed = CompletableDeferred<Unit>()
+            session = server.createSession(transport).also { created ->
+                created.onClose {
+                    // SDK leaves in-flight tool coroutines running on transport EOF;
+                    // cancel chat.subscribe collectors registered for this session.
+                    ChatSubscribeRegistry.cancelSession(created.sessionId)
+                    sessionClosed.complete(Unit)
+                }
             }
+            sessionClosed.await()
         } catch (_: Exception) {
             // Client disconnect is normal.
         } finally {
+            session?.sessionId?.let { ChatSubscribeRegistry.cancelSession(it) }
+            runCatching { session?.close() }
+            runCatching { transport?.close() }
             runCatching { client.close() }
         }
     }
