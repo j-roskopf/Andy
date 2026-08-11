@@ -120,6 +120,7 @@ import app.andy.ui.components.WorkspaceRail
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.model.AgentStatus
+import app.andy.ui.agents.AgentHeaderAction
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatSessionSidebarRow
@@ -199,6 +200,7 @@ private fun ProjectCockpit(
     val workflowProjects by services.projectWorkflows.projects.collectAsState()
     var selectedProjectId by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by remember { mutableStateOf<String?>(null) }
+    var chatDetailsExpanded by remember { mutableStateOf(false) }
     var selectedWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var initialWorkflowSelectionApplied by remember { mutableStateOf(false) }
     var canvas by remember { mutableStateOf(ProjectCanvas.entries.firstOrNull { it.label == initialCanvasLabel } ?: ProjectCanvas.Chat) }
@@ -359,6 +361,9 @@ private fun ProjectCockpit(
     val selectedProjectTask = project?.let { item ->
         agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
     }
+    LaunchedEffect(selectedProjectTask?.id) {
+        chatDetailsExpanded = false
+    }
     // Open chats stay read — including while a live run is on screen.
     // Only while Projects is the active destination: RetainedDestination keeps this
     // screen composed off-page, and clearing unread there would hide the badge.
@@ -483,7 +488,7 @@ private fun ProjectCockpit(
                     }
                 } else {
                     WorkspaceCanvas(Modifier.widthIn(min = chatMinWidth).weight(1f).fillMaxHeight()) {
-                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
@@ -491,97 +496,125 @@ private fun ProjectCockpit(
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
                             },
+                            chatActions = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }?.let { selected ->
+                                {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        AgentHeaderAction("delete", TextSecondary) {
+                                            requestDeleteChat(selected)
+                                        }
+                                        AgentHeaderAction(
+                                            label = if (chatDetailsExpanded) "hide details" else "details",
+                                        ) {
+                                            chatDetailsExpanded = !chatDetailsExpanded
+                                        }
+                                    }
+                                }
+                            },
                         )
                         Box(
-                            Modifier.fillMaxSize().testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
+                            Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .padding(top = AndySpace.Space3)
+                                .testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
                         ) {
-                            when (canvas) {
-                                ProjectCanvas.Chat -> {
-                                    val selected = agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == current.id }
-                                    Box(Modifier.fillMaxSize()) {
-                                        // Keep the composer mounted so draft text/images survive opening a transcript.
-                                        RetainedDestination(active = selected == null) {
-                                            AgentTaskComposerPane(
-                                                services,
-                                                agentCliStatuses,
-                                                current,
-                                                onSubmit = { draft -> scope.launch { selectedTaskId = services.agentRuns.createAndStart(draft).id } },
-                                                modifier = Modifier.fillMaxSize(),
-                                                workspaceState = workspaceState,
-                                                dictationActive = selected == null,
-                                            )
-                                        }
-                                        if (selected != null) {
-                                            AgentTaskDetail(
-                                                services,
-                                                selected,
-                                                onDelete = ::requestDeleteChat,
-                                                transcriptScrollMemory = transcriptScrollMemory,
-                                                workspaceState = workspaceState,
-                                                modifier = Modifier.fillMaxSize(),
-                                            )
-                                        }
+                            // Keep visited project tabs mounted so composer/follow-up drafts
+                            // (and other local pane state) survive Chat ↔ Tasks ↔ … switches.
+                            val chatActive = canvas == ProjectCanvas.Chat
+                            RetainedDestination(active = chatActive) {
+                                val selected = agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == current.id }
+                                Box(Modifier.fillMaxSize()) {
+                                    // Keep the composer mounted so draft text/images survive opening a transcript.
+                                    RetainedDestination(active = selected == null) {
+                                        AgentTaskComposerPane(
+                                            services,
+                                            agentCliStatuses,
+                                            current,
+                                            onSubmit = { draft -> scope.launch { selectedTaskId = services.agentRuns.createAndStart(draft).id } },
+                                            modifier = Modifier.fillMaxSize(),
+                                            workspaceState = workspaceState,
+                                            dictationActive = active && chatActive && selected == null,
+                                        )
+                                    }
+                                    if (selected != null) {
+                                        AgentTaskDetail(
+                                            services,
+                                            selected,
+                                            onDelete = ::requestDeleteChat,
+                                            showDeleteDetailsActions = false,
+                                            detailsExpanded = chatDetailsExpanded,
+                                            onDetailsExpandedChange = { chatDetailsExpanded = it },
+                                            transcriptScrollMemory = transcriptScrollMemory,
+                                            workspaceState = workspaceState,
+                                            modifier = Modifier.fillMaxSize(),
+                                            dictationActive = active && chatActive,
+                                        )
                                     }
                                 }
-                                ProjectCanvas.Tasks -> {
-                                    val workflow = effectiveProjectWorkflow ?: ProjectWorkflowState(current.id)
-                                    Row(
-                                        Modifier.fillMaxSize(),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    ) {
-                                        ProjectWorkflowList(
-                                            workflow = workflow,
-                                            selectedTaskId = selectedWorkflowTaskId,
-                                            onSelectTask = { selectedWorkflowTaskId = it },
-                                            onNewSpec = {
-                                                ensureWorkflowProjectLoaded()
-                                                editingSpec = null
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Tasks) {
+                                val workflow = effectiveProjectWorkflow ?: ProjectWorkflowState(current.id)
+                                Row(
+                                    Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    ProjectWorkflowList(
+                                        workflow = workflow,
+                                        selectedTaskId = selectedWorkflowTaskId,
+                                        onSelectTask = { selectedWorkflowTaskId = it },
+                                        onNewSpec = {
+                                            ensureWorkflowProjectLoaded()
+                                            editingSpec = null
+                                            specEditorOpen = true
+                                        },
+                                        onNewBuild = {
+                                            ensureWorkflowProjectLoaded()
+                                            buildEditor = BuildEditorSeed()
+                                        },
+                                        onProfiles = {
+                                            ensureWorkflowProjectLoaded()
+                                            profilesOpen = true
+                                        },
+                                        modifier = Modifier.width(360.dp).fillMaxHeight(),
+                                    )
+                                    PaneDivider(onDrag = {})
+                                    ProjectWorkflowDetail(
+                                        services = services,
+                                        workflow = workflow,
+                                        task = workflow.tasks.firstOrNull { it.id == selectedWorkflowTaskId },
+                                        agentTasks = projectTasks,
+                                        onNewBuildFromPlan = { buildEditor = BuildEditorSeed(plan = it) },
+                                        onOpenRun = { runId ->
+                                            selectedTaskId = runId
+                                            canvas = ProjectCanvas.Chat
+                                            services.agentRuns.setChatViewing(runId, viewing = true)
+                                        },
+                                        onEdit = { task ->
+                                            ensureWorkflowProjectLoaded()
+                                            if (task.kind == ProjectTaskKind.Spec) {
+                                                editingSpec = task
                                                 specEditorOpen = true
-                                            },
-                                            onNewBuild = {
-                                                ensureWorkflowProjectLoaded()
-                                                buildEditor = BuildEditorSeed()
-                                            },
-                                            onProfiles = {
-                                                ensureWorkflowProjectLoaded()
-                                                profilesOpen = true
-                                            },
-                                            modifier = Modifier.width(360.dp).fillMaxHeight(),
-                                        )
-                                        PaneDivider(onDrag = {})
-                                        ProjectWorkflowDetail(
-                                            services = services,
-                                            workflow = workflow,
-                                            task = workflow.tasks.firstOrNull { it.id == selectedWorkflowTaskId },
-                                            agentTasks = projectTasks,
-                                            onNewBuildFromPlan = { buildEditor = BuildEditorSeed(plan = it) },
-                                            onOpenRun = { runId ->
-                                                selectedTaskId = runId
-                                                canvas = ProjectCanvas.Chat
-                                                services.agentRuns.setChatViewing(runId, viewing = true)
-                                            },
-                                            onEdit = { task ->
-                                                ensureWorkflowProjectLoaded()
-                                                if (task.kind == ProjectTaskKind.Spec) {
-                                                    editingSpec = task
-                                                    specEditorOpen = true
-                                                } else {
-                                                    buildEditor = BuildEditorSeed(buildTaskId = task.linkedBuildTaskId ?: task.id)
-                                                }
-                                            },
-                                            onDelete = { task ->
-                                                val hasChildren = task.kind == ProjectTaskKind.Spec && workflow.tasks.any { it.linkedSpecTaskId == task.id }
-                                                pendingConfirmation = PendingConfirmation(
-                                                    title = "Delete ${task.kind.label}?",
-                                                    message = if (hasChildren) "This Spec has Build/Review/Verification children. Delete the entire workflow?" else "Deletes this Build workflow and its linked Review/Verification records. Run history and worktrees remain unless removed separately.",
-                                                    confirmLabel = "Delete",
-                                                ) { scope.launch { services.projectWorkflows.deleteTask(task.id, cascade = hasChildren); selectedWorkflowTaskId = null } }
-                                            },
-                                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                                        )
-                                    }
+                                            } else {
+                                                buildEditor = BuildEditorSeed(buildTaskId = task.linkedBuildTaskId ?: task.id)
+                                            }
+                                        },
+                                        onDelete = { task ->
+                                            val hasChildren = task.kind == ProjectTaskKind.Spec && workflow.tasks.any { it.linkedSpecTaskId == task.id }
+                                            pendingConfirmation = PendingConfirmation(
+                                                title = "Delete ${task.kind.label}?",
+                                                message = if (hasChildren) "This Spec has Build/Review/Verification children. Delete the entire workflow?" else "Deletes this Build workflow and its linked Review/Verification records. Run history and worktrees remain unless removed separately.",
+                                                confirmLabel = "Delete",
+                                            ) { scope.launch { services.projectWorkflows.deleteTask(task.id, cascade = hasChildren); selectedWorkflowTaskId = null } }
+                                        },
+                                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    )
                                 }
-                                ProjectCanvas.Runbook -> ProjectRunbook(
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Runbook) {
+                                ProjectRunbook(
                                     project = current,
                                     expandedActionId = expandedActionId,
                                     onExpandedActionChange = { expandedActionId = it },
@@ -592,13 +625,17 @@ private fun ProjectCockpit(
                                         onNotifyTerminalRun(runId)
                                     },
                                 )
-                                ProjectCanvas.Scratchpad -> ProjectScratchpadEditor(
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Scratchpad) {
+                                ProjectScratchpadEditor(
                                     services = services,
                                     projectId = current.id,
                                     persistedText = effectiveProjectWorkflow?.scratchpad.orEmpty(),
                                     modifier = Modifier.fillMaxSize(),
                                 )
-                                ProjectCanvas.Worktrees -> ProjectWorktrees(
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Worktrees) {
+                                ProjectWorktrees(
                                     services = services,
                                     project = current,
                                     onOpenTask = { taskId ->
@@ -748,8 +785,9 @@ internal fun ActionsScreen(
                 },
             )
             Box(Modifier.weight(1f).fillMaxWidth().padding(top = AndySpace.Space2)) {
-                when (pageTab) {
-                    ProjectsPageTab.Projects -> ProjectCockpit(
+                // Keep both page tabs mounted so project chat drafts survive Projects ↔ Kanban.
+                RetainedDestination(active = pageTab == ProjectsPageTab.Projects) {
+                    ProjectCockpit(
                         services = services,
                         config = config,
                         onConfigChange = onConfigChange,
@@ -763,11 +801,13 @@ internal fun ActionsScreen(
                         requestedProjectId = requestedProjectId,
                         onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
                         onNotifyTerminalRun = onNotifyTerminalRun,
-                        active = active,
+                        active = active && pageTab == ProjectsPageTab.Projects,
                         workspaceState = workspaceState,
                         onUpdateWorkspace = onUpdateWorkspace,
                     )
-                    ProjectsPageTab.Kanban -> KanbanBoardScreen(services = services)
+                }
+                RetainedDestination(active = pageTab == ProjectsPageTab.Kanban) {
+                    KanbanBoardScreen(services = services)
                 }
             }
         }
@@ -1335,36 +1375,28 @@ private fun ProjectChatToolbar(
     project: ActionProject,
     canvas: ProjectCanvas,
     onCanvasChange: (ProjectCanvas) -> Unit,
+    chatActions: (@Composable () -> Unit)? = null,
 ) {
-    Row(
+    Column(
         Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                project.name,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 18.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                project.contextDir,
-                color = TextSecondary.copy(alpha = 0.78f),
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ProjectCanvas.entries.filter { it != ProjectCanvas.Chat }.forEach { tab ->
-                FilterPill(tab.label, canvas == tab, if (tab == ProjectCanvas.Runbook) Rust else Cyan) { onCanvasChange(tab) }
-            }
-        }
+        Text(
+            project.name,
+            color = TextPrimary,
+            fontFamily = DisplayFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 18.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        TabBar(
+            tabs = ProjectCanvas.entries,
+            selected = canvas,
+            onSelect = onCanvasChange,
+            label = { it.label },
+            trailing = chatActions,
+        )
     }
 }
 

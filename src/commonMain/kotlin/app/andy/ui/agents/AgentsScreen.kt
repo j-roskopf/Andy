@@ -238,13 +238,16 @@ private fun AgentCommandCenter(
                         },
                         modifier = Modifier.fillMaxSize(),
                         workspaceState = workspaceState,
-                        dictationActive = composing,
+                        dictationActive = active && composing,
                     )
                 }
-                if (!composing) {
-                    if (selected == null) {
+                if (selected == null) {
+                    if (!composing) {
                         WorkspaceEmptyCanvas("Select a task or start a new one")
-                    } else {
+                    }
+                } else {
+                    // Keep the open transcript mounted under New Chat so follow-up drafts survive.
+                    RetainedDestination(active = !composing) {
                         AgentTaskDetail(
                             services,
                             selected,
@@ -252,6 +255,7 @@ private fun AgentCommandCenter(
                             transcriptScrollMemory = transcriptScrollMemory,
                             workspaceState = workspaceState,
                             modifier = Modifier.fillMaxSize(),
+                            dictationActive = active && !composing,
                         )
                     }
                 }
@@ -315,7 +319,6 @@ private fun AgentInboxRow(
                         isSessionWorking(task) -> ProjectActivityIndicator(16.dp)
                         task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
                         task.unread -> UnreadDot()
-                        task.status != null -> StatusDot(task.status)
                     }
                 }
             },

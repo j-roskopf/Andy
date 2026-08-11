@@ -92,6 +92,7 @@ import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -354,8 +355,8 @@ internal fun AgentTranscript(
                             }
                         }
                     },
-                contentPadding = PaddingValues(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                contentPadding = PaddingValues(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 // reverseLayout lays index zero at the visual bottom, so declare rows newest
                 // first while preserving the transcript's chronological reading order.
@@ -576,12 +577,12 @@ private fun AgentThinkingIndicator() {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ThinkingOrb(size = 14.dp, color = Cyan, contentDescription = "Thinking")
-        Text("Thinking", color = TextSecondary, fontSize = 12.sp)
+        ThinkingOrb(size = 12.dp, color = Cyan, contentDescription = "Thinking")
+        Text("Working", color = TextSecondary.copy(alpha = 0.85f), fontSize = 12.sp)
     }
 }
 
@@ -690,7 +691,7 @@ private fun TranscriptEvent(
             }
             if (awaitingPlanConfirmation) {
                 Text(
-                    "Waiting for you to continue — refine below or implement the plan.",
+                    "Waiting for you to continue. Refine below or implement the plan.",
                     color = TextSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,
@@ -785,20 +786,17 @@ private fun ChatMessageBubble(
     alignEnd: Boolean,
     content: @Composable () -> Unit,
 ) {
-    Box(Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
-                .widthIn(max = 640.dp)
-                .fillMaxWidth(if (alignEnd) 0.82f else 1f)
-                .align(if (alignEnd) Alignment.CenterEnd else Alignment.CenterStart)
-                .clip(RoundedCornerShape(14.dp))
-                .background(AndyColors.Neutral800.copy(alpha = 0.5f))
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            content = { content() },
-        )
-    }
+    // User turn: same layout as agent text, just a quieter background.
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(AndyColors.SurfaceRaised)
+            .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        content = { content() },
+    )
 }
 
 @Composable
@@ -807,7 +805,7 @@ private fun AgentResponse(
 ) {
     Column(
         Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         content = { content() },
     )
 }
@@ -1391,44 +1389,44 @@ private fun TranscriptExpandableRow(
 ) {
     Column(modifier.fillMaxWidth().animateContentSize()) {
         DisableSelection {
-            if (headlineContent != null) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = indent)
-                        .then(
-                            if (expandable) {
-                                Modifier
-                                    .pointerHoverIcon(PointerIcon.Hand)
-                                    .clickable { onExpandedChange(!expanded) }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    headlineContent()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = indent)
+                    .then(
+                        if (expandable) {
+                            Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable { onExpandedChange(!expanded) }
+                        } else {
+                            Modifier
+                        },
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (expandable) {
+                    Text(
+                        if (expanded) "v" else ">",
+                        color = headlineColor.copy(alpha = 0.7f),
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        modifier = Modifier.width(10.dp),
+                    )
                 }
-            } else {
-                Text(
-                    headline,
-                    color = headlineColor,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    maxLines = if (expanded) Int.MAX_VALUE else 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = indent)
-                        .then(
-                            if (expandable) {
-                                Modifier
-                                    .pointerHoverIcon(PointerIcon.Hand)
-                                    .clickable { onExpandedChange(!expanded) }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                )
+                if (headlineContent != null) {
+                    Box(Modifier.weight(1f, fill = false)) { headlineContent() }
+                } else {
+                    Text(
+                        headline,
+                        color = headlineColor,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        maxLines = if (expanded) Int.MAX_VALUE else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
             }
         }
         if (expandable) {
@@ -1619,9 +1617,9 @@ internal fun PlanReadyBanner(
         )
         Text(
             if (showImplementAction) {
-                "This turn finished in plan mode — nothing was changed. Implement when you're ready, or reply to refine the plan."
+                "This turn finished in plan mode. Nothing was changed. Implement when you're ready, or reply to refine the plan."
             } else {
-                "This turn finished in plan mode — nothing was changed. Review the plan in Projects, or reply to refine it here."
+                "This turn finished in plan mode. Nothing was changed. Review the plan in Projects, or reply to refine it here."
             },
             color = TextSecondary,
             fontSize = 12.sp,

@@ -100,9 +100,13 @@ import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatComposerFrame
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
+import app.andy.ui.components.ComposerChip
+import app.andy.ui.components.ComposerPlaceholderHint
+import app.andy.ui.components.ComposerToolbarRow
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.LocalOnOpenFileLink
 import app.andy.ui.components.onVoiceDictationShortcut
@@ -142,9 +146,19 @@ internal fun AgentTaskDetail(
     task: AgentTask,
     onDelete: (AgentTask) -> Unit,
     showHeader: Boolean = true,
+    /**
+     * When false, omit delete/details from the in-pane header (e.g. project tab-row chrome
+     * owns those actions). Expanded details can still be driven via [detailsExpanded].
+     */
+    showDeleteDetailsActions: Boolean = true,
+    /** Null keeps expansion local to the header; non-null is controlled by the caller. */
+    detailsExpanded: Boolean? = null,
+    onDetailsExpandedChange: ((Boolean) -> Unit)? = null,
     transcriptScrollMemory: TranscriptScrollMemory? = null,
     workspaceState: WorkspaceState = WorkspaceState(),
     modifier: Modifier = Modifier,
+    /** False while this pane is retained but not visible (e.g. under [RetainedDestination]). */
+    dictationActive: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val copyText = rememberCopyText()
@@ -184,6 +198,7 @@ internal fun AgentTaskDetail(
             followUpValue = insertTextAtCursor(followUpValue, spoken)
         },
         onError = { voiceError = it },
+        active = dictationActive,
     )
     val voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
     var scrollToLatestRequest by remember(task.id) { mutableStateOf(0) }
@@ -426,6 +441,9 @@ internal fun AgentTaskDetail(
                 planModeActive = planModeActive,
                 hasPendingPlanEntries = hasPendingPlanEntries,
                 terminalLive = sessionActive,
+                showDeleteDetailsActions = showDeleteDetailsActions,
+                detailsExpanded = detailsExpanded,
+                onDetailsExpandedChange = onDetailsExpandedChange,
                 onStop = { services.agentRuns.stop(task.id) },
                 onCompleteBuild = if (task.workflowStage == ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
@@ -531,7 +549,6 @@ internal fun AgentTaskDetail(
                                         viewMode = diffViewMode,
                                         onViewModeChange = { diffViewMode = it },
                                         onToggleFile = { path -> toggleFileDiff(path) },
-                                        embedded = true,
                                     )
                                 }
                             },
@@ -581,7 +598,6 @@ internal fun AgentTaskDetail(
                     viewMode = diffViewMode,
                     onViewModeChange = { diffViewMode = it },
                     onToggleFile = { path -> toggleFileDiff(path) },
-                    embedded = true,
                 )
             }
         }
@@ -671,12 +687,9 @@ internal fun AgentTaskDetail(
         }
 
         if (showFollowUpComposer) {
-            PanelCard(
+            ChatComposerFrame(
                 modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
-                background = AndyColors.SurfaceRaised,
-                borderColor = if (followUpImageDragActive) Cyan else null,
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                highlighted = followUpImageDragActive,
             ) {
                 if (task.userInputRequest == null) {
                     task.goal?.let { goal ->
@@ -774,24 +787,24 @@ internal fun AgentTaskDetail(
                                     onFiles = { dropped -> followUpImagePaths = attachChatImages(followUpImagePaths, dropped) },
                                     onDragActiveChange = { active -> followUpImageDragActive = active },
                                 ),
-                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
+                            textStyle = LocalTextStyle.current.copy(
+                                color = TextPrimary,
+                                fontFamily = DisplayFont,
+                                fontSize = 13.sp,
+                                lineHeight = 19.sp,
+                            ),
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,
                             visualTransformation = slashHighlight,
                             placeholder = {
-                                Text(
-                                    when {
-                                        followUpImageDragActive -> "release to attach images"
-                                        followUpImagePaths.isNotEmpty() ->
-                                            "add a message or send images — attach, paste, or drag more"
-                                        awaitingPlanConfirmation ->
-                                            "Refine the plan, or implement above"
-                                        else ->
-                                            "Follow up with ${task.agent.label} — attach, paste, or drag images"
+                                ComposerPlaceholderHint(
+                                    text = when {
+                                        followUpImageDragActive -> "Release to attach images"
+                                        followUpImagePaths.isNotEmpty() -> "Add a message, or send the attached images"
+                                        awaitingPlanConfirmation -> "Refine the plan, or implement above"
+                                        else -> "Message the agent, tag @files, or use /commands and /skills"
                                     },
-                                    color = if (followUpImageDragActive) Cyan else TextSecondary,
-                                    fontFamily = MonoFont,
-                                    fontSize = 13.sp,
+                                    highlighted = followUpImageDragActive,
                                 )
                             },
                         )
@@ -862,72 +875,80 @@ internal fun AgentTaskDetail(
                     }
                 }
 
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        FilterPill("plan", planModeActive, Green) {
-                            services.agentRuns.updatePlanMode(task.id, !planModeActive)
-                        }
-                        if (acpTask && availableAcpModes.isNotEmpty() && currentAcpMode != null) {
-                            Box {
-                                FilterPill(currentAcpMode.name, true, Cyan) { modeMenuExpanded = true }
-                                DropdownMenu(
-                                    expanded = modeMenuExpanded,
-                                    onDismissRequest = { modeMenuExpanded = false },
-                                ) {
-                                    availableAcpModes.forEach { mode ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                    Text(
-                                                        mode.name,
-                                                        color = if (mode.id == currentAcpMode.id) Green else TextPrimary,
-                                                        fontFamily = MonoFont,
-                                                        fontSize = 12.sp,
-                                                    )
-                                                    mode.description?.takeIf { it.isNotBlank() }?.let { description ->
-                                                        Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                ComposerToolbarRow(
+                    leading = {
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ComposerChip(
+                                text = "Plan",
+                                selected = planModeActive,
+                                showChevron = false,
+                                onClick = { services.agentRuns.updatePlanMode(task.id, !planModeActive) },
+                            )
+                            if (acpTask && availableAcpModes.isNotEmpty() && currentAcpMode != null) {
+                                Box {
+                                    ComposerChip(
+                                        text = currentAcpMode.name,
+                                        selected = true,
+                                        onClick = { modeMenuExpanded = true },
+                                    )
+                                    DropdownMenu(
+                                        expanded = modeMenuExpanded,
+                                        onDismissRequest = { modeMenuExpanded = false },
+                                    ) {
+                                        availableAcpModes.forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                        Text(
+                                                            mode.name,
+                                                            color = if (mode.id == currentAcpMode.id) Green else TextPrimary,
+                                                            fontFamily = MonoFont,
+                                                            fontSize = 12.sp,
+                                                        )
+                                                        mode.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                                        }
                                                     }
-                                                }
-                                            },
-                                            onClick = {
-                                                modeMenuExpanded = false
-                                                services.agentRuns.setAcpSessionMode(task.id, mode.id)
-                                            },
-                                        )
+                                                },
+                                                onClick = {
+                                                    modeMenuExpanded = false
+                                                    services.agentRuns.setAcpSessionMode(task.id, mode.id)
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }
+                            ComposerChip(
+                                text = if (copiedHint) "Opened" else "Terminal",
+                                selected = false,
+                                showChevron = false,
+                                onClick = {
+                                    services.agentRuns.interactiveResumeCommand(task.id)?.let {
+                                        copyText(it)
+                                        copiedHint = true
+                                    }
+                                    scope.launch { services.agentRuns.openInTerminal(task.id) }
+                                },
+                            )
                         }
-                    }
-                    ChatImageAttachButton(
-                        onImagesAttached = { added ->
-                            followUpImagePaths = attachChatImages(followUpImagePaths, added)
-                        },
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            services.agentRuns.interactiveResumeCommand(task.id)?.let {
-                                copyText(it)
-                                copiedHint = true
-                            }
-                            scope.launch { services.agentRuns.openInTerminal(task.id) }
-                        },
-                    ) {
-                        Text(if (copiedHint) "opened" else "terminal", fontSize = 11.sp)
-                    }
-                    if (task.userInputRequest == null) {
-                        ChatVoiceDictationButton(controller = voiceController)
-                        ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
-                    }
-                }
+                    },
+                    trailing = {
+                        ChatImageAttachButton(
+                            onImagesAttached = { added ->
+                                followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                            },
+                        )
+                        if (task.userInputRequest == null) {
+                            ChatVoiceDictationButton(controller = voiceController)
+                            ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
+                        }
+                    },
+                )
                 voiceError?.let { err ->
                     Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
                 }
@@ -1110,13 +1131,20 @@ private fun AgentTaskHeader(
     planModeActive: Boolean,
     hasPendingPlanEntries: Boolean,
     terminalLive: Boolean,
+    showDeleteDetailsActions: Boolean = true,
+    detailsExpanded: Boolean? = null,
+    onDetailsExpandedChange: ((Boolean) -> Unit)? = null,
     onStop: () -> Unit,
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
     onCopyPrompt: () -> Unit,
 ) {
-    var expanded by remember(task.id) { mutableStateOf(false) }
+    var localExpanded by remember(task.id) { mutableStateOf(false) }
+    val expanded = detailsExpanded ?: localExpanded
+    fun setExpanded(value: Boolean) {
+        if (onDetailsExpandedChange != null) onDetailsExpandedChange(value) else localExpanded = value
+    }
     val elapsedEnd = rememberElapsedEndMillis(
         taskId = task.id,
         finishedAtMillis = task.finishedAtMillis,
@@ -1131,109 +1159,84 @@ private fun AgentTaskHeader(
             delay(1_000)
         }
     }
+    val statusColor = agentStatusColor(task, planModeActive, hasPendingPlanEntries)
+    val statusLabel = agentStatusLabel(task, planModeActive, hasPendingPlanEntries)
+    val hasSessionActions = terminalLive || task.status == AgentStatus.Error
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space2),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
             Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         ) {
             Column(
                 Modifier
                     .weight(1f)
                     .pointerHoverIcon(PointerIcon.Hand)
-                    .clickable { expanded = !expanded },
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                    .clickable { setExpanded(!expanded) },
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     task.prompt.ifBlank { task.title },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
-                    lineHeight = 22.sp,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         "${task.agent.label} · ${task.modelConfigurationLabel()}",
-                        color = TextSecondary,
+                        color = TextSecondary.copy(alpha = 0.78f),
                         fontFamily = MonoFont,
                         fontSize = 10.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        agentStatusLabel(task, planModeActive, hasPendingPlanEntries),
-                        color = agentStatusColor(task, planModeActive, hasPendingPlanEntries),
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
-                    )
                     if (!terminalLive) {
-                        Text("read-only", color = TextSecondary.copy(alpha = 0.75f), fontFamily = MonoFont, fontSize = 10.sp)
+                        Text("read-only", color = TextSecondary.copy(alpha = 0.62f), fontFamily = MonoFont, fontSize = 10.sp)
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusTag(statusLabel, statusColor)
+        }
+
+        if (hasSessionActions || showDeleteDetailsActions) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            ) {
                 if (terminalLive) {
                     onCompleteBuild?.let { complete ->
-                        Text(
-                            "Complete",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                            modifier = Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable(onClick = complete)
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
+                        AgentHeaderAction("complete", Green, complete)
                     }
-                    Text(
-                        if (task.status == AgentStatus.Blocked) "Cancel" else "Stop",
+                    AgentHeaderAction(
+                        label = if (task.status == AgentStatus.Blocked) "cancel" else "stop",
                         color = Rust,
-                        fontSize = 11.sp,
-                        modifier = Modifier
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable(onClick = onStop)
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        onClick = onStop,
                     )
                 }
                 if (task.status == AgentStatus.Error) {
-                    Text(
-                        "Retry",
-                        color = Cyan,
-                        fontSize = 11.sp,
-                        modifier = Modifier
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable(onClick = onRetry)
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    AgentHeaderAction("retry", Cyan, onRetry)
+                }
+                if (showDeleteDetailsActions) {
+                    Spacer(Modifier.weight(1f))
+                    AgentHeaderAction("delete", TextSecondary, onDelete)
+                    AgentHeaderAction(
+                        label = if (expanded) "hide details" else "details",
+                        onClick = { setExpanded(!expanded) },
                     )
                 }
-                Text(
-                    "Delete",
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .clickable(onClick = onDelete)
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                )
-                Text(
-                    if (expanded) "⌄" else "›",
-                    color = TextSecondary.copy(alpha = 0.55f),
-                    fontSize = 11.sp,
-                    modifier = Modifier
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .clickable { expanded = !expanded }
-                        .padding(horizontal = 2.dp),
-                )
             }
         }
 
@@ -1242,24 +1245,17 @@ private fun AgentTaskHeader(
             enter = fadeIn(tween(140)) + expandVertically(tween(180)),
             exit = fadeOut(tween(100)) + shrinkVertically(tween(140)),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Text(
-                    task.cwd ?: "no project context",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
+                AgentHeaderInfoRow(
+                    label = "workspace",
+                    value = task.cwd ?: "no project context",
                 )
 
                 task.goal?.let { goal ->
-                    Text(
-                        "Goal: $goal",
-                        color = Green.copy(alpha = 0.9f),
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                    AgentHeaderInfoRow(
+                        label = "goal",
+                        value = goal,
+                        valueColor = Green.copy(alpha = 0.9f),
                     )
                 }
 
@@ -1270,15 +1266,7 @@ private fun AgentTaskHeader(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        "Copy prompt",
-                        color = TextSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable(onClick = onCopyPrompt)
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
+                    AgentHeaderAction("copy prompt", TextSecondary, onCopyPrompt)
                     Spacer(Modifier.weight(1f))
                     formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let {
                         Text(it, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
@@ -1289,6 +1277,56 @@ private fun AgentTaskHeader(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun AgentHeaderAction(
+    label: String,
+    color: Color = TextSecondary,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        color = color.copy(alpha = 0.88f),
+        fontFamily = DisplayFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        modifier = Modifier
+            .pointerHoverIcon(PointerIcon.Hand)
+            .clickable(onClick = onClick)
+            .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
+    )
+}
+
+@Composable
+private fun AgentHeaderInfoRow(
+    label: String,
+    value: String,
+    valueColor: Color = TextSecondary,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+    ) {
+        Text(
+            label,
+            color = TextSecondary.copy(alpha = 0.62f),
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 9.sp,
+            modifier = Modifier.width(58.dp),
+        )
+        Text(
+            value,
+            color = valueColor,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -1400,15 +1438,11 @@ private fun AgentChangeSummaryCard(
     viewMode: DiffViewMode,
     onViewModeChange: (DiffViewMode) -> Unit,
     onToggleFile: (String) -> Unit,
-    embedded: Boolean = false,
 ) {
     val displayedFiles = if (showAllFiles) summary.files else summary.files.take(3)
     val remaining = summary.files.size - displayedFiles.size
-    PanelCard(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        background = if (embedded) AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium) else AndyColors.Neutral850,
-        borderColor = if (embedded) Green.copy(alpha = 0.22f) else Border,
-        contentPadding = PaddingValues(vertical = AndySpace.Space3),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
@@ -1418,7 +1452,7 @@ private fun AgentChangeSummaryCard(
                 .pointerHoverIcon(PointerIcon.Hand)
                 .clickable { onFilesExpandedChange(!filesExpanded) },
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             Text(
                 if (filesExpanded) "v" else ">",
@@ -1427,12 +1461,14 @@ private fun AgentChangeSummaryCard(
                 fontSize = 11.sp,
                 modifier = Modifier.width(10.dp),
             )
-            Text("▣", color = Cyan, fontFamily = MonoFont, fontSize = 15.sp)
-            Column(Modifier.weight(1f)) {
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 Text(
                     "Edited ${summary.files.size} ${if (summary.files.size == 1) "file" else "files"}",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.SemiBold,
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
                     fontSize = 12.sp,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
@@ -1442,28 +1478,33 @@ private fun AgentChangeSummaryCard(
             }
         }
         if (filesExpanded) {
-            displayedFiles.forEach { file ->
-                // This interactive row is nested in the transcript's SelectionContainer.
-                // Opt out so the file link keeps its hand cursor rather than a text cursor.
-                DisableSelection {
-                    ChangedFileRow(
-                        file = file,
-                        expanded = expandedPath == file.path,
-                        loading = loadingPath == file.path,
-                        diff = diffs[file.path],
-                        viewMode = viewMode,
-                        onViewModeChange = onViewModeChange,
-                        onToggle = { onToggleFile(file.path) },
-                    )
+            Column(
+                Modifier.fillMaxWidth().padding(start = 22.dp),
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            ) {
+                displayedFiles.forEach { file ->
+                    // This interactive row is nested in the transcript's SelectionContainer.
+                    // Opt out so the file link keeps its hand cursor rather than a text cursor.
+                    DisableSelection {
+                        ChangedFileRow(
+                            file = file,
+                            expanded = expandedPath == file.path,
+                            loading = loadingPath == file.path,
+                            diff = diffs[file.path],
+                            viewMode = viewMode,
+                            onViewModeChange = onViewModeChange,
+                            onToggle = { onToggleFile(file.path) },
+                        )
+                    }
                 }
-            }
-            if (remaining > 0 || showAllFiles) {
-                OutlinedButton(
-                    onClick = { onShowAllFilesChange(!showAllFiles) },
-                    modifier = Modifier.padding(horizontal = 8.dp).height(28.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
-                ) {
-                    Text(if (showAllFiles) "show fewer files" else "show $remaining more files", fontSize = 10.sp)
+                if (remaining > 0 || showAllFiles) {
+                    OutlinedButton(
+                        onClick = { onShowAllFilesChange(!showAllFiles) },
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
+                    ) {
+                        Text(if (showAllFiles) "show fewer files" else "show $remaining more files", fontSize = 10.sp)
+                    }
                 }
             }
         }
@@ -1480,7 +1521,7 @@ private fun ChangedFileRow(
     onViewModeChange: (DiffViewMode) -> Unit,
     onToggle: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             Modifier.fillMaxWidth()
                 .pointerHoverIcon(PointerIcon.Hand)

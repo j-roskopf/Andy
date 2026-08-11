@@ -172,11 +172,12 @@ internal fun PanelCard(
     background: Color = AndyColors.SurfaceRaised,
     accent: Color? = null,
     borderColor: Color? = null,
+    /** Boxy chrome (composer, header) should pass [AndyShape.Interactive]; default stays soft for sheets/menus. */
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.Sheet),
     contentPadding: PaddingValues = PaddingValues(AndySpace.Space5),
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AndySpace.Space4),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(AndyRadius.Sheet)
     val resolvedBorder = borderColor ?: accent?.copy(alpha = 0.35f)
     Column(
         modifier

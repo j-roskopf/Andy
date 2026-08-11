@@ -1,6 +1,5 @@
 package app.andy.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,7 +25,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,17 +162,11 @@ internal fun WorkspaceItemRow(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    val background = when {
-        selected -> AndyColors.SurfaceSelected
-        hovered -> AndyColors.SurfaceHover
-        else -> Color.Transparent
-    }
     Row(
         modifier
             .fillMaxWidth()
             .padding(start = if (indented) AndySpace.Space4 else 0.dp)
             .clip(RoundedCornerShape(AndyRadius.Control))
-            .background(background)
             .hoverable(interactionSource)
             .clickable(onClick = onClick)
             .padding(horizontal = AndySpace.Space4, vertical = if (subtitle == null) 11.dp else AndySpace.Space3),
