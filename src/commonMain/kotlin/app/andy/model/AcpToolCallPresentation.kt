@@ -57,6 +57,7 @@ object AcpToolCallPresentation {
             else -> presented.summary
         }
         val mergedLocations = (previous.locations + incoming.locations).distinct()
+        val mergedImages = (previous.images + incoming.images).distinct()
         val resolvedSummary = enrichSummary(
             summary = summary.ifBlank { presented.summary },
             kind = incoming.kind ?: previous.kind,
@@ -67,6 +68,7 @@ object AcpToolCallPresentation {
             summary = resolvedSummary,
             detail = presented.detail.ifBlank { mergedDetail },
             locations = mergedLocations,
+            images = mergedImages,
         )
     }
 

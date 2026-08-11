@@ -14,6 +14,7 @@ import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.AgentUserInputOption
@@ -178,6 +179,7 @@ object AcpEventMapper {
             kind = kind.toAgentKind(),
             state = status.toAgentState(),
             locations = locations,
+            images = content.extractImages(),
         )
     }
 
@@ -225,6 +227,14 @@ object AcpEventMapper {
         is ContentBlock.Audio -> "[audio]"
         is ContentBlock.Resource -> "[resource]"
         is ContentBlock.ResourceLink -> "[resource: ${title ?: name}]"
+    }
+
+    /** Pulls inline image data out of tool content so the UI can render it instead of the "[image]" placeholder. */
+    private fun List<ToolCallContent>.extractImages(): List<AgentToolImage> = mapNotNull { item ->
+        val block = (item as? ToolCallContent.Content)?.content as? ContentBlock.Image ?: return@mapNotNull null
+        if (block.data.isBlank()) return@mapNotNull null
+        val mimeType = block.mimeType.ifBlank { "image/png" }
+        AgentToolImage(dataUri = "data:$mimeType;base64,${block.data}")
     }
 
     private fun JsonElement?.payloadText(): String? = this?.let { element ->

@@ -18,7 +18,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -50,6 +53,27 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.rememberMarkdownState
+
+/**
+ * Ambient handler for markdown links that look like source-file references rather than web
+ * URLs. Returning `true` swallows the click (e.g. to open the file in Andy's own code viewer);
+ * returning `false` falls through to the platform's normal [LocalUriHandler] (the OS browser).
+ * Defaults to always falling through, so screens that don't provide one keep prior behavior.
+ */
+internal val LocalOnOpenFileLink = staticCompositionLocalOf<(String) -> Boolean> { { false } }
+
+/** Real URI schemes (`http:`, `mailto:`, `file:`, …) are at least two characters before the colon, which excludes single-letter Windows drive prefixes like `C:\`. */
+private val UriSchemeRegex = Regex("""^[a-zA-Z][a-zA-Z0-9+.-]+:""")
+
+/** A markdown link href is treated as a source-file reference unless it's a real web/mail URL. */
+private fun looksLikeFileLink(uri: String): Boolean {
+    val trimmed = uri.trim()
+    if (trimmed.isEmpty() || trimmed.startsWith("#")) return false
+    if (trimmed.startsWith("file:", ignoreCase = true)) return true
+    if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) return false
+    if (UriSchemeRegex.containsMatchIn(trimmed)) return false
+    return true
+}
 
 /**
  * Markdown preview for scratchpads and notes.
@@ -197,6 +221,17 @@ private fun AndyMarkdown(
         AndyMarkdownDensity.Chat -> 0.82f
         AndyMarkdownDensity.Thinking -> 0.7f
     }
+    val onOpenFileLink = LocalOnOpenFileLink.current
+    val browserUriHandler = LocalUriHandler.current
+    val uriHandler = remember(onOpenFileLink, browserUriHandler) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                if (looksLikeFileLink(uri) && onOpenFileLink(uri)) return
+                browserUriHandler.openUri(uri)
+            }
+        }
+    }
+    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
     Markdown(
         markdownState = markdownState,
         colors = markdownColor(
@@ -334,6 +369,7 @@ private fun AndyMarkdown(
         ),
         modifier = modifier,
     )
+    }
 }
 
 /** Toggle a GFM task marker at [startOffset], [endOffset] inside [content]. */

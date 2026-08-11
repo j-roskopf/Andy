@@ -747,6 +747,12 @@ object AgentNativeSlashCommands {
     fun supportsGoal(agent: AgentKind): Boolean = agent == AgentKind.Codex || agent == AgentKind.ClaudeCode
 }
 
+/** Canonical command name used by Andy's shared slash composer. */
+internal fun String.composerCommandName(): String = trim().trimStart('/', '$')
+
+/** Formats provider and native commands using Andy's shared `/name` convention. */
+internal fun String.composerCommandToken(): String = "/${composerCommandName()}"
+
 /** Andy-native commands plus provider-advertised slash commands for composer autocomplete. */
 fun mergedComposerSlashCommands(
     agent: AgentKind,
@@ -1132,6 +1138,8 @@ sealed interface AgentEvent {
         val kind: AgentToolKind? = null,
         val state: AgentToolState = AgentToolState.Completed,
         val locations: List<String> = emptyList(),
+        /** Inline images returned by the tool (e.g. a screenshot), shown instead of a "[image]" placeholder. */
+        val images: List<AgentToolImage> = emptyList(),
     ) : AgentEvent
     data class ToolResult(
         override val atMillis: Long,
@@ -1212,6 +1220,9 @@ enum class AgentToolState {
     Completed,
     Failed,
 }
+
+/** An image attached to a tool call/result, carried as a data URI so it decodes without a round trip to disk. */
+data class AgentToolImage(val dataUri: String)
 
 data class AgentPlanEntry(
     val content: String,

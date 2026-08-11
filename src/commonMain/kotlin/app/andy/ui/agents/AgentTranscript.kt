@@ -76,6 +76,7 @@ import app.andy.domain.looksLikeFilePath
 import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
+import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.isRetriableConnectionStallMessage
 import app.andy.model.shouldShowConnectionStallBanner
@@ -103,6 +104,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 /** Explicit per-task scroll snapshot. */
 internal data class TranscriptScrollPosition(
@@ -646,6 +649,7 @@ private fun TranscriptEvent(
             detail = event.detail,
             kind = event.kind,
             locations = event.locations,
+            images = event.images,
             color = Cyan,
             onToolFileOpen = onToolFileOpen,
         )
@@ -1007,6 +1011,102 @@ private fun ChatImagePreviewDialog(
 }
 
 @Composable
+private fun ChatAttachedToolImages(
+    images: List<AgentToolImage>,
+    modifier: Modifier = Modifier,
+    maxWidth: Dp = 260.dp,
+    maxHeight: Dp = 180.dp,
+) {
+    if (images.isEmpty()) return
+    Row(
+        modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        images.forEachIndexed { index, image ->
+            ChatAttachedToolImage(
+                image = image,
+                label = "image ${index + 1}",
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatAttachedToolImage(
+    image: AgentToolImage,
+    label: String,
+    maxWidth: Dp = 260.dp,
+    maxHeight: Dp = 180.dp,
+) {
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, image.dataUri) {
+        value = withContext(Dispatchers.Default) {
+            decodeDataUriBytes(image.dataUri)?.let { bytes -> runCatching { loadImageBitmap(bytes) }.getOrNull() }
+        }
+    }
+    var previewOpen by remember(image.dataUri) { mutableStateOf(false) }
+    val bmp = bitmap
+    DisableSelection {
+        Box(
+            Modifier
+                .widthIn(max = maxWidth)
+                .heightIn(max = maxHeight)
+                .clip(RoundedCornerShape(AndyRadius.Control))
+                .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium))
+                .border(1.dp, Border.copy(alpha = 0.75f), RoundedCornerShape(AndyRadius.Control))
+                .then(
+                    if (bmp != null) {
+                        Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { previewOpen = true }
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = label,
+                    modifier = Modifier
+                        .widthIn(max = maxWidth)
+                        .heightIn(max = maxHeight),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Text(
+                    label,
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp),
+                )
+            }
+        }
+    }
+    if (previewOpen && bmp != null) {
+        ChatImagePreviewDialog(
+            bitmap = bmp,
+            fileName = label,
+            onDismiss = { previewOpen = false },
+        )
+    }
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+private fun decodeDataUriBytes(dataUri: String): ByteArray? {
+    val base64 = dataUri.substringAfter(',', missingDelimiterValue = "")
+    if (base64.isBlank()) return null
+    return runCatching { Base64.decode(base64) }.getOrNull()
+}
+
+@Composable
 private fun CompactToolCallsBlock(
     events: List<AgentEvent>,
     startIndex: Int,
@@ -1050,6 +1150,7 @@ private fun CompactToolCallsBlock(
                         detail = event.detail,
                         kind = event.kind,
                         locations = event.locations,
+                        images = event.images,
                         color = Cyan,
                         indent = TranscriptAsideContentIndent,
                         onToolFileOpen = onToolFileOpen,
@@ -1082,6 +1183,7 @@ private fun ToolBlock(
     detail: String,
     kind: AgentToolKind? = null,
     locations: List<String> = emptyList(),
+    images: List<AgentToolImage> = emptyList(),
     color: Color,
     indent: Dp = TranscriptAsideIndent,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
@@ -1092,7 +1194,7 @@ private fun ToolBlock(
         .orEmpty()
         .ifBlank { summary.takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }.orEmpty() }
         .ifBlank { name.orEmpty() }
-    val expandable = body.isNotBlank() && body != headline
+    val expandable = images.isNotEmpty() || (body.isNotBlank() && body != headline)
     val fileContent = remember(body) { parseToolCallFileContent(body) }
     val openableContent = fileContent ?: locations.firstOrNull { looksLikeFilePath(it) }?.let {
         ToolCallFileContent(path = it, oldText = null, newText = null)
@@ -1135,6 +1237,7 @@ private fun ToolBlock(
         ToolCallDetailBody(
             body = body,
             fileContent = fileContent,
+            images = images,
             onOpen = onToolFileOpen,
         )
     }
@@ -1144,8 +1247,12 @@ private fun ToolBlock(
 private fun ToolCallDetailBody(
     body: String,
     fileContent: ToolCallFileContent?,
+    images: List<AgentToolImage> = emptyList(),
     onOpen: (ToolCallFileContent) -> Unit,
 ) {
+    if (images.isNotEmpty()) {
+        ChatAttachedToolImages(images, modifier = Modifier.padding(top = 4.dp))
+    }
     if (fileContent != null) {
         Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             DisableSelection {
@@ -1187,6 +1294,7 @@ private fun ToolCallDetailBody(
         }
         return
     }
+    if (body.isBlank()) return
     ChatMarkdown(
         body,
         density = AndyMarkdownDensity.Thinking,
