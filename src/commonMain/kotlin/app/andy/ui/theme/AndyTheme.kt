@@ -19,9 +19,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Design DNA — Soft Minimal.
+ * Design DNA — Soft Minimal / dark glass.
  *
- * Deep charcoal surfaces, generous rounding, and tonal hierarchy over borders.
+ * Deep charcoal surfaces, soft rounding, hairline borders, and tonal hierarchy.
+ * Chat chrome follows a Cursor-style control-center language: recessed composer,
+ * document-stream transcript, functional green/amber/red status only.
  * Accent is punctuation. Dark and light palettes are tuned independently.
  */
 internal enum class AndyTint(val id: String, val label: String, val color: Color) {
@@ -198,8 +200,8 @@ private data class AndyTonalPalette(
             neutral800 = Color(0xFF0F0F0F), // pane-bg
             neutral850 = Color(0xFF0A0A0A), // content-bg
             neutral900 = Color(0xFF0A0A0A), // window-bg
-            border = Color.White.copy(alpha = 0.05f),
-            borderMedium = Color.White.copy(alpha = 0.08f),
+            border = Color.White.copy(alpha = 0.08f),
+            borderMedium = Color.White.copy(alpha = 0.12f),
             windowBg = Color(0xFF0A0A0A),
             sidebarBg = Color(0xFF111111),
             paneBg = Color(0xFF0F0F0F),
@@ -306,6 +308,10 @@ internal object AndyColors {
     val Blue get() = selectedTint.color
     val Warning = Color(0xFFE0A64B)
     val Error = Color(0xFFE46A6A)
+
+    /** Full-row diff tinting — added/removed lines and diff-stat chips share these. */
+    val DiffAddBg get() = Green.copy(alpha = 0.10f)
+    val DiffRemoveBg get() = Error.copy(alpha = 0.10f)
 }
 
 /** Translucency scale for surfaces stacked over other content (raised panels, popovers). */
@@ -330,12 +336,13 @@ internal object AndySpace {
 /** Soft radius system — generous rounding communicates approachability. */
 internal object AndyRadius {
     /** Buttons, fields, pills, segmented controls — squarish-rounded like toolbar chrome. */
-    val Interactive = 12.dp
-    val Control = 10.dp
+    val Interactive = 10.dp
+    val Control = 8.dp
     val Row = Interactive
     val Menu = 14.dp
-    val Sheet = 16.dp
-    val Window = 20.dp
+    /** Composer shell and large panels — matches control-center input rounding. */
+    val Sheet = 14.dp
+    val Window = 18.dp
     /** Reserved for dots, progress fills, and circular indicators only. */
     val Pill = 999.dp
 }

@@ -178,8 +178,9 @@ class AndyDesktopScreenshotTest {
                         AndyScreenshotScenario.ProjectsScratchpad,
                         AndyScreenshotScenario.ProjectsScratchpadEditor -> {
                             // Project detail + markdown preview can lag waitForIdle on busy CI.
+                            // Wait on the scratchpad chrome (not the project path — toolbar no longer shows it).
                             waitUntil(timeoutMillis = 15_000) {
-                                onAllNodesWithText("/workspace/sample-app", substring = true)
+                                onAllNodesWithText("Project scratchpad")
                                     .fetchSemanticsNodes()
                                     .isNotEmpty()
                             }

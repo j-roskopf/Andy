@@ -1,8 +1,5 @@
 package app.andy.ui.components
 
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -13,12 +10,9 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.andy.mergeChatImagePaths
 import app.andy.pickImageFiles
 import app.andy.readClipboardImagePaths
-import app.andy.ui.theme.AndyLayout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -29,14 +23,14 @@ internal fun ChatImageAttachButton(
     enabled: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
-    OutlinedButton(
-        onClick = { scope.launch { attachImagesFromPicker(onImagesAttached) } },
+    ComposerChip(
+        text = "+",
+        selected = false,
         enabled = enabled,
-        modifier = modifier.height(AndyLayout.ControlHeightMd),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-    ) {
-        Text("attach", fontSize = 11.sp)
-    }
+        showChevron = false,
+        modifier = modifier,
+        onClick = { scope.launch { attachImagesFromPicker(onImagesAttached) } },
+    )
 }
 
 internal suspend fun attachImagesFromPicker(onImagesAttached: (List<String>) -> Unit) {

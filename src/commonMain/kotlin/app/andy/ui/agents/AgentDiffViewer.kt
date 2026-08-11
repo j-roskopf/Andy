@@ -250,8 +250,8 @@ private fun CollapsedContextBar(count: Int, onToggle: () -> Unit) {
 @Composable
 private fun DiffCodeLine(line: DiffLine) {
     val background = when (line.kind) {
-        DiffLineKind.Addition -> Green.copy(alpha = 0.14f)
-        DiffLineKind.Deletion -> Red.copy(alpha = 0.16f)
+        DiffLineKind.Addition -> AndyColors.DiffAddBg
+        DiffLineKind.Deletion -> AndyColors.DiffRemoveBg
         DiffLineKind.Context -> Color.Transparent
     }
     val gutter = when (line.kind) {
@@ -344,10 +344,10 @@ private fun SplitDiffPane(
 ) {
     val kind = line?.kind
     val background = when {
-        kind == DiffLineKind.Deletion -> Red.copy(alpha = 0.16f)
-        kind == DiffLineKind.Addition -> Green.copy(alpha = 0.14f)
-        line == null && side == DiffSplitSide.Old -> Green.copy(alpha = 0.06f)
-        line == null && side == DiffSplitSide.New -> Red.copy(alpha = 0.06f)
+        kind == DiffLineKind.Deletion -> AndyColors.DiffRemoveBg
+        kind == DiffLineKind.Addition -> AndyColors.DiffAddBg
+        line == null && side == DiffSplitSide.Old -> AndyColors.DiffAddBg.copy(alpha = 0.5f)
+        line == null && side == DiffSplitSide.New -> AndyColors.DiffRemoveBg.copy(alpha = 0.5f)
         else -> Color.Transparent
     }
     val gutter = when (kind) {

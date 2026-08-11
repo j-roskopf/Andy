@@ -96,9 +96,13 @@ import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChatComposerFrame
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
+import app.andy.ui.components.ComposerChip
+import app.andy.ui.components.ComposerPlaceholderHint
+import app.andy.ui.components.ComposerToolbarRow
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
@@ -117,11 +121,11 @@ import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
-import app.andy.ui.theme.Panel
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -598,12 +602,9 @@ private fun AgentChatComposer(
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
 
-    PanelCard(
+    ChatComposerFrame(
         modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
-        background = AndyColors.SurfaceRaised,
-        borderColor = if (state.imageDragActive) Cyan else null,
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        highlighted = state.imageDragActive,
     ) {
         Box(Modifier.fillMaxWidth()) {
             TextField(
@@ -616,7 +617,7 @@ private fun AgentChatComposer(
                 minLines = 3,
                 maxLines = 7,
                 modifier = Modifier.fillMaxWidth()
-                    .heightIn(min = 94.dp, max = 180.dp)
+                    .heightIn(min = 88.dp, max = 180.dp)
                     .onVoiceDictationShortcut(voiceShortcut, voiceController)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -636,20 +637,23 @@ private fun AgentChatComposer(
                         onFiles = { dropped -> state.imagePaths = attachChatImages(state.imagePaths, dropped) },
                         onDragActiveChange = { active -> state.imageDragActive = active },
                     ),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 13.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                ),
                 colors = fieldColors(),
                 chromeStyle = FieldChromeStyle.Borderless,
                 visualTransformation = slashHighlight,
                 placeholder = {
-                    Text(
-                        when {
-                            state.imageDragActive -> "release to attach images"
-                            state.imagePaths.isNotEmpty() -> "add a message or send images — attach, paste, or drag more"
-                            else -> "What should ${state.agent.label} work on? — attach, paste, or drag images"
+                    ComposerPlaceholderHint(
+                        text = when {
+                            state.imageDragActive -> "Release to attach images"
+                            state.imagePaths.isNotEmpty() -> "Add a message, or send the attached images"
+                            else -> "Message the agent, tag @files, or use /commands and /skills"
                         },
-                        color = if (state.imageDragActive) Cyan else TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 13.sp,
+                        highlighted = state.imageDragActive,
                     )
                 },
             )
@@ -731,163 +735,192 @@ private fun AgentChatComposer(
             }
         }
 
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(
-                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-            Box {
-                FilterPill(
-                    state.agent.label,
-                    true,
-                    agentColor(state.agent),
-                    leadingContent = { AgentPillIcon(state.agent) },
+        ComposerToolbarRow(
+            leading = {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    agentMenuExpanded = true
-                }
-                DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
-                    // Keep this in step with the expanded provider controls: an
-                    // unavailable provider should still be discoverable here.
-                    // It remains disabled until its CLI is available, so a task
-                    // cannot be launched with an unusable provider.
-                    AgentKind.entries.forEach { agent ->
-                        val status = form.cliStatuses.firstOrNull { it.kind == agent }
-                        val ready = status?.ready == true || form.cliStatuses.isEmpty()
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    AgentPillIcon(agent)
-                                    Text(
-                                        "${agent.label}${if (ready) "" else " · ${if (status?.issue != null) "needs repair" else "unavailable"}"}",
-                                        color = TextPrimary,
-                                    )
-                                }
-                            },
-                            enabled = ready,
-                            onClick = {
-                                state.providerChosenInComposer = true
-                                state.agent = agent
-                                agentMenuExpanded = false
-                            },
+                    Box {
+                        ComposerChip(
+                            text = state.agent.label,
+                            selected = true,
+                            onClick = { agentMenuExpanded = true },
+                            leadingContent = { AgentPillIcon(state.agent) },
                         )
-                    }
-                }
-            }
-            Box {
-                val modelLabel = when {
-                    state.usesCustomModel -> "custom"
-                    form.selectedModel != null -> form.selectedModel.label
-                    else -> "model: default"
-                }
-                FilterPill(modelLabel, state.modelId != null, agentColor(state.agent)) { modelMenuExpanded = true }
-                DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("provider default", color = TextPrimary) },
-                        onClick = {
-                            state.modelId = null
-                            modelMenuExpanded = false
-                        },
-                    )
-                    if (state.agent == AgentKind.Cursor) {
-                        form.modelOptions.groupedByModelFamily().forEach { (family, options) ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        family.label.uppercase(),
-                                        color = TextSecondary,
-                                        fontFamily = MonoFont,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp,
-                                    )
-                                },
-                                onClick = {},
-                                enabled = false,
-                            )
-                            options.forEach { option ->
+                        DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
+                            // Keep this in step with the expanded provider controls: an
+                            // unavailable provider should still be discoverable here.
+                            // It remains disabled until its CLI is available, so a task
+                            // cannot be launched with an unusable provider.
+                            AgentKind.entries.forEach { agent ->
+                                val status = form.cliStatuses.firstOrNull { it.kind == agent }
+                                val ready = status?.ready == true || form.cliStatuses.isEmpty()
                                 DropdownMenuItem(
-                                    text = { Text(option.label, color = TextPrimary) },
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            AgentPillIcon(agent)
+                                            Text(
+                                                "${agent.label}${if (ready) "" else " · ${if (status?.issue != null) "needs repair" else "unavailable"}"}",
+                                                color = TextPrimary,
+                                            )
+                                        }
+                                    },
+                                    enabled = ready,
                                     onClick = {
-                                        state.modelId = option.id
-                                        modelMenuExpanded = false
+                                        state.providerChosenInComposer = true
+                                        state.agent = agent
+                                        agentMenuExpanded = false
                                     },
                                 )
                             }
                         }
-                    } else {
-                        form.modelOptions.forEach { option ->
+                    }
+                    Box {
+                        val modelLabel = when {
+                            state.usesCustomModel -> "custom"
+                            form.selectedModel != null -> form.selectedModel.label
+                            else -> "Default model"
+                        }
+                        ComposerChip(
+                            text = modelLabel,
+                            selected = state.modelId != null,
+                            onClick = { modelMenuExpanded = true },
+                        )
+                        DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
                             DropdownMenuItem(
-                                text = { Text(option.label, color = TextPrimary) },
+                                text = { Text("provider default", color = TextPrimary) },
                                 onClick = {
-                                    state.modelId = option.id
+                                    state.modelId = null
+                                    modelMenuExpanded = false
+                                },
+                            )
+                            if (state.agent == AgentKind.Cursor) {
+                                form.modelOptions.groupedByModelFamily().forEach { (family, options) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                family.label.uppercase(),
+                                                color = TextSecondary,
+                                                fontFamily = MonoFont,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.sp,
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false,
+                                    )
+                                    options.forEach { option ->
+                                        DropdownMenuItem(
+                                            text = { Text(option.label, color = TextPrimary) },
+                                            onClick = {
+                                                state.modelId = option.id
+                                                modelMenuExpanded = false
+                                            },
+                                        )
+                                    }
+                                }
+                            } else {
+                                form.modelOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label, color = TextPrimary) },
+                                        onClick = {
+                                            state.modelId = option.id
+                                            modelMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                            DropdownMenuItem(
+                                text = { Text("custom", color = TextPrimary) },
+                                onClick = {
+                                    state.modelId = CUSTOM_MODEL_ID
                                     modelMenuExpanded = false
                                 },
                             )
                         }
                     }
-                    DropdownMenuItem(
-                        text = { Text("custom", color = TextPrimary) },
-                        onClick = {
-                            state.modelId = CUSTOM_MODEL_ID
-                            modelMenuExpanded = false
-                        },
-                    )
-                }
-            }
-                form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
-                    Box {
-                        FilterPill(state.reasoningEffort?.label ?: "effort", state.reasoningEffort != null, Rust) { effortMenuExpanded = true }
-                        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                            if (state.agent != AgentKind.Cursor) {
-                                DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                    form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                        Box {
+                            ComposerChip(
+                                text = state.reasoningEffort?.label ?: "Effort",
+                                selected = state.reasoningEffort != null,
+                                onClick = { effortMenuExpanded = true },
+                            )
+                            DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                                if (state.agent != AgentKind.Cursor) {
+                                    DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                                }
+                                selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
                             }
-                            selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
+                        }
+                        if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
+                            ComposerChip(
+                                text = "Fast",
+                                selected = state.fastMode,
+                                showChevron = false,
+                                onClick = { state.fastMode = !state.fastMode },
+                            )
                         }
                     }
-                    if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
-                        FilterPill("fast", state.fastMode, Green) { state.fastMode = !state.fastMode }
-                    }
-                }
-                FilterPill("plan", state.planMode, Green) { state.planMode = !state.planMode }
-                if (state.agent == AgentKind.OpenClaw) {
-                    FilterPill(
-                        if (state.openClawNewSession) "new session" else "main session",
-                        state.openClawNewSession,
-                        Cyan,
-                    ) { state.openClawNewSession = !state.openClawNewSession }
-                }
-                Box {
-                    val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
-                    FilterPill(sandbox.labelFor(state.agent), true, if (sandbox == AgentSandboxMode.None) Rust else Cyan) { sandboxMenuExpanded = true }
-                    DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
-                        AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
-                    }
-                }
-                if (state.directoryIsGitRepo) {
-                    ComposerBranchWorktreeChip(
-                        branch = state.currentBranch,
-                        useWorktree = state.useWorktree,
-                        onUseWorktreeChange = { state.useWorktree = it },
+                    ComposerChip(
+                        text = "Plan",
+                        selected = state.planMode,
+                        showChevron = false,
+                        onClick = { state.planMode = !state.planMode },
                     )
+                    if (state.agent == AgentKind.OpenClaw) {
+                        ComposerChip(
+                            text = if (state.openClawNewSession) "New session" else "Main session",
+                            selected = state.openClawNewSession,
+                            showChevron = false,
+                            onClick = { state.openClawNewSession = !state.openClawNewSession },
+                        )
+                    }
+                    Box {
+                        val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
+                        ComposerChip(
+                            text = sandbox.labelFor(state.agent),
+                            selected = true,
+                            onClick = { sandboxMenuExpanded = true },
+                        )
+                        DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
+                            AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
+                        }
+                    }
+                    if (state.directoryIsGitRepo) {
+                        ComposerBranchWorktreeChip(
+                            branch = state.currentBranch,
+                            useWorktree = state.useWorktree,
+                            onUseWorktreeChange = { state.useWorktree = it },
+                        )
+                    }
+                    ComposerChip(
+                        text = if (showOptions) "Hide options" else "Options",
+                        selected = showOptions,
+                        showChevron = false,
+                        onClick = { onShowOptionsChange(!showOptions) },
+                    )
+                    onCancel?.let { cancel ->
+                        ComposerChip(
+                            text = "Cancel",
+                            selected = false,
+                            showChevron = false,
+                            onClick = cancel,
+                        )
+                    }
                 }
-            }
-            AgentQuotaMenu(services = form.services, agent = state.agent)
-            ChatImageAttachButton(
-                onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
-            )
-            OutlinedButton(onClick = { onShowOptionsChange(!showOptions) }) {
-                Text(if (showOptions) "hide options" else "options", fontSize = 11.sp)
-            }
-            onCancel?.let { cancel ->
-                OutlinedButton(onClick = cancel) { Text("cancel", fontSize = 11.sp) }
-            }
-            ChatVoiceDictationButton(controller = voiceController)
-            ChatSendButton(onClick = onSubmit, enabled = canSubmit)
-        }
+            },
+            trailing = {
+                AgentQuotaMenu(services = form.services, agent = state.agent)
+                ChatImageAttachButton(
+                    onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
+                )
+                ChatVoiceDictationButton(controller = voiceController)
+                ChatSendButton(onClick = onSubmit, enabled = canSubmit)
+            },
+        )
         voiceError?.let { err ->
             Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
         }

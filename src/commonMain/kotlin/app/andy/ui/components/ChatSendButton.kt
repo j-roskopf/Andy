@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
+import app.andy.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
 
 @Composable
@@ -58,12 +59,11 @@ internal fun ChatSendButton(
     val background = when {
         !enabled -> AndyColors.SurfaceHover
         sending -> AndyColors.OrangePressed
-        else -> AndyColors.Orange
+        else -> AndyColors.SurfaceSelected
     }
     val iconColor = when {
         !enabled -> AndyColors.TextDisabled
-        AndyColors.isLight -> Color.White
-        else -> Color(0xFF0A0A0A)
+        else -> TextPrimary
     }
 
     Box(
