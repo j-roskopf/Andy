@@ -2,6 +2,8 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::viewer_chrome;
+
 pub fn session_name(task_id: &str) -> String {
     format!("andy-task-{task_id}")
 }
@@ -28,11 +30,11 @@ fn tmux_binary() -> Result<String> {
 }
 
 fn which_tmux() -> Option<String> {
-    for dir in std::env::var("PATH")
-        .unwrap_or_default()
-        .split(':')
-        .chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].iter().copied())
-    {
+    for dir in std::env::var("PATH").unwrap_or_default().split(':').chain(
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            .iter()
+            .copied(),
+    ) {
         let candidate = PathBuf::from(dir).join("tmux");
         if candidate.is_file() {
             return Some(candidate.display().to_string());
@@ -45,6 +47,21 @@ fn tmux_command(args: &[&str]) -> Result<Command> {
     let mut command = Command::new(tmux_binary()?);
     command.args(args);
     Ok(command)
+}
+
+/// Run a tmux command with null stdio; returns Err when the process fails to spawn
+/// or exits non-zero.
+pub fn run_tmux(args: &[&str]) -> Result<()> {
+    let status = tmux_command(args)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("tmux {}", args.join(" ")))?;
+    if !status.success() {
+        bail!("tmux {} failed", args.join(" "));
+    }
+    Ok(())
 }
 
 pub fn has_session(task_id: &str) -> bool {
@@ -84,8 +101,7 @@ pub fn session_looks_broken(task_id: &str) -> bool {
         || (output.contains("getcwd") && output.contains("cannot access parent directories"))
 }
 
-const DETACH_HINT: &str =
-    "Press F12, Alt+d, or Ctrl-b then d to return to the chat list";
+const DETACH_HINT: &str = "Press F12, Alt+d, or Ctrl-b then d to return to the chat list";
 
 pub fn detach_hint() -> &'static str {
     DETACH_HINT
@@ -122,14 +138,26 @@ fn ensure_detach_keys() {
     });
 }
 
-pub fn attach(task_id: &str) -> Result<()> {
+/// Attach to a Terminal-lane session with the same header/status/hotkey framing
+/// used by the ACP viewer. Tmux remains the transport; chrome is a session-local
+/// status line plus a brief banner before the TTY is handed over.
+pub fn attach(task_id: &str, title: &str, status: &str) -> Result<()> {
     let name = session_name(task_id);
     ensure_detach_keys();
-    eprintln!("Attached to {name}. {DETACH_HINT}.");
-    let status = tmux_command(&["-L", "andy", "attach-session", "-t", &name])?
+    let title = if title.is_empty() { task_id } else { title };
+    let status = if status.is_empty() {
+        "Attached"
+    } else {
+        status
+    };
+    viewer_chrome::print_attach_banner(task_id, title, status);
+    // Best-effort: older/broken tmux still gets the banner + detach keys.
+    let _ = viewer_chrome::apply_tmux_session_chrome(task_id, title, status);
+    let attach_status = tmux_command(&["-L", "andy", "attach-session", "-t", &name])?
         .status()
         .context("spawn tmux attach")?;
-    if !status.success() {
+    let _ = viewer_chrome::clear_tmux_session_chrome(task_id);
+    if !attach_status.success() {
         bail!("tmux attach failed for session {name}");
     }
     Ok(())

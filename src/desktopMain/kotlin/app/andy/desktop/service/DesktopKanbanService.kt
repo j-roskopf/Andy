@@ -160,6 +160,13 @@ class DesktopKanbanService(
         }
     }
 
+    /** Wait for queued persists and write the latest in-memory board (tests / harness). */
+    suspend fun flushPersist() {
+        saveMutex.withLock {
+            store.saveKanbanBoard(_board.value)
+        }
+    }
+
     private fun nextId(prefix: String, board: KanbanBoard): String {
         val existing = buildSet {
             board.lanes.forEach { lane ->

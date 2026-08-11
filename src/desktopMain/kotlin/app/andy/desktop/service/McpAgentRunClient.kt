@@ -637,6 +637,9 @@ class McpAgentRunClient(
                 put("attachAndyMcp", JsonPrimitive(draft.attachAndyMcp))
                 put("autonomy", JsonPrimitive(draft.autonomy.name))
                 draft.model?.takeIf { it.isNotBlank() }?.let { put("model", JsonPrimitive(it)) }
+                if (draft.imagePaths.isNotEmpty()) {
+                    put("imagePaths", JsonArray(draft.imagePaths.map { JsonPrimitive(it) }))
+                }
                 // Managed evidence bundle ids only (§4) — never a local filesystem path.
                 if (draft.contextBundleIds.isNotEmpty()) {
                     put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
@@ -683,6 +686,9 @@ class McpAgentRunClient(
                 buildMap {
                     put("taskId", JsonPrimitive(taskId))
                     put("followUp", JsonPrimitive(followUp))
+                    if (imagePaths.isNotEmpty()) {
+                        put("imagePaths", JsonArray(imagePaths.map { JsonPrimitive(it) }))
+                    }
                     // Managed evidence bundle ids only (§4) — never a local filesystem path.
                     if (contextBundleIds.isNotEmpty()) {
                         put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
@@ -774,6 +780,9 @@ class McpAgentRunClient(
                 buildMap {
                     put("taskId", JsonPrimitive(taskId))
                     put("followUp", JsonPrimitive(followUp))
+                    if (imagePaths.isNotEmpty()) {
+                        put("imagePaths", JsonArray(imagePaths.map { JsonPrimitive(it) }))
+                    }
                     if (contextBundleIds.isNotEmpty()) {
                         put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
                     }

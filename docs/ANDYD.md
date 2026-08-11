@@ -1,8 +1,11 @@
 # Andy daemon (`andyd`) + CLI
 
-Andy’s center of gravity is a headless daemon that owns agent/project state and
-spawns agent CLIs into Andy-managed tmux sessions. The Compose GUI and the Rust
-CLI are equal clients over a Unix domain socket.
+Andy’s center of gravity is a headless daemon that owns agent/project state.
+Terminal-lane agents (Antigravity, Hermes, OpenClaw, …) run in Andy-managed
+tmux sessions; ACP-lane agents (Claude Code, Codex, Cursor, OpenCode, Pi) use a
+structured protocol subprocess and a JSONL transcript. The Compose GUI and the
+Rust CLI are equal clients over a Unix domain socket — `andy attach` routes to
+tmux or the native ACP viewer by lane.
 
 The CLI is **macOS and Linux only** (not Windows). It auto-starts `andyd` when
 the socket is not already live.
@@ -95,7 +98,7 @@ andy chat list                 # grouped by project (Inbox / projectId)
 andy chat list --json          # raw MCP payload
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
 andy chat start --no-attach --agent ClaudeCode "fire and forget JSON only"
-andy attach <taskId>           # live tmux, or quiet provider reattach then attach
+andy attach <taskId>           # ACP: native viewer · Terminal: tmux (or quiet reattach)
 andy tui                       # n new chat · grouped projects · a / Enter attach
 andy chat resume <taskId> "…"  # when quiet reattach isn't possible
 andy --remote user@mac.local chat list   # SSH tunnel the socket
@@ -168,14 +171,18 @@ andy tui
 andy attach <taskId>
 ```
 
-This live-attaches to the chat's tmux pane (or quietly reattaches an ended
-provider session first, same as GUI reattach). `andy tui` lists chats grouped
-by project — press **Enter** / **a** to attach without remembering a task id.
+This opens the lane-appropriate viewer: the native ACP chat UI for Claude Code /
+Codex / Cursor / OpenCode / Pi, or a live tmux pane for Terminal-lane agents
+(with quiet provider reattach when needed, same as GUI reattach). `andy tui`
+lists chats grouped by project — press **Enter** / **a** to attach without
+remembering a task id.
 
-**7. Detach without stopping the agent.** Press **F12**, **Alt+d**, or the
-usual tmux **Ctrl-b** then **d**. The agent keeps running on the host;
-reconnect later — even from a different phone or SSH session — with
-`andy attach <taskId>`.
+**7. Detach without stopping the agent.** For Terminal/tmux: press **F12**,
+**Alt+d**, or the usual tmux **Ctrl-b** then **d**. For the ACP viewer: press
+**Esc** / **q** / **Ctrl-C**. The agent keeps running on the host; reconnect
+later — even from a different phone or SSH session — with `andy attach <taskId>`.
+The ACP viewer defaults to conversation-only (user/assistant); press **v** for
+tools/commands/raw/usage detail, or set `ANDY_ACP_VIEW_DETAILS=1`.
 
 ### Device / network scripting
 
@@ -198,16 +205,27 @@ Curated groups: `device`, `emulator`, `avd`, `system-image`, `snapshot`,
 `input`, `app`, `intent`, `file`, `network`. Extra tool args:
 `--arg key=value` (JSON literals coerced) and `--json-args '{…}'`.
 
-`andy attach` / TUI attach first checks for a live `tmux -L andy` session. If the
-chat has ended but Andy can reopen the provider CLI (same as GUI reattach), it
-calls `chat.reattach`, waits for tmux, then attaches. Otherwise it tells you to
-use `andy chat resume`.
+`andy attach` / TUI attach resolves the task `lane` first:
+
+- **Acp** — opens the native CLI viewer (history via `chat.events` / live
+  updates via `chat.subscribe`). Requires a daemon that advertises
+  `chat.subscribe`; older andyd builds hard-fail with an upgrade message.
+- **Terminal** — checks for a live `tmux -L andy` session. If the chat has
+  ended but Andy can reopen the provider CLI (same as GUI reattach), it calls
+  `chat.reattach`, waits for tmux, then attaches. Otherwise it tells you to use
+  `andy chat resume`.
 
 Dev loop without installing: `cargo run --manifest-path cli/andy/Cargo.toml -- chat list`
 
-Live terminal view is always `tmux -L andy attach -t andy-task-<id>` — MCP never
-streams PTY bytes. From the TUI or `andy attach`, press **F12**, **Alt+d**, or the
-usual tmux **Ctrl-b** then **d** to detach back to the chat list without stopping the agent.
+CLI tests (unit + mock-MCP integration): `cargo test --manifest-path cli/andy/Cargo.toml`
+
+Terminal-lane live view is always `tmux -L andy attach -t andy-task-<id>` — MCP
+never streams PTY bytes. `andy attach` wraps that session with the same
+header/status/hotkey chrome as the ACP viewer (session-local tmux status line +
+banner), then hands the TTY to tmux. From the TUI or `andy attach` on a Terminal
+chat, press **F12**, **Alt+d**, or the usual tmux **Ctrl-b** then **d** to
+detach back to the chat list without stopping the agent. ACP chats use
+Esc/q/Ctrl-C for the same “detach, keep running” behavior.
 
 ## launchd (macOS)
 
@@ -260,10 +278,11 @@ Claude Code, Codex, Cursor, OpenCode, and Pi default to the ACP stdio lane. ACP
 sessions use the official Kotlin ACP client, persist structured JSONL transcripts
 under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep their ACP session id
 separate from vendor CLI session ids. The GUI renders those events with the
-structured transcript surface and can continue a stored session after restart.
+structured transcript surface; the CLI uses the same event stream via
+`chat.subscribe` in `andy attach`. Both can continue a stored session after restart.
 
-Antigravity, Hermes, and OpenClaw remain on the terminal/tmux lane. If ACP
-spawn or initialization fails, Andy records the diagnostic and falls back to the
-existing terminal lane for that task. Override routing for a rollout with
-`ANDY_AGENT_LANE=terminal|acp` or the provider-specific
+Antigravity, Hermes, and OpenClaw remain on the terminal/tmux lane (`andy attach`
+→ `tmux -L andy`). If ACP spawn or initialization fails, Andy records the
+diagnostic and falls back to the existing terminal lane for that task. Override
+routing for a rollout with `ANDY_AGENT_LANE=terminal|acp` or the provider-specific
 `ANDY_AGENT_LANE_<AGENT_KIND>` variable.

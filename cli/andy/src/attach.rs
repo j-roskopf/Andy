@@ -3,25 +3,34 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
+use crate::acp_view;
 use crate::mcp::McpClient;
 use crate::tmux;
 
 const SESSION_WAIT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
-/// Attach to a live tmux session.
+/// Attach to a chat — ACP lane opens the native viewer; Terminal lane uses tmux
+/// with the same header/status/hotkey chrome framing.
 ///
-/// For a freshly started chat, waits for the session to appear. If it never does,
-/// tries quiet provider reattach (ended chats) before failing.
+/// For a freshly started Terminal chat, waits for the session to appear. If it
+/// never does, tries quiet provider reattach (ended chats) before failing.
 pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result<()> {
+    let lane = acp_view::resolve_lane(client, task_id).await?;
+    if lane.eq_ignore_ascii_case("Acp") {
+        return acp_view::run_acp_viewer(client, task_id).await;
+    }
+
+    let (title, status) = load_terminal_chrome(client, task_id).await;
+
     if tmux::has_session(task_id) && !tmux::session_looks_broken(task_id) {
-        return tmux::attach(task_id);
+        return tmux::attach(task_id, &title, &status);
     }
 
     // New starts are Queued briefly before tmux exists — wait first.
     match wait_for_tmux(client, task_id, AbortOnTerminalStatus::Yes).await? {
         WaitOutcome::Ready if !tmux::session_looks_broken(task_id) => {
-            return tmux::attach(task_id);
+            return tmux::attach(task_id, &title, &status);
         }
         WaitOutcome::Ready | WaitOutcome::TimedOut | WaitOutcome::TerminalStatus => {}
     }
@@ -47,7 +56,7 @@ pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result
                 .context("chat.resume after reattach failure")?;
             match wait_for_tmux(client, task_id, AbortOnTerminalStatus::No).await? {
                 WaitOutcome::Ready if !tmux::session_looks_broken(task_id) => {
-                    return tmux::attach(task_id);
+                    return tmux::attach(task_id, &title, &status);
                 }
                 WaitOutcome::Ready | WaitOutcome::TimedOut | WaitOutcome::TerminalStatus => {}
             }
@@ -79,7 +88,37 @@ pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result
         );
     }
 
-    tmux::attach(task_id)
+    let (title, status) = load_terminal_chrome(client, task_id).await;
+    tmux::attach(task_id, &title, &status)
+}
+
+async fn load_terminal_chrome(client: &mut McpClient, task_id: &str) -> (String, String) {
+    let status_raw = client
+        .call_tool("chat.status", json!({ "taskId": task_id }))
+        .await
+        .unwrap_or_default();
+    let status_v: Value = serde_json::from_str(&status_raw).unwrap_or(Value::Null);
+    let list_raw = client
+        .call_tool("chat.list", Value::Object(Default::default()))
+        .await
+        .unwrap_or_else(|_| "[]".into());
+    let list: Value = serde_json::from_str(&list_raw).unwrap_or(Value::Null);
+    let row = list.as_array().and_then(|arr| {
+        arr.iter()
+            .find(|e| e.get("id").and_then(|id| id.as_str()) == Some(task_id))
+    });
+    let title = row
+        .and_then(|r| r.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(task_id)
+        .to_string();
+    let status = status_v
+        .get("status")
+        .or_else(|| status_v.get("taskStatus"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Attached")
+        .to_string();
+    (title, status)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

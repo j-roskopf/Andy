@@ -41,7 +41,11 @@ pub fn parse_chats(raw: &str) -> Vec<ChatRow> {
                 return None;
             }
             // CLI never shows archived chats (still present in --json raw payload).
-            if el.get("archived").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if el
+                .get("archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 return None;
             }
             Some(ChatRow {
