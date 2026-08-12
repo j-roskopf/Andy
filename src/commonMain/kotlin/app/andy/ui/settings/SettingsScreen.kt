@@ -1793,11 +1793,10 @@ private fun NetworkAccessPanel(
     PanelCard(modifier = Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Network Access",
-            description = "Opt-in remote chat from your phone/tablet over Tailscale (or LAN). " +
-                "Requires the access token on every request — including through Tailscale Serve / localhost " +
-                "proxies. Plain HTTP is fine on Tailscale (WireGuard already encrypts the path); use " +
-                "`tailscale serve --bg <port>` only if you need HTTPS for Web Push. " +
-                "Embedded GUI mode only binds while the window is open.",
+            description = "Opt-in remote chat from your phone/tablet. In Tailscale-only mode (default), Andy " +
+                "binds to localhost only and is reachable exclusively through `tailscale serve` — no raw port " +
+                "is exposed to your LAN. Requires the access token on every request, including through " +
+                "Tailscale Serve / localhost proxies. Embedded GUI mode only binds while the window is open.",
         )
         if (!workspaceState.mcpServerEnabled) {
             Text(
@@ -1836,7 +1835,7 @@ private fun NetworkAccessPanel(
             )
             Spacer(Modifier.height(8.dp))
             SettingsInlineCheckbox(
-                label = "Tailscale only (block other local networks)",
+                label = "Tailscale only (bind to localhost, no LAN exposure)",
                 checked = workspaceState.networkAccessTailscaleOnly,
                 onCheckedChange = { checked ->
                     onUpdateWorkspace { it.copy(networkAccessTailscaleOnly = checked) }
@@ -1844,14 +1843,33 @@ private fun NetworkAccessPanel(
             )
             Text(
                 if (workspaceState.networkAccessTailscaleOnly) {
-                    "Only Tailscale addresses (100.x) and this Mac can connect. Home Wi‑Fi devices are rejected. " +
-                        "Turn off if you need plain LAN access or a non-Tailscale VPN."
+                    "Andy only binds to localhost — nothing is reachable on your LAN or Tailscale IP directly. " +
+                        "Run the command below once per boot so `tailscale serve` forwards your tailnet to it " +
+                        "(also gets you HTTPS for free, needed for Web Push / iOS install). " +
+                        "Turn off if you need plain LAN access or a non-Tailscale VPN instead."
                 } else {
                     "Any device that can reach this Mac’s IP may attempt access (still needs the token)."
                 },
                 color = TextSecondary,
                 fontSize = 12.sp,
             )
+            if (workspaceState.networkAccessTailscaleOnly) {
+                Spacer(Modifier.height(8.dp))
+                Text("Run once (per boot)", color = TextSecondary, fontSize = 12.sp)
+                SelectionContainer {
+                    Text(
+                        "tailscale serve --bg ${workspaceState.mcpServerPort}",
+                        color = TextPrimary,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { copyText("tailscale serve --bg ${workspaceState.mcpServerPort}") },
+                ) {
+                    Text("Copy command")
+                }
+            }
             Spacer(Modifier.height(8.dp))
             Text("Access token", color = TextSecondary, fontSize = 12.sp)
             SelectionContainer {
@@ -1882,7 +1900,11 @@ private fun NetworkAccessPanel(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Text("Open on another device", color = TextSecondary, fontSize = 12.sp)
+            Text(
+                if (workspaceState.networkAccessTailscaleOnly) "Open on this Mac" else "Open on another device",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
             accessUrls.forEach { url ->
                 SelectionContainer {
                     Text(url, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
@@ -1890,10 +1912,9 @@ private fun NetworkAccessPanel(
             }
             Text(
                 if (workspaceState.networkAccessTailscaleOnly) {
-                    "Showing Tailscale URLs when available. These stay http:// — WireGuard already encrypts " +
-                        "Tailscale traffic. For Web Push / HTTPS, run " +
-                        "`tailscale serve --bg ${workspaceState.mcpServerPort}` and open the https://…ts.net " +
-                        "URL (token still required)."
+                    "This localhost URL only works on this Mac — it's for testing the token/QR flow. From " +
+                        "another Tailscale device, run the `tailscale serve` command above, then open the " +
+                        "https://…ts.net URL it prints (token still required)."
                 } else {
                     "LAN addresses are listed first when available; Tailscale/WireGuard addresses appear when " +
                         "present. These stay http://. For HTTPS / Web Push, run " +

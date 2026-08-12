@@ -6,9 +6,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -72,7 +74,18 @@ fun interface SynchronizedUpdateGate {
  * `requestImmediateRedraw` (keystroke echo) honours the same flag, so a permanently-held gate
  * would add up to one interval to echo latency. [flushNow] is called on user input to reopen
  * the gate immediately, preserving the old throttle's "sparse updates are never delayed"
- * property. The gate re-arms on the loop's next tick.
+ * property.
+ *
+ * A keystroke's echo does not arrive synchronously with [flushNow] — the byte still has to
+ * round-trip through the PTY line discipline and back before BossTerm sees it as inbound damage.
+ * Toggling the flag once and letting the ambient loop's own timer decide when to re-close it
+ * is not enough: if [flushNow] lands just as [gateLoop] was about to close the gate anyway (its
+ * own timer fires moments later), the reopened window can be far shorter than one render
+ * window, and the echo arrives after the gate has already slammed shut — stranding it until the
+ * *next* cycle. That is the "I typed and it took a beat to show up" case, and it gets worse
+ * under churn since that is when [gateLoop] is actively cycling the gate rather than leaving it
+ * open. [flushWake] interrupts [gateLoop]'s current wait so a flush always buys a fresh
+ * [renderWindowMillis] of open gate, regardless of where in the cycle it lands.
  *
  * ### Cursor blink
  *
@@ -111,6 +124,9 @@ class TerminalFrameLimiter(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** Wakes a closed-phase wait in [gateLoop] early; conflated so bursts of flushes collapse to one. */
+    private val flushWake = Channel<Unit>(Channel.CONFLATED)
+
     /** `-Dandy.terminal.repaint.fps=0` disables the cap entirely; the gate is never touched. */
     val isEnabled: Boolean get() = foregroundIntervalMillis > 0L
 
@@ -132,24 +148,50 @@ class TerminalFrameLimiter(
                 delay(interval)
                 continue
             }
+            // Drop any flush requested while the gate was already open — it already got what it
+            // wanted — so only a flush during *this* closed phase wakes the wait below early.
+            while (flushWake.tryReceive().isSuccess) { /* drain stale wakes */ }
             gate.setSynchronizedUpdate(true)
-            // Absorb the per-character storm. Nothing invalidates Compose for this whole span.
-            delay((interval - renderWindowMillis).coerceAtLeast(1L))
+            // Absorb the per-character storm. Nothing invalidates Compose for this whole span,
+            // unless flushNow wakes it early for a keystroke.
+            withTimeoutOrNull((interval - renderWindowMillis).coerceAtLeast(1L)) { flushWake.receive() }
             // Emits one redraw iff the gated window produced damage.
             gate.setSynchronizedUpdate(false)
             // Stay open long enough for that frame to compose against a live capture,
             // otherwise ProperTerminal reuses the previous frame and the screen never advances.
-            delay(renderWindowMillis)
+            openForRenderWindow()
         }
     }
 
     /**
-     * Reopen the gate now so the next redraw is not delayed. Called on user input.
-     * No-op when the cap is disabled, so callers need not branch.
+     * Holds the gate open for [renderWindowMillis]; a flush landing anywhere in that span resets
+     * the countdown to a full window again. Without the reset, a flush arriving late in the
+     * window (gate already open, so [flushNow] itself is a no-op) would only get whatever time
+     * was left before the next cycle's closed phase — which can be shorter than a PTY round-trip
+     * needs, stranding the echo for a full cycle. Typing is sparse enough that this rarely chains
+     * more than once or twice in practice.
+     */
+    private suspend fun openForRenderWindow() {
+        var remaining = renderWindowMillis
+        while (withTimeoutOrNull(remaining) { flushWake.receive() } != null) {
+            remaining = renderWindowMillis
+        }
+    }
+
+    /**
+     * Reopen the gate now so the next redraw is not delayed, and guarantee it stays open for at
+     * least one full [renderWindowMillis] — not just until [gateLoop]'s own timer next fires.
+     * Called on user input. No-op when the cap is disabled, so callers need not branch.
+     *
+     * Keystroke echo arrives asynchronously (PTY round-trip), so a bare gate toggle can lose the
+     * race: if [gateLoop] was about to close the gate anyway, the reopened window can be far
+     * shorter than [renderWindowMillis] and the echo lands after the gate has shut again.
+     * Waking [gateLoop]'s wait makes the reopened window consistent instead.
      */
     fun flushNow() {
         if (!isEnabled) return
         runCatching { gate.setSynchronizedUpdate(false) }
+        flushWake.trySend(Unit)
     }
 
     override fun close() {

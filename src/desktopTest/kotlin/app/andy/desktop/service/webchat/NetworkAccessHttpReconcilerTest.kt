@@ -128,10 +128,26 @@ class NetworkAccessHttpReconcilerTest {
     }
 
     @Test
-    fun applyBindRebindsFromLoopbackToAllInterfaces() = runBlocking {
+    fun applyBindStaysLoopbackForDefaultTailscaleOnlyMode() = runBlocking {
         assertTrue(mcp.status.value.contains("127.0.0.1"), mcp.status.value)
         // startHttpBlocking reads host from workspace (same as standalone andyd).
+        // Default networkAccessTailscaleOnly = true — enabling Network Access alone
+        // must NOT open a LAN-facing listener; reach is only via `tailscale serve`.
         workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
+        val enabled = workspaceStore.load().toNetworkAccessBindConfig()
+        assertTrue(enabled.tailscaleOnly, "test assumes default tailscaleOnly = true")
+        val result = applyNetworkAccessHttpBind(mcp, enabled)
+        assertTrue(result.isSuccess, result.stderr)
+        assertTrue(mcp.status.value.contains("127.0.0.1"), mcp.status.value)
+        assertTrue(mcp.running.value)
+    }
+
+    @Test
+    fun applyBindRebindsFromLoopbackToAllInterfacesWhenTailscaleOnlyOff() = runBlocking {
+        assertTrue(mcp.status.value.contains("127.0.0.1"), mcp.status.value)
+        workspaceStore.save(
+            workspaceStore.load().copy(networkAccessEnabled = true, networkAccessTailscaleOnly = false),
+        )
         val enabled = workspaceStore.load().toNetworkAccessBindConfig()
         val result = applyNetworkAccessHttpBind(mcp, enabled)
         assertTrue(result.isSuccess, result.stderr)
@@ -196,7 +212,9 @@ class NetworkAccessHttpReconcilerTest {
                     delay(50)
                 }
             }
-            assertTrue(mcp.status.value.contains("0.0.0.0"), mcp.status.value)
+            // Default networkAccessTailscaleOnly = true — stays on loopback; reach is
+            // only via `tailscale serve`.
+            assertTrue(mcp.status.value.contains("127.0.0.1"), mcp.status.value)
             val client = HttpClient(CIO)
             try {
                 // Network Access on → token required even on loopback (Serve-safe).
@@ -230,6 +248,15 @@ class NetworkAccessHttpReconcilerTest {
         assertNotEquals(a, d)
         assertNotEquals(a, e)
         assertEquals(a, a.copy())
+    }
+
+    @Test
+    fun suggestNetworkAccessHostsReturnsLoopbackForDefaultTailscaleOnlyMode() = runBlocking {
+        workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
+        assertTrue(workspaceStore.load().networkAccessTailscaleOnly, "test assumes default tailscaleOnly = true")
+        // Nothing listens on the Tailscale/LAN interface in this mode — 127.0.0.1 is
+        // the only host actually reachable from this Mac (remote reach is via `tailscale serve`).
+        assertEquals(listOf("127.0.0.1"), mcp.suggestNetworkAccessHosts())
     }
 
     private fun ephemeralPort(): Int = ServerSocket(0).use { it.localPort }

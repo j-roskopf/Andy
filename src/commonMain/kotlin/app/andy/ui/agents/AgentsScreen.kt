@@ -21,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
@@ -43,7 +42,6 @@ import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.TextField
 import app.andy.ui.components.WorkspaceEmptyCanvas
-import app.andy.ui.components.WorkspaceItemRow
 import app.andy.ui.components.WorkspaceRailHeader
 import app.andy.ui.components.WorkspaceSplit
 import app.andy.ui.components.primaryButtonColors
@@ -305,34 +303,27 @@ private fun AgentInboxRow(
         formatCost(task.totalCostUsd)?.let { add(it) }
     }.joinToString(" · ")
     Box {
-        WorkspaceItemRow(
-            title = task.title,
+        ChatSessionSidebarRow(
+            task = task,
             selected = selected,
-            subtitle = meta,
+            nowMillis = nowMillis,
             onClick = onClick,
-            leading = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    when {
-                        isSessionWorking(task) -> ProjectActivityIndicator(16.dp)
-                        task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
-                        task.unread -> UnreadDot()
-                    }
+            subtitle = meta,
+            trailing = when {
+                task.status == AgentStatus.Blocked -> {
+                    { StatusTag("blocked", Red) }
                 }
-            },
-            trailing = {
-                // The blocked pill already carries the status label; avoid showing it twice.
-                if (task.status != AgentStatus.Blocked) {
-                    Text(
-                        agentStatusLabel(task),
-                        color = agentStatusColor(task).copy(alpha = 0.85f),
-                        fontFamily = MonoFont,
-                        fontSize = 9.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                else -> {
+                    {
+                        Text(
+                            agentStatusLabel(task),
+                            color = agentStatusColor(task).copy(alpha = 0.85f),
+                            fontFamily = MonoFont,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             },
             modifier = Modifier.pointerInput(task.id) {

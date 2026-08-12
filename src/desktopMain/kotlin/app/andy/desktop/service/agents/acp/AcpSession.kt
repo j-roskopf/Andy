@@ -121,7 +121,7 @@ class AcpSession(
         protocol = rpc
         // Protocol.start() starts the underlying transport. Starting the stdio
         // transport separately makes ACP initialization fail with "Transport is
-        // not in CREATED state", which then triggers the terminal fallback.
+        // not in CREATED state".
         rpc.start()
 
         val acpClient = Client(rpc)

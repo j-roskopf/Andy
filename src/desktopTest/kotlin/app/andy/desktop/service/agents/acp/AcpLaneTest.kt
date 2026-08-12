@@ -6,6 +6,7 @@ import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
+import app.andy.model.acpSupported
 import app.andy.model.defaultLane
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.PlanEntry
@@ -59,15 +60,23 @@ class AcpLaneTest {
     }
 
     @Test
-    fun supportedProvidersDefaultToAcpAndTerminalOnlyProvidersStayTerminal() {
+    fun supportedProvidersAlwaysUseAcpAndTerminalOnlyProvidersStayTerminal() {
         assertEquals(AgentLaneKind.Acp, AgentKind.ClaudeCode.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Codex.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Cursor.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.OpenCode.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Pi.defaultLane())
+        assertTrue(AgentKind.ClaudeCode.acpSupported)
+        assertTrue(AgentKind.Codex.acpSupported)
+        assertTrue(AgentKind.Cursor.acpSupported)
+        assertTrue(AgentKind.OpenCode.acpSupported)
+        assertTrue(AgentKind.Pi.acpSupported)
         assertEquals(AgentLaneKind.Terminal, AgentKind.Antigravity.defaultLane())
         assertEquals(AgentLaneKind.Terminal, AgentKind.Hermes.defaultLane())
         assertEquals(AgentLaneKind.Terminal, AgentKind.OpenClaw.defaultLane())
+        assertFalse(AgentKind.Antigravity.acpSupported)
+        assertFalse(AgentKind.Hermes.acpSupported)
+        assertFalse(AgentKind.OpenClaw.acpSupported)
     }
 
     @Test

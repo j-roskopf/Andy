@@ -30,6 +30,15 @@ internal fun WorkspaceState.toNetworkAccessBindConfig(): NetworkAccessBindConfig
     )
 
 /**
+ * Single source of truth for the HTTP bind address:
+ * - Disabled, or Tailscale-only (default): loopback — remote reach is only via
+ *   `tailscale serve`, which forwards tailnet traffic to 127.0.0.1 on this host.
+ * - Enabled with Tailscale-only off: plain LAN, `0.0.0.0`.
+ */
+internal fun NetworkAccessBindConfig.resolveHost(): String =
+    if (enabled && !tailscaleOnly) "0.0.0.0" else "127.0.0.1"
+
+/**
  * Applies [desired] to [mcp]: stop then start so host/port/token changes take effect
  * (including token regen, which would otherwise hit the same-host early-return in
  * [DesktopMcpServerService.startHttpBlocking]).
