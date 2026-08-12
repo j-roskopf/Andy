@@ -20,7 +20,7 @@ class ClaudeCodeAdapter : AgentCliAdapter {
         task.maxBudgetUsd?.let { add("--max-budget-usd"); add(it.toString()) }
         mcpUrl?.let {
             add("--mcp-config")
-            add("""{"mcpServers":{"andy":{"type":"http","url":"$it"}}}""")
+            add(andyHttpMcpServerJson(it, LocalMcpAttachAuth.bearerToken()))
         }
         // Interactive Claude accepts a trailing prompt as the first user turn.
         // `--mcp-config` is variadic (`<configs...>`), so end options with `--`
@@ -49,7 +49,7 @@ class ClaudeCodeAdapter : AgentCliAdapter {
             addClaudePermissionMode(task)
             mcpUrl?.let {
                 add("--mcp-config")
-                add("""{"mcpServers":{"andy":{"type":"http","url":"$it"}}}""")
+                add(andyHttpMcpServerJson(it, LocalMcpAttachAuth.bearerToken()))
             }
             composeResumePrompt(
                 originalPrompt = task.promptForCli(),

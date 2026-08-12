@@ -52,6 +52,19 @@ data class WorkspaceState(
     val proxyUpstreamTrustedCaPath: String? = null,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
+    /** When true, MCP/HTTP binds to 0.0.0.0 so other devices on the user's network can reach Andy. */
+    val networkAccessEnabled: Boolean = false,
+    /**
+     * When Network Access is on, only accept Tailscale CGNAT peers (`100.64/10`) plus loopback
+     * (for Tailscale Serve / local vendor CLIs). Default on — blocks random LAN devices.
+     */
+    val networkAccessTailscaleOnly: Boolean = true,
+    /** Shared bearer token required for network (and loopback reverse-proxy) access when enabled. */
+    val networkAccessToken: String = "",
+    /** Web Push VAPID public key (URL-safe base64); empty until first push use. */
+    val vapidPublicKey: String = "",
+    /** Web Push VAPID private key (URL-safe base64); empty until first push use. */
+    val vapidPrivateKey: String = "",
     val tintId: String = "andy-blue",
     val surfaceModeId: String = "tinted",
     val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,

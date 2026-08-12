@@ -161,6 +161,12 @@ kotlin {
                 implementation("io.ktor:ktor-server-netty:3.0.1")
                 implementation("io.ktor:ktor-server-sse:3.0.1")
                 implementation("io.ktor:ktor-server-double-receive:3.0.1")
+                implementation("io.ktor:ktor-server-websockets:3.0.1")
+                // Web Push (VAPID + aes128gcm) for the network-access chat PWA.
+                implementation("nl.martijndwars:web-push:5.1.2")
+                implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+                implementation("org.apache.httpcomponents:httpclient:4.5.14")
+                implementation("org.apache.httpcomponents:httpasyncclient:4.1.5")
                 implementation("io.grpc:grpc-api:1.69.0")
                 implementation("io.grpc:grpc-core:1.69.0")
                 implementation("io.grpc:grpc-netty-shaded:1.69.0")
@@ -202,6 +208,10 @@ kotlin {
                 implementation(kotlin("test"))
                 implementation("org.jetbrains.compose.ui:ui-test-junit4:1.11.1")
                 implementation("io.github.takahirom.roborazzi:roborazzi-compose-desktop:1.60.0")
+                implementation("io.ktor:ktor-client-cio:3.0.1")
+                implementation("io.ktor:ktor-client-websockets:3.0.1")
+                implementation("io.ktor:ktor-client-content-negotiation:3.0.1")
+                implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.1")
             }
         }
     }
@@ -513,6 +523,14 @@ tasks.withType<Test>().configureEach {
         // Most desktop service tests inject fake terminal adapters. Keep those fixtures
         // on their intended lane; ACP behavior is covered by the dedicated ACP tests.
         environment("ANDY_AGENT_LANE", "terminal")
+        // Orchestrating Andy/Cursor sessions inject ANDY_TASK_ID / ANDY_PROJECT_ROOT into
+        // the agent environment. Clear them for the test JVM so status-hook scripts and
+        // cwd-scoped fixtures are not redirected to the parent chat's task id.
+        environment("ANDY_TASK_ID", "")
+        environment("ANDY_PROJECT_ROOT", "")
+        // Concurrent Gradle that cleans/recompiles while desktopTest runs can produce mass
+        // NoClassDefFoundError / missing binary result files (classpath race). Run the suite
+        // exclusively — see docs/TESTS.md. Not a product failure; do not quarantine suites.
         if (!isRoborazziTaskRequested) {
             filter.excludeTestsMatching("app.andy.AndyDesktopScreenshotTest")
             maxParallelForks = andyDesktopTestParallelForks
@@ -1065,10 +1083,17 @@ val andydFatJar = tasks.register<Jar>("andydFatJar") {
     archiveBaseName.set("andyd")
     archiveVersion.set(andyVersionName)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // Runtime classpath exceeds the classic ZIP entry limit once webchat + web-push
+    // deps are included; Zip64 is required for a valid standalone andyd.jar.
+    isZip64 = true
     val desktopCompilation = kotlin.targets.getByName("desktop").compilations.getByName("main")
     dependsOn(desktopCompilation.compileTaskProvider)
+    // allOutputs alone does not always pull processResources into the task graph when
+    // compile is UP-TO-DATE; without this, standalone andyd.jar can omit webchat/.
+    dependsOn("desktopProcessResources")
     dependsOn(":agent-store:jar")
-    from(desktopCompilation.output.allOutputs)
+    from(desktopCompilation.output.classesDirs)
+    from(desktopCompilation.output.resourcesDir)
     from({
         desktopCompilation.runtimeDependencyFiles?.filter { it.isFile }?.map { zipTree(it) } ?: emptyArray<File>()
     })

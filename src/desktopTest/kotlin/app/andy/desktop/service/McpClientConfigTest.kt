@@ -88,4 +88,26 @@ class McpClientConfigTest {
             testHome.deleteRecursively()
         }
     }
+
+    @Test
+    fun hermesYamlIncludesBearerHeadersWhenNetworkAccessTokenProvided() {
+        val merged = McpClientConfig.mergeHermesYaml("", 8565, bearerToken = "secret-token")
+        assertTrue(merged.contains("""url: "http://127.0.0.1:8565/mcp-http""""))
+        assertTrue(merged.contains("headers:"))
+        assertTrue(merged.contains("""Authorization: "Bearer secret-token""""))
+        assertTrue(
+            McpClientConfig.getSnippet(McpClientConfig.ClientType.Hermes, 8565, bearerToken = "secret-token")
+                .contains("""Authorization: "Bearer secret-token""""),
+        )
+    }
+
+    @Test
+    fun snippetIncludesBearerHeadersWhenTokenProvided() {
+        val snippet = McpClientConfig.getSnippet(
+            McpClientConfig.ClientType.Codex,
+            8565,
+            bearerToken = "tok",
+        )
+        assertTrue(snippet.contains("""http_headers = { Authorization = "Bearer tok" }"""))
+    }
 }

@@ -63,6 +63,7 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
@@ -324,16 +325,13 @@ internal fun ProjectWorkflowDetail(
             )
         }
         val pairActive = when (task.kind) {
-            ProjectTaskKind.Build -> listOfNotNull(task.linkedReviewTaskId, task.linkedVerificationTaskId)
-                .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
+            ProjectTaskKind.Build -> workflowPairInFlight(task, workflow, agentTasks)
             ProjectTaskKind.Review, ProjectTaskKind.Verification -> {
                 val build = workflow.tasks.firstOrNull { it.id == task.linkedBuildTaskId }
-                build?.isActive == true || listOfNotNull(build?.linkedReviewTaskId, build?.linkedVerificationTaskId)
-                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
+                build != null && workflowPairInFlight(build, workflow, agentTasks)
             }
             ProjectTaskKind.Spec -> workflow.tasks.filter { it.linkedSpecTaskId == task.id }.any { child ->
-                child.isActive || listOfNotNull(child.linkedReviewTaskId, child.linkedVerificationTaskId)
-                    .any { id -> workflow.tasks.firstOrNull { it.id == id }?.isActive == true }
+                workflowPairInFlight(child, workflow, agentTasks)
             }
         }
         when (task.kind) {
@@ -499,9 +497,13 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
             ?.let { attempt -> runs.firstOrNull { it.id == attempt.runId } }
             ?.takeIf { it.isActive && it.workflowStage == ProjectWorkflowStage.Build }
     }
+    // Waiting alone is a handoff park, not an in-flight run — do not hide follow-up/resume behind Pause/Stop.
+    val pairInFlight = remember(build, review, verification, runs) {
+        workflowPairInFlight(build, workflow, runs)
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         when {
-            build.isActive || review?.isActive == true || verification?.isActive == true -> {
+            pairInFlight -> {
                 activeBuildRun?.let { run ->
                     OutlinedButton(onClick = { services.agentRuns.completeWorkflowRun(run.id) }) {
                         Text("Mark build complete")
@@ -519,8 +521,14 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
                 }
             }
             build.state == ProjectTaskState.Draft -> Button(onClick = { scope.launch { services.projectWorkflows.startBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Start pair") }
-            build.state != ProjectTaskState.Completed -> Button(onClick = { scope.launch { services.projectWorkflows.resumeBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Resume pair") }
-            else -> OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }
+            build.state == ProjectTaskState.Completed -> OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }
+            build.state == ProjectTaskState.NeedsAttention || build.state == ProjectTaskState.Paused -> {
+                // Attention/pause after review or verify limits: recovery follow-up is the real escape hatch.
+                // Resume stays available for transient stops, but follow-up must remain visible.
+                OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }
+                Button(onClick = { scope.launch { services.projectWorkflows.resumeBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Resume pair") }
+            }
+            else -> Button(onClick = { scope.launch { services.projectWorkflows.resumeBuildPair(build.id) } }, colors = primaryButtonColors()) { Text("Resume pair") }
         }
         Spacer(Modifier.weight(1f))
         Text(
@@ -1396,6 +1404,29 @@ private fun taskKindAccent(kind: ProjectTaskKind): Color = when (kind) {
 private fun reviewStatusLabel(status: ProjectReviewStatus): String = when (status) {
     ProjectReviewStatus.Approved -> "approved"
     ProjectReviewStatus.ChangesRequested -> "changes requested"
+}
+
+/**
+ * True while a build pair has an in-flight or blocked agent turn.
+ * [ProjectTaskState.Waiting] alone does not count — handoffs park siblings there.
+ */
+private fun workflowPairInFlight(
+    build: ProjectTask,
+    workflow: ProjectWorkflowState,
+    runs: List<AgentTask>,
+): Boolean {
+    val stages = listOfNotNull(
+        build,
+        build.linkedReviewTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } },
+        build.linkedVerificationTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } },
+    )
+    if (stages.any { it.isInFlight }) return true
+    return stages.any { stage ->
+        val run = stage.attempts.maxByOrNull { it.createdAtMillis }?.runId
+            ?.let { id -> runs.firstOrNull { it.id == id } }
+            ?: return@any false
+        run.isActive || run.status == AgentStatus.Blocked
+    }
 }
 
 private fun taskStateLabel(state: ProjectTaskState): String = when (state) {

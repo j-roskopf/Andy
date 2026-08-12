@@ -10,6 +10,11 @@ import java.io.File
 data class AndyMcpEndpoint(
     val port: Int,
     val httpUrl: String,
+    /**
+     * When Network Access is on, loopback MCP requires this bearer token
+     * (closes reverse-proxy / Tailscale Serve auth bypass).
+     */
+    val bearerToken: String? = null,
 )
 
 /** Appends `andyTaskId` so chat.start can inherit the parent's autonomy dial. */

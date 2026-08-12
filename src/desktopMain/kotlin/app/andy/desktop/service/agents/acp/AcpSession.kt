@@ -19,6 +19,7 @@ import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ClientCapabilities
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.FileSystemCapability
+import com.agentclientprotocol.model.HttpHeader
 import com.agentclientprotocol.model.Implementation
 import com.agentclientprotocol.model.McpServer
 import com.agentclientprotocol.model.SessionId
@@ -137,7 +138,13 @@ class AcpSession(
 
         val parameters = SessionCreationParameters(
             cwd = cwd.path,
-            mcpServers = mcp?.let { listOf(McpServer.Http("andy", task.agent.acpEndpointUrl(it), emptyList())) }.orEmpty(),
+            // When Network Access is on, loopback MCP requires the shared token (Serve/proxy safe).
+            mcpServers = mcp?.let { endpoint ->
+                val headers = endpoint.bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let { token ->
+                    listOf(HttpHeader("Authorization", "Bearer $token"))
+                }.orEmpty()
+                listOf(McpServer.Http("andy", task.agent.acpEndpointUrl(endpoint), headers))
+            }.orEmpty(),
         )
         val operationsFactory = ClientOperationsFactory { _, _ -> operations(cwd) }
         val storedId = task.acpSessionId?.takeIf { it.isNotBlank() }

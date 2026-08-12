@@ -183,9 +183,18 @@ internal fun AndyShell(
         onPopOutMirrorRequestConsumed()
     }
 
-    LaunchedEffect(state.workspaceState.mcpServerEnabled, state.workspaceState.mcpServerPort) {
+    LaunchedEffect(
+        state.workspaceState.mcpServerEnabled,
+        state.workspaceState.mcpServerPort,
+        state.workspaceState.networkAccessEnabled,
+        state.workspaceState.networkAccessTailscaleOnly,
+        state.workspaceState.networkAccessToken,
+    ) {
         if (!capabilities.mcp) return@LaunchedEffect
         if (state.workspaceState.mcpServerEnabled) {
+            // Restart when bind host, port, or token changes so existing WS sessions
+            // drop immediately (token regenerate must invalidate live connections).
+            services.mcp.stop()
             services.mcp.start(state.workspaceState.mcpServerPort)
         } else {
             services.mcp.stop()

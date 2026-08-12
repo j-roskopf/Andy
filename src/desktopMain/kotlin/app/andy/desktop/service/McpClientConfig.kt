@@ -19,7 +19,26 @@ object McpClientConfig {
         Windsurf("Windsurf")
     }
 
-    fun getSnippet(client: ClientType, port: Int): String {
+    fun getSnippet(client: ClientType, port: Int, bearerToken: String? = null): String {
+        val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() }
+        val headersJson = token?.let {
+            """,
+                      "headers": {
+                        "Authorization": "Bearer $it"
+                      }"""
+        }.orEmpty()
+        val headersYaml = token?.let {
+            """
+                    headers:
+                      Authorization: "Bearer $it""""
+        }.orEmpty()
+        val headersToml = token?.let {
+            """
+                http_headers = { Authorization = "Bearer $it" }"""
+        }.orEmpty()
+        val piTokenHint = token?.let {
+            "\n                # With Network Access on, pass Authorization: Bearer <token> to /mcp-http"
+        }.orEmpty()
         return when (client) {
             ClientType.ClaudeCode, ClientType.Cursor, ClientType.Antigravity -> {
                 """
@@ -27,7 +46,7 @@ object McpClientConfig {
                   "mcpServers": {
                     "andy": {
                       "type": "http",
-                      "url": "http://127.0.0.1:$port/mcp-http"
+                      "url": "http://127.0.0.1:$port/mcp-http"$headersJson
                     }
                   }
                 }
@@ -39,7 +58,7 @@ object McpClientConfig {
                   "mcp": {
                     "andy": {
                       "type": "remote",
-                      "url": "http://127.0.0.1:$port/mcp-http"
+                      "url": "http://127.0.0.1:$port/mcp-http"$headersJson
                     }
                   }
                 }
@@ -49,21 +68,26 @@ object McpClientConfig {
                 """
                 # Pi has no native MCP config file. Andy sets ANDY_MCP_URL and loads
                 # ~/.andy/pi/andy-extension.ts via `pi -e` when MCP attach is enabled.
-                ANDY_MCP_URL=http://127.0.0.1:$port/mcp-http
+                ANDY_MCP_URL=http://127.0.0.1:$port/mcp-http$piTokenHint
                 """.trimIndent()
             }
             ClientType.Hermes -> """
                 mcp_servers:
                   andy:
-                    url: "http://127.0.0.1:$port/mcp-http"
+                    url: "http://127.0.0.1:$port/mcp-http"$headersYaml
             """.trimIndent()
-            ClientType.OpenClaw -> """
-                { "mcp": { "andy": { "transport": "streamable-http", "url": "http://127.0.0.1:$port/mcp-http" } } }
+            ClientType.OpenClaw -> {
+                val headersObj = token?.let {
+                    """, "headers": { "Authorization": "Bearer $it" }"""
+                }.orEmpty()
+                """
+                { "mcp": { "andy": { "transport": "streamable-http", "url": "http://127.0.0.1:$port/mcp-http"$headersObj } } }
             """.trimIndent()
+            }
             ClientType.Codex -> {
                 """
                 [mcp_servers.andy]
-                url = "http://127.0.0.1:$port/mcp-http"
+                url = "http://127.0.0.1:$port/mcp-http"$headersToml
                 """.trimIndent()
             }
             ClientType.ClaudeDesktop -> {
@@ -72,7 +96,7 @@ object McpClientConfig {
                   "mcpServers": {
                     "andy": {
                       "type": "sse",
-                      "url": "http://127.0.0.1:$port/mcp"
+                      "url": "http://127.0.0.1:$port/mcp"$headersJson
                     }
                   }
                 }
@@ -84,7 +108,7 @@ object McpClientConfig {
                   "mcpServers": {
                     "andy": {
                       "type": "http",
-                      "url": "http://127.0.0.1:$port/mcp-http"
+                      "url": "http://127.0.0.1:$port/mcp-http"$headersJson
                     }
                   }
                 }
@@ -122,10 +146,10 @@ object McpClientConfig {
     fun getOpenCodeProjectConfig(cwd: File?): File? =
         cwd?.takeIf { it.isDirectory }?.let { File(it, "opencode.json") }
 
-    fun writeConfig(client: ClientType, port: Int, cwd: File? = null): Boolean {
+    fun writeConfig(client: ClientType, port: Int, cwd: File? = null, bearerToken: String? = null): Boolean {
         if (client == ClientType.Pi) {
             AndyPiExtensionInstaller.ensureInstalled()
-            return writePiMcpConfig(port)
+            return writePiMcpConfig(port, bearerToken)
         }
         val file = when (client) {
             ClientType.OpenCode -> getOpenCodeProjectConfig(cwd) ?: getConfigFile(client)
@@ -143,14 +167,14 @@ object McpClientConfig {
 
             val newContent = when (client) {
                 ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop, ClientType.Antigravity -> {
-                    mergeJson(client, currentContent, port)
+                    mergeJson(client, currentContent, port, bearerToken)
                 }
-                ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port)
+                ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port, bearerToken)
                     ?: return false
-                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port)
-                ClientType.Hermes -> mergeHermesYaml(currentContent, port)
+                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port, bearerToken)
+                ClientType.Hermes -> mergeHermesYaml(currentContent, port, bearerToken)
                 ClientType.Codex -> {
-                    mergeToml(currentContent, port)
+                    mergeToml(currentContent, port, bearerToken)
                 }
                 else -> return false
             }
@@ -163,13 +187,14 @@ object McpClientConfig {
         }
     }
 
-    private fun mergeJson(client: ClientType, content: String, port: Int): String {
+    private fun mergeJson(client: ClientType, content: String, port: Int, bearerToken: String? = null): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
         val mcpServers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         val usesLegacySse = client == ClientType.ClaudeDesktop
         mcpServers["andy"] = buildJsonObject {
             put("type", if (usesLegacySse) "sse" else "http")
             put("url", "http://127.0.0.1:$port/${if (usesLegacySse) "mcp" else "mcp-http"}")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(mcpServers)
@@ -178,7 +203,7 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun mergeOpenCodeJson(content: String, port: Int): String? {
+    internal fun mergeOpenCodeJson(content: String, port: Int, bearerToken: String? = null): String? {
         val json = if (content.isBlank()) {
             JsonObject(emptyMap())
         } else {
@@ -188,6 +213,7 @@ object McpClientConfig {
         mcp["andy"] = buildJsonObject {
             put("type", "remote")
             put("url", "http://127.0.0.1:$port/mcp-http")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcp"] = JsonObject(mcp)
@@ -199,7 +225,7 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun writePiMcpConfig(port: Int): Boolean {
+    internal fun writePiMcpConfig(port: Int, bearerToken: String? = null): Boolean {
         val file = File(System.getProperty("user.home"), ".pi/mcp.json")
         return try {
             file.parentFile?.mkdirs()
@@ -207,7 +233,7 @@ object McpClientConfig {
             if (file.exists() && currentContent.isNotBlank()) {
                 File(file.absolutePath + ".bak").writeText(currentContent)
             }
-            val merged = mergePiMcpJson(currentContent, port) ?: return false
+            val merged = mergePiMcpJson(currentContent, port, bearerToken) ?: return false
             file.writeText(merged)
             true
         } catch (e: Exception) {
@@ -216,7 +242,7 @@ object McpClientConfig {
         }
     }
 
-    internal fun mergePiMcpJson(content: String, port: Int): String? {
+    internal fun mergePiMcpJson(content: String, port: Int, bearerToken: String? = null): String? {
         val json = if (content.isBlank()) {
             JsonObject(emptyMap())
         } else {
@@ -227,6 +253,7 @@ object McpClientConfig {
             put("type", "streamable-http")
             put("url", "http://127.0.0.1:$port/mcp-http")
             put("lifecycle", "eager")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(servers)
@@ -235,45 +262,62 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun mergeOpenClawJson(content: String, port: Int): String {
+    internal fun mergeOpenClawJson(content: String, port: Int, bearerToken: String? = null): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
         val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         mcp["andy"] = buildJsonObject {
             put("transport", "streamable-http")
             put("url", "http://127.0.0.1:$port/mcp-http")
+            putMcpAuthHeaders(bearerToken)
         }
         val pretty = Json { prettyPrint = true }
         return pretty.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
     }
 
-    internal fun mergeHermesYaml(content: String, port: Int): String {
+    internal fun mergeHermesYaml(content: String, port: Int, bearerToken: String? = null): String {
         val lines = content.lines().toMutableList()
-        val url = "    url: \"http://127.0.0.1:$port/mcp-http\""
+        val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() }
+        val block = buildList {
+            add("  andy:")
+            add("    url: \"http://127.0.0.1:$port/mcp-http\"")
+            if (token != null) {
+                add("    headers:")
+                add("      Authorization: \"Bearer $token\"")
+            }
+        }
         val root = lines.indexOfFirst { it.trim() == "mcp_servers:" }
         if (root < 0) {
             if (lines.isNotEmpty() && lines.last().isNotBlank()) lines.add("")
-            lines.addAll(listOf("mcp_servers:", "  andy:", url))
+            lines.add("mcp_servers:")
+            lines.addAll(block)
             return lines.joinToString("\n").trimEnd() + "\n"
         }
         val andy = (root + 1 until lines.size).firstOrNull { lines[it].trim() == "andy:" }
         if (andy != null) {
             var end = andy + 1
-            while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) end++
+            while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    ") || lines[end].startsWith("      "))) {
+                end++
+            }
+            // Also consume continuation lines that are more indented under andy
+            // (headers block uses 4–6 spaces). Stop at next top-level mcp server key.
             lines.subList(andy, end).clear()
         }
         val insert = (andy ?: (root + 1)).coerceAtMost(lines.size)
-        lines.addAll(insert, listOf("  andy:", url))
+        lines.addAll(insert, block)
         return lines.joinToString("\n").trimEnd() + "\n"
     }
 
-    private fun mergeToml(content: String, port: Int): String {
+    private fun mergeToml(content: String, port: Int, bearerToken: String? = null): String {
         val lines = content.lines().toMutableList()
         val targetHeader = "[mcp_servers.andy]"
         val index = lines.indexOfFirst { it.trim() == targetHeader }
-        val newBlock = listOf(
-            "[mcp_servers.andy]",
-            "url = \"http://127.0.0.1:$port/mcp-http\"",
-        )
+        val newBlock = buildList {
+            add("[mcp_servers.andy]")
+            add("url = \"http://127.0.0.1:$port/mcp-http\"")
+            bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let { token ->
+                add("http_headers = { Authorization = \"Bearer $token\" }")
+            }
+        }
         if (index != -1) {
             var lastIdx = index + 1
             while (lastIdx < lines.size && !lines[lastIdx].trim().startsWith("[")) {
@@ -288,5 +332,12 @@ object McpClientConfig {
             lines.addAll(newBlock)
         }
         return lines.joinToString("\n")
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putMcpAuthHeaders(bearerToken: String?) {
+        val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        put("headers", buildJsonObject {
+            put("Authorization", "Bearer $token")
+        })
     }
 }

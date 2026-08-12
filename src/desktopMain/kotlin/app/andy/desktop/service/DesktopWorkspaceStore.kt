@@ -50,6 +50,12 @@ class DesktopWorkspaceStore(
             proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
+            networkAccessEnabled = props.getProperty("networkAccessEnabled")?.toBooleanStrictOrNull() ?: false,
+            networkAccessTailscaleOnly =
+                props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
+            networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
+            vapidPublicKey = props.getProperty("vapidPublicKey").orEmpty(),
+            vapidPrivateKey = props.getProperty("vapidPrivateKey").orEmpty(),
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
@@ -157,6 +163,20 @@ class DesktopWorkspaceStore(
 
     override suspend fun save(state: WorkspaceState) = withContext(Dispatchers.IO) {
         file.parentFile.mkdirs()
+        // Daemon-owned VAPID keys may be generated after the GUI loaded ShellState.
+        // Preserve non-blank on-disk keys when the incoming state still has empties so a
+        // later GUI workspace save does not wipe them and break existing push subscriptions.
+        val onDisk = Properties().apply {
+            if (file.exists()) {
+                file.inputStream().use { load(it) }
+            }
+        }
+        val vapidPublic = state.vapidPublicKey.ifBlank {
+            onDisk.getProperty("vapidPublicKey").orEmpty()
+        }
+        val vapidPrivate = state.vapidPrivateKey.ifBlank {
+            onDisk.getProperty("vapidPrivateKey").orEmpty()
+        }
         val props = Properties().apply {
             setProperty("selectedSdkPath", state.selectedSdkPath.orEmpty())
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
@@ -170,6 +190,11 @@ class DesktopWorkspaceStore(
             setProperty("proxyUpstreamTrustedCaPath", state.proxyUpstreamTrustedCaPath.orEmpty())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
+            setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
+            setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
+            setProperty("networkAccessToken", state.networkAccessToken)
+            setProperty("vapidPublicKey", vapidPublic)
+            setProperty("vapidPrivateKey", vapidPrivate)
             setProperty("tintId", state.tintId)
             setProperty("surfaceModeId", state.surfaceModeId)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)

@@ -148,6 +148,41 @@ These are not env-gated; they stay ignored until someone deliberately re-enables
 | --- | --- | --- |
 | `ANDY_HAPPY_EYEBALLS_DELAY` | `0.25` (in the mitm addon) | Seconds of IPv6 lead time before racing IPv4 (RFC 8305). mitmproxy itself does not enable Happy Eyeballs; the addon patches `asyncio.open_connection`. Set `0` to disable. |
 
+## Troubleshooting: mass `NoClassDefFoundError` / binary results
+
+If `desktopTest` reports dozens or hundreds of `NoClassDefFoundError` /
+`ClassNotFoundException` failures (often on synthetic `$1` continuation
+classes) or exits with
+`NoSuchFileException: build/test-results/desktopTest/binary/in-progress-results-*.bin`:
+
+1. Do **not** run concurrent Gradle invocations that touch the same project
+   (`clean`, `compile*`, `desktopTest`, `--rerun-tasks` overlapping). That
+   races the test classpath and Kotlin daemon outputs (“Detected multiple
+   Kotlin daemon sessions”).
+2. Recover with a single exclusive rebuild, then re-run:
+
+```sh
+./gradlew --stop
+./gradlew clean desktopTest
+# or focused:
+./gradlew clean desktopTest --tests 'app.andy.desktop.service.webchat.*'
+```
+
+This is an infrastructure/classpath race, not a product failure. Prefer a
+clean rebuild over quarantining tests. `build.gradle.kts` documents the same
+gate next to the `desktopTest` env block; webchat stays covered by
+`./gradlew desktopTest --tests 'app.andy.desktop.service.webchat.*'` and CI’s
+exclusive `desktopTest` job.
+
+## Troubleshooting: status-hook tests under an Andy agent
+
+If `AgentStatusTrackerTest.statusHookScript*` fails with missing
+`.andy/task-hooks/status.json` (or unexpectedly creates `.andy/` with no
+active-task file) while you are inside an Andy/Cursor agent chat, the parent
+session’s `ANDY_TASK_ID` / `ANDY_PROJECT_ROOT` leaked into the test worker.
+`desktopTest` clears those env vars; `runStatusHook` also strips them unless a
+test opts back in.
+
 ## Related
 
 - Screenshot baselines (separate from these gates): [SCREENSHOT_SCENARIO_MATRIX.md](SCREENSHOT_SCENARIO_MATRIX.md), `./gradlew recordRoborazziDesktop` / `verifyRoborazziDesktop`

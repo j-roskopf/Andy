@@ -40,6 +40,7 @@ Actions workflow). PR CI runs `verifyRoborazziDesktop` on `macos-latest` only.
 | Bug replay | Bugs | captured checkout report, investigation timeline (actions/network/metrics/crash-free hierarchy/screenshot/log), frames, and identity | `desktop-bugs-replay.png` | yes |
 | Recordings export | Recordings | recording library with export sheet (trim + format) | `desktop-recordings-export.png` | yes |
 | Settings MCP | Settings | configured local SDK, proxy, and MCP service | `desktop-settings-mcp.png` | yes |
+| Settings Network Access | Settings → MCP | MCP + network access enabled with token/QR | `desktop-settings-network-access.png` | yes |
 | Mirror pop-out | Pop-out mirror | focused mirror with hardware controls | `desktop-mirror-pop-out.png` | yes |
 
 The contextual "Explain…" actions never appear in these baselines: they are gated on a

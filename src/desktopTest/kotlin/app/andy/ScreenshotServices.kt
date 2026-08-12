@@ -49,6 +49,16 @@ internal object ScreenshotServices {
                 hostFileRoots = listOf("/workspace/sample-app"),
                 lastHostFilePath = "/workspace/sample-app/app/src/main/AndroidManifest.xml",
                 recentHostFiles = listOf("/workspace/sample-app/app/src/main/AndroidManifest.xml"),
+                mcpServerEnabled = scenario == AndyScreenshotScenario.SettingsNetworkAccess ||
+                    scenario == AndyScreenshotScenario.SettingsMcp,
+                mcpServerPort = 8565,
+                networkAccessEnabled = scenario == AndyScreenshotScenario.SettingsNetworkAccess,
+                networkAccessTailscaleOnly = true,
+                networkAccessToken = if (scenario == AndyScreenshotScenario.SettingsNetworkAccess) {
+                    "screenshot-network-access-token-0123456789abcdef"
+                } else {
+                    ""
+                },
             ),
         )
         return AndyServices(
@@ -140,7 +150,25 @@ internal object ScreenshotServices {
         override suspend fun disconnect(serial: String) = CommandResult.success("disconnected $serial")
         override suspend fun listMdnsServices() = listOf(MdnsService("adb-PIXEL8", "_adb-tls-connect._tcp", "192.168.86.47", 37123), MdnsService("adb-PAIRING", "_adb-tls-pairing._tcp", "192.168.86.47", 37199))
         override suspend fun mdnsAvailable() = true
-        override suspend fun generatePairingQr(content: String) = ByteArray(64) { (it * 17).toByte() }
+        override suspend fun generatePairingQr(content: String): ByteArray? {
+            return runCatching {
+                val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(
+                    content,
+                    com.google.zxing.BarcodeFormat.QR_CODE,
+                    256,
+                    256,
+                )
+                val image = java.awt.image.BufferedImage(matrix.width, matrix.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+                for (x in 0 until matrix.width) {
+                    for (y in 0 until matrix.height) {
+                        image.setRGB(x, y, if (matrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+                    }
+                }
+                val out = java.io.ByteArrayOutputStream()
+                javax.imageio.ImageIO.write(image, "PNG", out)
+                out.toByteArray()
+            }.getOrNull()
+        }
     }
 
     private object ScreenshotAvds : AvdService {
@@ -639,6 +667,8 @@ internal object ScreenshotServices {
         override fun isAutoWriteSupported(clientName: String) = true
         override fun writeConfig(clientName: String, port: Int) = true
         override fun getToolNames() = listOf("list_devices", "capture_screenshot", "run_shell")
+        override fun suggestNetworkAccessHosts() = listOf("192.168.1.42", "100.64.1.2")
+        override fun generateNetworkAccessToken() = "screenshot-network-access-token-0123456789abcdef"
     }
 
     private object ScreenshotActionConfig : ActionConfigStore {

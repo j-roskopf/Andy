@@ -92,9 +92,26 @@ internal fun shellQuote(value: String): String = "'" + value.replace("'", "'\"'\
 internal fun resolveLanIp(): String {
     // Prefer real LAN NICs over VPN/Tailscale (often utun*/100.64/10 CGNAT). Phones on
     // Wi‑Fi cannot reach the Mac's Tailscale address, which looks like "Wi‑Fi fine, no apps".
-    data class Candidate(val interfaceName: String, val address: Inet4Address)
+    return lanIpv4Candidates().firstOrNull()?.address?.hostAddress ?: "127.0.0.1"
+}
 
-    val candidates = NetworkInterface.getNetworkInterfaces().toList().asSequence()
+/**
+ * Hosts to advertise for Network Access URLs in Settings.
+ *
+ * Prefer physical LAN first (same ordering as [resolveLanIp]), then VPN/overlay
+ * addresses (Tailscale CGNAT, WireGuard, utun, …). VPN-only machines must not fall
+ * back to 127.0.0.1 — that defeats QR / phone first-run on the user's private network.
+ */
+internal fun resolveNetworkAccessHosts(): List<String> {
+    val lan = lanIpv4Candidates().map { it.address.hostAddress }
+    val vpn = vpnIpv4Candidates().map { it.address.hostAddress }
+    return (lan + vpn).filterNotNull().distinct().ifEmpty { listOf("127.0.0.1") }
+}
+
+private data class IpCandidate(val interfaceName: String, val address: Inet4Address)
+
+private fun lanIpv4Candidates(): List<IpCandidate> =
+    NetworkInterface.getNetworkInterfaces().toList().asSequence()
         .filter { iface ->
             iface.isUp &&
                 !iface.isLoopback &&
@@ -105,18 +122,41 @@ internal fun resolveLanIp(): String {
             iface.inetAddresses.toList().asSequence()
                 .filterIsInstance<Inet4Address>()
                 .filter { address -> isReachableLanIpv4(address) }
-                .map { address -> Candidate(iface.name, address) }
+                .map { address -> IpCandidate(iface.name, address) }
         }
-        .toList()
-
-    val preferred = candidates
         .sortedWith(
-            compareByDescending<Candidate> { isRfc1918(it.address) }
+            compareByDescending<IpCandidate> { isRfc1918(it.address) }
                 .thenByDescending { isPreferredLanInterfaceName(it.interfaceName) }
                 .thenBy { it.interfaceName },
         )
-        .firstOrNull()
-    return preferred?.address?.hostAddress ?: "127.0.0.1"
+        .toList()
+
+private fun vpnIpv4Candidates(): List<IpCandidate> =
+    NetworkInterface.getNetworkInterfaces().toList().asSequence()
+        .filter { iface ->
+            iface.isUp &&
+                !iface.isLoopback &&
+                !iface.isVirtual &&
+                isVpnLikeInterfaceName(iface.name)
+        }
+        .flatMap { iface ->
+            iface.inetAddresses.toList().asSequence()
+                .filterIsInstance<Inet4Address>()
+                .filter { address -> isReachableVpnIpv4(address) }
+                .map { address -> IpCandidate(iface.name, address) }
+        }
+        .sortedWith(
+            compareByDescending<IpCandidate> { isCarrierGradeNat(it.address.hostAddress.orEmpty()) }
+                .thenBy { it.interfaceName },
+        )
+        .toList()
+
+/** VPN/overlay IPv4 usable for Network Access (includes Tailscale CGNAT). */
+internal fun isReachableVpnIpv4(address: Inet4Address): Boolean {
+    if (address.isLoopbackAddress || address.isLinkLocalAddress || address.isAnyLocalAddress) return false
+    val host = address.hostAddress ?: return false
+    if (host.startsWith("169.254.")) return false
+    return true
 }
 
 internal fun isVpnLikeInterfaceName(name: String): Boolean {

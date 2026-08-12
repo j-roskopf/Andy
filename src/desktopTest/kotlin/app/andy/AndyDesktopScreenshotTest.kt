@@ -59,6 +59,7 @@ class AndyDesktopScreenshotTest {
         AndyScreenshotScenario.BugsReplay,
         AndyScreenshotScenario.RecordingsExport,
         AndyScreenshotScenario.SettingsMcp,
+        AndyScreenshotScenario.SettingsNetworkAccess,
         AndyScreenshotScenario.MirrorPopOut,
     )
 
@@ -205,6 +206,21 @@ class AndyDesktopScreenshotTest {
                             // user config row is inside the capture viewport.
                             onNodeWithText("checkout-focus").performScrollTo()
                             waitForIdle()
+                        }
+                        AndyScreenshotScenario.SettingsMcp,
+                        AndyScreenshotScenario.SettingsNetworkAccess,
+                        -> {
+                            onNodeWithText("MCP").performClick()
+                            waitForIdle()
+                            if (scenario == AndyScreenshotScenario.SettingsNetworkAccess) {
+                                waitUntil(timeoutMillis = 10_000) {
+                                    onAllNodesWithText("Network Access")
+                                        .fetchSemanticsNodes()
+                                        .isNotEmpty()
+                                }
+                                onNodeWithText("Network Access").performScrollTo()
+                                waitForIdle()
+                            }
                         }
                         else -> Unit
                     }

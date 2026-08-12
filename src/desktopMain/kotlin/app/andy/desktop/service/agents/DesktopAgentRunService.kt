@@ -929,7 +929,7 @@ class DesktopAgentRunService(
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
         when {
             followUp.isBlank() && imagePaths.isEmpty() -> return "Describe the issue found during testing, or attach a screenshot, before starting a follow-up."
-            !build.recoveryMode && build.state != ProjectTaskState.Completed -> return "Finish or pause the current workflow stage before adding a follow-up."
+            !canStartRecoveryFollowUp(build) -> return "Finish or pause the current workflow stage before adding a follow-up."
             isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) -> return "Wait for the current workflow run to finish before adding another follow-up."
             workflowBudgetReached(build) -> return "The workflow's reported-cost guardrail has been reached."
         }
@@ -957,8 +957,10 @@ class DesktopAgentRunService(
                 updatedAtMillis = System.currentTimeMillis(),
             )
         }
-        review?.let { item ->
-            updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting, reviewGeneration = generation, lastError = null) }
+        if (build.reviewEnabled) {
+            review?.let { item ->
+                updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting, reviewGeneration = generation, lastError = null) }
+            }
         }
         persist()
         val run = createAndStart(
@@ -1940,7 +1942,14 @@ class DesktopAgentRunService(
         } else {
             null
         }
-        val argv = runCatching { argvBuilder(adapter, binary, mcpUrl) }.getOrElse {
+        val mcpBearer = runCatching { workspaceStore.load() }.getOrNull()
+            ?.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val argv = runCatching {
+            LocalMcpAttachAuth.withBearerToken(mcpBearer) { argvBuilder(adapter, binary, mcpUrl) }
+        }.getOrElse {
             finishTask(taskId, AgentStatus.Error, exitCode = null, error = it.message ?: "failed to build command")
             return
         }
@@ -3158,7 +3167,10 @@ class DesktopAgentRunService(
     }
 
     private suspend fun prepareMcp(agent: AgentKind, taskId: String, cwd: File? = null): String? = mcpMutex.withLock {
-        val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
+        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
+        val port = workspace.mcpServerPort
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
             val result = mcp.start(port)
@@ -3173,29 +3185,29 @@ class DesktopAgentRunService(
             // These only support config-file registration; write it and pass no URL.
             // Shared config cannot carry a per-task andyTaskId — CLI/ANDY_TASK_ID covers those.
             AgentKind.Cursor -> {
-                mcp.writeConfig("Cursor", port)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Cursor, port, bearerToken = bearer)
                 null
             }
             AgentKind.Antigravity -> {
-                mcp.writeConfig("Antigravity", port)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Antigravity, port, bearerToken = bearer)
                 null
             }
             AgentKind.OpenCode -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenCode, port, cwd)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenCode, port, cwd, bearerToken = bearer)
                 null
             }
             // Pi has no native MCP config; wire ~/.pi/mcp.json for pi-mcp-compatible extensions
             // and pass ANDY_MCP_URL to Andy's Pi extension.
             AgentKind.Pi -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Pi, port, cwd)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Pi, port, cwd, bearerToken = bearer)
                 mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
             AgentKind.Hermes -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Hermes, port, cwd)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Hermes, port, cwd, bearerToken = bearer)
                 null
             }
             AgentKind.OpenClaw -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenClaw, port, cwd)
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenClaw, port, cwd, bearerToken = bearer)
                 null
             }
         }
@@ -3203,7 +3215,10 @@ class DesktopAgentRunService(
 
     /** ACP receives an MCP server descriptor directly; it must not mutate provider config files. */
     private suspend fun prepareAcpMcp(taskId: String): AndyMcpEndpoint = mcpMutex.withLock {
-        val port = runCatching { workspaceStore.load().mcpServerPort }.getOrElse { 8565 }
+        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
+        val port = workspace.mcpServerPort
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
         val isRunning = runCatching { mcp.running.first() }.getOrElse { false }
         if (!isRunning) {
             val result = mcp.start(port)
@@ -3212,6 +3227,7 @@ class DesktopAgentRunService(
         AndyMcpEndpoint(
             port = port,
             httpUrl = mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId),
+            bearerToken = bearer,
         )
     }
 
@@ -3857,6 +3873,16 @@ class DesktopAgentRunService(
         return run.status == AgentStatus.Blocked
     }
 
+    /**
+     * Recovery follow-ups are the escape hatch after the automated loop finishes or stalls:
+     * completed pairs, already-open recovery, paused pairs, and attention stops (review/verify limits).
+     */
+    private fun canStartRecoveryFollowUp(build: ProjectTask): Boolean =
+        build.recoveryMode ||
+            build.state == ProjectTaskState.Completed ||
+            build.state == ProjectTaskState.Paused ||
+            build.state == ProjectTaskState.NeedsAttention
+
     private fun setPairAttention(build: ProjectTask, message: String) {
         updateProjectTask(build.id) { it.copy(state = ProjectTaskState.NeedsAttention, paused = true, lastError = message, updatedAtMillis = System.currentTimeMillis()) }
         build.linkedReviewTaskId?.let { id ->
@@ -3975,6 +4001,11 @@ class DesktopAgentRunService(
                             it.copy(state = if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled)
                         }
                     }
+                    // Verification is parked Waiting while the build runs; pause it too so
+                    // completed/paused pairs don't look "active" and hide recovery follow-ups.
+                    build.linkedVerificationTaskId?.let { verificationId ->
+                        updateProjectTask(verificationId) { it.copy(state = ProjectTaskState.Paused) }
+                    }
                     persist()
                 } else if (recoveryAttempt) {
                     updateProjectTask(build.id) {
@@ -3987,7 +4018,12 @@ class DesktopAgentRunService(
                         )
                     }
                     build.linkedReviewTaskId?.let { reviewId ->
-                        updateProjectTask(reviewId) { it.copy(state = ProjectTaskState.Paused, lastError = null) }
+                        updateProjectTask(reviewId) {
+                            it.copy(
+                                state = if (build.reviewEnabled) ProjectTaskState.Paused else ProjectTaskState.Disabled,
+                                lastError = null,
+                            )
+                        }
                     }
                     persist()
                 } else {
@@ -4062,6 +4098,9 @@ class DesktopAgentRunService(
         if (parsed.status == ProjectReviewStatus.Approved) {
             if (build.paused) {
                 updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Paused, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+                build.linkedVerificationTaskId?.let { verificationId ->
+                    updateProjectTask(verificationId) { it.copy(state = ProjectTaskState.Paused, lastError = null) }
+                }
                 persist()
             } else if (workflowBudgetReached(build)) {
                 setPairAttention(build, "reported workflow cost reached the configured budget")
@@ -4117,6 +4156,18 @@ class DesktopAgentRunService(
         }
         if (parsed.status == ProjectVerificationStatus.Passed) {
             updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Completed, paused = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+            // Clear any parked Waiting siblings so recovery follow-up stays available in the UI.
+            build.linkedReviewTaskId?.let { reviewId ->
+                val review = projectTask(reviewId) ?: return@let
+                if (review.state == ProjectTaskState.Waiting) {
+                    updateProjectTask(reviewId) {
+                        it.copy(
+                            state = if (build.reviewEnabled) ProjectTaskState.Completed else ProjectTaskState.Disabled,
+                            lastError = null,
+                        )
+                    }
+                }
+            }
             persist()
             return
         }

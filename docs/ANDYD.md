@@ -60,6 +60,43 @@ This starts MCP on:
 - Loopback HTTP (default port from workspace settings, usually `8565`) so vendor
   agent CLIs can still attach Andy device tools
 
+### Network Access (optional web client)
+
+Off by default. In Settings → MCP → Network Access, enable “Allow access from
+other devices on my network” to bind the HTTP listener to `0.0.0.0` and serve a
+small static web chat UI at `/` (ACP-lane chats only).
+
+**Auth:** When Network Access is on, the shared access token is required for
+every non-public route — including loopback. That way Tailscale Serve (or any
+localhost reverse proxy) cannot bypass the token. Use
+`Authorization: Bearer …` (or `?token=` on WebSockets). Static assets at `/`
+stay public so the login screen can load. When Network Access is off, loopback
+stays open without a token so local vendor CLIs keep working.
+
+**Tailscale only (default on):** Non-loopback peers outside Tailscale CGNAT
+(`100.64/10`) get `403`. Turn this off in Settings if you need plain LAN or
+another VPN. Standalone `andyd` watches `~/.andy/workspace.properties` and
+rebinds when these settings change; regenerating the token drops live
+WebSockets.
+
+Turning Network Access on exposes the full MCP tool surface (not just chat) to
+anyone who has the token. Prefer the Tailscale `http://100.x:<port>/` URL on
+your phone — WireGuard already encrypts that path. Andy does not terminate TLS.
+
+For Web Push / iOS home-screen install (browsers require HTTPS), terminate TLS
+in front of andyd — for example with Tailscale Serve:
+
+```sh
+# with Network Access on and MCP port 8565 (or your configured port):
+tailscale serve --bg 8565
+# then open the https://…ts.net URL Tailscale prints (Andy access token still required)
+```
+
+Any reverse proxy (Caddy, nginx, …) pointing at `127.0.0.1:<mcpServerPort>`
+works the same way; the token is still enforced.
+
+This is additive to SSH + `andy tui` / `andy attach`.
+
 ## Rust CLI
 
 Install from the latest GitHub Release (macOS arm64 / Linux x86_64):
