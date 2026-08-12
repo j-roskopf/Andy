@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
@@ -128,12 +129,15 @@ internal fun ChatMarkdown(
      * lines (common before inline emphasis) render as soft breaks instead of hard line breaks.
      */
     preserveLineBreaks: Boolean = false,
+    /** Overrides the code/inline-code color, e.g. the plan card's teal technical-token accent. */
+    codeAccent: Color? = null,
 ) {
     if (text.isBlank()) return
     AndyMarkdown(
         text = if (preserveLineBreaks) text.withChatLineBreaks() else text,
         density = density,
         bodyLineHeight = lineHeight,
+        codeAccent = codeAccent,
         modifier = modifier.fillMaxWidth(),
     )
 }
@@ -202,6 +206,7 @@ private fun AndyMarkdown(
         AndyMarkdownDensity.Preview -> 20.sp
     },
     onTextChange: ((String) -> Unit)? = null,
+    codeAccent: Color? = null,
 ) {
     // Only unwrap for read-only content: checkbox toggling below computes offsets
     // into the parsed source and writes them straight back through onTextChange,
@@ -279,12 +284,12 @@ private fun AndyMarkdown(
                 fontFamily = MonoFont,
                 fontSize = if (thinking) 10.sp else 12.sp,
                 lineHeight = if (thinking) 15.sp else 18.sp,
-                color = if (thinking) TextSecondary else TextPrimary,
+                color = codeAccent ?: (if (thinking) TextSecondary else TextPrimary),
             ),
             inlineCode = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = MonoFont,
                 fontSize = if (thinking) 10.sp else 12.sp,
-                color = if (thinking) TextSecondary else TextPrimary.copy(alpha = 0.95f),
+                color = codeAccent ?: (if (thinking) TextSecondary else TextPrimary.copy(alpha = 0.95f)),
             ),
             ordered = body,
             bullet = body,

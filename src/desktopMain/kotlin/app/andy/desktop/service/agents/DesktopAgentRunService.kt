@@ -2492,6 +2492,15 @@ class DesktopAgentRunService(
         if (promptFlag >= 0 && promptFlag + 1 < argv.size) {
             return argv[promptFlag + 1].trim().takeIf { it.isNotBlank() }
         }
+        // Honor end-of-options so variadic flags like Claude `--mcp-config <configs...>`
+        // can be terminated with `--` before a trailing prompt.
+        val endOfOptions = argv.indexOf("--")
+        if (endOfOptions >= 0) {
+            return argv.drop(endOfOptions + 1)
+                .lastOrNull { it.isNotBlank() && !it.startsWith("-") }
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }
         val flagValueIndexes = argv.indices.filter { index ->
             index > 0 && argv[index - 1].startsWith("-")
         }.toSet()

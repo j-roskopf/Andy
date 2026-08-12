@@ -106,6 +106,24 @@ class ClaudeCodeInteractiveAdapterTest {
         assertTrue("--max-budget-usd" in argv && "12.5" in argv)
         assertTrue("--mcp-config" in argv)
         assertTrue(argv.any { it.contains("http://127.0.0.1:8565/mcp") })
+        // Claude's --mcp-config is variadic; end options before the prompt.
+        assertTrue("--" in argv)
+        assertEquals("do the thing", argv.last())
+        assertEquals("--", argv[argv.lastIndex - 1])
+    }
+
+    @Test
+    fun resumeEndsMcpConfigOptionsBeforeFollowUpPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
+            followUp = "hello",
+        )
+        assertNotNull(argv)
+        assertTrue("--mcp-config" in argv!!)
+        assertEquals("hello", argv.last())
+        assertEquals("--", argv[argv.lastIndex - 1])
     }
 
     @Test

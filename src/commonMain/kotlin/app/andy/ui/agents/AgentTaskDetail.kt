@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +38,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -228,6 +228,7 @@ internal fun AgentTaskDetail(
     val supportsResume = true
     val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
+    val knownAgentTasks by services.agentRuns.tasks.collectAsState()
     val acpSessionLive = services.agentRuns.isLaneLive(task.id)
     val acpTask = task.lane == AgentLaneKind.Acp
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
@@ -554,6 +555,8 @@ internal fun AgentTaskDetail(
                             },
                         activePermissionRequestId = pendingPermissionId,
                         onToolFileOpen = ::openToolFile,
+                        knownTasks = knownAgentTasks,
+                        currentTaskId = task.id,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                     filePreviewPane?.let { preview ->
@@ -677,13 +680,22 @@ internal fun AgentTaskDetail(
             )
         }
         if (awaitingPlanConfirmation && showFollowUpComposer) {
-            PlanReadyBanner(
-                showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
-                onImplement = {
-                    services.agentRuns.updatePlanMode(task.id, false)
-                    services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
-                },
-            )
+            key(task.id) {
+                PlanApprovalCard(
+                    showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
+                    onImplement = {
+                        services.agentRuns.updatePlanMode(task.id, false)
+                        services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
+                    },
+                    onRefine = { feedback ->
+                        if (task.isActive) {
+                            services.agentRuns.queueFollowUp(task.id, feedback)
+                        } else {
+                            services.agentRuns.resume(task.id, feedback)
+                        }
+                    },
+                )
+            }
         }
 
         if (showFollowUpComposer) {
@@ -790,8 +802,8 @@ internal fun AgentTaskDetail(
                             textStyle = LocalTextStyle.current.copy(
                                 color = TextPrimary,
                                 fontFamily = DisplayFont,
-                                fontSize = 13.sp,
-                                lineHeight = 19.sp,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
                             ),
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,

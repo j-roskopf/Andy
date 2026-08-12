@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,12 +33,16 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 
-/** Chat input shell: raised background only. Border appears solely while dragging images. */
+/**
+ * Chat input shell: elevated surface + hairline border (Design DNA composer).
+ * Stronger ring only while dragging images / focus-highlight.
+ */
 @Composable
 internal fun ChatComposerFrame(
     modifier: Modifier = Modifier,
@@ -49,16 +54,18 @@ internal fun ChatComposerFrame(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = AndyShape.Sheet
+    val borderColor = if (highlighted) {
+        Cyan.copy(alpha = 0.42f)
+    } else {
+        Border
+    }
     Column(
         modifier
             .clip(shape)
             .background(AndyColors.SurfaceRaised, shape)
-            .then(
-                if (highlighted) Modifier.border(1.dp, Cyan.copy(alpha = 0.55f), shape)
-                else Modifier,
-            )
+            .border(1.dp, borderColor, shape)
             .padding(contentPadding),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         content = content,
     )
 }
@@ -76,49 +83,51 @@ internal fun ComposerChip(
 ) {
     val contentColor = when {
         !enabled -> AndyColors.TextDisabled
-        selected -> TextPrimary
+        selected -> TextSecondary
         else -> TextSecondary.copy(alpha = 0.70f)
     }
-    // Chips sit on SurfaceRaised; tonal selected tokens are too close, so use a
-    // higher-contrast fill that still stays borderless.
+    // DNA: controls sit on the elevated composer; hover/active are barely lighter fills.
     val container = when {
         !enabled -> Color.Transparent
-        selected -> if (AndyColors.isLight) {
-            Color.Black.copy(alpha = 0.10f)
-        } else {
-            Color.White.copy(alpha = 0.14f)
-        }
+        selected -> Color.White.copy(alpha = if (AndyColors.isLight) 0.08f else 0.07f)
         else -> Color.Transparent
     }
     Row(
         modifier
             .height(AndyLayout.ControlHeightSm)
-            .clip(AndyShape.Interactive)
-            .background(container, AndyShape.Interactive)
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(container, RoundedCornerShape(AndyRadius.Control))
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = AndySpace.Space3),
+            .padding(horizontal = AndySpace.Space2),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         leadingContent?.invoke()
         Text(
             text,
             color = contentColor,
             fontFamily = DisplayFont,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            fontSize = 12.sp,
-            lineHeight = 15.sp,
+            fontWeight = FontWeight.Normal,
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         if (showChevron) {
-            Text(
-                "⌄",
-                color = contentColor.copy(alpha = if (selected) 0.70f else 0.50f),
-                fontSize = 10.sp,
-                lineHeight = 12.sp,
-            )
+            // ⌄ sits optically low in its em-box; pin to a square and nudge up.
+            Box(
+                Modifier.size(12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "⌄",
+                    color = contentColor.copy(alpha = 0.55f),
+                    fontSize = 10.sp,
+                    lineHeight = 10.sp,
+                    modifier = Modifier.offset(y = (-1).dp),
+                )
+            }
         }
     }
 }
@@ -130,14 +139,16 @@ internal fun ComposerToolbarRow(
     trailing: @Composable RowScope.() -> Unit,
 ) {
     Row(
-        modifier.fillMaxWidth(),
+        modifier
+            .fillMaxWidth()
+            .padding(top = AndySpace.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Row(
             Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             content = leading,
         )
         Row(
@@ -162,16 +173,16 @@ internal fun ComposerPlaceholderHint(
     ) {
         Text(
             text,
-            color = if (highlighted) Cyan else TextSecondary.copy(alpha = 0.72f),
+            color = if (highlighted) Cyan else AndyColors.TextDisabled,
             fontFamily = DisplayFont,
-            fontSize = 13.sp,
-            lineHeight = 19.sp,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
             modifier = Modifier.weight(1f).padding(end = AndySpace.Space3),
         )
         if (focusHint != null) {
             Text(
                 focusHint,
-                color = TextSecondary.copy(alpha = 0.42f),
+                color = AndyColors.TextDisabled,
                 fontFamily = DisplayFont,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,

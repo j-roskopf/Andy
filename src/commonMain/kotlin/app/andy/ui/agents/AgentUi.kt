@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -220,12 +221,15 @@ internal fun ChatSessionSidebarRow(
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    val working = isSessionWorking(task)
     Column(
         modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(AndyRadius.Row))
+            .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -236,21 +240,26 @@ internal fun ChatSessionSidebarRow(
                 task.title,
                 color = when {
                     selected || task.unread -> TextPrimary
-                    else -> TextPrimary.copy(alpha = 0.88f)
+                    else -> TextSecondary
                 },
                 fontFamily = DisplayFont,
-                fontWeight = if (task.unread && !selected) FontWeight.SemiBold else FontWeight.Medium,
+                fontWeight = when {
+                    task.unread && !selected -> FontWeight.Medium
+                    selected -> FontWeight.Medium
+                    else -> FontWeight.Normal
+                },
                 fontSize = 13.sp,
+                lineHeight = 18.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             when {
-                isSessionWorking(task) -> ProjectActivityIndicator(12.dp)
+                working -> ProjectActivityIndicator(12.dp)
                 trailing != null -> trailing()
                 else -> Text(
                     formatSessionAge(sessionActivityMillis(task), nowMillis),
-                    color = TextSecondary.copy(alpha = 0.62f),
+                    color = AndyColors.TextTertiary,
                     fontFamily = MonoFont,
                     fontSize = 11.sp,
                     maxLines = 1,
@@ -264,7 +273,7 @@ internal fun ChatSessionSidebarRow(
             AgentPillIcon(task.agent, Modifier.size(12.dp))
             Text(
                 task.agent.label,
-                color = TextSecondary.copy(alpha = 0.72f),
+                color = AndyColors.TextTertiary,
                 fontFamily = DisplayFont,
                 fontSize = 11.sp,
                 maxLines = 1,

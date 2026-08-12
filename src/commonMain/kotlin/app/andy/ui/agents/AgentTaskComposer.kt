@@ -172,8 +172,8 @@ internal fun AgentTaskComposerPane(
                     projectContext?.let { "What should we build in ${it.name}?" } ?: "What can I help you with?",
                     color = TextPrimary,
                     fontFamily = DisplayFont,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 18.sp,
                     textAlign = TextAlign.Center,
                 )
             }
@@ -640,8 +640,8 @@ private fun AgentChatComposer(
                 textStyle = LocalTextStyle.current.copy(
                     color = TextPrimary,
                     fontFamily = DisplayFont,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
                 ),
                 colors = fieldColors(),
                 chromeStyle = FieldChromeStyle.Borderless,

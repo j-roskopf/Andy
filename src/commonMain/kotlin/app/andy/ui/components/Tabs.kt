@@ -73,8 +73,11 @@ internal fun TabBar(
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier
+                        // Match TabBarItem bottom inset so trailing content cannot grow the bar.
                         .padding(bottom = AndySpace.Space2)
+                        .height(28.dp)
                         .horizontalScroll(rememberScrollState()),
+                    contentAlignment = Alignment.CenterEnd,
                 ) {
                     trailing()
                 }
@@ -140,7 +143,7 @@ private fun TabBarItem(
             Modifier
                 .padding(top = 6.dp)
                 .height(2.dp)
-                .width(if (selected) 24.dp else 0.dp)
+                .width(if (selected) 28.dp else 0.dp)
                 .background(if (selected) Rust else Color.Transparent, RoundedCornerShape(AndyRadius.Pill)),
         )
     }

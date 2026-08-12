@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,11 +72,9 @@ internal fun WorkspaceRail(
 ) {
     Column(
         modifier
-            .rightBorder(
-                Border.copy(alpha = if (AndyColors.isLight) 0.20f else 0.44f),
-            )
-            .padding(end = AndySpace.Space4),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+            .rightBorder(Border)
+            .padding(end = AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         content = content,
     )
 }
@@ -123,7 +123,7 @@ internal fun WorkspaceCanvas(
 ) {
     Box(
         modifier
-            .padding(start = AndySpace.Space5),
+            .padding(start = AndySpace.Space4),
         content = content,
     )
 }
@@ -167,6 +167,7 @@ internal fun WorkspaceItemRow(
             .fillMaxWidth()
             .padding(start = if (indented) AndySpace.Space4 else 0.dp)
             .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
             .hoverable(interactionSource)
             .clickable(onClick = onClick)
             .padding(horizontal = AndySpace.Space4, vertical = if (subtitle == null) 11.dp else AndySpace.Space3),

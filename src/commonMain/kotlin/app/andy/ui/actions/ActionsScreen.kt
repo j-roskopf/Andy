@@ -384,12 +384,9 @@ private fun ProjectCockpit(
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val railWidth = AndyLayout.ListWidth
-        val chatMinWidth = 520.dp
+        val chatMinWidth = 620.dp
 
-        Column(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+        Column(Modifier.fillMaxSize()) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 WorkspaceRail(Modifier.width(railWidth).fillMaxHeight()) {
                     ProjectsSidebarHeader(
@@ -488,7 +485,7 @@ private fun ProjectCockpit(
                     }
                 } else {
                     WorkspaceCanvas(Modifier.widthIn(min = chatMinWidth).weight(1f).fillMaxHeight()) {
-                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        Column(Modifier.fillMaxSize()) {
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
@@ -496,19 +493,26 @@ private fun ProjectCockpit(
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
                             },
-                            chatActions = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }?.let { selected ->
-                                {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        AgentHeaderAction("delete", TextSecondary) {
-                                            requestDeleteChat(selected)
-                                        }
-                                        AgentHeaderAction(
-                                            label = if (chatDetailsExpanded) "hide details" else "details",
+                            chatActions = {
+                                val selected = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }
+                                // Keep a fixed trailing slot so Chat ↔ Tasks does not shift the tab bar.
+                                Box(
+                                    Modifier.height(28.dp),
+                                    contentAlignment = Alignment.CenterEnd,
+                                ) {
+                                    if (selected != null) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                                            verticalAlignment = Alignment.CenterVertically,
                                         ) {
-                                            chatDetailsExpanded = !chatDetailsExpanded
+                                            AgentHeaderAction("delete", TextSecondary) {
+                                                requestDeleteChat(selected)
+                                            }
+                                            AgentHeaderAction(
+                                                label = if (chatDetailsExpanded) "hide details" else "details",
+                                            ) {
+                                                chatDetailsExpanded = !chatDetailsExpanded
+                                            }
                                         }
                                     }
                                 }
@@ -870,14 +874,22 @@ private fun ProjectsSidebarHeader(
     onNew: () -> Unit,
 ) {
     val searchVisible = searchExpanded || query.isNotBlank()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp),
-            horizontalArrangement = Arrangement.End,
+                .padding(top = AndySpace.Space2),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                "Projects",
+                color = TextSecondary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 12.sp,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
             SearchGlyphButton(
                 active = searchVisible,
                 onClick = {
@@ -890,6 +902,7 @@ private fun ProjectsSidebarHeader(
             )
             Spacer(Modifier.width(4.dp))
             PlusGlyphButton(onClick = onNew)
+            }
         }
         AnimatedVisibility(
             visible = searchVisible,
@@ -1381,15 +1394,35 @@ private fun ProjectChatToolbar(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
-        Text(
-            project.name,
-            color = TextPrimary,
-            fontFamily = DisplayFont,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 18.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        ) {
+            Text(
+                project.name,
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Text(
+                project.contextDir,
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
         TabBar(
             tabs = ProjectCanvas.entries,
             selected = canvas,

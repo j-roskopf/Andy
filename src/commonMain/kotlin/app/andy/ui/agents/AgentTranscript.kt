@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +38,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -62,9 +64,12 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,6 +81,9 @@ import app.andy.domain.looksLikeFilePath
 import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
+import app.andy.model.AgentPlanEntry
+import app.andy.model.AgentSpawnPresentation
+import app.andy.model.AgentTask
 import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.isRetriableConnectionStallMessage
@@ -84,14 +92,19 @@ import app.andy.model.stripDecisionCheckpointMarkup
 import app.andy.model.AgentSkill
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
+import app.andy.service.OpenAgentTaskRequest
+import app.andy.ui.shell.LocalOpenAgentTask
 import app.andy.ui.components.AndyMarkdownDensity
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.TextField
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
@@ -100,6 +113,7 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -167,6 +181,10 @@ internal fun AgentTranscript(
     autoExpandActivitySections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
+    /** Known Andy chats used to resolve spawn rows to openable task ids. */
+    knownTasks: List<AgentTask> = emptyList(),
+    /** Current chat id so spawn resolution does not link a row back to itself. */
+    currentTaskId: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -413,6 +431,8 @@ internal fun AgentTranscript(
                                 },
                                 onSkillOpen = onSkillOpen,
                                 onToolFileOpen = onToolFileOpen,
+                                knownTasks = knownTasks,
+                                currentTaskId = currentTaskId,
                             )
                             is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
                                 events = item.events,
@@ -436,6 +456,8 @@ internal fun AgentTranscript(
                                     setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
                                 },
                                 onToolFileOpen = onToolFileOpen,
+                                knownTasks = knownTasks,
+                                currentTaskId = currentTaskId,
                             )
                         }
                     }
@@ -600,6 +622,8 @@ private fun TranscriptEvent(
     onThinkingExpandedChange: (String, Boolean) -> Unit,
     onSkillOpen: (AgentSkill) -> Unit,
     onToolFileOpen: (ToolCallFileContent) -> Unit,
+    knownTasks: List<AgentTask> = emptyList(),
+    currentTaskId: String? = null,
 ) {
     when (event) {
         is AgentEvent.SessionStarted -> Unit
@@ -641,29 +665,43 @@ private fun TranscriptEvent(
                 }
             }
         }
-        is AgentEvent.ToolCall -> ToolBlock(
-            expanded = toolExpanded,
-            onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
-            marker = "▸",
-            name = event.toolName,
-            summary = event.summary,
-            detail = event.detail,
-            kind = event.kind,
-            locations = event.locations,
-            images = event.images,
-            color = Cyan,
-            onToolFileOpen = onToolFileOpen,
-        )
-        is AgentEvent.ToolResult -> ToolBlock(
-            expanded = toolExpanded,
-            onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
-            marker = if (event.isError) "✗" else "✓",
-            name = event.toolName,
-            summary = event.summary,
-            detail = event.detail,
-            color = if (event.isError) Red else TextSecondary,
-            onToolFileOpen = onToolFileOpen,
-        )
+        is AgentEvent.ToolCall -> if (AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+            SpawningAgentsBlock(
+                sources = listOf(
+                    AgentSpawnPresentation.SpawnSource(event.toolName, event.summary, event.detail),
+                ),
+                expanded = toolExpanded,
+                onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                knownTasks = knownTasks,
+                currentTaskId = currentTaskId,
+            )
+        } else {
+            ToolBlock(
+                expanded = toolExpanded,
+                onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                marker = "▸",
+                name = event.toolName,
+                summary = event.summary,
+                detail = event.detail,
+                kind = event.kind,
+                locations = event.locations,
+                images = event.images,
+                color = Cyan,
+                onToolFileOpen = onToolFileOpen,
+            )
+        }
+        is AgentEvent.ToolResult -> if (event.isError || !AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+            ToolBlock(
+                expanded = toolExpanded,
+                onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                marker = if (event.isError) "✗" else "✓",
+                name = event.toolName,
+                summary = event.summary,
+                detail = event.detail,
+                color = if (event.isError) Red else TextSecondary,
+                onToolFileOpen = onToolFileOpen,
+            )
+        }
         is AgentEvent.TaskError -> {
             if (event.message.isRetriableConnectionStallMessage()) return
             Text(event.message, color = Red, fontFamily = MonoFont, fontSize = 12.sp, lineHeight = 16.sp)
@@ -674,30 +712,11 @@ private fun TranscriptEvent(
         )
         // The header owns this live status; a transcript row would only add noise.
         is AgentEvent.ContextUsage -> Unit
-        is AgentEvent.PlanUpdate -> Column(
-            Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Plan", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            event.markdown?.takeIf { it.isNotBlank() }?.let { markdown ->
-                ChatMarkdown(markdown, lineHeight = 18.sp)
-            }
-            event.entries.forEach { entry ->
-                val prefix = when (entry.status) {
-                    "file" -> "file"
-                    else -> entry.status
-                }
-                Text("$prefix  ${entry.content}", color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
-            }
-            if (awaitingPlanConfirmation) {
-                Text(
-                    "Waiting for you to continue. Refine below or implement the plan.",
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                )
-            }
-        }
+        is AgentEvent.PlanUpdate -> PlanDocumentBlock(
+            entries = event.entries,
+            markdown = event.markdown,
+            awaitingApproval = awaitingPlanConfirmation,
+        )
         is AgentEvent.ModeChanged -> Text(
             "mode: ${event.modeId}",
             color = TextSecondary,
@@ -740,6 +759,81 @@ private fun TranscriptEvent(
         // Raw adapter diagnostics are retained for debugging but should never become
         // visible chat bubbles. User-facing failures have dedicated event types.
         is AgentEvent.Raw -> Unit
+    }
+}
+
+/** Plan Mode's warm gold status accent — the one punctuation color for the whole card. */
+private val PlanAccent = Yellow
+
+/** Technical-token accent for inline code inside a plan document, distinct from chat's default. */
+private val PlanCodeAccent = Color(0xFF4EC5B4)
+
+/**
+ * A provider's plan, rendered as its own nested document rather than plain transcript text.
+ * The outer gold frame is the one non-neutral border in the transcript; it exists purely to
+ * mark "this needs your attention" without resorting to a banner or a modal.
+ */
+@Composable
+private fun PlanDocumentBlock(
+    entries: List<AgentPlanEntry>,
+    markdown: String?,
+    awaitingApproval: Boolean,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(AndyRadius.Sheet))
+            .background(AndyColors.Neutral900)
+            .border(1.dp, PlanAccent.copy(alpha = 0.85f), RoundedCornerShape(AndyRadius.Sheet))
+            .padding(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("≡", color = PlanAccent, fontFamily = MonoFont, fontSize = 12.sp)
+            Text("Plan", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            if (awaitingApproval) {
+                Text("Awaiting approval", color = TextSecondary, fontSize = 12.sp)
+            }
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(AndyColors.SurfaceRaised, RoundedCornerShape(AndyRadius.Control))
+                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                .padding(AndySpace.Space4),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            markdown?.takeIf { it.isNotBlank() }?.let { text ->
+                ChatMarkdown(text, lineHeight = 20.sp, codeAccent = PlanCodeAccent)
+            }
+            entries.forEachIndexed { index, entry ->
+                PlanEntryLine(index + 1, entry)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanEntryLine(index: Int, entry: AgentPlanEntry) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "$index.",
+            color = TextSecondary.copy(alpha = 0.7f),
+            fontFamily = MonoFont,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            ChatMarkdown(entry.content, lineHeight = 19.sp, codeAccent = PlanCodeAccent)
+            if (entry.status.isNotBlank() && entry.status != "pending") {
+                Text(
+                    entry.status,
+                    color = TextSecondary.copy(alpha = 0.55f),
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+        }
     }
 }
 
@@ -786,17 +880,22 @@ private fun ChatMessageBubble(
     alignEnd: Boolean,
     content: @Composable () -> Unit,
 ) {
-    // User turn: same layout as agent text, just a quieter background.
+    // Traditional chat: user bubbles sit on the trailing edge and cap below full width.
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
-            .clip(RoundedCornerShape(AndyRadius.Control))
-            .background(AndyColors.SurfaceRaised)
-            .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-        content = { content() },
-    )
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(if (alignEnd) 0.85f else 1f)
+                .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
+                .clip(RoundedCornerShape(AndyRadius.Control))
+                .background(AndyColors.SurfaceRaised)
+                .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            content = { content() },
+        )
+    }
 }
 
 @Composable
@@ -1116,7 +1215,30 @@ private fun CompactToolCallsBlock(
     onToolExpandedChange: (String, Boolean) -> Unit,
     onThinkingExpandedChange: (String, Boolean) -> Unit,
     onToolFileOpen: (ToolCallFileContent) -> Unit,
+    knownTasks: List<AgentTask> = emptyList(),
+    currentTaskId: String? = null,
 ) {
+    val spawnSources = AgentSpawnPresentation.spawnSources(events)
+    val spawnOnly = spawnSources.isNotEmpty() &&
+        events.none { it is AgentEvent.ToolResult && it.isError } &&
+        events.all { event ->
+            when (event) {
+                is AgentEvent.ToolCall -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
+                is AgentEvent.ToolResult -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
+                else -> false
+            }
+        }
+    if (spawnOnly) {
+        SpawningAgentsBlock(
+            sources = spawnSources,
+            expanded = expanded,
+            onExpandedChange = onExpandedChange,
+            knownTasks = knownTasks,
+            currentTaskId = currentTaskId,
+        )
+        return
+    }
+
     val hasError = events.any { it is AgentEvent.ToolResult && it.isError }
     val headlineColor = if (hasError) Red.copy(alpha = 0.9f) else TextSecondary
 
@@ -1139,36 +1261,199 @@ private fun CompactToolCallsBlock(
                         expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandActivitySections),
                         onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
                     )
-                    is AgentEvent.ToolCall -> ToolBlock(
-                        expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
-                        onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                        marker = "▸",
-                        name = event.toolName,
-                        summary = event.summary,
-                        detail = event.detail,
-                        kind = event.kind,
-                        locations = event.locations,
-                        images = event.images,
-                        color = Cyan,
-                        indent = TranscriptAsideContentIndent,
-                        onToolFileOpen = onToolFileOpen,
-                    )
-                    is AgentEvent.ToolResult -> ToolBlock(
-                        expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
-                        onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                        marker = if (event.isError) "✗" else "✓",
-                        name = event.toolName,
-                        summary = event.summary,
-                        detail = event.detail,
-                        color = if (event.isError) Red else TextSecondary,
-                        indent = TranscriptAsideContentIndent,
-                        onToolFileOpen = onToolFileOpen,
-                    )
+                    is AgentEvent.ToolCall -> if (AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+                        val source = AgentSpawnPresentation.spawnSources(listOf(event)).singleOrNull()
+                            ?: AgentSpawnPresentation.SpawnSource(event.toolName, event.summary, event.detail)
+                        SpawnedAgentLine(
+                            spawn = AgentSpawnPresentation.parse(source.toolName, source.summary, source.detail),
+                            indent = TranscriptAsideContentIndent,
+                            knownTasks = knownTasks,
+                            currentTaskId = currentTaskId,
+                        )
+                    } else {
+                        ToolBlock(
+                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                            marker = "▸",
+                            name = event.toolName,
+                            summary = event.summary,
+                            detail = event.detail,
+                            kind = event.kind,
+                            locations = event.locations,
+                            images = event.images,
+                            color = Cyan,
+                            indent = TranscriptAsideContentIndent,
+                            onToolFileOpen = onToolFileOpen,
+                        )
+                    }
+                    is AgentEvent.ToolResult -> if (event.isError || !AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+                        ToolBlock(
+                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                            marker = if (event.isError) "✗" else "✓",
+                            name = event.toolName,
+                            summary = event.summary,
+                            detail = event.detail,
+                            color = if (event.isError) Red else TextSecondary,
+                            indent = TranscriptAsideContentIndent,
+                            onToolFileOpen = onToolFileOpen,
+                        )
+                    }
                     else -> Unit
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SpawningAgentsBlock(
+    sources: List<AgentSpawnPresentation.SpawnSource>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    knownTasks: List<AgentTask> = emptyList(),
+    currentTaskId: String? = null,
+) {
+    val count = sources.size.coerceAtLeast(1)
+    TranscriptExpandableRow(
+        headline = AgentSpawnPresentation.spawningHeadline(count),
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        headlineColor = TextSecondary,
+        indent = TranscriptAsideIndent,
+        headlineContent = { SpawningAgentsHeadline(count) },
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            sources.forEach { source ->
+                SpawnedAgentLine(
+                    spawn = AgentSpawnPresentation.parse(source.toolName, source.summary, source.detail),
+                    indent = TranscriptAsideContentIndent,
+                    knownTasks = knownTasks,
+                    currentTaskId = currentTaskId,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpawningAgentsHeadline(count: Int) {
+    if (count <= 1) {
+        Text(
+            "Spawning agent",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        return
+    }
+    Text(
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = TextSecondary)) { append("Spawning ") }
+            withStyle(SpanStyle(color = TextPrimary)) { append("$count") }
+            withStyle(SpanStyle(color = TextSecondary)) { append(" agents") }
+        },
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun SpawnedAgentLine(
+    spawn: AgentSpawnPresentation.Spawn,
+    indent: Dp = TranscriptAsideIndent,
+    knownTasks: List<AgentTask> = emptyList(),
+    currentTaskId: String? = null,
+) {
+    val openAgentTask = LocalOpenAgentTask.current
+    val taskId = remember(spawn, knownTasks, currentTaskId) {
+        AgentSpawnPresentation.resolveTaskId(spawn, knownTasks, excludeTaskId = currentTaskId)
+    }
+    val linkedTask = remember(taskId, knownTasks) { knownTasks.firstOrNull { it.id == taskId } }
+    // Prefer the live Andy chat title so the colored link matches the child inbox row.
+    val displayName = linkedTask?.title?.takeIf { it.isNotBlank() } ?: spawn.name
+    val displayType = spawn.type
+        ?: linkedTask?.agent?.cliName
+    val instructions = spawn.instructions.ifBlank {
+        linkedTask?.prompt?.lineSequence()?.firstOrNull()?.trim().orEmpty()
+    }
+    val nameColor = remember(displayName) { agentSpawnNameColor(displayName) }
+    val muted = TextSecondary.copy(alpha = 0.88f)
+    val suffix = buildString {
+        displayType
+            ?.takeIf { it.isNotBlank() && !it.equals(displayName, ignoreCase = true) }
+            ?.let { append(" ($it)") }
+        if (instructions.isNotBlank()) {
+            append(" with the instructions: ")
+            append(instructions)
+        }
+    }
+    DisableSelection {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = indent),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Created ", color = muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1)
+            Text(
+                displayName,
+                color = nameColor,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .then(
+                        if (taskId != null) {
+                            Modifier
+                                .pointerHoverIcon(PointerIcon.Hand)
+                                .clickable {
+                                    openAgentTask(OpenAgentTaskRequest(taskId, linkedTask?.projectId))
+                                }
+                        } else {
+                            Modifier
+                        },
+                    ),
+            )
+            if (suffix.isNotBlank()) {
+                Text(
+                    suffix,
+                    color = muted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+        }
+    }
+}
+
+/** Stable pastel accents so parallel spawn rows stay distinguishable, Cursor-style. */
+internal fun agentSpawnNameColor(name: String): Color {
+    val palette = listOf(
+        Color(0xFFF07178),
+        Color(0xFFC3A6FF),
+        Color(0xFFE6A35C),
+        Color(0xFF7DCEA0),
+        Color(0xFF6EC6E0),
+        Color(0xFFE8A0BF),
+        Color(0xFFD4C05C),
+        Color(0xFF9BDBB3),
+    )
+    var hash = 0
+    for (ch in name) hash = hash * 31 + ch.code
+    // Unsigned view avoids abs(Int.MIN_VALUE) staying negative and indexing the palette with < 0.
+    return palette[(hash.toUInt() % palette.size.toUInt()).toInt()]
 }
 
 @Composable
@@ -1465,12 +1750,12 @@ internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
     val phrases = toolCalls.map { toolActionPhrase(it.toolName, it.summary, it.kind, it.locations) }
     val readCount = toolCalls.count { it.toolName.lowercase() in ReadToolNames || it.kind == AgentToolKind.Read }
     val commandCount = toolCalls.count { it.toolName.lowercase() in CommandToolNames || it.kind == AgentToolKind.Execute }
-    val agentCount = toolCalls.count { it.toolName.lowercase() in AgentToolNames }
+    val agentCount = toolCalls.count { AgentSpawnPresentation.isAgentSpawn(it.toolName, it.summary, it.detail) }
     val editCount = toolCalls.count {
         it.kind == AgentToolKind.Edit || it.toolName.lowercase() in EditToolNames
     }
     val summaryParts = buildList {
-        if (agentCount > 0) add("ran ${if (agentCount == 1) "an agent" else "$agentCount agents"}")
+        if (agentCount > 0) add(AgentSpawnPresentation.spawningHeadline(agentCount))
         if (readCount > 0) add("read $readCount ${if (readCount == 1) "file" else "files"}")
         if (editCount > 0) add("edited $editCount ${if (editCount == 1) "file" else "files"}")
         if (commandCount > 0) add("ran $commandCount ${if (commandCount == 1) "command" else "commands"}")
@@ -1521,7 +1806,7 @@ private fun toolActionPhrase(
         .orEmpty()
         .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
     return when {
-        lower in AgentToolNames -> "Ran an agent"
+        AgentSpawnPresentation.isAgentSpawn(toolName, summary, "") -> AgentSpawnPresentation.spawningHeadline(1)
         lower in ReadToolNames || kind == AgentToolKind.Read ->
             trimmedSummary.takeIf { it.isNotBlank() }?.let { "Read $it" } ?: "Read file"
         lower in EditToolNames || kind == AgentToolKind.Edit ->
@@ -1537,7 +1822,6 @@ private fun toolActionPhrase(
 private val ReadToolNames = setOf("read", "grep", "glob", "list_dir", "file_read", "get_network_request")
 private val CommandToolNames = setOf("shell", "run_terminal_cmd", "bash", "write", "strreplace")
 private val EditToolNames = setOf("edit", "edit file", "edit_file", "str_replace", "apply_patch", "write")
-private val AgentToolNames = setOf("task", "agent", "mcp_task")
 
 /**
  * Lazy identity for a transcript row. Must stay stable while streamed text / tool
@@ -1599,43 +1883,79 @@ internal fun ConnectionStallBanner(
     }
 }
 
+/**
+ * The approval gate for a finished plan turn: a quiet gold-framed card that sits right above
+ * the composer. Reject and Approve stay separate actions on purpose — refining is a low-emphasis
+ * text action (it just continues the conversation), while implementing is the one that changes
+ * the workspace, so it gets the outlined button treatment.
+ */
 @Composable
-internal fun PlanReadyBanner(
+internal fun PlanApprovalCard(
     showImplementAction: Boolean,
     onImplement: () -> Unit,
+    onRefine: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var feedback by remember { mutableStateOf("") }
     Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(AndyRadius.Sheet))
+            .background(AndyColors.Neutral900)
+            .border(1.dp, PlanAccent.copy(alpha = 0.85f), RoundedCornerShape(AndyRadius.Sheet))
+            .padding(AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
-        Text(
-            "Plan ready",
-            color = Green,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("≡", color = PlanAccent, fontFamily = MonoFont, fontSize = 12.sp)
+            Text("Plan", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("Awaiting approval", color = TextSecondary, fontSize = 12.sp)
+        }
         Text(
             if (showImplementAction) {
-                "This turn finished in plan mode. Nothing was changed. Implement when you're ready, or reply to refine the plan."
+                "This turn finished in plan mode. Nothing was changed. Implement when you're ready, or leave feedback and refine below."
             } else {
-                "This turn finished in plan mode. Nothing was changed. Review the plan in Projects, or reply to refine it here."
+                "This turn finished in plan mode. Nothing was changed. Review the plan in Projects, or leave feedback and refine below."
             },
             color = TextSecondary,
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
-        if (showImplementAction) {
-            Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text(
-                    "Implement plan",
-                    color = Cyan,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .pointerHoverIcon(PointerIcon.Hand)
-                        .clickable(onClick = onImplement)
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                )
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+        TextField(
+            value = feedback,
+            onValueChange = { feedback = it },
+            singleLine = true,
+            placeholder = {
+                Text("Optional feedback if refining…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    val trimmed = feedback.trim()
+                    if (trimmed.isNotEmpty()) {
+                        onRefine(trimmed)
+                        feedback = ""
+                    }
+                },
+                enabled = feedback.isNotBlank(),
+                modifier = Modifier
+                    .height(AndyLayout.ControlHeightMd)
+                    .defaultMinSize(minHeight = AndyLayout.ControlHeightMd),
+                contentPadding = PaddingValues(horizontal = AndySpace.Space5, vertical = 0.dp),
+            ) {
+                Text("Refine", fontSize = 12.sp)
+            }
+            if (showImplementAction) {
+                OutlinedButton(onClick = onImplement) {
+                    Text("Implement plan", fontSize = 12.sp)
+                }
             }
         }
     }
