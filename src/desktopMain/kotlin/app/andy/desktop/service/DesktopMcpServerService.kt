@@ -256,7 +256,11 @@ class DesktopMcpServerService(
 
     override fun getSnippet(clientName: String, port: Int): String {
         val client = McpClientConfig.ClientType.entries.firstOrNull { it.label == clientName } ?: McpClientConfig.ClientType.ClaudeCode
-        return McpClientConfig.getSnippet(client, port)
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
+        return McpClientConfig.getSnippet(client, port, bearerToken = bearer)
     }
 
     override fun getClients(): List<String> {

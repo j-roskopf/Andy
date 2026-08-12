@@ -88,10 +88,12 @@ class WebPushService(
         }
     }
 
-    suspend fun sendNeedsInput(taskId: String, title: String) {
+    suspend fun sendNeedsInput(taskId: String, @Suppress("UNUSED_PARAMETER") title: String) {
+        // Keep the notification body generic — untitled chats use prompt text as
+        // title, which must not appear on lock screens / notification centers.
         val payload = buildJsonObject {
             put("title", "Andy")
-            put("body", "Andy: ${title.ifBlank { taskId }} needs your input")
+            put("body", "Andy needs your input.")
             put("taskId", taskId)
             put("url", "/#/chat/$taskId")
         }.toString()

@@ -163,6 +163,20 @@ class DesktopWorkspaceStore(
 
     override suspend fun save(state: WorkspaceState) = withContext(Dispatchers.IO) {
         file.parentFile.mkdirs()
+        // Daemon-owned VAPID keys may be generated after the GUI loaded ShellState.
+        // Preserve non-blank on-disk keys when the incoming state still has empties so a
+        // later GUI workspace save does not wipe them and break existing push subscriptions.
+        val onDisk = Properties().apply {
+            if (file.exists()) {
+                file.inputStream().use { load(it) }
+            }
+        }
+        val vapidPublic = state.vapidPublicKey.ifBlank {
+            onDisk.getProperty("vapidPublicKey").orEmpty()
+        }
+        val vapidPrivate = state.vapidPrivateKey.ifBlank {
+            onDisk.getProperty("vapidPrivateKey").orEmpty()
+        }
         val props = Properties().apply {
             setProperty("selectedSdkPath", state.selectedSdkPath.orEmpty())
             setProperty("selectedDeviceSerial", state.selectedDeviceSerial.orEmpty())
@@ -179,8 +193,8 @@ class DesktopWorkspaceStore(
             setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
             setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
             setProperty("networkAccessToken", state.networkAccessToken)
-            setProperty("vapidPublicKey", state.vapidPublicKey)
-            setProperty("vapidPrivateKey", state.vapidPrivateKey)
+            setProperty("vapidPublicKey", vapidPublic)
+            setProperty("vapidPrivateKey", vapidPrivate)
             setProperty("tintId", state.tintId)
             setProperty("surfaceModeId", state.surfaceModeId)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)

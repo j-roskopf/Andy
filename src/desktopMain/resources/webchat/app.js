@@ -59,13 +59,37 @@
       headers: authHeaders(options.headers || {}),
     });
     if (res.status === 401) {
-      forgetToken("Session expired — enter the current access token.");
+      forgetToken("Session expired — enter the current access token.").catch(() => {});
       throw new Error("unauthorized");
     }
     return res;
   }
 
-  function forgetToken(message) {
+  async function disablePushSubscription() {
+    if (!canUseWebPush()) return;
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager?.getSubscription();
+      if (!sub) return;
+      const endpoint = sub.endpoint;
+      // Revoke server-side while the bearer token is still available.
+      if (token) {
+        await fetch("/api/push/subscribe", {
+          method: "DELETE",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ endpoint }),
+        }).catch(() => {});
+      }
+      await sub.unsubscribe().catch(() => {});
+      const btn = $("btn-notify");
+      if (btn) btn.textContent = "Enable notifications";
+    } catch (_) {
+      // Best-effort — still clear local credentials below.
+    }
+  }
+
+  async function forgetToken(message) {
+    await disablePushSubscription();
     localStorage.removeItem(TOKEN_KEY);
     token = "";
     closeSocket();
@@ -389,7 +413,7 @@
     };
     socket.onclose = (ev) => {
       if (ev.code === 4401 || ev.code === 1008) {
-        forgetToken("Access token rejected. Enter the current token.");
+        forgetToken("Access token rejected. Enter the current token.").catch(() => {});
         return;
       }
       if (currentChatId === id) {
@@ -784,7 +808,7 @@
 
   $("btn-forget").addEventListener("click", () => {
     if (confirm("Log out of Andy on this device? You'll need the access token again.")) {
-      forgetToken();
+      forgetToken().catch(() => {});
     }
   });
   $("btn-new").addEventListener("click", () => { location.hash = "#/new"; });

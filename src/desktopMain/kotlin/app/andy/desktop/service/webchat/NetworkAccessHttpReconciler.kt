@@ -86,6 +86,22 @@ internal class NetworkAccessHttpReconciler(
                         "andyd: WARNING Network Access HTTP rebind failed " +
                             "(${result.stderr.ifBlank { result.stdout }})",
                     )
+                    // applyNetworkAccessHttpBind always stops first, so a failed start
+                    // leaves HTTP down. Restore the last good bind when possible.
+                    val restored = runCatching { applyNetworkAccessHttpBind(mcp, applied) }
+                        .getOrElse { error ->
+                            error.printStackTrace()
+                            app.andy.service.CommandResult.failure(error.message ?: "restore failed")
+                        }
+                    if (!restored.isSuccess) {
+                        System.err.println(
+                            "andyd: WARNING Network Access HTTP restore also failed " +
+                                "(${restored.stderr.ifBlank { restored.stdout }})",
+                        )
+                        // Sentinel so a later revert to the previous config still retries
+                        // instead of matching `applied` and skipping forever.
+                        applied = applied.copy(port = Int.MIN_VALUE)
+                    }
                 }
                 onApplied(next, result)
             }
