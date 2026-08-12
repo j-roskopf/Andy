@@ -3,6 +3,7 @@ package app.andy.terminal
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -197,6 +198,42 @@ class TerminalFrameLimiterTest {
         // With the gate open, a subsequent keystroke echo is not delayed at all.
         gate.requestRedraw()
         assertEquals(2, gate.redraws.get())
+        loop.cancel()
+    }
+
+    @Test
+    fun `flushNow late in an already-open window still buys a fresh render window`() = runBlocking {
+        // Reproduces the "typed and it took a beat to show up" bug. flushNow() is a no-op when
+        // the gate is already open (the common case: gateLoop reopens it every cycle on its
+        // own), so a keystroke landing late in that open window used to get only whatever
+        // sliver of time was left before gateLoop's own timer closed it again - which can be
+        // shorter than the PTY round-trip needs, stranding the echo for a full closed phase.
+        // Wide enough that the blocking poll in awaitTrue (2ms granularity) and ordinary
+        // coroutine dispatch jitter can't accidentally push the flush into the wrong phase.
+        val gate = FakeRedrawGate()
+        val intervalMs = 400L
+        val renderWindowMs = 200L
+        val limiter = limiter(gate, intervalMs = intervalMs, renderWindowMs = renderWindowMs)
+        val loop = driveLoop(limiter)
+
+        // Ride out one full closed phase, then catch the *start* of an open phase.
+        awaitTrue("gate never closed") { gate.isGated }
+        awaitTrue("gate never reopened") { !gate.isGated }
+
+        // Flush late in that open window - only a sliver of it (~25%) is left.
+        delay(renderWindowMs * 3 / 4)
+        limiter.flushNow()
+        assertFalse(gate.isGated, "flushNow must leave the gate open")
+
+        // The echo doesn't land immediately (simulating the PTY round-trip). This lands well
+        // past where the *original* open window would have ended (and deep into what would have
+        // been the next closed phase), so the gate can only still be open because the late flush
+        // bought a fresh render window rather than just the leftover sliver.
+        delay(renderWindowMs / 2)
+        gate.requestRedraw()
+        assertTrue(!gate.isGated, "gate closed before a fresh render window elapsed after flushNow")
+        assertEquals(1, gate.redraws.get(), "late-arriving echo was dropped by an early re-close")
+
         loop.cancel()
     }
 

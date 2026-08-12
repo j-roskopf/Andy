@@ -219,6 +219,7 @@ internal fun ChatSessionSidebarRow(
     nowMillis: Long,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    subtitle: String = task.agent.label,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val working = isSessionWorking(task)
@@ -272,7 +273,7 @@ internal fun ChatSessionSidebarRow(
         ) {
             AgentPillIcon(task.agent, Modifier.size(12.dp))
             Text(
-                task.agent.label,
+                subtitle,
                 color = AndyColors.TextTertiary,
                 fontFamily = DisplayFont,
                 fontSize = 11.sp,

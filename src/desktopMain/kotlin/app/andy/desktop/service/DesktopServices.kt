@@ -32,6 +32,7 @@ import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.desktop.service.voice.DesktopVoiceDictationService
 import app.andy.desktop.service.voice.DesktopVoiceSetupService
 import app.andy.desktop.service.webchat.NetworkAccessHttpReconciler
+import app.andy.desktop.service.webchat.resolveHost
 import app.andy.desktop.service.webchat.toNetworkAccessBindConfig
 import app.andy.model.AgentKind
 import app.andy.model.toTerminalAppearance
@@ -263,10 +264,11 @@ fun createDaemonRuntime(
     // HTTP is optional for agent CLIs; unix socket is the andyd control plane.
     // Use a blocking bind (no nested runBlocking / Dispatchers.IO) — that path hung
     // under Gradle JavaExec and killed the daemon via a 30s TimeoutException.
-    // Bind host follows Network Access (0.0.0.0 when enabled, else loopback).
+    // Bind host follows Network Access (0.0.0.0 only when enabled with Tailscale-only
+    // off; otherwise loopback — Tailscale-only mode requires `tailscale serve`).
     val initialWorkspace = runBlocking { store.load() }
     val bindConfig = initialWorkspace.toNetworkAccessBindConfig()
-    val bindHost = if (bindConfig.enabled) "0.0.0.0" else "127.0.0.1"
+    val bindHost = bindConfig.resolveHost()
     System.err.println("andyd: binding HTTP MCP on $bindHost:${bindConfig.port}")
     val httpResult = runCatching { mcp.startHttpBlocking(bindConfig.port) }
         .getOrElse { error ->
@@ -291,7 +293,7 @@ fun createDaemonRuntime(
         mcp = mcp,
         scope = daemonScope,
         onApplied = { next, result ->
-            val host = if (next.enabled) "0.0.0.0" else "127.0.0.1"
+            val host = next.resolveHost()
             if (result.isSuccess) {
                 System.err.println("andyd: MCP HTTP rebound on $host:${next.port}")
             }

@@ -887,7 +887,7 @@ private fun ChatMessageBubble(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(if (alignEnd) 0.85f else 1f)
+                .then(if (alignEnd) Modifier.widthIn(max = 640.dp) else Modifier.fillMaxWidth())
                 .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
                 .clip(RoundedCornerShape(AndyRadius.Control))
                 .background(AndyColors.SurfaceRaised)

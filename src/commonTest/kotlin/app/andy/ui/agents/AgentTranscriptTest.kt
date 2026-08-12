@@ -333,6 +333,42 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun coalesceCollapsesConsecutivePlanUpdatesIntoLatestSnapshot() {
+        val coalesced = coalesceAcpTranscriptEvents(
+            listOf(
+                AgentEvent.PlanUpdate(
+                    atMillis = 1,
+                    entries = listOf(AgentPlanEntry("Add resolveHost()", "pending")),
+                ),
+                AgentEvent.PlanUpdate(
+                    atMillis = 2,
+                    entries = listOf(
+                        AgentPlanEntry("Add resolveHost()", "pending"),
+                        AgentPlanEntry("Update suggestNetworkAccessHosts()", "pending"),
+                    ),
+                ),
+            ),
+        )
+
+        val plan = assertIs<AgentEvent.PlanUpdate>(coalesced.single())
+        assertEquals(2, plan.entries.size)
+        assertEquals("Update suggestNetworkAccessHosts()", plan.entries.last().content)
+    }
+
+    @Test
+    fun coalesceKeepsPlanUpdatesSeparateAcrossABarrier() {
+        val coalesced = coalesceAcpTranscriptEvents(
+            listOf(
+                AgentEvent.PlanUpdate(atMillis = 1, entries = listOf(AgentPlanEntry("First plan", "pending"))),
+                AgentEvent.UserMessage(atMillis = 2, text = "Implement the plan."),
+                AgentEvent.PlanUpdate(atMillis = 3, entries = listOf(AgentPlanEntry("Second plan", "pending"))),
+            ),
+        )
+
+        assertEquals(2, coalesced.filterIsInstance<AgentEvent.PlanUpdate>().size)
+    }
+
+    @Test
     fun acpWhitespaceRawChunksRecoverAndCoalesceIntoAssistantResponse() {
         val events = listOf(
             AgentEvent.AssistantText(atMillis = 1, text = "In Minneapolis today (Monday, August", isStreamDelta = true),

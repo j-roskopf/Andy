@@ -29,7 +29,10 @@ val AgentKind.acpSupported: Boolean
         AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
-/** The default lane for newly-created tasks; persisted tasks never re-derive this value. */
+/**
+ * Lane for newly-created tasks; persisted tasks never re-derive this value.
+ * ACP-capable providers always stay on [AgentLaneKind.Acp] (no terminal demotion).
+ */
 fun AgentKind.defaultLane(): AgentLaneKind =
     if (acpSupported) AgentLaneKind.Acp else AgentLaneKind.Terminal
 
@@ -1404,8 +1407,24 @@ fun coalesceAgentStreamDeltas(
             mergeStreamDelta(transcript, event)
         event is AgentEvent.Thinking && event.isStreamDelta ->
             mergeStreamDelta(transcript, event)
+        event is AgentEvent.PlanUpdate -> mergePlanUpdate(transcript, event)
         else -> transcript + event
     }
+}
+
+/**
+ * A provider re-sends its plan in full every time it revises one, so back-to-back
+ * [AgentEvent.PlanUpdate]s are snapshots of the same plan rather than distinct turns.
+ * Replace the previous snapshot in place so the transcript shows only the latest.
+ */
+private fun mergePlanUpdate(
+    transcript: List<AgentEvent>,
+    event: AgentEvent.PlanUpdate,
+): List<AgentEvent> {
+    val index = transcript.indices.lastOrNull { !transcript[it].isStreamCoalesceTransparent() }
+        ?: return transcript + event
+    if (transcript[index] !is AgentEvent.PlanUpdate) return transcript + event
+    return transcript.toMutableList().also { it[index] = event }
 }
 
 private fun mergeStreamDelta(

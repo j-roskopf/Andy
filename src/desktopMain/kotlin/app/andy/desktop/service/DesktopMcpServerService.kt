@@ -45,6 +45,8 @@ import app.andy.desktop.service.webchat.WebPushService
 import app.andy.desktop.service.webchat.generateNetworkAccessTokenBytes
 import app.andy.desktop.service.webchat.installWebChatRoutes
 import app.andy.desktop.service.webchat.remotePeerAddress
+import app.andy.desktop.service.webchat.resolveHost
+import app.andy.desktop.service.webchat.toNetworkAccessBindConfig
 
 class DesktopMcpServerService(
     private val devices: DeviceService,
@@ -91,15 +93,15 @@ class DesktopMcpServerService(
     }
 
     override fun suggestNetworkAccessHosts(): List<String> {
-        val hosts = resolveNetworkAccessHosts()
         val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
             .getOrElse { WorkspaceState() }
         if (!workspace.networkAccessEnabled || !workspace.networkAccessTailscaleOnly) {
-            return hosts
+            return resolveNetworkAccessHosts()
         }
-        val tailscale = hosts.filter { app.andy.desktop.service.proxy.isCarrierGradeNat(it) }
-        // Prefer Tailscale URLs when the filter is on; fall back so Settings still shows something.
-        return tailscale.ifEmpty { hosts }
+        // Tailscale-only mode binds loopback — nothing listens on the Tailscale/LAN
+        // interface directly. Remote reach is only via `tailscale serve` (forwards to
+        // 127.0.0.1 here), so that's the only host actually reachable from this Mac.
+        return listOf("127.0.0.1")
     }
 
     override fun generateNetworkAccessToken(): String = generateNetworkAccessTokenBytes()
@@ -149,7 +151,7 @@ class DesktopMcpServerService(
     fun startHttpBlocking(port: Int): CommandResult = synchronized(httpLock) {
         val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
             .getOrElse { WorkspaceState() }
-        val host = if (workspace.networkAccessEnabled) "0.0.0.0" else "127.0.0.1"
+        val host = workspace.toNetworkAccessBindConfig().resolveHost()
 
         if (serverEngine != null) {
             if (runningPort == port && runningHost == host) {

@@ -63,8 +63,33 @@ This starts MCP on:
 ### Network Access (optional web client)
 
 Off by default. In Settings → MCP → Network Access, enable “Allow access from
-other devices on my network” to bind the HTTP listener to `0.0.0.0` and serve a
-small static web chat UI at `/` (ACP-lane chats only).
+other devices on my network” to serve a small static web chat UI at `/`
+(ACP-lane chats only). There are two modes, controlled by the "Tailscale only"
+toggle:
+
+**Tailscale only (default on):** the HTTP listener binds to `127.0.0.1` —
+nothing is exposed on your LAN or Tailscale interface directly. The *only* way
+to reach it from another device is through `tailscale serve`, which forwards
+tailnet traffic to `127.0.0.1` on this host:
+
+```sh
+# with Network Access on and MCP port 8565 (or your configured port):
+tailscale serve --bg 8565
+# then open the https://…ts.net URL Tailscale prints (Andy access token still required)
+```
+
+Because `tailscale serve` requires the backend on loopback anyway, this mode
+gets HTTPS for free — no separate step needed for Web Push or iOS
+"Add to Home Screen". Run the `tailscale serve` command once per boot; Settings
+shows a "Copy command" button.
+
+**LAN (Tailscale-only off):** the HTTP listener binds to `0.0.0.0`, so any
+device that can reach this Mac's IP may attempt access (still gated by the
+token). This is a real TCP listener on your LAN — prefer Tailscale-only unless
+you specifically need plain-network access without Tailscale. Andy does not
+terminate TLS in this mode either; front it with `tailscale serve` (works the
+same way) or your own reverse proxy (Caddy, nginx, …) pointing at
+`127.0.0.1:<mcpServerPort>` if you need HTTPS.
 
 **Auth:** When Network Access is on, the shared access token is required for
 every non-public route — including loopback. That way Tailscale Serve (or any
@@ -73,27 +98,11 @@ localhost reverse proxy) cannot bypass the token. Use
 stay public so the login screen can load. When Network Access is off, loopback
 stays open without a token so local vendor CLIs keep working.
 
-**Tailscale only (default on):** Non-loopback peers outside Tailscale CGNAT
-(`100.64/10`) get `403`. Turn this off in Settings if you need plain LAN or
-another VPN. Standalone `andyd` watches `~/.andy/workspace.properties` and
-rebinds when these settings change; regenerating the token drops live
-WebSockets.
+Standalone `andyd` watches `~/.andy/workspace.properties` and rebinds when
+these settings change; regenerating the token drops live WebSockets.
 
 Turning Network Access on exposes the full MCP tool surface (not just chat) to
-anyone who has the token. Prefer the Tailscale `http://100.x:<port>/` URL on
-your phone — WireGuard already encrypts that path. Andy does not terminate TLS.
-
-For Web Push / iOS home-screen install (browsers require HTTPS), terminate TLS
-in front of andyd — for example with Tailscale Serve:
-
-```sh
-# with Network Access on and MCP port 8565 (or your configured port):
-tailscale serve --bg 8565
-# then open the https://…ts.net URL Tailscale prints (Andy access token still required)
-```
-
-Any reverse proxy (Caddy, nginx, …) pointing at `127.0.0.1:<mcpServerPort>`
-works the same way; the token is still enforced.
+anyone who has the token.
 
 This is additive to SSH + `andy tui` / `andy attach`.
 
@@ -311,7 +320,7 @@ In addition to the existing device tools:
 
 ## Agent transport lanes
 
-Claude Code, Codex, Cursor, OpenCode, and Pi default to the ACP stdio lane. ACP
+Claude Code, Codex, Cursor, OpenCode, and Pi always use the ACP stdio lane. ACP
 sessions use the official Kotlin ACP client, persist structured JSONL transcripts
 under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep their ACP session id
 separate from vendor CLI session ids. The GUI renders those events with the
@@ -319,7 +328,7 @@ structured transcript surface; the CLI uses the same event stream via
 `chat.subscribe` in `andy attach`. Both can continue a stored session after restart.
 
 Antigravity, Hermes, and OpenClaw remain on the terminal/tmux lane (`andy attach`
-→ `tmux -L andy`). If ACP spawn or initialization fails, Andy records the
-diagnostic and falls back to the existing terminal lane for that task. Override
-routing for a rollout with `ANDY_AGENT_LANE=terminal|acp` or the provider-specific
-`ANDY_AGENT_LANE_<AGENT_KIND>` variable.
+→ `tmux -L andy`). If ACP spawn or initialization fails for an ACP-capable
+provider, the task ends in error and stays on the ACP lane — Andy does not demote
+it to terminal/tmux. `ANDY_AGENT_LANE=terminal|acp` (or
+`ANDY_AGENT_LANE_<AGENT_KIND>`) remains a test/rollout override only.

@@ -1287,10 +1287,18 @@ class DesktopAgentRunService(
                 // PlanReady "Implement" flips plan mode then resumes; wait for setMode first.
                 acpPlanModeSyncJobs.remove(taskId)?.join()
                 val success = runAcpFollowUp(taskId, acpFollowUp, imagePaths)
-                if (!success && currentTask(taskId)?.lane == AgentLaneKind.Acp) {
-                    updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, finishedAtMillis = null) }
-                    persist()
-                    resume(taskId, followUp, imagePaths, selectedSkills, contextBundleIds, provenance)
+                // ACP-capable providers stay on ACP. A failed resume must not demote to terminal.
+                if (!success) {
+                    val current = currentTask(taskId) ?: return@launch
+                    if (current.status == AgentStatus.Working || current.status == null) {
+                        finishTask(
+                            taskId = taskId,
+                            status = AgentStatus.Error,
+                            exitCode = null,
+                            error = current.errorMessage ?: "ACP session failed to resume",
+                            statusConfident = true,
+                        )
+                    }
                 }
             }
             return
@@ -2350,11 +2358,15 @@ class DesktopAgentRunService(
             )
         }.getOrElse { error ->
             appendLaunchDiagnostics(taskId, "acpStartFailed=${error.message}\n")
-            // ACP is an opportunistic lane. A failed spawn/initialize returns to the
-            // existing terminal path while preserving the same task and prompt.
-            updateTask(taskId) { it.copy(lane = AgentLaneKind.Terminal, status = null, startedAtMillis = null, finishedAtMillis = null) }
-            persist()
-            runProcess(taskId, handle, argvBuilder, writeAfterStart, onTerminalStarted)
+            // ACP-capable providers stay on ACP. Surface spawn/init failures instead of
+            // silently demoting the task to the terminal lane.
+            finishTask(
+                taskId = taskId,
+                status = AgentStatus.Error,
+                exitCode = null,
+                error = "ACP failed to start: ${error.message ?: error::class.java.simpleName}",
+                statusConfident = true,
+            )
             return
         }
         onTerminalStarted()
@@ -2386,7 +2398,15 @@ class DesktopAgentRunService(
                 runCatching {
                     acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
                 }.getOrElse {
+                    val message = "ACP failed to resume: ${it.message ?: it::class.java.simpleName}"
                     appendLaunchDiagnostics(taskId, "acpResumeFailed=${it.message}\n")
+                    finishTask(
+                        taskId = taskId,
+                        status = AgentStatus.Error,
+                        exitCode = null,
+                        error = message,
+                        statusConfident = true,
+                    )
                     return false
                 }
             }
@@ -2788,6 +2808,7 @@ class DesktopAgentRunService(
             } else {
                 task.copy(
                     status = AgentStatus.Blocked,
+                    statusConfident = true,
                     userInputRequest = request,
                     exitCode = exitCode,
                     finishedAtMillis = System.currentTimeMillis(),
@@ -3250,6 +3271,8 @@ class DesktopAgentRunService(
     }
 
     private fun resolveLane(agent: AgentKind): AgentLaneKind {
+        // Env override is for tests/rollout only. Production leaves it unset so
+        // ACP-capable providers always resolve to Acp via defaultLane().
         val suffix = agent.name.uppercase()
         val configured = System.getenv("ANDY_AGENT_LANE_$suffix")
             ?: System.getenv("ANDY_AGENT_LANE")
