@@ -88,17 +88,16 @@ object AgentSpawnPresentation {
      * even when ACP/MCP surfaces input and output as separate transcript events.
      */
     fun spawnSources(events: List<AgentEvent>): List<SpawnSource> {
+        // Failed spawn results stay visible as transcript error rows; they must not be absorbed
+        // into an optimistic spawn row as if they had succeeded.
         val results = events.filterIsInstance<AgentEvent.ToolResult>()
-            .filter { isAgentSpawn(it.toolName, it.summary, it.detail) }
+            .filter { !it.isError && isAgentSpawn(it.toolName, it.summary, it.detail) }
             .toMutableList()
         return events.filterIsInstance<AgentEvent.ToolCall>()
             .filter { isAgentSpawn(it.toolName, it.summary, it.detail) }
             .map { call ->
-                val resultIndex = results.indexOfFirst { result ->
-                    result.toolName.equals(call.toolName, ignoreCase = true) ||
-                        looksLikeTaskId(extractQuotedField(result.detail, "id", "taskId") ?: "")
-                }
-                val result = if (resultIndex >= 0) results.removeAt(resultIndex) else null
+                val resultIndex = pairResultIndex(call, results)
+                val result = if (resultIndex != null) results.removeAt(resultIndex) else null
                 SpawnSource(
                     toolName = call.toolName,
                     summary = listOf(call.summary, result?.summary.orEmpty())
@@ -109,6 +108,31 @@ object AgentSpawnPresentation {
                         .joinToString("\n"),
                 )
             }
+    }
+
+    /**
+     * Chooses which unmatched result belongs to [call], or null when the pairing is ambiguous.
+     *
+     * A tool-name-only match is only trusted when it is the sole result for that name. When
+     * several same-named spawn calls are outstanding, results can finish out of order, so picking
+     * by arrival order risks cross-linking each spawn row to the wrong child chat. In that case
+     * the row is left unpaired and [resolveTaskId] falls back to title/instructions matching,
+     * which is correct rather than crossed.
+     */
+    private fun pairResultIndex(call: AgentEvent.ToolCall, results: List<AgentEvent.ToolResult>): Int? {
+        val nameMatches = results.indices.filter { index ->
+            results[index].toolName.equals(call.toolName, ignoreCase = true)
+        }
+        if (nameMatches.size == 1) return nameMatches.single()
+        // Without a name match, an id-bearing result is still a strong signal when it is the only
+        // one outstanding (e.g. the provider omitted the result's tool name).
+        if (nameMatches.isEmpty()) {
+            val idMatches = results.indices.filter { index ->
+                looksLikeTaskId(extractQuotedField(results[index].detail, "id", "taskId") ?: "")
+            }
+            if (idMatches.size == 1) return idMatches.single()
+        }
+        return null
     }
 
     /** Match a spawned row to an Andy chat when the tool result omitted / lost the id. */

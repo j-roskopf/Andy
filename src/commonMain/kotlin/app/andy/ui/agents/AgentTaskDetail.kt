@@ -38,6 +38,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -679,20 +680,22 @@ internal fun AgentTaskDetail(
             )
         }
         if (awaitingPlanConfirmation && showFollowUpComposer) {
-            PlanApprovalCard(
-                showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
-                onImplement = {
-                    services.agentRuns.updatePlanMode(task.id, false)
-                    services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
-                },
-                onRefine = { feedback ->
-                    if (task.isActive) {
-                        services.agentRuns.queueFollowUp(task.id, feedback)
-                    } else {
-                        services.agentRuns.resume(task.id, feedback)
-                    }
-                },
-            )
+            key(task.id) {
+                PlanApprovalCard(
+                    showImplementAction = task.workflowStage != ProjectWorkflowStage.Spec,
+                    onImplement = {
+                        services.agentRuns.updatePlanMode(task.id, false)
+                        services.agentRuns.resume(task.id, IMPLEMENT_PLAN_PROMPT)
+                    },
+                    onRefine = { feedback ->
+                        if (task.isActive) {
+                            services.agentRuns.queueFollowUp(task.id, feedback)
+                        } else {
+                            services.agentRuns.resume(task.id, feedback)
+                        }
+                    },
+                )
+            }
         }
 
         if (showFollowUpComposer) {

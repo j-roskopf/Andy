@@ -94,7 +94,6 @@ import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.shell.LocalOpenAgentTask
-import kotlin.math.abs
 import app.andy.ui.components.AndyMarkdownDensity
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
@@ -691,7 +690,7 @@ private fun TranscriptEvent(
                 onToolFileOpen = onToolFileOpen,
             )
         }
-        is AgentEvent.ToolResult -> if (!AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+        is AgentEvent.ToolResult -> if (event.isError || !AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
             ToolBlock(
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
@@ -1220,13 +1219,15 @@ private fun CompactToolCallsBlock(
     currentTaskId: String? = null,
 ) {
     val spawnSources = AgentSpawnPresentation.spawnSources(events)
-    val spawnOnly = spawnSources.isNotEmpty() && events.all { event ->
-        when (event) {
-            is AgentEvent.ToolCall -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
-            is AgentEvent.ToolResult -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
-            else -> false
+    val spawnOnly = spawnSources.isNotEmpty() &&
+        events.none { it is AgentEvent.ToolResult && it.isError } &&
+        events.all { event ->
+            when (event) {
+                is AgentEvent.ToolCall -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
+                is AgentEvent.ToolResult -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
+                else -> false
+            }
         }
-    }
     if (spawnOnly) {
         SpawningAgentsBlock(
             sources = spawnSources,
@@ -1285,7 +1286,7 @@ private fun CompactToolCallsBlock(
                             onToolFileOpen = onToolFileOpen,
                         )
                     }
-                    is AgentEvent.ToolResult -> if (!AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+                    is AgentEvent.ToolResult -> if (event.isError || !AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
                         ToolBlock(
                             expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
@@ -1451,7 +1452,8 @@ internal fun agentSpawnNameColor(name: String): Color {
     )
     var hash = 0
     for (ch in name) hash = hash * 31 + ch.code
-    return palette[abs(hash) % palette.size]
+    // Unsigned view avoids abs(Int.MIN_VALUE) staying negative and indexing the palette with < 0.
+    return palette[(hash.toUInt() % palette.size.toUInt()).toInt()]
 }
 
 @Composable
