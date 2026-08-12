@@ -50,6 +50,12 @@ class DesktopWorkspaceStore(
             proxyUpstreamTrustedCaPath = props.getProperty("proxyUpstreamTrustedCaPath")?.takeIf { it.isNotBlank() },
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
+            networkAccessEnabled = props.getProperty("networkAccessEnabled")?.toBooleanStrictOrNull() ?: false,
+            networkAccessTailscaleOnly =
+                props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
+            networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
+            vapidPublicKey = props.getProperty("vapidPublicKey").orEmpty(),
+            vapidPrivateKey = props.getProperty("vapidPrivateKey").orEmpty(),
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
@@ -170,6 +176,11 @@ class DesktopWorkspaceStore(
             setProperty("proxyUpstreamTrustedCaPath", state.proxyUpstreamTrustedCaPath.orEmpty())
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
+            setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
+            setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
+            setProperty("networkAccessToken", state.networkAccessToken)
+            setProperty("vapidPublicKey", state.vapidPublicKey)
+            setProperty("vapidPrivateKey", state.vapidPrivateKey)
             setProperty("tintId", state.tintId)
             setProperty("surfaceModeId", state.surfaceModeId)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)

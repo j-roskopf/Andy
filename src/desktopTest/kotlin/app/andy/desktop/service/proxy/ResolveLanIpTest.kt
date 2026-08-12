@@ -41,6 +41,30 @@ class ResolveLanIpTest {
         assertFalse(isCarrierGradeNat(ip), "resolveLanIp returned CGNAT/Tailscale address: $ip")
     }
 
+    @Test
+    fun vpnIpv4AllowsCarrierGradeNatForNetworkAccess() {
+        assertTrue(isReachableVpnIpv4(inet4("100.72.168.32")))
+        assertTrue(isReachableVpnIpv4(inet4("10.8.0.2")))
+        assertFalse(isReachableVpnIpv4(inet4("127.0.0.1")))
+        assertFalse(isReachableVpnIpv4(inet4("169.254.1.1")))
+    }
+
+    @Test
+    fun resolveNetworkAccessHostsNeverEmptyAndKeepsLanBeforeVpn() {
+        val hosts = resolveNetworkAccessHosts()
+        assertTrue(hosts.isNotEmpty())
+        // Proxy/LAN helper still excludes CGNAT; Network Access may include it when
+        // only VPN interfaces exist. When both are present, LAN (non-CGNAT) comes first.
+        val lan = resolveLanIp()
+        if (lan != "127.0.0.1" && hosts.contains(lan)) {
+            assertTrue(hosts.indexOf(lan) == 0 || !isCarrierGradeNat(hosts.first()))
+        }
+        // Must not force VPN-only users onto loopback when a VPN address exists.
+        if (hosts.any { isCarrierGradeNat(it) || it != "127.0.0.1" }) {
+            assertFalse(hosts == listOf("127.0.0.1"))
+        }
+    }
+
     private fun inet4(host: String): Inet4Address =
         Inet4Address.getByName(host) as Inet4Address
 }

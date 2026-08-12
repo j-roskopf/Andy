@@ -27,6 +27,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.plugins.doublereceive.*
+import io.ktor.server.websocket.WebSockets
 import io.modelcontextprotocol.kotlin.sdk.*
 import io.modelcontextprotocol.kotlin.sdk.server.*
 import io.modelcontextprotocol.kotlin.sdk.server.mcp
@@ -38,6 +39,12 @@ import java.io.File
 import java.util.Base64
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
+import app.andy.desktop.service.proxy.resolveNetworkAccessHosts
+import app.andy.desktop.service.webchat.NetworkAccessAuthPlugin
+import app.andy.desktop.service.webchat.WebPushService
+import app.andy.desktop.service.webchat.generateNetworkAccessTokenBytes
+import app.andy.desktop.service.webchat.installWebChatRoutes
+import app.andy.desktop.service.webchat.remotePeerAddress
 
 class DesktopMcpServerService(
     private val devices: DeviceService,
@@ -56,22 +63,46 @@ class DesktopMcpServerService(
     private val heapDump: HeapDumpService = UnavailableHeapDumpService,
     private val bugs: BugService = UnavailableBugService,
     private val recordingExport: RecordingExportService = UnavailableRecordingExportService,
+    private val webPush: WebPushService = WebPushService(workspaceStore),
+    private val actionConfig: ActionConfigStore? = null,
 ) : McpServerService {
     override val status = MutableStateFlow("stopped")
     override val running = MutableStateFlow(false)
 
     private var serverEngine: EmbeddedServer<*, *>? = null
     private var runningPort: Int? = null
+    private var runningHost: String? = null
     private val httpLock = Any()
     private var unixSocketServer: McpUnixSocketServer? = null
     private var agentRuns: AgentRunService? = null
     private var projectWorkflows: ProjectWorkflowService? = null
 
+    /**
+     * Test-only: force Network Access peer classification (e.g. `"203.0.113.10"`)
+     * so integration tests can exercise the non-loopback auth path over loopback sockets.
+     */
+    internal var authPeerAddressOverride: String? = null
+
     /** Wire agent/project services so MCP tools can control chats (daemon / embedded). */
     fun bindAgentServices(agents: AgentRunService, projects: ProjectWorkflowService) {
         agentRuns = agents
         projectWorkflows = projects
+        webPush.startWatching(agents)
     }
+
+    override fun suggestNetworkAccessHosts(): List<String> {
+        val hosts = resolveNetworkAccessHosts()
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        if (!workspace.networkAccessEnabled || !workspace.networkAccessTailscaleOnly) {
+            return hosts
+        }
+        val tailscale = hosts.filter { app.andy.desktop.service.proxy.isCarrierGradeNat(it) }
+        // Prefer Tailscale URLs when the filter is on; fall back so Settings still shows something.
+        return tailscale.ifEmpty { hosts }
+    }
+
+    override fun generateNetworkAccessToken(): String = generateNetworkAccessTokenBytes()
 
     fun startUnixSocketBlocking(socketPath: File): CommandResult {
         return try {
@@ -116,14 +147,18 @@ class DesktopMcpServerService(
      * `runBlocking` + [Dispatchers.IO] can hang indefinitely.
      */
     fun startHttpBlocking(port: Int): CommandResult = synchronized(httpLock) {
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        val host = if (workspace.networkAccessEnabled) "0.0.0.0" else "127.0.0.1"
+
         if (serverEngine != null) {
-            if (runningPort == port) {
+            if (runningPort == port && runningHost == host) {
                 return CommandResult.success("Already running")
             }
             stopEngine()
         }
 
-        if (!isPortAvailable(port)) {
+        if (!isPortAvailable(port, host)) {
             status.value = "error: port $port already in use"
             running.value = false
             return CommandResult.failure("Port $port is already in use")
@@ -131,13 +166,40 @@ class DesktopMcpServerService(
 
         try {
             status.value = "starting..."
-            System.err.println("andy-mcp: creating Netty engine on 127.0.0.1:$port")
+            System.err.println("andy-mcp: creating Netty engine on $host:$port")
 
-            val engine = embeddedServer(Netty, host = "127.0.0.1", port = port) {
+            val engine = embeddedServer(Netty, host = host, port = port) {
                 install(DoubleReceive)
+                install(WebSockets)
+                install(NetworkAccessAuthPlugin) {
+                    tokenProvider = {
+                        runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                            .getOrElse { WorkspaceState() }
+                            .networkAccessToken
+                    }
+                    networkAccessEnabledProvider = {
+                        runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                            .getOrElse { WorkspaceState() }
+                            .networkAccessEnabled
+                    }
+                    tailscaleOnlyProvider = {
+                        runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                            .getOrElse { WorkspaceState() }
+                            .networkAccessTailscaleOnly
+                    }
+                    peerAddressResolver = { call ->
+                        authPeerAddressOverride ?: call.remotePeerAddress()
+                    }
+                }
                 mcpStreamableHttp("/mcp-http", enableDnsRebindingProtection = false) {
                     createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
                 }
+                installWebChatRoutes(
+                    agentRuns = { agentRuns },
+                    projectWorkflows = { projectWorkflows },
+                    actionConfig = { actionConfig },
+                    push = webPush,
+                )
                 routing {
                     mcp("/mcp", enableDnsRebindingProtection = false) {
                         createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
@@ -149,17 +211,19 @@ class DesktopMcpServerService(
             System.err.println("andy-mcp: engine.start(wait=false)…")
             engine.start(wait = false)
             runningPort = port
+            runningHost = host
 
-            status.value = "running on 127.0.0.1:$port"
+            status.value = "running on $host:$port"
             running.value = true
-            System.err.println("andy-mcp: HTTP listening on 127.0.0.1:$port")
-            CommandResult.success("Server started on port $port")
+            System.err.println("andy-mcp: HTTP listening on $host:$port")
+            CommandResult.success("Server started on $host:$port")
         } catch (e: Exception) {
             e.printStackTrace()
             status.value = "error: ${e.message ?: "start failed"}"
             running.value = false
             serverEngine = null
             runningPort = null
+            runningHost = null
             CommandResult.failure("Failed to start server: ${e.message}")
         }
     }
@@ -185,6 +249,7 @@ class DesktopMcpServerService(
             serverEngine = null
         }
         runningPort = null
+        runningHost = null
         status.value = "stopped"
         running.value = false
     }
@@ -215,7 +280,11 @@ class DesktopMcpServerService(
 
     override fun writeConfig(clientName: String, port: Int): Boolean {
         val client = McpClientConfig.ClientType.entries.firstOrNull { it.label == clientName } ?: return false
-        return McpClientConfig.writeConfig(client, port)
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
+        return McpClientConfig.writeConfig(client, port, bearerToken = bearer)
     }
 
     override fun getToolNames(): List<String> = listOf(
@@ -1957,11 +2026,11 @@ class DesktopMcpServerService(
         }
     }
 
-    private fun isPortAvailable(port: Int): Boolean {
+    private fun isPortAvailable(port: Int, host: String = "127.0.0.1"): Boolean {
         return try {
             java.net.ServerSocket().use { socket ->
                 socket.reuseAddress = true
-                socket.bind(java.net.InetSocketAddress("127.0.0.1", port))
+                socket.bind(java.net.InetSocketAddress(host, port))
                 true
             }
         } catch (_: Exception) {

@@ -380,6 +380,34 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun recoveryFollowUpEscapesNeedsAttentionAfterReviewLimit() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(List(5) { "changes" }))) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.NeedsAttention
+            }
+
+            val error = harness.service.startRecoveryFollowUp(
+                buildId,
+                "I fixed the validation fallback locally; please re-apply cleanly.",
+            )
+            assertEquals(null, error, "attention after the review limit must allow recovery follow-ups")
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.let {
+                    it.state == ProjectTaskState.Paused && it.recoveryMode
+                } == true
+            }
+            val build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertEquals(6, build.attempts.size)
+            assertTrue(build.attempts.last().isRecoveryFollowUp)
+            assertEquals(2, build.reviewGeneration, "recovery must open a fresh review generation past the 5/5 gate")
+            assertEquals(null, build.lastError)
+        }
+    }
+
+    @Test
     fun enablingCompletedWorkflowWaitsForResumeAndRedisablingRestoresCompletion() = runBlocking {
         withHarness(WorkflowAdapter()) { harness ->
             val buildId = saveExternalPair(harness.service)
@@ -1037,6 +1065,87 @@ class ProjectWorkflowServiceTest {
             val run = adapter.launched.first { it.workflowTaskId == buildId && it.workflowAttempt == 2 }
             assertEquals(imagePaths, run.imagePaths)
             assertTrue(run.prompt.contains("confirmation toast never appears after rotation"))
+        }
+    }
+
+    @Test
+    fun recoveryFollowUpWorksForBuildCreatedFromSpec() = runBlocking {
+        withHarness(WorkflowAdapter()) { harness ->
+            val service = harness.service
+            val specId = service.saveSpec(
+                ProjectSpecDraft(
+                    projectId = "project-1",
+                    title = "Plan recovery follow-up",
+                    brief = "Design a change that will need a tested fix thread",
+                    profile = specProfile(),
+                ),
+            )
+            service.runSpec(specId)
+            await { service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == specId }?.planVersions?.size == 1 }
+            val plan = service.projects.value.getValue("project-1").tasks.first { it.id == specId }.planVersions.single()
+            val buildId = service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Build from spec",
+                    plan = ProjectPlanSnapshot(plan.text, specId, plan.version, "Plan recovery follow-up · v1"),
+                    buildNotes = "",
+                    verificationInstructions = "Run deterministic checks",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                ),
+            )
+            service.startBuildPair(buildId)
+            await {
+                service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Completed
+            }
+
+            val error = service.startRecoveryFollowUp(buildId, "The empty-state copy is wrong after the first run.")
+            assertEquals(null, error)
+            await {
+                service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Paused
+            }
+            val workflow = service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            assertEquals(specId, build.linkedSpecTaskId)
+            assertTrue(build.recoveryMode)
+            assertTrue(build.attempts.last().isRecoveryFollowUp)
+            val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
+            assertEquals(ProjectTaskState.Completed, verification.state)
+            assertFalse(verification.isInFlight)
+            assertFalse(verification.isActive, "completed verification must not look active after recovery")
+        }
+    }
+
+    @Test
+    fun pauseAfterBuildCompletesDoesNotLeaveVerificationWaiting() = runBlocking {
+        withHarness(
+            WorkflowAdapter(
+                // Keep the build alive long enough to arm pause-after-current.
+                buildKeepAliveSeconds = 20,
+                reviewOutcomes = ArrayDeque(listOf("approved")),
+            ),
+        ) { harness ->
+            val buildId = saveExternalPair(harness.service, reviewEnabled = true)
+            harness.service.startBuildPair(buildId)
+            val buildRun = awaitValue {
+                harness.service.tasks.value.firstOrNull {
+                    it.workflowStage == ProjectWorkflowStage.Build && it.isActive
+                }
+            }
+            harness.service.pauseBuildPair(buildId)
+            // Finish the build while paused so reconcile parks the pair without starting review.
+            harness.service.completeWorkflowRun(buildRun.id)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Paused
+            }
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val verification = workflow.tasks.first { it.id == build.linkedVerificationTaskId }
+            assertEquals(ProjectTaskState.Paused, build.state)
+            assertEquals(ProjectTaskState.Paused, verification.state, "parked verification must pause with the pair")
+            assertFalse(verification.isActive)
+            assertEquals(0, workflow.tasks.first { it.id == build.linkedReviewTaskId }.attempts.size)
         }
     }
 

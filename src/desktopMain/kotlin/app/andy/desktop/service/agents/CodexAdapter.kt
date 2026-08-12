@@ -25,7 +25,7 @@ class CodexAdapter : AgentCliAdapter {
             AgentSandboxMode.WorkspaceWrite -> { add("--sandbox"); add("workspace-write") }
             AgentSandboxMode.None -> add("--dangerously-bypass-approvals-and-sandbox")
         }
-        mcpUrl?.let { add("-c"); add("mcp_servers.andy.url=\"$it\"") }
+        addCodexMcpFlags(mcpUrl)
         // Interactive codex accepts an optional trailing [PROMPT].
         task.promptForCli().takeIf { it.isNotBlank() }?.let(::add)
     }
@@ -51,7 +51,7 @@ class CodexAdapter : AgentCliAdapter {
                 addCodexImageFlags(followUpImagePaths)
                 task.modelForCli()?.let { add("--model"); add(it) }
                 task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
-                mcpUrl?.let { add("-c"); add("mcp_servers.andy.url=\"$it\"") }
+                addCodexMcpFlags(mcpUrl)
                 prompt?.let(::add)
             }
         } else {
@@ -77,5 +77,14 @@ private fun MutableList<String>.addCodexImageFlags(imagePaths: List<String>) {
     imagePaths.forEach { path ->
         add("--image")
         add(path)
+    }
+}
+
+private fun MutableList<String>.addCodexMcpFlags(mcpUrl: String?) {
+    val url = mcpUrl ?: return
+    add("-c"); add("mcp_servers.andy.url=\"$url\"")
+    LocalMcpAttachAuth.bearerToken()?.let { token ->
+        // Codex accepts a string map for HTTP headers on remote MCP servers.
+        add("-c"); add("mcp_servers.andy.http_headers={\"Authorization\"=\"Bearer $token\"}")
     }
 }

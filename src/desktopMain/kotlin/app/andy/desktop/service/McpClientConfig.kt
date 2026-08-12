@@ -122,10 +122,10 @@ object McpClientConfig {
     fun getOpenCodeProjectConfig(cwd: File?): File? =
         cwd?.takeIf { it.isDirectory }?.let { File(it, "opencode.json") }
 
-    fun writeConfig(client: ClientType, port: Int, cwd: File? = null): Boolean {
+    fun writeConfig(client: ClientType, port: Int, cwd: File? = null, bearerToken: String? = null): Boolean {
         if (client == ClientType.Pi) {
             AndyPiExtensionInstaller.ensureInstalled()
-            return writePiMcpConfig(port)
+            return writePiMcpConfig(port, bearerToken)
         }
         val file = when (client) {
             ClientType.OpenCode -> getOpenCodeProjectConfig(cwd) ?: getConfigFile(client)
@@ -143,14 +143,14 @@ object McpClientConfig {
 
             val newContent = when (client) {
                 ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop, ClientType.Antigravity -> {
-                    mergeJson(client, currentContent, port)
+                    mergeJson(client, currentContent, port, bearerToken)
                 }
-                ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port)
+                ClientType.OpenCode -> mergeOpenCodeJson(currentContent, port, bearerToken)
                     ?: return false
-                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port)
+                ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port, bearerToken)
                 ClientType.Hermes -> mergeHermesYaml(currentContent, port)
                 ClientType.Codex -> {
-                    mergeToml(currentContent, port)
+                    mergeToml(currentContent, port, bearerToken)
                 }
                 else -> return false
             }
@@ -163,13 +163,14 @@ object McpClientConfig {
         }
     }
 
-    private fun mergeJson(client: ClientType, content: String, port: Int): String {
+    private fun mergeJson(client: ClientType, content: String, port: Int, bearerToken: String? = null): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
         val mcpServers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         val usesLegacySse = client == ClientType.ClaudeDesktop
         mcpServers["andy"] = buildJsonObject {
             put("type", if (usesLegacySse) "sse" else "http")
             put("url", "http://127.0.0.1:$port/${if (usesLegacySse) "mcp" else "mcp-http"}")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(mcpServers)
@@ -178,7 +179,7 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun mergeOpenCodeJson(content: String, port: Int): String? {
+    internal fun mergeOpenCodeJson(content: String, port: Int, bearerToken: String? = null): String? {
         val json = if (content.isBlank()) {
             JsonObject(emptyMap())
         } else {
@@ -188,6 +189,7 @@ object McpClientConfig {
         mcp["andy"] = buildJsonObject {
             put("type", "remote")
             put("url", "http://127.0.0.1:$port/mcp-http")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcp"] = JsonObject(mcp)
@@ -199,7 +201,7 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun writePiMcpConfig(port: Int): Boolean {
+    internal fun writePiMcpConfig(port: Int, bearerToken: String? = null): Boolean {
         val file = File(System.getProperty("user.home"), ".pi/mcp.json")
         return try {
             file.parentFile?.mkdirs()
@@ -207,7 +209,7 @@ object McpClientConfig {
             if (file.exists() && currentContent.isNotBlank()) {
                 File(file.absolutePath + ".bak").writeText(currentContent)
             }
-            val merged = mergePiMcpJson(currentContent, port) ?: return false
+            val merged = mergePiMcpJson(currentContent, port, bearerToken) ?: return false
             file.writeText(merged)
             true
         } catch (e: Exception) {
@@ -216,7 +218,7 @@ object McpClientConfig {
         }
     }
 
-    internal fun mergePiMcpJson(content: String, port: Int): String? {
+    internal fun mergePiMcpJson(content: String, port: Int, bearerToken: String? = null): String? {
         val json = if (content.isBlank()) {
             JsonObject(emptyMap())
         } else {
@@ -227,6 +229,7 @@ object McpClientConfig {
             put("type", "streamable-http")
             put("url", "http://127.0.0.1:$port/mcp-http")
             put("lifecycle", "eager")
+            putMcpAuthHeaders(bearerToken)
         }
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(servers)
@@ -235,12 +238,13 @@ object McpClientConfig {
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
-    internal fun mergeOpenClawJson(content: String, port: Int): String {
+    internal fun mergeOpenClawJson(content: String, port: Int, bearerToken: String? = null): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
         val mcp = (json["mcp"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
         mcp["andy"] = buildJsonObject {
             put("transport", "streamable-http")
             put("url", "http://127.0.0.1:$port/mcp-http")
+            putMcpAuthHeaders(bearerToken)
         }
         val pretty = Json { prettyPrint = true }
         return pretty.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
@@ -266,14 +270,17 @@ object McpClientConfig {
         return lines.joinToString("\n").trimEnd() + "\n"
     }
 
-    private fun mergeToml(content: String, port: Int): String {
+    private fun mergeToml(content: String, port: Int, bearerToken: String? = null): String {
         val lines = content.lines().toMutableList()
         val targetHeader = "[mcp_servers.andy]"
         val index = lines.indexOfFirst { it.trim() == targetHeader }
-        val newBlock = listOf(
-            "[mcp_servers.andy]",
-            "url = \"http://127.0.0.1:$port/mcp-http\"",
-        )
+        val newBlock = buildList {
+            add("[mcp_servers.andy]")
+            add("url = \"http://127.0.0.1:$port/mcp-http\"")
+            bearerToken?.trim()?.takeIf { it.isNotEmpty() }?.let { token ->
+                add("http_headers = { Authorization = \"Bearer $token\" }")
+            }
+        }
         if (index != -1) {
             var lastIdx = index + 1
             while (lastIdx < lines.size && !lines[lastIdx].trim().startsWith("[")) {
@@ -288,5 +295,12 @@ object McpClientConfig {
             lines.addAll(newBlock)
         }
         return lines.joinToString("\n")
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.putMcpAuthHeaders(bearerToken: String?) {
+        val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        put("headers", buildJsonObject {
+            put("Authorization", "Bearer $token")
+        })
     }
 }

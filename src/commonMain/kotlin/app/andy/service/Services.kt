@@ -761,6 +761,18 @@ interface McpServerService {
     fun isAutoWriteSupported(clientName: String): Boolean
     fun writeConfig(clientName: String, port: Int): Boolean
     fun getToolNames(): List<String>
+
+    /**
+     * Reachable hosts for Network Access (LAN first, then VPN/Tailscale/WireGuard).
+     * Used for Settings URL list + QR. Default is loopback-only.
+     */
+    fun suggestNetworkAccessHosts(): List<String> = listOf("127.0.0.1")
+
+    /** Preferred host (first of [suggestNetworkAccessHosts]). */
+    fun suggestNetworkAccessHost(): String = suggestNetworkAccessHosts().firstOrNull() ?: "127.0.0.1"
+
+    /** Cryptographically random access token (URL-safe base64). */
+    fun generateNetworkAccessToken(): String = ""
 }
 
 enum class MirrorTouchAction { Down, Move, Up }

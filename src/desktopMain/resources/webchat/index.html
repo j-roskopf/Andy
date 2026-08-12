@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1419" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Andy</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <section id="view-auth" class="view hidden">
+      <div class="auth-card">
+        <h1>Andy</h1>
+        <p class="muted">Enter the access token from Andy Settings → MCP → Network Access.</p>
+        <label class="field">
+          <span>Access token</span>
+          <input id="token-input" type="password" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="token-save" class="primary">Continue</button>
+        <p id="auth-error" class="error hidden"></p>
+      </div>
+    </section>
+
+    <section id="view-list" class="view hidden">
+      <header class="topbar">
+        <h1>Chats</h1>
+        <div class="topbar-actions">
+          <button id="btn-notify" class="ghost" type="button">Enable notifications</button>
+          <button id="btn-new" class="primary" type="button">New</button>
+          <button id="btn-forget" class="ghost" type="button">Log out</button>
+        </div>
+      </header>
+      <div id="chat-list" class="list"></div>
+      <p id="list-empty" class="muted empty hidden">No ACP chats yet.</p>
+      <p id="list-error" class="error hidden"></p>
+    </section>
+
+    <section id="view-chat" class="view view-chat hidden">
+      <header class="topbar">
+        <button id="btn-back" class="ghost icon-btn" type="button" aria-label="Back">‹</button>
+        <div class="topbar-title">
+          <h1 id="chat-title">Chat</h1>
+          <p id="chat-meta" class="muted"></p>
+        </div>
+      </header>
+      <div id="permission" class="permission hidden"></div>
+      <div id="transcript" class="transcript"></div>
+      <p id="chat-loading" class="muted empty hidden">Loading chat…</p>
+      <p id="chat-error" class="error hidden"></p>
+      <p id="reconnect" class="banner hidden">Connection lost. <button id="btn-reconnect" type="button">Reconnect</button></p>
+      <div class="composer-wrap">
+        <div id="slash-menu" class="slash-menu hidden" role="listbox"></div>
+        <form id="composer" class="composer">
+          <textarea id="composer-input" rows="1" placeholder="Message…" enterkeyhint="send" autocomplete="off"></textarea>
+          <button type="submit" class="primary">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="view-new" class="view hidden">
+      <header class="topbar">
+        <button id="btn-new-back" class="ghost icon-btn" type="button" aria-label="Back">‹</button>
+        <h1>New chat</h1>
+      </header>
+      <form id="new-form" class="form">
+        <label class="field">
+          <span>Agent</span>
+          <select id="new-agent">
+            <option value="ClaudeCode">Claude Code</option>
+            <option value="Codex">Codex</option>
+            <option value="Cursor">Cursor</option>
+            <option value="OpenCode">OpenCode</option>
+            <option value="Pi">Pi</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Project</span>
+          <select id="new-project">
+            <option value="">Inbox (no project)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Autonomy</span>
+          <select id="new-autonomy">
+            <option value="ReadOnly">ReadOnly</option>
+            <option value="Standard" selected>Standard</option>
+            <option value="Full">Full</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Title (optional)</span>
+          <input id="new-title" type="text" />
+        </label>
+        <label class="field">
+          <span>Prompt</span>
+          <div class="composer-wrap new-prompt-wrap">
+            <div id="new-slash-menu" class="slash-menu hidden" role="listbox"></div>
+            <textarea id="new-prompt" rows="5" required autocomplete="off"></textarea>
+          </div>
+        </label>
+        <button type="submit" class="primary">Start chat</button>
+        <p id="new-error" class="error hidden"></p>
+      </form>
+    </section>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 package app.andy.ui.settings
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -61,6 +63,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -72,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
 import app.andy.isToggleableInSidebar
+import app.andy.loadImageBitmap
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentKind
 import app.andy.model.AgentMessageDeliveryMode
@@ -87,6 +91,7 @@ import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
+import app.andy.service.DeviceService
 import app.andy.service.McpServerService
 import app.andy.service.OrchestrationPreferencesService
 import app.andy.service.ProxyService
@@ -127,7 +132,9 @@ import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class DesktopSettingsCategory(
     val label: String,
@@ -230,6 +237,12 @@ internal fun SettingsScreen(
                     onPortTextChange = { portText = it },
                     mcpStatus = mcpStatus,
                     mcpRunning = mcpRunning,
+                )
+                NetworkAccessPanel(
+                    workspaceState = workspaceState,
+                    onUpdateWorkspace = onUpdateWorkspace,
+                    mcpService = services.mcp,
+                    devices = services.devices,
                 )
                 McpToolsPanel(toolNames)
                 McpClientsPanel(
@@ -1699,7 +1712,14 @@ private fun McpServerPanel(
                 label = "Enable MCP Server",
                 checked = workspaceState.mcpServerEnabled,
                 onCheckedChange = { checked ->
-                    onUpdateWorkspace { it.copy(mcpServerEnabled = checked) }
+                    // Network Access reuses the MCP listener; clearing it with MCP
+                    // prevents a later standalone andyd from binding 0.0.0.0 from stale state.
+                    onUpdateWorkspace {
+                        it.copy(
+                            mcpServerEnabled = checked,
+                            networkAccessEnabled = if (checked) it.networkAccessEnabled else false,
+                        )
+                    }
                 },
             )
             Spacer(Modifier.width(16.dp))
@@ -1732,6 +1752,183 @@ private fun McpServerPanel(
             Text("Server Status:", color = TextSecondary, fontSize = 12.sp)
             GlowingDot(mcpRunning)
             Text(mcpStatus, color = if (mcpRunning) Green else Rust, fontSize = 12.sp, fontFamily = MonoFont, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun NetworkAccessPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    mcpService: McpServerService,
+    devices: DeviceService,
+) {
+    val copyText = rememberCopyText()
+    val hosts = remember(
+        workspaceState.networkAccessEnabled,
+        workspaceState.networkAccessTailscaleOnly,
+        workspaceState.mcpServerPort,
+    ) {
+        mcpService.suggestNetworkAccessHosts().ifEmpty { listOf(mcpService.suggestNetworkAccessHost()) }
+    }
+    val accessUrls = hosts.map { host -> "http://$host:${workspaceState.mcpServerPort}/" }
+    val primaryAccessUrl = accessUrls.firstOrNull() ?: "http://127.0.0.1:${workspaceState.mcpServerPort}/"
+    val qrUrl = if (workspaceState.networkAccessToken.isNotBlank()) {
+        "$primaryAccessUrl?token=${workspaceState.networkAccessToken}"
+    } else {
+        primaryAccessUrl
+    }
+    var qrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(qrUrl, workspaceState.networkAccessEnabled) {
+        qrBitmap = if (workspaceState.networkAccessEnabled && workspaceState.networkAccessToken.isNotBlank()) {
+            withContext(Dispatchers.Default) {
+                devices.generatePairingQr(qrUrl)?.let { loadImageBitmap(it) }
+            }
+        } else {
+            null
+        }
+    }
+
+    PanelCard(modifier = Modifier.fillMaxWidth()) {
+        SettingsSectionHeader(
+            title = "Network Access",
+            description = "Opt-in remote chat from your phone/tablet over Tailscale (or LAN). " +
+                "Requires the access token on every request — including through Tailscale Serve / localhost " +
+                "proxies. Plain HTTP is fine on Tailscale (WireGuard already encrypts the path); use " +
+                "`tailscale serve --bg <port>` only if you need HTTPS for Web Push. " +
+                "Embedded GUI mode only binds while the window is open.",
+        )
+        if (!workspaceState.mcpServerEnabled) {
+            Text(
+                "Requires the MCP server to be running. Enable it above first.",
+                color = TextSecondary,
+                fontSize = 13.sp,
+            )
+        }
+        SettingsInlineCheckbox(
+            label = "Allow access from other devices on my network",
+            checked = workspaceState.networkAccessEnabled,
+            enabled = workspaceState.mcpServerEnabled,
+            onCheckedChange = { checked ->
+                if (!checked) {
+                    onUpdateWorkspace { it.copy(networkAccessEnabled = false) }
+                    return@SettingsInlineCheckbox
+                }
+                val token = workspaceState.networkAccessToken.ifBlank {
+                    mcpService.generateNetworkAccessToken()
+                }
+                onUpdateWorkspace {
+                    it.copy(
+                        mcpServerEnabled = true,
+                        networkAccessEnabled = true,
+                        networkAccessToken = token,
+                    )
+                }
+            },
+        )
+        if (workspaceState.networkAccessEnabled) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Anyone who has the access token can control Andy, including device and file tools — not just chat.",
+                color = Rust,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            SettingsInlineCheckbox(
+                label = "Tailscale only (block other local networks)",
+                checked = workspaceState.networkAccessTailscaleOnly,
+                onCheckedChange = { checked ->
+                    onUpdateWorkspace { it.copy(networkAccessTailscaleOnly = checked) }
+                },
+            )
+            Text(
+                if (workspaceState.networkAccessTailscaleOnly) {
+                    "Only Tailscale addresses (100.x) and this Mac can connect. Home Wi‑Fi devices are rejected. " +
+                        "Turn off if you need plain LAN access or a non-Tailscale VPN."
+                } else {
+                    "Any device that can reach this Mac’s IP may attempt access (still needs the token)."
+                },
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Access token", color = TextSecondary, fontSize = 12.sp)
+            SelectionContainer {
+                Text(
+                    workspaceState.networkAccessToken.ifBlank { "(generating…)" },
+                    color = TextPrimary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = { copyText(workspaceState.networkAccessToken) },
+                    enabled = workspaceState.networkAccessToken.isNotBlank(),
+                ) {
+                    Text("Copy token")
+                }
+                OutlinedButton(
+                    onClick = {
+                        val next = mcpService.generateNetworkAccessToken()
+                        onUpdateWorkspace { it.copy(networkAccessToken = next) }
+                    },
+                ) {
+                    Text("Regenerate")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Open on another device", color = TextSecondary, fontSize = 12.sp)
+            accessUrls.forEach { url ->
+                SelectionContainer {
+                    Text(url, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                }
+            }
+            Text(
+                if (workspaceState.networkAccessTailscaleOnly) {
+                    "Showing Tailscale URLs when available. These stay http:// — WireGuard already encrypts " +
+                        "Tailscale traffic. For Web Push / HTTPS, run " +
+                        "`tailscale serve --bg ${workspaceState.mcpServerPort}` and open the https://…ts.net " +
+                        "URL (token still required)."
+                } else {
+                    "LAN addresses are listed first when available; Tailscale/WireGuard addresses appear when " +
+                        "present. These stay http://. For HTTPS / Web Push, run " +
+                        "`tailscale serve --bg ${workspaceState.mcpServerPort}` (token still required)."
+                },
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = { copyText(primaryAccessUrl) }) {
+                    Text("Copy URL")
+                }
+                OutlinedButton(
+                    onClick = { copyText(qrUrl) },
+                    enabled = workspaceState.networkAccessToken.isNotBlank(),
+                ) {
+                    Text("Copy URL + token")
+                }
+            }
+            qrBitmap?.let { bitmap ->
+                Spacer(Modifier.height(10.dp))
+                Text("Scan to open and sign in", color = TextSecondary, fontSize = 12.sp)
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = "Network access QR code",
+                    modifier = Modifier
+                        .size(160.dp)
+                        .background(Color.White, AndyShape.Interactive)
+                        .padding(8.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            }
         }
     }
 }

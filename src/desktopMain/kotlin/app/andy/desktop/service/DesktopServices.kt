@@ -31,6 +31,8 @@ import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.desktop.service.voice.DesktopVoiceDictationService
 import app.andy.desktop.service.voice.DesktopVoiceSetupService
+import app.andy.desktop.service.webchat.NetworkAccessHttpReconciler
+import app.andy.desktop.service.webchat.toNetworkAccessBindConfig
 import app.andy.model.AgentKind
 import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
@@ -42,6 +44,7 @@ import app.andy.service.UnavailableKanbanService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -169,6 +172,7 @@ fun createDaemonRuntime(
         heapDump = heapDump,
         bugs = bugService,
         recordingExport = recordingExportService,
+        actionConfig = actionConfig,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
@@ -259,15 +263,18 @@ fun createDaemonRuntime(
     // HTTP is optional for agent CLIs; unix socket is the andyd control plane.
     // Use a blocking bind (no nested runBlocking / Dispatchers.IO) — that path hung
     // under Gradle JavaExec and killed the daemon via a 30s TimeoutException.
-    val port = runBlocking { store.load() }.mcpServerPort
-    System.err.println("andyd: binding HTTP MCP on 127.0.0.1:$port")
-    val httpResult = runCatching { mcp.startHttpBlocking(port) }
+    // Bind host follows Network Access (0.0.0.0 when enabled, else loopback).
+    val initialWorkspace = runBlocking { store.load() }
+    val bindConfig = initialWorkspace.toNetworkAccessBindConfig()
+    val bindHost = if (bindConfig.enabled) "0.0.0.0" else "127.0.0.1"
+    System.err.println("andyd: binding HTTP MCP on $bindHost:${bindConfig.port}")
+    val httpResult = runCatching { mcp.startHttpBlocking(bindConfig.port) }
         .getOrElse { error ->
             error.printStackTrace()
             CommandResult.failure(error.message ?: "HTTP start failed")
         }
     if (httpResult.isSuccess) {
-        System.err.println("andyd: MCP HTTP on 127.0.0.1:$port")
+        System.err.println("andyd: MCP HTTP on $bindHost:${bindConfig.port}")
     } else {
         System.err.println(
             "andyd: WARNING HTTP MCP failed (${httpResult.stderr.ifBlank { httpResult.stdout }}); " +
@@ -275,11 +282,29 @@ fun createDaemonRuntime(
         )
     }
 
+    // GUI Settings writes ~/.andy/workspace.properties; in daemon-client mode the
+    // Compose process only restarts its own MCP. Watch the file so standalone andyd
+    // rebinds host/port and drops WS sessions when the token is regenerated.
+    val daemonScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val networkAccessReconciler = NetworkAccessHttpReconciler(
+        workspaceStore = store,
+        mcp = mcp,
+        scope = daemonScope,
+        onApplied = { next, result ->
+            val host = if (next.enabled) "0.0.0.0" else "127.0.0.1"
+            if (result.isSuccess) {
+                System.err.println("andyd: MCP HTTP rebound on $host:${next.port}")
+            }
+        },
+    ).also { it.start(bindConfig) }
+
     return DaemonRuntime(
         services = services,
         socketPath = socketPath,
         mcp = mcp,
         onShutdown = {
+            networkAccessReconciler.stop()
+            daemonScope.cancel()
             runCatching { agentRuns.shutdownForProcessExit() }
             runCatching { mcp.stopUnixSocketBlocking() }
             runBlocking {
@@ -383,6 +408,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         heapDump = heapDump,
         bugs = bugService,
         recordingExport = recordingExportService,
+        actionConfig = actionConfig,
     )
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
@@ -569,6 +595,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         heapDump = heapDump,
         bugs = bugService,
         recordingExport = recordingExportService,
+        actionConfig = actionConfig,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()

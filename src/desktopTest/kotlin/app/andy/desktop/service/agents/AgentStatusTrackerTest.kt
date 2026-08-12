@@ -1411,7 +1411,13 @@ private fun runStatusHook(
 ): Pair<Int, String> {
     val proc = ProcessBuilder("sh", script.absolutePath, *args)
         .directory(project)
-        .apply { environment().putAll(env) }
+        .apply {
+            // Parent Andy/Cursor sessions leak these into Gradle workers; only keep values
+            // the test opts into via [env].
+            environment().remove(AndyStatusHookInstaller.TASK_ID_ENV)
+            environment().remove(AndyStatusHookInstaller.PROJECT_ROOT_ENV)
+            environment().putAll(env)
+        }
         .redirectErrorStream(true)
         .start()
     proc.outputStream.bufferedWriter().use { writer ->

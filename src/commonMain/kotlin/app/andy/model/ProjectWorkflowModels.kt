@@ -162,7 +162,15 @@ data class ProjectTask(
     val createdAtMillis: Long,
     val updatedAtMillis: Long,
 ) {
+    /**
+     * Broad "not idle" flag used for badges and coarse UI locks.
+     * Includes [ProjectTaskState.Waiting], which is also used to park siblings during
+     * build→review→verify handoffs — those parked stages are not in-flight work.
+     */
     val isActive: Boolean get() = state == ProjectTaskState.Queued || state == ProjectTaskState.Running || state == ProjectTaskState.Waiting
+
+    /** True while this stage itself has a queued/running agent turn (excludes handoff Waiting). */
+    val isInFlight: Boolean get() = state == ProjectTaskState.Queued || state == ProjectTaskState.Running
 }
 
 data class ProjectWorkflowState(
