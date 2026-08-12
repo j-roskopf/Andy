@@ -394,6 +394,38 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun compactToolActivityHeadlineUsesSpawningCopyForTaskTools() {
+        val events = listOf(
+            AgentEvent.ToolCall(
+                atMillis = 1,
+                toolName = "Task",
+                summary = "description=Review PR #717, subagent_type=explore",
+                detail = """{"description":"Review PR #717","prompt":"Review PR #717","subagent_type":"explore"}""",
+            ),
+            AgentEvent.ToolCall(
+                atMillis = 2,
+                toolName = "Task",
+                summary = "description=Review PR #717, subagent_type=explore",
+                detail = """{"description":"Review PR #717","prompt":"Review PR #717","subagent_type":"explore"}""",
+            ),
+            AgentEvent.ToolCall(
+                atMillis = 3,
+                toolName = "Task",
+                summary = "description=Review PR #717, subagent_type=explore",
+                detail = """{"description":"Review PR #717","prompt":"Review PR #717","subagent_type":"explore"}""",
+            ),
+            AgentEvent.ToolCall(
+                atMillis = 4,
+                toolName = "Task",
+                summary = "description=Review PR #717, subagent_type=explore",
+                detail = """{"description":"Review PR #717","prompt":"Review PR #717","subagent_type":"explore"}""",
+            ),
+        )
+
+        assertEquals("Spawning 4 agents", compactToolActivityHeadline(events))
+    }
+
+    @Test
     fun connectionStallErrorsAreHiddenFromTranscriptDisplay() {
         val events = listOf(
             AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),

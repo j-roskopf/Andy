@@ -23,7 +23,12 @@ class ClaudeCodeAdapter : AgentCliAdapter {
             add("""{"mcpServers":{"andy":{"type":"http","url":"$it"}}}""")
         }
         // Interactive Claude accepts a trailing prompt as the first user turn.
-        task.promptForCli().takeIf { it.isNotBlank() }?.let(::add)
+        // `--mcp-config` is variadic (`<configs...>`), so end options with `--`
+        // before the prompt or Claude treats the prompt as another config path.
+        task.promptForCli().takeIf { it.isNotBlank() }?.let { prompt ->
+            if (mcpUrl != null) add("--")
+            add(prompt)
+        }
     }
 
     override fun buildInteractiveResumeCommand(
@@ -50,7 +55,10 @@ class ClaudeCodeAdapter : AgentCliAdapter {
                 originalPrompt = task.promptForCli(),
                 followUp = followUp,
                 boundToConversation = sessionId != null,
-            )?.let(::add)
+            )?.let { prompt ->
+                if (mcpUrl != null) add("--")
+                add(prompt)
+            }
         }
     }
 
