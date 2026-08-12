@@ -321,28 +321,28 @@ internal object AndyOverlay {
     val Strong = 0.90f
 }
 
-/** Soft minimal spacing scale — slightly more generous than the prior DNA. */
+/** Harness spacing scale — dense workbench rhythm (4/8/12/16…). */
 internal object AndySpace {
     val Space1 = 4.dp
-    val Space2 = 6.dp
-    val Space3 = 10.dp
-    val Space4 = 14.dp
-    val Space5 = 18.dp
+    val Space2 = 8.dp
+    val Space3 = 12.dp
+    val Space4 = 16.dp
+    val Space5 = 20.dp
     val Space6 = 24.dp
     val Space7 = 28.dp
-    val Space8 = 36.dp
+    val Space8 = 32.dp
 }
 
-/** Soft radius system — generous rounding communicates approachability. */
+/** Harness radius system — compact chrome, 18dp composer. */
 internal object AndyRadius {
     /** Buttons, fields, pills, segmented controls — squarish-rounded like toolbar chrome. */
-    val Interactive = 10.dp
-    val Control = 8.dp
-    val Row = Interactive
-    val Menu = 14.dp
-    /** Composer shell and large panels — matches control-center input rounding. */
-    val Sheet = 14.dp
-    val Window = 18.dp
+    val Interactive = 8.dp
+    val Control = 6.dp
+    val Row = 8.dp
+    val Menu = 12.dp
+    /** Composer shell — Design DNA ~18px. */
+    val Sheet = 18.dp
+    val Window = 14.dp
     /** Reserved for dots, progress fills, and circular indicators only. */
     val Pill = 999.dp
 }
@@ -356,15 +356,15 @@ internal object AndyShape {
     val Window = RoundedCornerShape(AndyRadius.Window)
 }
 
-/** Soft minimal layout + control metrics. */
+/** Harness layout + control metrics. */
 internal object AndyLayout {
-    val ToolbarHeight = 52.dp
+    val ToolbarHeight = 56.dp
     val SidebarWidth = 220.dp
     val SidebarCollapsedWidth = 52.dp
-    val ListWidth = 272.dp
-    val SidebarRowHeight = 34.dp
+    val ListWidth = 300.dp
+    val SidebarRowHeight = 36.dp
     val ControlHeightXs = 26.dp
-    val ControlHeightSm = 30.dp
+    val ControlHeightSm = 28.dp
     val ControlHeightMd = 32.dp
     /** Compact single-line text field — squarish-rounded, readable at a glance. */
     val FieldHeight = 32.dp

@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -800,8 +799,8 @@ internal fun AgentTaskDetail(
                             textStyle = LocalTextStyle.current.copy(
                                 color = TextPrimary,
                                 fontFamily = DisplayFont,
-                                fontSize = 13.sp,
-                                lineHeight = 19.sp,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
                             ),
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,

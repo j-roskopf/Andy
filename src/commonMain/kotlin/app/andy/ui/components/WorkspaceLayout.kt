@@ -72,11 +72,9 @@ internal fun WorkspaceRail(
 ) {
     Column(
         modifier
-            .rightBorder(
-                Border.copy(alpha = if (AndyColors.isLight) 0.20f else 0.44f),
-            )
-            .padding(end = AndySpace.Space4),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+            .rightBorder(Border)
+            .padding(end = AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         content = content,
     )
 }
@@ -125,7 +123,7 @@ internal fun WorkspaceCanvas(
 ) {
     Box(
         modifier
-            .padding(start = AndySpace.Space5),
+            .padding(start = AndySpace.Space4),
         content = content,
     )
 }
