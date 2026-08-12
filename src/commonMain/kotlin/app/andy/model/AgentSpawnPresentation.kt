@@ -169,7 +169,7 @@ object AgentSpawnPresentation {
             val obj = parseJson(candidate) ?: return@forEach
             obj.forEach { (key, element) ->
                 val value = (element as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                if (value.isNotBlank()) into.putIfAbsent(key, value)
+                if (value.isNotBlank() && !into.containsKey(key)) into[key] = value
             }
         }
         // Whole blob may be one JSON object (common for rawInput stored as detail).
@@ -177,7 +177,7 @@ object AgentSpawnPresentation {
         if (trimmed.startsWith("{")) {
             parseJson(trimmed)?.forEach { (key, element) ->
                 val value = (element as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
-                if (value.isNotBlank()) into.putIfAbsent(key, value)
+                if (value.isNotBlank() && !into.containsKey(key)) into[key] = value
             }
         }
     }
@@ -192,13 +192,13 @@ object AgentSpawnPresentation {
         )
         val alternation = keys.joinToString("|") { Regex.escape(it) }
         val pattern = Regex(
-            """\b($alternation)\s*=\s*(.*?)(?=,\s*(?:$alternation)\s*=|$)""",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            """\b($alternation)\s*=\s*([\s\S]*?)(?=,\s*(?:$alternation)\s*=|$)""",
+            setOf(RegexOption.IGNORE_CASE),
         )
         pattern.findAll(text).forEach { match ->
             val key = match.groupValues[1]
             val value = match.groupValues[2].trim().trim('"')
-            if (value.isNotBlank()) into.putIfAbsent(key, value)
+            if (value.isNotBlank() && !into.containsKey(key)) into[key] = value
         }
     }
 
