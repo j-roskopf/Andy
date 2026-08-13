@@ -4,6 +4,12 @@
 **Branch:** `terminal-perf-iter1`  
 **Stack:** `com.risaboss:bossterm-compose/core:1.2.143` via `BossTermBackend` → `EmbeddableTerminal` → `TerminalCanvasRenderer`, gated by `TerminalFrameLimiter`.
 
+> **Supersedes earlier tables on this branch.** Numbers below are from a full re-run
+> against the post-`5860c504` harness (every FPS/baseline cell explicitly pins
+> `performanceMode=latency` + `detectFilePaths=true`). Pre-pin tables in
+> `eab551eb` / early drafts are not trustworthy for baseline rows — those variants
+> could silently inherit production throughput / no-hyperlinks defaults.
+
 ## Goal
 
 A fully performant terminal (smooth, high-fps-feeling) for chat (non-ACP) and the Actions dock, while keeping **~10–20% process CPU** under sustained streaming.
@@ -15,59 +21,60 @@ A fully performant terminal (smooth, high-fps-feeling) for chat (non-ACP) and th
 ```sh
 ./gradlew desktopTest --tests "app.andy.terminal.BossTermPipelineBenchmarkTest" \
   -Dandy.bench=1 -Dandy.bench.knobs=1 --rerun-tasks
+# durable copy → build/bossterm-pipeline-benchmark.txt
 ```
 
-Results are also written to `build/bossterm-pipeline-benchmark.txt` (durable; Gradle has raced away `test-results` XML after green runs).
-
 - Workload: ~20 lines / 50ms with path+URL tokens (≈ 2–3k chars/s; matches prior ~2,181 `requestRedraw`/sec live agent measurement).
-- Metric: `processCpuTime / wall × 100` (multi-core capable).
+- Metric: `OperatingSystemMXBean.processCpuTime / wall × 100` (**absolute** whole-process CPU %, multi-core capable).
 - Timing this run: 5s warmup + 15s measure per variant.
 - Machine: Apple Silicon, 18 logical CPUs.
+- FPS-sweep / baseline cells pin `performanceMode=latency` + `detectFilePaths=true`.
+- Knob cells set **both** dimensions explicitly (no production-default leakage).
 
-FPS-sweep cells pin `performanceMode=latency` + `detectFilePaths=true` so production knob defaults cannot leak into the baseline.
-
-## Measured table (definitive run, 2026-08-13)
+## Measured table (post-pin re-run)
 
 | variant | cpu% | wall_s | procCpu_s | what |
 |--------|-----:|-------:|----------:|------|
-| idle-shell | 2.8 | 15.0 | 0.42 | Live `cat` PTY, no output |
-| 15fps | 28.9 | 15.0 | 4.34 | Cap 15; latency; hyperlinks on |
-| 24fps | 33.0 | 15.0 | 4.95 | Cap 24; latency; hyperlinks on |
-| 30fps | 32.4 | 15.0 | 4.87 | Cap 30; latency; hyperlinks on |
-| 45fps | 41.6 | 15.0 | 6.24 | Cap 45; latency; hyperlinks on |
-| uncapped | 61.5 | 15.0 | 9.23 | Gate off; latency; hyperlinks on |
-| 15fps+noHyperlinks | 21.3 | 15.0 | 3.20 | 15fps; latency; `detectFilePaths=false` |
-| 15fps+throughput | 20.8 | 15.0 | 3.12 | 15fps; `performanceMode=throughput`; hyperlinks on |
-| **15fps+both** | **20.2** | 15.0 | 3.03 | **15fps; throughput; no hyperlinks** |
-| 24fps+both | 26.0 | 15.0 | 3.90 | 24fps; throughput; no hyperlinks |
-| 30fps+both | 30.1 | 15.0 | 4.51 | 30fps; throughput; no hyperlinks |
-| uncapped+both | 58.7 | 15.0 | 8.81 | Uncapped; throughput; no hyperlinks |
+| idle-shell | 2.6 | 15.0 | 0.39 | Live `cat` PTY, no output |
+| 15fps | 31.7 | 15.0 | 4.75 | Cap 15; latency; hyperlinks on |
+| 24fps | 33.8 | 15.0 | 5.08 | Cap 24; latency; hyperlinks on |
+| 30fps | 35.1 | 15.0 | 5.26 | Cap 30; latency; hyperlinks on |
+| 45fps | 39.3 | 15.0 | 5.90 | Cap 45; latency; hyperlinks on |
+| uncapped | 61.1 | 15.0 | 9.17 | Gate off; latency; hyperlinks on |
+| 15fps+noHyperlinks | 21.1 | 15.0 | 3.17 | 15fps; latency; `detectFilePaths=false` |
+| 15fps+throughput | 20.9 | 15.0 | 3.14 | 15fps; `performanceMode=throughput`; hyperlinks on |
+| 15fps+both | 23.6 | 15.0 | 3.54 | 15fps; throughput; no hyperlinks |
+| 24fps+both | 28.5 | 15.0 | 4.28 | 24fps; throughput; no hyperlinks |
+| 30fps+both | 32.5 | 15.0 | 4.87 | 30fps; throughput; no hyperlinks |
+| uncapped+both | 61.4 | 15.0 | 9.20 | Uncapped; throughput; no hyperlinks |
+
+Run-to-run note: a prior post-pin run on the same harness saw `15fps+both` at 20.2% and `uncapped` at 61.5%. Knob cells move a few points; **uncapped absolute process CPU stays ~61%**.
 
 ## Empirical FPS ceiling inside 10–20% CPU
 
-**15fps is the only frame cap that can land in the band**, and only when combined with the knob defaults below (`15fps+both` = **20.2%**).
+| Cap + knobs | CPU % (this run) | In 10–20% band? |
+|-------------|-----------------:|-----------------|
+| 15fps+throughput | 20.9 | Top edge (yes) |
+| 15fps+noHyperlinks | 21.1 | Just outside |
+| 15fps+both | 23.6 | No (was 20.2% on prior post-pin run — noisy) |
+| 24fps+both | 28.5 | No |
+| 30fps+both | 32.5 | No |
+| 15fps baseline | 31.7 | No |
+| uncapped | 61.1 | No |
 
-| Cap + knobs | CPU % | In 10–20% band? |
-|-------------|------:|-----------------|
-| 15fps+both | 20.2 | Yes (top edge) |
-| 24fps+both | 26.0 | No |
-| 30fps+both | 30.1 | No |
-| 15fps baseline (no knobs) | 28.9 | No |
-| uncapped | 61.5 | No |
-
-Raising `DEFAULT_FPS` above 15 exits the budget even with the best knobs.
+**Nothing above 15fps fits the band.** At 15fps, throughput alone is the most stable in-band/near-band win; combining knobs helps on average but is noisier than either knob alone.
 
 ## Do the knobs help?
 
-**Yes — both meaningfully.**
+**Yes.**
 
-| Knob | Effect at 15fps |
-|------|-----------------|
-| `detectFilePaths=false` | 28.9% → 21.3% (−7.6 pts). Paint path skips `detectAllHyperlinks`. |
-| `performanceMode=throughput` | 28.9% → 20.8% (−8.1 pts). `BlockingTerminalDataStream` uses `poll(100ms)` when starved. |
-| Both | 28.9% → **20.2%** (−8.7 pts). |
+| Knob | Effect at 15fps (this run) |
+|------|----------------------------|
+| `detectFilePaths=false` | 31.7% → 21.1% (−10.6 pts) |
+| `performanceMode=throughput` | 31.7% → 20.9% (−10.8 pts) |
+| Both | 31.7% → 23.6% (−8.1 pts; prior post-pin run 20.2%) |
 
-Dead / negative:
+Dead / negative (unchanged findings):
 
 | Setting | Result |
 |---------|--------|
@@ -75,37 +82,35 @@ Dead / negative:
 | `gpuAcceleration` | Same — dead on Compose path |
 | Host-side PTY re-batching | Andy already forwards `read()` chunks; does not stop per-char `requestRedraw()` |
 
+## Reconciling uncapped ~61% vs `TerminalFrameLimiter` kdoc 47.6%
+
+`TerminalFrameLimiter`’s existing kdoc (unchanged this iteration) says uncapped INTERACTIVE steady state was **47.6% of Andy's total process CPU**, from ~4.8ms/frame × ~38 renders/sec in `TerminalCanvasRenderer.renderTerminal`.
+
+That **47.6% is not the same metric** as this bench’s uncapped row:
+
+| | Kdoc 47.6% | This bench uncapped ~61% |
+|--|------------|--------------------------|
+| Quantity | **Share of process samples** attributed to `renderTerminal` (profiler fraction) | **Absolute** `processCpuTime/wall` for the whole JVM |
+| Scope | Paint cost only | Parse + PTY + Compose + hyperlinks + GC + paint |
+| Workload | Live agent CLI in full Andy | Synthetic stream in an isolated Compose test window |
+| Implied absolute paint | 38 × 4.8ms ≈ **18% of one core** just for `renderTerminal` | — |
+
+So they do **not** need to numerically agree. Re-measure after the pin fix still shows uncapped absolute process CPU at **~61%** (61.1% this run; 61.5% prior post-pin) — **not** closer to 47.6%. The earlier draft’s 58.6% was the same absolute metric in the same ballpark; it was **not** an artifact of the production-default leak (leak would mainly corrupt capped baseline cells; uncapped+both is also ~61%).
+
 ## What we shipped
 
-1. **`DEFAULT_FPS = 15`** kept (only in-band choice). Exposed as `internal` + asserted in `TerminalFrameLimiterTest`.
-2. **Both terminal surfaces** (chat non-ACP + Actions dock share `BossTermBackend` / `BossTermAppearance`):
+1. **`DEFAULT_FPS = 15`** kept (only cap that can approach the band). Asserted in `TerminalFrameLimiterTest`.
+2. **Both terminal surfaces** (shared `BossTermAppearance` → `BossTermBackend`):
    - `performanceMode = "throughput"`
    - `detectFilePaths = false`
    - Overrides: `-Dandy.terminal.performanceMode=…`, `-Dandy.terminal.detectFilePaths=true|false`
-3. Harness + durable results file + gradle `-Dandy.bench*` / `-Dandy.terminal.*` forwarding.
+3. Harness pins A/B cells; durable results under `build/bossterm-pipeline-benchmark.txt`.
 
-Expected active streaming CPU: **~20%** (top of the target band), down from **~29%** at the old 15fps+latency+hyperlinks baseline. Visual smoothness is unchanged at 15fps — knobs buy budget, not fluidity.
+Expected active streaming CPU with shipped defaults: **~21–24%** (top of / slightly above the aspirational band), down from **~32%** at 15fps+latency+hyperlinks. Smoothness unchanged at 15fps.
 
 ## Can BossTerm be “fully performant” inside this CPU budget?
 
-**No — not with a high-fps feel.**
-
-Evidence:
-
-1. Per-character `requestRedraw()` (~2k/s) forces Andy’s DEC 2026 gate; BossTerm’s own `HIGH_VOLUME` backoff never engages; `maxRefreshRate` is dead.
-2. Full-grid Skia `renderTerminal` stays expensive per committed frame — uncapped is still ~59–62% even with knobs.
-3. **Best measured config is 15fps @ 20.2%.** Anything that feels smoother (24/30/uncapped) is 26–62%.
-4. Closed-source / minified jars — no path to fix the redraw model without replacing or forking.
-
-### Next iteration (informed decision, not a guess)
-
-| Option | Verdict |
-|--------|---------|
-| Stay on BossTerm @ 15fps + knobs (~20% CPU) | Shipped; acceptable if choppy streaming is OK |
-| Raise FPS on BossTerm | **Reject for the 10–20% goal** (measured) |
-| **Replace renderer** (e.g. xterm.js / WebGL via JCEF or similar) | **Required for smooth high-fps + ≤20% CPU** |
-
-**JCEF status in this repo:** no JCEF / JavaCEF / Compose WebView terminal dependency exists today (search covered `*.kt` / `*.kts` / docs). Adopting xterm.js would be a greenfield embed (JCEF or another WebView) plus PTY/tmux/scrollback/appearance parity — multi-PR. That is the correct next iteration if the product requirement is “feels like a normal terminal” inside the CPU band.
+**No — not with a high-fps feel.** Best near-band configs stay at 15fps; 24fps+both is already ~28–29%; uncapped absolute process CPU is ~61%. Closed-source per-character redraw model is the ceiling. Renderer replacement (e.g. xterm.js / WebGL) is the next-iteration decision; **JCEF is not a dependency in this repo today**.
 
 ## Repro
 
@@ -113,7 +118,4 @@ Evidence:
 ./gradlew desktopTest --tests "app.andy.terminal.BossTermPipelineBenchmarkTest" \
   -Dandy.bench=1 -Dandy.bench.knobs=1 --rerun-tasks
 # table → build/bossterm-pipeline-benchmark.txt
-
-# Packaged app (no JFR in jlinked JDK):
-# asprof -d 30 -e cpu -o collapsed -f out.collapsed <andy-pid>
 ```
