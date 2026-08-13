@@ -1,10 +1,14 @@
 package app.andy.ui.actions
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -27,10 +31,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -56,6 +58,8 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,7 +77,6 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.PendingConfirmation
-import app.andy.ui.components.StatusTag
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -81,7 +84,10 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
+import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.Red
@@ -97,6 +103,7 @@ internal enum class ProjectsPageTab(val label: String) {
 
 private const val LaneWidthDp = 280
 private val GrabOffset = Offset(24f, 16f)
+private const val KanbanMotionMs = 120
 
 private data class KanbanDragState(
     val cardId: String,
@@ -186,99 +193,206 @@ internal fun KanbanBoardScreen(services: AndyServices) {
         )
     }
 
-    Box(
+    Column(
         Modifier
             .fillMaxSize()
-            .onGloballyPositioned { boardCoordinates = it },
+            .padding(horizontal = AndySpace.Space4),
     ) {
-        Row(
+        KanbanBoardHeader(board = board)
+        Box(
             Modifier
-                .fillMaxSize()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+                .weight(1f)
+                .fillMaxWidth()
+                .onGloballyPositioned { boardCoordinates = it },
         ) {
-            board.lanes.forEachIndexed { laneIndex, lane ->
-                KanbanLaneColumn(
-                    lane = lane,
-                    laneIndex = laneIndex,
-                    laneCount = board.lanes.size,
-                    dragState = dragState,
-                    dropTarget = dropTarget,
-                    onLaneBounds = { rect -> laneBounds = laneBounds + (lane.id to rect) },
-                    onCardBounds = { cardId, rect ->
-                        if (rect == null) cardBounds.remove(cardId) else cardBounds[cardId] = rect
-                    },
-                    onCardClick = { card -> cardDialog = CardDialogState.Edit(card) },
-                    onAddCard = { cardDialog = CardDialogState.Create(lane.id) },
-                    onRenameLane = { laneNameDialog = LaneNameDialogState(lane.id, lane.name) },
-                    onDeleteLane = {
-                        if (lane.cards.isEmpty()) {
-                            services.kanban.deleteLane(lane.id)
-                        } else {
-                            pendingConfirmation = PendingConfirmation(
-                                title = "Delete lane?",
-                                message = "Delete '${lane.name}' and its ${lane.cards.size} card(s)? This can't be undone.",
-                                confirmLabel = "Delete",
-                            ) { services.kanban.deleteLane(lane.id) }
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = AndySpace.Space4),
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+            ) {
+                board.lanes.forEachIndexed { laneIndex, lane ->
+                    KanbanLaneColumn(
+                        lane = lane,
+                        cards = lane.cards,
+                        laneIndex = laneIndex,
+                        laneCount = board.lanes.size,
+                        dragState = dragState,
+                        dropTarget = dropTarget,
+                        onLaneBounds = { rect -> laneBounds = laneBounds + (lane.id to rect) },
+                        onCardBounds = { cardId, rect ->
+                            if (rect == null) cardBounds.remove(cardId) else cardBounds[cardId] = rect
+                        },
+                        onCardClick = { card -> cardDialog = CardDialogState.Edit(card) },
+                        onAddCard = { cardDialog = CardDialogState.Create(lane.id) },
+                        onRenameLane = { laneNameDialog = LaneNameDialogState(lane.id, lane.name) },
+                        onDeleteLane = {
+                            if (lane.cards.isEmpty()) {
+                                services.kanban.deleteLane(lane.id)
+                            } else {
+                                pendingConfirmation = PendingConfirmation(
+                                    title = "Delete lane?",
+                                    message = "Delete '${lane.name}' and its ${lane.cards.size} card(s)? This can't be undone.",
+                                    confirmLabel = "Delete",
+                                ) { services.kanban.deleteLane(lane.id) }
+                            }
+                        },
+                        onMoveLaneLeft = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Left) },
+                        onMoveLaneRight = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Right) },
+                        onDragStart = { card, cardSize, pointerInBoard ->
+                            dragState = KanbanDragState(
+                                cardId = card.id,
+                                sourceLaneId = lane.id,
+                                cardSize = cardSize,
+                                pointerPositionInBoard = pointerInBoard,
+                            )
+                        },
+                        onDrag = { delta ->
+                            dragState = dragState?.copy(
+                                pointerPositionInBoard = dragState!!.pointerPositionInBoard + delta,
+                            )
+                        },
+                        onDragEnd = {
+                            val drag = dragState ?: return@KanbanLaneColumn
+                            val target = resolveDropTarget(
+                                pointer = drag.pointerPositionInBoard,
+                                dragCardId = drag.cardId,
+                                lanes = board.lanes,
+                                laneBounds = laneBounds,
+                                cardBounds = cardBounds,
+                            )
+                            if (target != null) {
+                                services.kanban.moveCard(drag.cardId, target.laneId, target.index)
+                            }
+                            dragState = null
+                        },
+                        onDragCancel = { dragState = null },
+                        boardCoordinates = boardCoordinates,
+                        cardBounds = cardBounds,
+                    )
+                }
+            }
+
+            dragState?.let { drag ->
+                val card = board.lanes.flatMap { it.cards }.firstOrNull { it.id == drag.cardId } ?: return@let
+                val density = LocalDensity.current
+                val cardWidth = with(density) { drag.cardSize.width.toDp() }
+                KanbanCardView(
+                    card = card,
+                    modifier = Modifier
+                        .graphicsLayer {
+                            translationX = drag.pointerPositionInBoard.x - GrabOffset.x
+                            translationY = drag.pointerPositionInBoard.y - GrabOffset.y
                         }
-                    },
-                    onMoveLaneLeft = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Left) },
-                    onMoveLaneRight = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Right) },
-                    onDragStart = { card, cardSize, pointerInBoard ->
-                        dragState = KanbanDragState(
-                            cardId = card.id,
-                            sourceLaneId = lane.id,
-                            cardSize = cardSize,
-                            pointerPositionInBoard = pointerInBoard,
-                        )
-                    },
-                    onDrag = { delta ->
-                        dragState = dragState?.copy(
-                            pointerPositionInBoard = dragState!!.pointerPositionInBoard + delta,
-                        )
-                    },
-                    onDragEnd = {
-                        val drag = dragState ?: return@KanbanLaneColumn
-                        val target = resolveDropTarget(
-                            pointer = drag.pointerPositionInBoard,
-                            dragCardId = drag.cardId,
-                            lanes = board.lanes,
-                            laneBounds = laneBounds,
-                            cardBounds = cardBounds,
-                        )
-                        if (target != null) {
-                            services.kanban.moveCard(drag.cardId, target.laneId, target.index)
-                        }
-                        dragState = null
-                    },
-                    onDragCancel = { dragState = null },
-                    boardCoordinates = boardCoordinates,
-                    cardBounds = cardBounds,
+                        .width(cardWidth)
+                        .alpha(0.95f),
                 )
             }
-        }
-
-        dragState?.let { drag ->
-            val card = board.lanes.flatMap { it.cards }.firstOrNull { it.id == drag.cardId } ?: return@let
-            val density = LocalDensity.current
-            val cardWidth = with(density) { drag.cardSize.width.toDp() }
-            KanbanCardView(
-                card = card,
-                modifier = Modifier
-                    .graphicsLayer {
-                        translationX = drag.pointerPositionInBoard.x - GrabOffset.x
-                        translationY = drag.pointerPositionInBoard.y - GrabOffset.y
-                    }
-                    .width(cardWidth)
-                    .alpha(0.95f),
-            )
         }
     }
 }
 
 @Composable
+private fun KanbanBoardHeader(board: KanbanBoard) {
+    val totalCards = board.lanes.sumOf { it.cards.size }
+    val completedCards = board.lanes
+        .filter { lane -> isCompletedLane(lane) }
+        .sumOf { it.cards.size }
+    val activeCards = totalCards - completedCards
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = AndySpace.Space5, bottom = AndySpace.Space4),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(AndySpace.Space1)) {
+                Text(
+                    "Kanban",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 20.sp,
+                    lineHeight = 26.sp,
+                )
+                Text(
+                    "Drag cards to move them across the board",
+                    color = TextSecondary,
+                    fontFamily = DisplayFont,
+                    fontSize = 12.sp,
+                )
+            }
+            KanbanSummaryMetric("cards", totalCards, TextPrimary)
+            KanbanSummaryMetric("active", activeCards, Cyan)
+            KanbanSummaryMetric("done", completedCards, Green)
+        }
+
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Border.copy(alpha = 0.65f)),
+        )
+    }
+}
+
+@Composable
+private fun KanbanSummaryMetric(label: String, value: Int, color: Color) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+    ) {
+        Text(
+            value.toString(),
+            color = color,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 16.sp,
+        )
+        Text(
+            label.uppercase(),
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 9.sp,
+            letterSpacing = 0.7.sp,
+        )
+    }
+}
+
+private fun isCompletedLane(lane: KanbanLane): Boolean =
+    isCompletedKanbanLane(laneId = lane.id, laneName = lane.name)
+
+/**
+ * Treats a lane as completed only for explicit done-ish ids/labels.
+ *
+ * Substring matching is intentionally avoided so names like "Incomplete", "Undone",
+ * or "Not done" do not inflate the board's done total.
+ */
+internal fun isCompletedKanbanLane(laneId: String, laneName: String): Boolean {
+    if (laneId.equals("done", ignoreCase = true)) return true
+    val name = laneName.trim()
+    if (name.isEmpty()) return false
+    val lower = name.lowercase()
+    if (UNFINISHED_LANE_LABEL.containsMatchIn(lower)) return false
+    return COMPLETED_LANE_LABEL.containsMatchIn(lower)
+}
+
+private val COMPLETED_LANE_LABEL =
+    Regex("""\b(done|complete|completed|finished)\b""")
+
+private val UNFINISHED_LANE_LABEL =
+    Regex("""\b(incomplete|undone|not[\s-]+done|not[\s-]+complete[d]?)\b""")
+
+@Composable
 private fun KanbanLaneColumn(
     lane: KanbanLane,
+    cards: List<KanbanCard>,
     laneIndex: Int,
     laneCount: Int,
     dragState: KanbanDragState?,
@@ -300,14 +414,27 @@ private fun KanbanLaneColumn(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val isDropTarget = dropTarget?.laneId == lane.id && dragState != null
+    // Light mode needs an opaque well — PaneBg@alpha washes out on the canvas.
+    // Dark keeps a soft translucent pane so lanes sit lightly on the deep content bg.
+    val idleLane = if (AndyColors.isLight) AndyColors.PaneBg else AndyColors.PaneBg.copy(alpha = 0.62f)
+    val dropLane = if (AndyColors.isLight) {
+        AndyColors.SurfaceSelected
+    } else {
+        AndyColors.SurfaceSelected.copy(alpha = 0.68f)
+    }
+    val laneBackground by animateColorAsState(
+        targetValue = if (isDropTarget) dropLane else idleLane,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanLaneBackground",
+    )
 
     Column(
         Modifier
             .width(LaneWidthDp.dp)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(AndyRadius.Row))
-            .background(if (isDropTarget) AndyColors.SurfaceHover else Color.Transparent)
-            .padding(horizontal = AndySpace.Space2)
+            .clip(AndyShape.Row)
+            .background(laneBackground, AndyShape.Row)
+            .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space3)
             .onGloballyPositioned { coordinates ->
                 val boardOrigin = boardCoordinates?.positionInRoot() ?: Offset.Zero
                 val bounds = coordinates.boundsInRoot()
@@ -338,15 +465,16 @@ private fun KanbanLaneColumn(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                lane.cards.size.toString(),
+                cards.size.toString(),
                 color = TextSecondary,
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
             )
-            Box {
-                IconButton(onClick = { menuExpanded = true }, modifier = Modifier.size(28.dp)) {
-                    Text("⋯", color = TextSecondary, fontSize = 16.sp)
-                }
+            KanbanIconButton(
+                contentDescription = "Actions for ${lane.name}",
+                onClick = { menuExpanded = true },
+            ) {
+                Text("⋯", color = TextSecondary, fontSize = 16.sp)
                 DropdownMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
@@ -377,10 +505,10 @@ private fun KanbanLaneColumn(
 
         Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
             val insertionIndex = if (isDropTarget) dropTarget.index else null
-            if (lane.cards.isEmpty() && insertionIndex == 0) {
+            if (cards.isEmpty() && insertionIndex == 0) {
                 KanbanInsertionIndicator()
             }
-            lane.cards.forEachIndexed { index, card ->
+            cards.forEachIndexed { index, card ->
                 if (insertionIndex == index) {
                     KanbanInsertionIndicator()
                 }
@@ -426,14 +554,16 @@ private fun KanbanLaneColumn(
                         },
                 )
             }
-            if (insertionIndex == lane.cards.size) {
+            if (insertionIndex == cards.size) {
                 KanbanInsertionIndicator()
             }
         }
 
-        TextButton(onClick = onAddCard, modifier = Modifier.align(Alignment.Start)) {
-            Text("+ Add card", color = TextSecondary, fontFamily = DisplayFont, fontSize = 12.sp)
-        }
+        KanbanTextAction(
+            label = "+ Add card",
+            onClick = onAddCard,
+            modifier = Modifier.align(Alignment.Start),
+        )
     }
 }
 
@@ -442,23 +572,92 @@ internal fun KanbanAddLaneAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    KanbanTextAction(
+        label = "+ Add lane",
+        onClick = onClick,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun KanbanTextAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    val textColor = when {
-        hovered -> TextPrimary.copy(alpha = 0.82f)
-        else -> TextSecondary
-    }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val textColor by animateColorAsState(
+        targetValue = if (hovered) TextPrimary else TextSecondary,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanTextActionColor",
+    )
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanTextActionScale",
+    )
     Text(
-        "+ Add lane",
+        label,
         color = textColor,
         fontFamily = DisplayFont,
         fontSize = 12.sp,
         modifier = modifier
-            .clip(RoundedCornerShape(AndyRadius.Control))
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .clip(AndyShape.Interactive)
             .hoverable(interactionSource)
-            .clickable(onClick = onClick)
-            .padding(horizontal = AndySpace.Space2, vertical = 4.dp),
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = AndySpace.Space2, vertical = 5.dp),
     )
+}
+
+@Composable
+private fun KanbanIconButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val background by animateColorAsState(
+        targetValue = if (hovered) AndyColors.SurfaceHover else Color.Transparent,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanIconButtonBackground",
+    )
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.96f else 1f,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanIconButtonScale",
+    )
+    Box(
+        Modifier
+            .size(28.dp)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .clip(AndyShape.Interactive)
+            .background(background, AndyShape.Interactive)
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
 }
 
 @Composable
@@ -491,15 +690,32 @@ private fun KanbanCardView(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
+    val interactionSource = remember(card.id) { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val cardBackground by animateColorAsState(
+        targetValue = if (hovered) AndyColors.SurfaceHover else AndyColors.SurfaceRaised,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanCardBackground",
+    )
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed && onClick != null) 0.97f else 1f,
+        animationSpec = tween(KanbanMotionMs),
+        label = "kanbanCardScale",
+    )
     Column(
         modifier
             .fillMaxWidth()
             .clip(AndyShape.Row)
-            .background(AndyColors.SurfaceRaised, AndyShape.Row)
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .background(cardBackground, AndyShape.Row)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = interactionSource,
                         indication = null,
                         onClick = onClick,
                     )
@@ -507,7 +723,8 @@ private fun KanbanCardView(
                     Modifier
                 },
             )
-            .padding(AndySpace.Space4),
+            .hoverable(interactionSource)
+            .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Text(
@@ -525,7 +742,8 @@ private fun KanbanCardView(
                 color = TextSecondary,
                 fontFamily = DisplayFont,
                 fontSize = 12.sp,
-                maxLines = 2,
+                lineHeight = 17.sp,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -544,7 +762,27 @@ private fun KanbanCardView(
 
 @Composable
 private fun KanbanTagChip(tag: String) {
-    StatusTag(tag, tagColor(tag))
+    val color = tagColor(tag)
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(color.copy(alpha = 0.13f), RoundedCornerShape(AndyRadius.Control))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+    ) {
+        Box(Modifier.size(5.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
+        Text(
+            tag,
+            color = color,
+            fontFamily = DisplayFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 private fun tagColor(tag: String): Color =

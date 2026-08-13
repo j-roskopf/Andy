@@ -68,13 +68,14 @@ internal fun WorkspaceSplit(
 @Composable
 internal fun WorkspaceRail(
     modifier: Modifier = Modifier,
+    contentSpacing: Dp = AndySpace.Space3,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier
             .rightBorder(Border)
             .padding(end = AndySpace.Space3),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(contentSpacing),
         content = content,
     )
 }

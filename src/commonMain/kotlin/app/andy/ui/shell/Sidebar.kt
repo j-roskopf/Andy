@@ -93,7 +93,9 @@ internal fun Sidebar(
     sdk: SdkDiscovery,
     updates: AppUpdateService?,
     mcpRunning: Boolean,
-    mcpPort: Int
+    mcpPort: Int,
+    /** Clears traffic-light / title-bar chrome while keeping SidebarBg full-bleed underneath. */
+    contentTopPadding: Dp = 0.dp,
 ) {
     val updateState by if (updates != null) {
         updates.state.collectAsState()
@@ -135,6 +137,7 @@ internal fun Sidebar(
             .width(sidebarWidth)
             .fillMaxHeight()
             .background(AndyColors.SidebarBg)
+            .padding(top = contentTopPadding)
             .padding(horizontal = horizontalPadding, vertical = AndySpace.Space3),
     ) {
         Row(

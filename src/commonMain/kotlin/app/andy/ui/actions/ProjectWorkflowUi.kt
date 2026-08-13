@@ -267,8 +267,6 @@ private fun WorkflowRow(
     ) {
         if (expandable) {
             Text(if (expanded) "v" else ">", color = TextSecondary, fontFamily = MonoFont, modifier = Modifier.width(10.dp).clickable(onClick = onToggle))
-        } else {
-            Box(Modifier.width(3.dp).height(30.dp).background(accent, RoundedCornerShape(2.dp)))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {

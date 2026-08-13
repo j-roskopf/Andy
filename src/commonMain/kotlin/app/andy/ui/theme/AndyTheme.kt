@@ -215,27 +215,35 @@ private data class AndyTonalPalette(
             textDisabled = Color.White.copy(alpha = 0.26f),
         )
 
-        /** Soft minimal light palette — warm neutrals, tuned independently. */
+        /**
+         * Soft minimal light palette — tuned independently of dark.
+         *
+         * Lightness rises with elevation (canvas → pane/well → raised white),
+         * matching how the shell uses ContentBg under SurfaceRaised chrome.
+         * Keep steps wide enough that kanban lanes, chat rails, and the composer
+         * remain distinct without relying on borders.
+         */
         fun light() = AndyTonalPalette(
             neutral100 = Color.Black.copy(alpha = 0.88f),
             neutral200 = Color.Black.copy(alpha = 0.88f),
             neutral300 = Color.Black.copy(alpha = 0.62f),
             neutral400 = Color.Black.copy(alpha = 0.42f),
             neutral500 = Color.Black.copy(alpha = 0.24f),
-            neutral600 = Color(0xFFE8E8E8), // surface-hover
+            neutral600 = Color(0xFFE2E2E2), // surface-hover
             neutral700 = Color(0xFFFFFFFF), // surface-raised
-            neutral750 = Color(0xFFEDEDED), // sidebar-bg
-            neutral800 = Color(0xFFFAFAFA), // pane-bg
-            neutral850 = Color(0xFFFFFFFF), // content-bg
-            neutral900 = Color(0xFFF5F5F5), // window-bg
-            border = Color.Black.copy(alpha = 0.06f),
-            borderMedium = Color.Black.copy(alpha = 0.10f),
-            windowBg = Color(0xFFF5F5F5),
-            sidebarBg = Color(0xFFEDEDED),
-            paneBg = Color(0xFFFAFAFA),
-            contentBg = Color(0xFFFFFFFF),
-            surfaceHover = Color(0xFFE8E8E8),
-            surfaceSelected = Color(0xFFDCDCDC),
+            neutral750 = Color(0xFFE8E8E8), // sidebar-bg
+            neutral800 = Color(0xFFEBEBEB), // pane-bg / wells
+            neutral850 = Color(0xFFF2F2F2), // content-bg
+            neutral900 = Color(0xFFF2F2F2), // window-bg
+            border = Color.Black.copy(alpha = 0.08f),
+            borderMedium = Color.Black.copy(alpha = 0.12f),
+            windowBg = Color(0xFFF2F2F2),
+            sidebarBg = Color(0xFFE8E8E8),
+            paneBg = Color(0xFFEBEBEB),
+            // Same role as dark contentBg: recessed canvas behind raised surfaces.
+            contentBg = Color(0xFFF2F2F2),
+            surfaceHover = Color(0xFFE2E2E2),
+            surfaceSelected = Color(0xFFD6D6D6),
             surfaceRaised = Color(0xFFFFFFFF),
             textPrimary = Color.Black.copy(alpha = 0.88f),
             textSecondary = Color.Black.copy(alpha = 0.62f),

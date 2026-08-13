@@ -121,6 +121,7 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.model.AgentStatus
 import app.andy.ui.agents.AgentHeaderAction
+import app.andy.ui.agents.AgentStarterPrompt
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatSessionSidebarRow
@@ -133,6 +134,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -167,14 +169,32 @@ private val ProjectChatSort =
     compareByDescending<AgentTask> { it.createdAtMillis }
 
 private enum class ProjectCanvas(val label: String) {
-    Chat("chat"),
-    Tasks("tasks"),
-    Runbook("runbook"),
-    Scratchpad("scratchpad"),
-    Worktrees("worktrees"),
+    Chat("Chat"),
+    Tasks("Tasks"),
+    Runbook("Runbook"),
+    Scratchpad("Scratchpad"),
+    Worktrees("Worktrees"),
 }
 
 private const val RecentSessionsPerProject = 5
+
+private fun projectChatStarterPrompts(project: ActionProject): List<AgentStarterPrompt> = listOf(
+    AgentStarterPrompt(
+        label = "Plan a change",
+        description = "Turn an idea into a scoped implementation plan",
+        prompt = "Help me plan the next change for ${project.name}. Start by inspecting the relevant code and call out the files and risks.",
+    ),
+    AgentStarterPrompt(
+        label = "Inspect the codebase",
+        description = "Find the important paths, conventions, and current constraints",
+        prompt = "Inspect ${project.name} and summarize the most important architecture and conventions I should know before making a change.",
+    ),
+    AgentStarterPrompt(
+        label = "Run a verification",
+        description = "Choose the smallest useful check for the next step",
+        prompt = "Review ${project.name}, identify the most relevant verification for the current state, and run it if it is safe to do so.",
+    ),
+)
 
 @Composable
 private fun ProjectCockpit(
@@ -203,7 +223,12 @@ private fun ProjectCockpit(
     var chatDetailsExpanded by remember { mutableStateOf(false) }
     var selectedWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var initialWorkflowSelectionApplied by remember { mutableStateOf(false) }
-    var canvas by remember { mutableStateOf(ProjectCanvas.entries.firstOrNull { it.label == initialCanvasLabel } ?: ProjectCanvas.Chat) }
+    var canvas by remember {
+        mutableStateOf(
+            ProjectCanvas.entries.firstOrNull { it.label.equals(initialCanvasLabel, ignoreCase = true) }
+                ?: ProjectCanvas.Chat,
+        )
+    }
     var query by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
@@ -388,7 +413,10 @@ private fun ProjectCockpit(
 
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                WorkspaceRail(Modifier.width(railWidth).fillMaxHeight()) {
+                WorkspaceRail(
+                    Modifier.width(railWidth).fillMaxHeight(),
+                    contentSpacing = AndySpace.Space2,
+                ) {
                     ProjectsSidebarHeader(
                         query = query,
                         onQueryChange = { query = it },
@@ -417,8 +445,10 @@ private fun ProjectCockpit(
                             val sessionsCollapsed = !searchActive && item.id in collapsedProjectIds
                             ProjectSessionGroup(
                                 project = item,
+                                selected = item.id == selectedProjectId,
                                 nowMillis = nowMillis,
                                 hasUnread = item.id in unreadProjectIds,
+                                chatCount = chatLists.active.size,
                                 sessions = when {
                                     entry.searchSessions != null -> entry.searchSessions
                                     sessionsCollapsed -> emptyList()
@@ -541,6 +571,7 @@ private fun ProjectCockpit(
                                             modifier = Modifier.fillMaxSize(),
                                             workspaceState = workspaceState,
                                             dictationActive = active && chatActive && selected == null,
+                                            starterPrompts = projectChatStarterPrompts(current),
                                         )
                                     }
                                     if (selected != null) {
@@ -874,34 +905,58 @@ private fun ProjectsSidebarHeader(
     onNew: () -> Unit,
 ) {
     val searchVisible = searchExpanded || query.isNotBlank()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = AndySpace.Space2),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Projects",
+                "PROJECTS",
                 color = TextSecondary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
+                fontFamily = MonoFont,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 10.sp,
+                letterSpacing = 0.8.sp,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-            SearchGlyphButton(
-                active = searchVisible,
-                onClick = {
-                    if (searchVisible && query.isBlank()) {
-                        onSearchExpandedChange(false)
-                    } else {
-                        onSearchExpandedChange(true)
-                    }
-                },
-            )
-            Spacer(Modifier.width(4.dp))
-            PlusGlyphButton(onClick = onNew)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+            ) {
+                SearchGlyphButton(
+                    active = searchVisible,
+                    onClick = {
+                        if (searchVisible && query.isBlank()) {
+                            onSearchExpandedChange(false)
+                        } else {
+                            onSearchExpandedChange(true)
+                        }
+                    },
+                )
+                PlusGlyphButton(onClick = onNew)
+            }
+        }
+        if (!searchVisible) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(AndyRadius.Control))
+                    .background(AndyColors.SurfaceHover.copy(alpha = 0.52f))
+                    .clickable { onSearchExpandedChange(true) }
+                    .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            ) {
+                SearchGlyph(TextSecondary.copy(alpha = 0.64f))
+                Text(
+                    "Search projects and chats",
+                    color = TextSecondary.copy(alpha = 0.66f),
+                    fontFamily = DisplayFont,
+                    fontSize = 11.sp,
+                )
             }
         }
         AnimatedVisibility(
@@ -1136,6 +1191,29 @@ private fun projectSidebarTaskMatches(query: String, task: AgentTask): Boolean {
 private val ProjectSidebarViolet = Color(0xFF8B5CF6)
 
 @Composable
+private fun ProjectMonogram(
+    name: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .size(30.dp)
+            .clip(AndyShape.Row)
+            .background(if (selected) Cyan.copy(alpha = 0.18f) else AndyColors.SurfaceHover),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            name.firstOrNull()?.uppercase() ?: "?",
+            color = if (selected) Cyan else TextSecondary,
+            fontFamily = MonoFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+        )
+    }
+}
+
+@Composable
 private fun WorktreeBranchGlyph(modifier: Modifier = Modifier) {
     Canvas(modifier.size(14.dp)) {
         val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round)
@@ -1166,7 +1244,7 @@ private fun ProjectsSidebarFooter() {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 2.dp),
+            .padding(top = AndySpace.Space1, bottom = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1182,8 +1260,10 @@ private fun ProjectsSidebarFooter() {
 @Composable
 private fun ProjectSessionGroup(
     project: ActionProject,
+    selected: Boolean,
     nowMillis: Long,
     hasUnread: Boolean,
+    chatCount: Int,
     sessions: List<AgentTask>,
     selectedSessionId: String?,
     sessionsCollapsed: Boolean,
@@ -1206,33 +1286,45 @@ private fun ProjectSessionGroup(
 
     Column(
         Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .clip(AndyShape.Row)
                 .hoverable(interactionSource)
                 .clickable(onClick = onToggleProject)
-                .padding(vertical = 3.dp),
+                .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            ProjectFolderGlyph(expanded = !sessionsCollapsed)
-            Text(
-                project.name,
-                color = TextPrimary.copy(alpha = 0.92f),
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Text(
+                    project.name,
+                    color = TextPrimary.copy(alpha = 0.94f),
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "$chatCount ${if (chatCount == 1) "chat" else "chats"} · ${if (project.source == ConfigSource.Repo) "repository" else "local"}",
+                    color = TextSecondary.copy(alpha = 0.62f),
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
-                if (hovered) {
+                if (hovered || selected) {
                     if (project.source != ConfigSource.Repo) {
                         Text(
                             "edit",
@@ -1242,7 +1334,7 @@ private fun ProjectSessionGroup(
                             modifier = Modifier.clickable(onClick = onEditProject),
                         )
                     }
-                    NewProjectChatButton(onClick = onNewChat, size = 13.dp)
+                    NewProjectChatButton(onClick = onNewChat, size = 15.dp)
                 }
                 if (hasUnread) UnreadDot()
             }
@@ -1253,20 +1345,9 @@ private fun ProjectSessionGroup(
             exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
         ) {
             Column(
-                Modifier.padding(start = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                Modifier.padding(start = AndySpace.Space3),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                if (viewingArchived) {
-                    Text(
-                        "ARCHIVED",
-                        color = TextSecondary.copy(alpha = 0.55f),
-                        fontFamily = MonoFont,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 10.sp,
-                        letterSpacing = 0.6.sp,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 4.dp),
-                    )
-                }
                 sessions.forEach { task ->
                     ProjectSessionRow(
                         task = task,
@@ -1283,26 +1364,26 @@ private fun ProjectSessionGroup(
                 }
                 if (showMore) {
                     Text(
-                        "Show more",
-                        color = TextSecondary.copy(alpha = 0.55f),
+                        "Show all chats",
+                        color = Cyan.copy(alpha = 0.78f),
                         fontFamily = DisplayFont,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         modifier = Modifier
-                            .padding(top = 2.dp)
+                            .padding(start = AndySpace.Space2)
                             .clickable(onClick = onShowMore)
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                     )
                 }
                 if (archivedCount > 0 || viewingArchived) {
                     Text(
                         if (viewingArchived) "Back to chats" else "Archived ($archivedCount)",
-                        color = TextSecondary.copy(alpha = 0.55f),
+                        color = TextSecondary.copy(alpha = 0.62f),
                         fontFamily = DisplayFont,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         modifier = Modifier
-                            .padding(top = 2.dp)
+                            .padding(start = AndySpace.Space2)
                             .clickable(onClick = onToggleArchived)
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                     )
                 }
             }
@@ -1328,19 +1409,21 @@ private fun ProjectSessionRow(
             selected = selected,
             nowMillis = nowMillis,
             onClick = onOpen,
-            modifier = Modifier.pointerInput(task.id) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        if (event.type != PointerEventType.Press) continue
-                        val change = event.changes.firstOrNull() ?: continue
-                        if (event.buttons.isSecondaryPressed) {
-                            menuExpanded = true
-                            change.consume()
+            modifier = Modifier
+                .fillMaxWidth()
+                .pointerInput(task.id) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type != PointerEventType.Press) continue
+                            val change = event.changes.firstOrNull() ?: continue
+                            if (event.buttons.isSecondaryPressed) {
+                                menuExpanded = true
+                                change.consume()
+                            }
                         }
                     }
-                }
-            },
+                },
             trailing = when {
                 task.status == AgentStatus.Blocked -> {
                     { StatusTag("blocked", Red) }
@@ -1392,43 +1475,60 @@ private fun ProjectChatToolbar(
 ) {
     Column(
         Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .height(40.dp),
+                .height(44.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         ) {
-            Text(
-                project.name,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Text(
-                project.contextDir,
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            ProjectMonogram(project.name, selected = true)
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                ) {
+                    Text(
+                        project.name,
+                        color = TextPrimary,
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 15.sp,
+                        lineHeight = 19.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        if (project.source == ConfigSource.Repo) "REPOSITORY" else "LOCAL",
+                        color = Cyan.copy(alpha = 0.78f),
+                        fontFamily = MonoFont,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.6.sp,
+                    )
+                }
+                Text(
+                    project.contextDir,
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            chatActions?.invoke()
         }
         TabBar(
             tabs = ProjectCanvas.entries,
             selected = canvas,
             onSelect = onCanvasChange,
             label = { it.label },
-            trailing = chatActions,
         )
     }
 }

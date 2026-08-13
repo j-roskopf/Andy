@@ -229,8 +229,8 @@ internal fun ChatSessionSidebarRow(
             .clip(RoundedCornerShape(AndyRadius.Row))
             .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -250,7 +250,7 @@ internal fun ChatSessionSidebarRow(
                     else -> FontWeight.Normal
                 },
                 fontSize = 13.sp,
-                lineHeight = 18.sp,
+                lineHeight = 16.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
