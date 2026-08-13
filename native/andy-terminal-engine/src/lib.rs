@@ -6,8 +6,13 @@
 //!
 //! The production Compose/BossTerm path is intentionally untouched.
 
+uniffi::setup_scaffolding!();
+
 mod engine;
+mod ffi_jni;
+mod ffi_uniffi;
 
 pub use engine::{
     CellAttrFlags, CellSnapshot, CursorSnapshot, EngineSize, GridSnapshot, TerminalEngine,
 };
+pub use ffi_uniffi::uniffi_round_trip_add;

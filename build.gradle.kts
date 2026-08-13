@@ -204,6 +204,12 @@ kotlin {
             }
         }
         val desktopTest by getting {
+            // UniFFI probe sources are macOS-only (see desktopTestMacOs below) so Linux/Windows
+            // CI does not require cargo or generated Kotlin bindings.
+            if (System.getProperty("os.name").lowercase().contains("mac")) {
+                kotlin.srcDir("src/desktopTestMacOs/kotlin")
+                kotlin.srcDir(layout.buildDirectory.dir("generated/andy-terminal-engine/uniffi"))
+            }
             dependencies {
                 implementation(kotlin("test"))
                 implementation("org.jetbrains.compose.ui:ui-test-junit4:1.11.1")
@@ -258,6 +264,83 @@ val verifyScrcpyServer by tasks.registering {
     }
 }
 
+val andyTerminalEngineCrate = layout.projectDirectory.dir("native/andy-terminal-engine")
+val andyTerminalEngineCargoDylib =
+    andyTerminalEngineCrate.file("target/release/libandy_terminal_engine.dylib")
+val andyTerminalEngineUniffiOut =
+    layout.buildDirectory.dir("generated/andy-terminal-engine/uniffi")
+
+val buildAndyTerminalEngineNative by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Phase-0 alacritty_terminal JNI/UniFFI cdylib via cargo."
+    workingDir = andyTerminalEngineCrate.asFile
+    inputs.files(
+        andyTerminalEngineCrate.file("Cargo.toml"),
+        andyTerminalEngineCrate.file("Cargo.lock"),
+        andyTerminalEngineCrate.file("uniffi-bindgen.rs"),
+    )
+    inputs.dir(andyTerminalEngineCrate.dir("src"))
+    outputs.file(andyTerminalEngineCargoDylib)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac")
+    }
+    commandLine("cargo", "build", "--release", "--features", "uniffi-cli")
+    doLast {
+        val arch = System.getProperty("os.arch").lowercase()
+        val slice = when (arch) {
+            "aarch64", "arm64" -> "macos-arm64"
+            "x86_64", "amd64" -> "macos-x86_64"
+            else -> error("Unsupported macOS arch for andy-terminal-engine: $arch")
+        }
+        val staged = layout.buildDirectory
+            .file("native/andy-terminal-engine/$slice/libandy_terminal_engine.dylib")
+            .get()
+            .asFile
+        staged.parentFile.mkdirs()
+        andyTerminalEngineCargoDylib.asFile.copyTo(staged, overwrite = true)
+    }
+}
+
+val generateAndyTerminalEngineUniffi by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Generates UniFFI Kotlin bindings for the terminal-engine FFI probe."
+    dependsOn(buildAndyTerminalEngineNative)
+    workingDir = andyTerminalEngineCrate.asFile
+    inputs.file(andyTerminalEngineCargoDylib)
+    outputs.dir(andyTerminalEngineUniffiOut)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac")
+    }
+    doFirst {
+        andyTerminalEngineUniffiOut.get().asFile.mkdirs()
+    }
+    commandLine(
+        "cargo",
+        "run",
+        "--release",
+        "--features",
+        "uniffi-cli",
+        "--bin",
+        "uniffi-bindgen",
+        "--",
+        "generate",
+        "--library",
+        andyTerminalEngineCargoDylib.asFile.absolutePath,
+        "--language",
+        "kotlin",
+        "--out-dir",
+        andyTerminalEngineUniffiOut.get().asFile.absolutePath,
+        "--no-format",
+    )
+}
+
+tasks.named("compileTestKotlinDesktop") {
+    // UniFFI-generated Kotlin is only compiled into desktopTest on macOS hosts.
+    if (System.getProperty("os.name").lowercase().contains("mac")) {
+        dependsOn(generateAndyTerminalEngineUniffi)
+    }
+}
+
 tasks.named<Copy>("desktopProcessResources") {
     dependsOn(
         "buildAndyMirrorJniMacArm64",
@@ -266,6 +349,7 @@ tasks.named<Copy>("desktopProcessResources") {
         "buildAndyNotificationsJniMacX64",
         "buildAndyVoiceJniMacArm64",
         "buildAndyVoiceJniMacX64",
+        buildAndyTerminalEngineNative,
         verifyScrcpyServer,
     )
     from(layout.buildDirectory.dir("native/andy-mirror")) {
@@ -279,6 +363,10 @@ tasks.named<Copy>("desktopProcessResources") {
     from(layout.buildDirectory.dir("native/andy-voice")) {
         include("**/andy-voice-jni.dylib")
         into("andy-voice")
+    }
+    from(layout.buildDirectory.dir("native/andy-terminal-engine")) {
+        include("**/libandy_terminal_engine.dylib")
+        into("andy-terminal-engine")
     }
 }
 
@@ -522,6 +610,8 @@ tasks.withType<Test>().configureEach {
         "andy.terminal.repaint.renderWindowMs",
         "andy.terminal.performanceMode",
         "andy.terminal.detectFilePaths",
+        "andy.rust.term.bench",
+        "andy.terminal.engine.dylib",
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }

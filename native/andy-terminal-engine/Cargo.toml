@@ -10,10 +10,21 @@ publish = false
 name = "andy_terminal_engine"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi-cli"]
+
+[features]
+default = []
+# Enables the UniFFI bindgen binary used by the Phase-0 boundary probe.
+uniffi-cli = ["uniffi/cli"]
+
 [dependencies]
 alacritty_terminal = "0.26"
 parking_lot = "0.12"
-# jni / uniffi added in a later commit once the engine API is proven.
+jni = "0.21"
+uniffi = "0.32"
 
-[dev-dependencies]
-# in-crate tests only
+[build-dependencies]
+# none — UniFFI proc-macro scaffolding needs no build.rs
