@@ -519,6 +519,7 @@ tasks.withType<Test>().configureEach {
         "andy.bench.measureSec",
         "andy.bench.stream",
         "andy.terminal.repaint.fps",
+        "andy.terminal.repaint.renderWindowMs",
         "andy.terminal.performanceMode",
         "andy.terminal.detectFilePaths",
     ).forEach { key ->

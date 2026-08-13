@@ -207,12 +207,14 @@ class TerminalFrameLimiter(
         /**
          * Default cap, in frames per second.
          *
-         * 15 matches the cap the Swing-era throttle settled on, which was measured as the best
-         * of {off, 60, 15} against a real PTY and has never drawn a latency complaint. Its 67ms
-         * worst case only ever applies to streaming output — user input bypasses it via
-         * [flushNow].
+         * Kept at 15 after the BossTerm Compose re-measure (2026-08): under agent-like streaming,
+         * 24/30/45fps all landed above the 10–20% process-CPU target, and even 15fps sits near
+         * ~30% without the agent-CLI knob defaults in [BossTermAppearance]. Raising this without
+         * a cheaper renderer regresses the budget — see
+         * `docs/terminal-performance-investigation.md`.
          *
          * Override with `-Dandy.terminal.repaint.fps=<n>` (same property as before); `0` disables.
+         * User input bypasses the cap via [flushNow].
          */
         private const val DEFAULT_FPS = 15L
 
@@ -231,6 +233,9 @@ class TerminalFrameLimiter(
          * 60Hz, ~10ms at 144Hz, both landing near one rendered frame per cycle.
          */
         private fun defaultRenderWindowMillis(): Long {
+            System.getProperty("andy.terminal.repaint.renderWindowMs")?.toLongOrNull()?.let { override ->
+                if (override > 0L) return override.coerceIn(4L, 50L)
+            }
             val hz = runCatching {
                 java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
                     .defaultScreenDevice.displayMode.refreshRate

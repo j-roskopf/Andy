@@ -45,6 +45,8 @@ object BossTermPipelineBenchmark {
         val fps: Long,
         val detectFilePaths: Boolean? = null,
         val performanceMode: String? = null,
+        /** Override for `andy.terminal.repaint.renderWindowMs`; null keeps display default. */
+        val renderWindowMs: Long? = null,
         /** When true, argv is a quiet `cat` instead of the streaming workload. */
         val idle: Boolean = false,
     )
@@ -107,6 +109,45 @@ object BossTermPipelineBenchmark {
                 description = "Uncapped + detectFilePaths=false",
                 fps = 0L,
                 detectFilePaths = false,
+            ),
+            Variant(
+                name = "15fps+both",
+                description = "15fps + detectFilePaths=false + performanceMode=throughput",
+                fps = 15L,
+                detectFilePaths = false,
+                performanceMode = "throughput",
+            ),
+            Variant(
+                name = "24fps+both",
+                description = "24fps + detectFilePaths=false + performanceMode=throughput",
+                fps = 24L,
+                detectFilePaths = false,
+                performanceMode = "throughput",
+            ),
+            Variant(
+                name = "30fps+both",
+                description = "30fps + detectFilePaths=false + performanceMode=throughput",
+                fps = 30L,
+                detectFilePaths = false,
+                performanceMode = "throughput",
+            ),
+            // At 24–30fps the default ~25ms open window (1.5× 60Hz frame) consumes most of
+            // the cycle, so Compose can paint multiple display frames per "capped" tick.
+            Variant(
+                name = "24fps+rw12",
+                description = "24fps + renderWindowMs=12 (one 60Hz frame) + throughput + noHyperlinks",
+                fps = 24L,
+                detectFilePaths = false,
+                performanceMode = "throughput",
+                renderWindowMs = 12L,
+            ),
+            Variant(
+                name = "30fps+rw10",
+                description = "30fps + renderWindowMs=10 + throughput + noHyperlinks",
+                fps = 30L,
+                detectFilePaths = false,
+                performanceMode = "throughput",
+                renderWindowMs = 10L,
             ),
         )
     }
@@ -187,54 +228,56 @@ object BossTermPipelineBenchmark {
         var session: BossTermBackend? = null
 
         withProp("andy.terminal.repaint.fps", variant.fps.toString()) {
-            withProp(
-                "andy.terminal.detectFilePaths",
-                variant.detectFilePaths?.toString(),
-            ) {
-                withProp("andy.terminal.performanceMode", variant.performanceMode) {
-                    val argv = if (variant.idle) {
-                        listOf("/bin/sh", "-c", "cat")
-                    } else {
-                        streamCommand()
-                    }
-                    session = TerminalSessions.create(
-                        TerminalLaunchRequest(
-                            sessionId = "bossterm-bench-${variant.name}-${System.nanoTime()}",
-                            argv = argv,
-                            cols = 120,
-                            rows = 40,
-                            mode = TerminalMode.DirectPty,
-                            agentCli = true,
-                            appearance = TerminalAppearanceSnapshot(),
-                        ),
-                    ) as BossTermBackend
+            withProp("andy.terminal.repaint.renderWindowMs", variant.renderWindowMs?.toString()) {
+                withProp(
+                    "andy.terminal.detectFilePaths",
+                    variant.detectFilePaths?.toString(),
+                ) {
+                    withProp("andy.terminal.performanceMode", variant.performanceMode) {
+                        val argv = if (variant.idle) {
+                            listOf("/bin/sh", "-c", "cat")
+                        } else {
+                            streamCommand()
+                        }
+                        session = TerminalSessions.create(
+                            TerminalLaunchRequest(
+                                sessionId = "bossterm-bench-${variant.name}-${System.nanoTime()}",
+                                argv = argv,
+                                cols = 120,
+                                rows = 40,
+                                mode = TerminalMode.DirectPty,
+                                agentCli = true,
+                                appearance = TerminalAppearanceSnapshot(),
+                            ),
+                        ) as BossTermBackend
 
-                    try {
-                        application(exitProcessOnExit = false) {
-                            val state = rememberWindowState(width = 1280.dp, height = 800.dp)
-                            Window(
-                                onCloseRequest = ::exitApplication,
-                                state = state,
-                                title = "BossTerm bench — ${variant.name}",
-                            ) {
-                                TerminalHost(session!!)
-                                LaunchedEffect(Unit) {
-                                    delay(warmupSec * 1_000L)
-                                    val bean = osBean()
-                                    val cpu0 = bean.processCpuTime
-                                    val wall = measureNanoTime {
-                                        delay(measureSec * 1_000L)
+                        try {
+                            application(exitProcessOnExit = false) {
+                                val state = rememberWindowState(width = 1280.dp, height = 800.dp)
+                                Window(
+                                    onCloseRequest = ::exitApplication,
+                                    state = state,
+                                    title = "BossTerm bench — ${variant.name}",
+                                ) {
+                                    TerminalHost(session!!)
+                                    LaunchedEffect(Unit) {
+                                        delay(warmupSec * 1_000L)
+                                        val bean = osBean()
+                                        val cpu0 = bean.processCpuTime
+                                        val wall = measureNanoTime {
+                                            delay(measureSec * 1_000L)
+                                        }
+                                        val cpuDelta = bean.processCpuTime - cpu0
+                                        wallSeconds = wall / 1_000_000_000.0
+                                        processCpuSeconds = cpuDelta / 1_000_000_000.0
+                                        cpuPercent = 100.0 * cpuDelta / wall
+                                        exitApplication()
                                     }
-                                    val cpuDelta = bean.processCpuTime - cpu0
-                                    wallSeconds = wall / 1_000_000_000.0
-                                    processCpuSeconds = cpuDelta / 1_000_000_000.0
-                                    cpuPercent = 100.0 * cpuDelta / wall
-                                    exitApplication()
                                 }
                             }
+                        } finally {
+                            session?.close()
                         }
-                    } finally {
-                        session?.close()
                     }
                 }
             }
