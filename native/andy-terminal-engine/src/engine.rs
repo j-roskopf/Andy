@@ -1,0 +1,311 @@
+//! Headless terminal engine built on `alacritty_terminal`.
+//!
+//! Andy owns the PTY (via pty4j) and the renderer (Compose/Skia). This type only
+//! owns VT parsing + grid state, and exposes a snapshot API the JVM can poll on
+//! a coalesced redraw cadence.
+
+use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::vte::ansi::{self, Color, Timeout};
+
+/// Viewport size in cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineSize {
+    pub columns: usize,
+    pub rows: usize,
+}
+
+impl Dimensions for EngineSize {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
+/// Compact attribute flags for a single cell (subset useful to Compose).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CellAttrFlags {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverse: bool,
+    pub dim: bool,
+    pub strikethrough: bool,
+}
+
+/// One cell of grid state, flattened for FFI transfer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellSnapshot {
+    pub ch: char,
+    pub fg_named: Option<u8>,
+    pub bg_named: Option<u8>,
+    pub fg_rgb: Option<(u8, u8, u8)>,
+    pub bg_rgb: Option<(u8, u8, u8)>,
+    pub attrs: CellAttrFlags,
+}
+
+/// Cursor position in the active grid (viewport coordinates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorSnapshot {
+    pub row: i32,
+    pub col: usize,
+}
+
+/// Full viewport snapshot returned to the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridSnapshot {
+    pub columns: usize,
+    pub rows: usize,
+    pub cursor: CursorSnapshot,
+    pub alt_screen: bool,
+    /// Flat row-major cells: `cells[row * columns + col]`.
+    pub cells: Vec<CellSnapshot>,
+    /// Bytes currently held in the DEC 2026 sync buffer (0 when not syncing).
+    pub sync_buffered_bytes: usize,
+}
+
+/// Headless VT engine: parse bytes into grid state Andy can render.
+pub struct TerminalEngine {
+    term: Term<VoidListener>,
+    parser: ansi::Processor,
+    size: EngineSize,
+}
+
+impl TerminalEngine {
+    pub fn new(columns: usize, rows: usize) -> Self {
+        let size = EngineSize { columns, rows };
+        let mut config = Config::default();
+        // Keep enough scrollback for agent CLI sessions; Phase 1 can tune this.
+        config.scrolling_history = 10_000;
+        let term = Term::new(config, &size, VoidListener);
+        Self {
+            term,
+            parser: ansi::Processor::new(),
+            size,
+        }
+    }
+
+    pub fn size(&self) -> EngineSize {
+        self.size
+    }
+
+    /// Feed a raw PTY/ANSI chunk. Andy controls when to call this and when to
+    /// snapshot/repaint — there is no per-character redraw callback.
+    pub fn advance(&mut self, bytes: &[u8]) {
+        self.parser.advance(&mut self.term, bytes);
+    }
+
+    pub fn resize(&mut self, columns: usize, rows: usize) {
+        self.size = EngineSize { columns, rows };
+        self.term.resize(self.size);
+    }
+
+    pub fn is_alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Bytes currently buffered under an open DEC 2026 synchronized update.
+    pub fn sync_buffered_bytes(&self) -> usize {
+        self.parser.sync_bytes_count()
+    }
+
+    pub fn is_synchronized(&self) -> bool {
+        self.sync_buffered_bytes() > 0
+            || self.parser.sync_timeout().pending_timeout()
+    }
+
+    /// Force-end a synchronized update (mirrors Alacritty's timeout path).
+    pub fn stop_sync(&mut self) {
+        self.parser.stop_sync(&mut self.term);
+    }
+
+    pub fn snapshot(&self) -> GridSnapshot {
+        let columns = self.size.columns;
+        let rows = self.size.rows;
+        let grid = self.term.grid();
+        let cursor_point = grid.cursor.point;
+        let mut cells = Vec::with_capacity(columns * rows);
+
+        for row in 0..rows {
+            let line = Line(row as i32);
+            for col in 0..columns {
+                let cell = &grid[line][Column(col)];
+                cells.push(cell_to_snapshot(cell));
+            }
+        }
+
+        GridSnapshot {
+            columns,
+            rows,
+            cursor: CursorSnapshot {
+                row: cursor_point.line.0,
+                col: cursor_point.column.0,
+            },
+            alt_screen: self.is_alt_screen(),
+            cells,
+            sync_buffered_bytes: self.sync_buffered_bytes(),
+        }
+    }
+
+    /// Visible viewport as plain text (trailing spaces trimmed per line).
+    pub fn viewport_text(&self) -> String {
+        let snap = self.snapshot();
+        let mut lines = Vec::with_capacity(snap.rows);
+        for row in 0..snap.rows {
+            let start = row * snap.columns;
+            let end = start + snap.columns;
+            let line: String = snap.cells[start..end].iter().map(|c| c.ch).collect();
+            lines.push(line.trim_end().to_string());
+        }
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+}
+
+fn cell_to_snapshot(cell: &alacritty_terminal::term::cell::Cell) -> CellSnapshot {
+    let (fg_named, fg_rgb) = color_parts(cell.fg);
+    let (bg_named, bg_rgb) = color_parts(cell.bg);
+    CellSnapshot {
+        ch: cell.c,
+        fg_named,
+        bg_named,
+        fg_rgb,
+        bg_rgb,
+        attrs: CellAttrFlags {
+            bold: cell.flags.contains(Flags::BOLD),
+            italic: cell.flags.contains(Flags::ITALIC),
+            underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+            inverse: cell.flags.contains(Flags::INVERSE),
+            dim: cell.flags.contains(Flags::DIM),
+            strikethrough: cell.flags.contains(Flags::STRIKEOUT),
+        },
+    }
+}
+
+fn color_parts(color: Color) -> (Option<u8>, Option<(u8, u8, u8)>) {
+    match color {
+        Color::Named(named) => (Some(named as u8), None),
+        Color::Spec(rgb) => (None, Some((rgb.r, rgb.g, rgb.b))),
+        Color::Indexed(idx) => (Some(idx), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::vte::ansi::NamedColor;
+
+    #[test]
+    fn feeds_plain_text_into_grid() {
+        let mut eng = TerminalEngine::new(40, 10);
+        eng.advance(b"hello");
+        let snap = eng.snapshot();
+        assert_eq!(snap.cells[0].ch, 'h');
+        assert_eq!(snap.cells[4].ch, 'o');
+        assert_eq!(snap.cursor.col, 5);
+        assert_eq!(snap.cursor.row, 0);
+        assert_eq!(eng.viewport_text(), "hello");
+    }
+
+    #[test]
+    fn parses_sgr_bold_and_named_color() {
+        let mut eng = TerminalEngine::new(40, 5);
+        // bold + red foreground
+        eng.advance(b"\x1b[1;31mX\x1b[0m");
+        let cell = &eng.snapshot().cells[0];
+        assert_eq!(cell.ch, 'X');
+        assert!(cell.attrs.bold);
+        assert_eq!(cell.fg_named, Some(NamedColor::Red as u8));
+    }
+
+    #[test]
+    fn resize_updates_dimensions() {
+        let mut eng = TerminalEngine::new(10, 5);
+        eng.advance(b"abc");
+        eng.resize(20, 8);
+        let snap = eng.snapshot();
+        assert_eq!(snap.columns, 20);
+        assert_eq!(snap.rows, 8);
+        assert_eq!(snap.cells[0].ch, 'a');
+        assert_eq!(snap.cells.len(), 20 * 8);
+    }
+
+    #[test]
+    fn alternate_screen_swaps_buffers() {
+        let mut eng = TerminalEngine::new(20, 5);
+        eng.advance(b"main");
+        assert!(!eng.is_alt_screen());
+
+        // DECSET 1049 — enter alternate screen (cursor restored to home by 1049).
+        eng.advance(b"\x1b[?1049h");
+        assert!(eng.is_alt_screen());
+        eng.advance(b"\x1b[H\x1b[2Jalt");
+        assert_eq!(eng.viewport_text(), "alt");
+
+        // DECRST 1049 — leave alternate screen, restore main buffer.
+        eng.advance(b"\x1b[?1049l");
+        assert!(!eng.is_alt_screen());
+        assert_eq!(eng.viewport_text(), "main");
+    }
+
+    #[test]
+    fn dec_2026_buffers_until_end_of_sync() {
+        let mut eng = TerminalEngine::new(40, 5);
+
+        // Begin synchronized update — content must not hit the grid yet.
+        eng.advance(b"\x1b[?2026h");
+        assert!(eng.is_synchronized());
+        eng.advance(b"secret");
+        assert!(eng.sync_buffered_bytes() > 0);
+        assert_eq!(eng.viewport_text(), "");
+        assert_eq!(eng.snapshot().cells[0].ch, ' ');
+
+        // End synchronized update — buffer flushes into the grid.
+        eng.advance(b"\x1b[?2026l");
+        assert!(!eng.is_synchronized());
+        assert_eq!(eng.sync_buffered_bytes(), 0);
+        assert_eq!(eng.viewport_text(), "secret");
+    }
+
+    #[test]
+    fn dec_2026_stop_sync_flushes_on_timeout_path() {
+        let mut eng = TerminalEngine::new(40, 5);
+        eng.advance(b"\x1b[?2026hbuffered\x1b[31m!");
+        assert!(eng.is_synchronized());
+        assert_eq!(eng.viewport_text(), "");
+
+        eng.stop_sync();
+        assert!(!eng.is_synchronized());
+        assert_eq!(eng.viewport_text(), "buffered!");
+        assert!(eng.snapshot().cells[8].attrs.bold == false);
+        // '!' should carry red from the SGR inside the sync buffer.
+        assert_eq!(
+            eng.snapshot().cells[8].fg_named,
+            Some(NamedColor::Red as u8)
+        );
+    }
+
+    #[test]
+    fn cursor_moves_with_cup() {
+        let mut eng = TerminalEngine::new(40, 10);
+        // CUP row 3, col 5 (1-based)
+        eng.advance(b"\x1b[3;5H*");
+        let snap = eng.snapshot();
+        assert_eq!(snap.cursor.row, 2);
+        assert_eq!(snap.cursor.col, 5);
+        let idx = 2 * 40 + 4;
+        assert_eq!(snap.cells[idx].ch, '*');
+    }
+}
