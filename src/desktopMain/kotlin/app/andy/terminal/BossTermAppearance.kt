@@ -27,6 +27,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettingsOverride {
     val theme = toBossTermTheme()
+    val detectFilePaths = resolvedDetectFilePaths()
     return TerminalSettingsOverride(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
@@ -39,7 +40,8 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
         // Agent TUIs own the alternate screen; disable BossTerm AI chrome.
         aiAssistantsEnabled = false,
         disableLineSpacingInAlternateBuffer = true,
-        performanceMode = if (agentCliMode) "latency" else "balanced",
+        performanceMode = resolvedPerformanceMode(agentCliMode),
+        detectFilePaths = detectFilePaths,
         enableMouseReporting = forwardMouseToApplication || !agentCliMode,
         forceActionOnMouseReporting = agentCliMode && !forwardMouseToApplication,
         // BossTerm 1.2.143 accumulates fractional deltas only on its local-history path.
@@ -56,7 +58,8 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettings {
     val theme = toBossTermTheme()
-    return TerminalSettings(
+    val detectFilePaths = resolvedDetectFilePaths()
+    val base = TerminalSettings(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
         activeThemeId = theme.id,
@@ -68,13 +71,32 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
         aiAssistantsEnabled = false,
         autoInjectShellIntegration = false,
         disableLineSpacingInAlternateBuffer = true,
-        performanceMode = if (agentCliMode) "latency" else "balanced",
+        performanceMode = resolvedPerformanceMode(agentCliMode),
         enableMouseReporting = forwardMouseToApplication || !agentCliMode,
         forceActionOnMouseReporting = agentCliMode && !forwardMouseToApplication,
         mouseScrollThreshold = if (forwardMouseToApplication) 0f else 1f,
         simulateMouseScrollInAlternateScreen = !forwardMouseToApplication,
     )
+    // Only override when the system property is set, so BossTerm's own default is preserved.
+    return if (detectFilePaths == null) base else base.copy(detectFilePaths = detectFilePaths)
 }
+
+/**
+ * `-Dandy.terminal.performanceMode=latency|balanced|throughput` overrides the agent/default
+ * mapping. Used by [BossTermPipelineBenchmark] and available as an escape hatch in the field.
+ * BossTerm's [ai.rever.bossterm.compose.terminal.BlockingTerminalDataStream] uses this at
+ * init: latency=`take()`, balanced=`poll(10ms)`, throughput=`poll(100ms)`.
+ */
+private fun resolvedPerformanceMode(agentCliMode: Boolean): String =
+    System.getProperty("andy.terminal.performanceMode")?.takeIf { it.isNotBlank() }
+        ?: if (agentCliMode) "latency" else "balanced"
+
+/**
+ * `-Dandy.terminal.detectFilePaths=true|false` overrides BossTerm's per-frame path/URL
+ * hyperlink scan. `null` means "leave Override unset / Settings default".
+ */
+private fun resolvedDetectFilePaths(): Boolean? =
+    System.getProperty("andy.terminal.detectFilePaths")?.toBooleanStrictOrNull()
 
 /** ARGB packed as Compose Color expects (`0xAARRGGBB`). */
 fun TerminalAppearanceSnapshot.panelBackgroundArgb(): Long {

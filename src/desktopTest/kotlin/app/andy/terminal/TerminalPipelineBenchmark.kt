@@ -30,7 +30,10 @@ import javax.swing.Timer
 import kotlin.system.measureNanoTime
 
 /**
- * Standalone benchmark for Andy's terminal presentation pipeline.
+ * Historical Swing/FakeTerminal stand-in from the KetraTerm era.
+ *
+ * **Not representative of today's BossTerm Compose pipeline.** Prefer
+ * [BossTermPipelineBenchmark] for CPU measurements against the live rendering stack.
  *
  * Not a test — run explicitly:
  *   ./gradlew desktopTest --tests "app.andy.terminal.TerminalPipelineBenchmarkTest" \
