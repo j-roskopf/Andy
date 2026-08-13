@@ -9,7 +9,9 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{self, Color, Timeout};
+use alacritty_terminal::vte::ansi::{self, Timeout};
+
+use crate::color::color_to_argb;
 
 /// Viewport size in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,10 +49,9 @@ pub struct CellAttrFlags {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellSnapshot {
     pub ch: char,
-    pub fg_named: Option<u8>,
-    pub bg_named: Option<u8>,
-    pub fg_rgb: Option<(u8, u8, u8)>,
-    pub bg_rgb: Option<(u8, u8, u8)>,
+    /// Opaque ARGB (`0xAARRGGBB`) resolved with the engine's default palette.
+    pub fg_argb: u32,
+    pub bg_argb: u32,
     pub attrs: CellAttrFlags,
 }
 
@@ -175,14 +176,10 @@ impl TerminalEngine {
 }
 
 fn cell_to_snapshot(cell: &alacritty_terminal::term::cell::Cell) -> CellSnapshot {
-    let (fg_named, fg_rgb) = color_parts(cell.fg);
-    let (bg_named, bg_rgb) = color_parts(cell.bg);
     CellSnapshot {
         ch: cell.c,
-        fg_named,
-        bg_named,
-        fg_rgb,
-        bg_rgb,
+        fg_argb: color_to_argb(cell.fg),
+        bg_argb: color_to_argb(cell.bg),
         attrs: CellAttrFlags {
             bold: cell.flags.contains(Flags::BOLD),
             italic: cell.flags.contains(Flags::ITALIC),
@@ -191,14 +188,6 @@ fn cell_to_snapshot(cell: &alacritty_terminal::term::cell::Cell) -> CellSnapshot
             dim: cell.flags.contains(Flags::DIM),
             strikethrough: cell.flags.contains(Flags::STRIKEOUT),
         },
-    }
-}
-
-fn color_parts(color: Color) -> (Option<u8>, Option<(u8, u8, u8)>) {
-    match color {
-        Color::Named(named) => (Some(named as u8), None),
-        Color::Spec(rgb) => (None, Some((rgb.r, rgb.g, rgb.b))),
-        Color::Indexed(idx) => (Some(idx), None),
     }
 }
 
@@ -227,7 +216,9 @@ mod tests {
         let cell = &eng.snapshot().cells[0];
         assert_eq!(cell.ch, 'X');
         assert!(cell.attrs.bold);
-        assert_eq!(cell.fg_named, Some(NamedColor::Red as u8));
+        // One Dark red from color.rs palette.
+        assert_eq!(cell.fg_argb, 0xFF_E0_6C_75);
+        let _ = NamedColor::Red; // keep import meaningful if palette changes
     }
 
     #[test]
@@ -289,12 +280,9 @@ mod tests {
         eng.stop_sync();
         assert!(!eng.is_synchronized());
         assert_eq!(eng.viewport_text(), "buffered!");
-        assert!(eng.snapshot().cells[8].attrs.bold == false);
+        assert!(!eng.snapshot().cells[8].attrs.bold);
         // '!' should carry red from the SGR inside the sync buffer.
-        assert_eq!(
-            eng.snapshot().cells[8].fg_named,
-            Some(NamedColor::Red as u8)
-        );
+        assert_eq!(eng.snapshot().cells[8].fg_argb, 0xFF_E0_6C_75);
     }
 
     #[test]

@@ -6,11 +6,12 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use jni::objects::{JByteArray, JClass};
+use jni::objects::{JByteArray, JClass, JCharArray, JIntArray};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 use parking_lot::Mutex;
 
+use crate::color::{ATTR_BOLD, ATTR_DIM, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE};
 use crate::TerminalEngine;
 
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
@@ -231,4 +232,120 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeCell
         }
         snap.cells[row * snap.columns + col].attrs.bold as jboolean
     })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeStopSync(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    with_engines(|map| {
+        if let Some(engine) = map.get_mut(&handle) {
+            engine.stop_sync();
+        }
+    });
+}
+
+/// Fills preallocated arrays with a full viewport snapshot.
+///
+/// `meta` length ≥ 6: `[columns, rows, cursorRow, cursorCol, altScreen, syncBufferedBytes]`.
+/// `chars` / `fgArgb` / `bgArgb` / `attrs` length ≥ `columns * rows`.
+///
+/// Returns `0` on success, `-1` on error (bad handle / short buffers).
+#[no_mangle]
+pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFillSnapshot<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    chars: JCharArray<'local>,
+    fg_argb: JIntArray<'local>,
+    bg_argb: JIntArray<'local>,
+    attrs: JByteArray<'local>,
+    meta: JIntArray<'local>,
+) -> jint {
+    let snap = with_engines(|map| map.get(&handle).map(|e| e.snapshot()));
+    let Some(snap) = snap else {
+        return -1;
+    };
+    let cell_count = snap.columns * snap.rows;
+    let Ok(chars_len) = env.get_array_length(&chars) else {
+        return -1;
+    };
+    let Ok(fg_len) = env.get_array_length(&fg_argb) else {
+        return -1;
+    };
+    let Ok(bg_len) = env.get_array_length(&bg_argb) else {
+        return -1;
+    };
+    let Ok(attrs_len) = env.get_array_length(&attrs) else {
+        return -1;
+    };
+    let Ok(meta_len) = env.get_array_length(&meta) else {
+        return -1;
+    };
+    if chars_len < cell_count as i32
+        || fg_len < cell_count as i32
+        || bg_len < cell_count as i32
+        || attrs_len < cell_count as i32
+        || meta_len < 6
+    {
+        return -1;
+    }
+
+    let mut char_buf = vec![0u16; cell_count];
+    let mut fg_buf = vec![0i32; cell_count];
+    let mut bg_buf = vec![0i32; cell_count];
+    let mut attr_buf = vec![0i8; cell_count];
+
+    for (i, cell) in snap.cells.iter().enumerate() {
+        char_buf[i] = cell.ch as u32 as u16;
+        fg_buf[i] = cell.fg_argb as i32;
+        bg_buf[i] = cell.bg_argb as i32;
+        let mut a = 0u8;
+        if cell.attrs.bold {
+            a |= ATTR_BOLD;
+        }
+        if cell.attrs.italic {
+            a |= ATTR_ITALIC;
+        }
+        if cell.attrs.underline {
+            a |= ATTR_UNDERLINE;
+        }
+        if cell.attrs.inverse {
+            a |= ATTR_INVERSE;
+        }
+        if cell.attrs.dim {
+            a |= ATTR_DIM;
+        }
+        if cell.attrs.strikethrough {
+            a |= ATTR_STRIKE;
+        }
+        attr_buf[i] = a as i8;
+    }
+
+    if env.set_char_array_region(&chars, 0, &char_buf).is_err() {
+        return -1;
+    }
+    if env.set_int_array_region(&fg_argb, 0, &fg_buf).is_err() {
+        return -1;
+    }
+    if env.set_int_array_region(&bg_argb, 0, &bg_buf).is_err() {
+        return -1;
+    }
+    if env.set_byte_array_region(&attrs, 0, &attr_buf).is_err() {
+        return -1;
+    }
+    let meta_buf = [
+        snap.columns as i32,
+        snap.rows as i32,
+        snap.cursor.row,
+        snap.cursor.col as i32,
+        if snap.alt_screen { 1 } else { 0 },
+        snap.sync_buffered_bytes as i32,
+    ];
+    if env.set_int_array_region(&meta, 0, &meta_buf).is_err() {
+        return -1;
+    }
+    0
 }

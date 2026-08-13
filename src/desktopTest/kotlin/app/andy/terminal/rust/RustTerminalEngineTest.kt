@@ -81,6 +81,22 @@ class RustTerminalEngineTest {
         }
     }
 
+    @Test
+    fun fillFrameReturnsPackedColorsAndAttrs() {
+        if (!isMacArm64()) return
+        RustTerminalEngine(columns = 20, rows = 4).use { engine ->
+            engine.advance("\u001B[1;31mHi\u001B[0m")
+            val frame = RustTerminalFrame()
+            assertTrue(engine.fillFrame(frame))
+            assertEquals(20, frame.columns)
+            assertEquals(4, frame.rows)
+            assertEquals('H', frame.chars[0])
+            assertEquals('i', frame.chars[1])
+            assertTrue(frame.attrs[0].toInt() and RustTerminalAttrs.BOLD != 0)
+            assertEquals(0xFFE06C75.toInt(), frame.fgArgb[0])
+        }
+    }
+
     private fun isMacArm64(): Boolean {
         val os = System.getProperty("os.name").lowercase()
         val arch = System.getProperty("os.arch").lowercase()

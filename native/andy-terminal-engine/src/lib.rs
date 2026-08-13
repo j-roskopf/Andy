@@ -8,6 +8,7 @@
 
 uniffi::setup_scaffolding!();
 
+mod color;
 mod engine;
 mod ffi_jni;
 mod ffi_uniffi;
