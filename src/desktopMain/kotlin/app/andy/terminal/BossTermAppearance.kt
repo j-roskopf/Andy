@@ -27,7 +27,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettingsOverride {
     val theme = toBossTermTheme()
-    val detectFilePaths = resolvedDetectFilePaths()
+    val detectFilePaths = resolvedDetectFilePaths(agentCliMode)
     return TerminalSettingsOverride(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
@@ -58,7 +58,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettings {
     val theme = toBossTermTheme()
-    val detectFilePaths = resolvedDetectFilePaths()
+    val detectFilePaths = resolvedDetectFilePaths(agentCliMode)
     val base = TerminalSettings(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
@@ -77,7 +77,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
         mouseScrollThreshold = if (forwardMouseToApplication) 0f else 1f,
         simulateMouseScrollInAlternateScreen = !forwardMouseToApplication,
     )
-    // Only override when the system property is set, so BossTerm's own default is preserved.
+    // null → leave BossTerm's data-class default (enabled); non-null → agent default or -D override.
     return if (detectFilePaths == null) base else base.copy(detectFilePaths = detectFilePaths)
 }
 
@@ -86,17 +86,27 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
  * mapping. Used by [BossTermPipelineBenchmark] and available as an escape hatch in the field.
  * BossTerm's [ai.rever.bossterm.compose.terminal.BlockingTerminalDataStream] uses this at
  * init: latency=`take()`, balanced=`poll(10ms)`, throughput=`poll(100ms)`.
+ *
+ * Agent CLIs default to **throughput**: measured ~25% lower process CPU than latency under
+ * streaming load (see `docs/terminal-performance-investigation.md`) with no echo regression
+ * on the poll-when-empty path (poll still returns as soon as a chunk arrives).
  */
 private fun resolvedPerformanceMode(agentCliMode: Boolean): String =
     System.getProperty("andy.terminal.performanceMode")?.takeIf { it.isNotBlank() }
-        ?: if (agentCliMode) "latency" else "balanced"
+        ?: if (agentCliMode) "throughput" else "balanced"
 
 /**
- * `-Dandy.terminal.detectFilePaths=true|false` overrides BossTerm's per-frame path/URL
- * hyperlink scan. `null` means "leave Override unset / Settings default".
+ * `-Dandy.terminal.detectFilePaths=true|false` overrides the default.
+ *
+ * Agent CLIs default to **false**: BossTerm's `TerminalCanvasRenderer.detectAllHyperlinks`
+ * runs on the paint path when enabled, and A/B runs showed a real (if noisier) CPU cut with
+ * it off. Embedded agent TUIs rarely need clickable path detection; Actions/direct shells
+ * keep BossTerm's default (enabled) unless the property overrides.
  */
-private fun resolvedDetectFilePaths(): Boolean? =
-    System.getProperty("andy.terminal.detectFilePaths")?.toBooleanStrictOrNull()
+private fun resolvedDetectFilePaths(agentCliMode: Boolean): Boolean? {
+    System.getProperty("andy.terminal.detectFilePaths")?.toBooleanStrictOrNull()?.let { return it }
+    return if (agentCliMode) false else null
+}
 
 /** ARGB packed as Compose Color expects (`0xAARRGGBB`). */
 fun TerminalAppearanceSnapshot.panelBackgroundArgb(): Long {

@@ -754,6 +754,8 @@ class BossTermScrollbackTest {
         assertEquals(true, agent.forceActionOnMouseReporting)
         assertEquals(true, agent.simulateMouseScrollInAlternateScreen)
         assertEquals(true, agent.scrollbarAlwaysVisible)
+        assertEquals("throughput", agent.performanceMode)
+        assertEquals(false, agent.detectFilePaths)
 
         val tmuxAttach = TerminalAppearanceSnapshot().toBossTermSettingsOverride(
             agentCliMode = true,
