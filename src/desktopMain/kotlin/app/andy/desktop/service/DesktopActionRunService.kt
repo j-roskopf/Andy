@@ -12,6 +12,7 @@ import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalSession
 import app.andy.terminal.TerminalSessions
 import app.andy.terminal.buildTerminalLaunchEnvironment
+import app.andy.terminal.rust.RustTerminalBackend
 import app.andy.terminal.toTerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +32,7 @@ class DesktopActionRunService(
     private data class RunHandle(
         val session: TerminalSession?,
         val terminal: AndyTerminalView?,
+        val rustTerminal: RustTerminalBackend? = null,
     )
 
     private val nextRun = AtomicInteger(1)
@@ -96,12 +98,14 @@ class DesktopActionRunService(
                     appearance = terminalAppearance(),
                 ),
             )
-            val terminal = (session as? BossTermBackend)?.toTerminalView()
-                ?: error("terminal view missing after start")
-            session to terminal
+            when (session) {
+                is RustTerminalBackend -> Triple(session, null, session)
+                is BossTermBackend -> Triple(session, session.toTerminalView(), null)
+                else -> error("terminal view missing after start: ${session::class.simpleName}")
+            }
         }.fold(
-            onSuccess = { (session, terminal) ->
-                val handle = RunHandle(session, terminal)
+            onSuccess = { (session, terminal, rustTerminal) ->
+                val handle = RunHandle(session, terminal, rustTerminal)
                 handles[runId] = handle
                 initialCommand?.let { command ->
                     scope.launch(Dispatchers.IO) {
@@ -121,7 +125,7 @@ class DesktopActionRunService(
             },
             onFailure = {
                 markComplete(runId, ActionRunStatus.Failed, null)
-                handles[runId] = RunHandle(null, null)
+                handles[runId] = RunHandle(null, null, null)
             },
         )
         return runId
@@ -145,6 +149,8 @@ class DesktopActionRunService(
 
     internal fun terminalView(runId: String): AndyTerminalView? = handles[runId]?.terminal
 
+    internal fun rustTerminal(runId: String): RustTerminalBackend? = handles[runId]?.rustTerminal
+
     internal fun writeToTerminal(runId: String, text: String) {
         handles[runId]?.session?.writeText(text)
     }
@@ -157,6 +163,7 @@ class DesktopActionRunService(
         val appearance = terminalAppearance()
         handles.values.forEach { handle ->
             (handle.session as? BossTermBackend)?.updateAppearance(appearance)
+            (handle.session as? RustTerminalBackend)?.updateAppearance(appearance)
         }
     }
 

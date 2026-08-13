@@ -150,18 +150,44 @@ Measured on Apple Silicon with `-Dandy.rust.term.bench=1`:
 
 At 60 FPS, ~34 µs is ~0.2% of a 16.7 ms frame — negligible next to Compose/Skia paint. Even a naïve full-grid String snapshot is fine for Phase 1; packed `IntArray`/`ByteBuffer` can wait until profiling says otherwise.
 
+## Phase 1 (in-app) — landed
+
+Opt-in Actions dock path:
+
+| Piece | Location |
+|-------|----------|
+| Flag | `-Dandy.terminal.engine=rust` (via `-Pandy.terminal.engine=rust` or `ANDY_TERMINAL_ENGINE=rust`) |
+| Backend | `RustTerminalBackend` — PTY via BossTerm `DesktopProcessService`, tee, `advance`, coalesced paint @ 60fps |
+| Canvas | `RustTerminalCanvas` — Compose/Skia + keyboard encoder |
+| Surface | `ProjectTerminalSurface` mounts Rust canvas when the run is rust-backed |
+| Factory | `TerminalSessions` DirectPty (non-`agentCli`) selects Rust when enabled + dylib loads |
+
+Agent chat / tmux attach remains BossTerm.
+
+### How to test in the app
+
+```sh
+./gradlew run -Pandy.terminal.engine=rust
+# or: ANDY_TERMINAL_ENGINE=rust ./gradlew run
+```
+
+Open an **Actions** project terminal (shell). Type normally; arrows / Ctrl-C work. If the dylib fails to load, Andy falls back to BossTerm.
+
+```sh
+./gradlew desktopTest --tests "app.andy.terminal.rust.*"
+```
+
 ## Go / no-go recommendation
 
-### Go — proceed to Phase 1
+### Go — dogfood the Actions path; then expand
 
-Phase 1 should:
+Next:
 
-1. Introduce a `TerminalEngine` interface with `BossTermBackend` as default and `RustTerminalBackend` behind a flag / system property.
-2. Drive redraw cadence entirely from Andy (PTY read batch → `advance` → single coalesced snapshot/paint). Do **not** invent a native per-cell redraw callback.
-3. Honor DEC 2026 by skipping paint while `syncBufferedBytes() > 0` (plus a timeout flush mirroring Alacritty).
-4. Keep Compose cell rendering in Kotlin/Skia; start with full-grid snapshot, then damage/dirty lines if needed (`Term::damage` exists upstream).
-5. Fold Developer ID signing of the dylib into the macOS release task graph and run one notarization dry-run before calling packaging “done”.
-6. Leave BossTerm dependency in place until the Rust path matches feature needs for agent CLIs + Actions dock.
+1. More input (mouse, bracketed paste) as TUIs need it.
+2. Push Andy Settings theme palette into Rust (today: hard-coded One Dark–ish ARGB).
+3. Agent chat / `TmuxAttach` behind the same flag once input is enough.
+4. Developer ID sign the dylib in the release graph + one notarization pass.
+5. Keep BossTerm until Rust covers agent CLIs + Actions.
 
 ### Red flags that would flip this to no-go (none observed)
 
@@ -175,4 +201,4 @@ Phase 1 should:
 - Full VT feature parity / selection / find / hyperlinks
 - Linux + Windows cdylib CI matrix (spike is macOS arm64)
 - Removing BossTerm
-- Compose renderer rewrite (keep Skia path)
+- Replacing Compose/Skia with another renderer

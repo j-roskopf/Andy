@@ -612,6 +612,7 @@ tasks.withType<Test>().configureEach {
         "andy.terminal.detectFilePaths",
         "andy.rust.term.bench",
         "andy.terminal.engine.dylib",
+        "andy.terminal.engine",
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }
@@ -675,6 +676,14 @@ compose.desktop {
         jvmArgs += "--add-opens=java.desktop/sun.lwawt=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED"
+        // Opt-in Rust VT engine for Actions DirectPty: -Pandy.terminal.engine=rust
+        // (or export ANDY_TERMINAL_ENGINE=rust). Default remains BossTerm.
+        val rustTerminalEngine = providers.gradleProperty("andy.terminal.engine")
+            .orElse(providers.environmentVariable("ANDY_TERMINAL_ENGINE"))
+            .orNull
+        if (!rustTerminalEngine.isNullOrBlank()) {
+            jvmArgs += "-Dandy.terminal.engine=$rustTerminalEngine"
+        }
         buildTypes.release.proguard {
             isEnabled.set(false)
         }
