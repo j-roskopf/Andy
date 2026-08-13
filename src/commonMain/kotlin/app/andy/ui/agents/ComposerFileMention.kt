@@ -12,6 +12,7 @@ import app.andy.model.HostSearchMode
 import app.andy.model.HostSearchResult
 import app.andy.service.HostFileService
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 internal data class ComposerFileMention(val start: Int, val end: Int, val query: String)
 
@@ -40,16 +41,43 @@ internal fun composerFileMentionResults(
 ): List<HostSearchResult> {
     var results by remember { mutableStateOf(emptyList<HostSearchResult>()) }
     LaunchedEffect(query, roots) {
-        if (query == null || roots.isEmpty()) {
-            results = emptyList()
-            return@LaunchedEffect
-        }
+        // Drop prior matches immediately so Tab / labels never apply to a stale query.
+        results = emptyList()
+        if (query == null || roots.isEmpty()) return@LaunchedEffect
         delay(150)
+        ensureComposerFileIndexes(hostFiles, roots)
         results = runCatching {
             hostFiles.search(query, HostSearchMode.FileName, roots, limit = 8)
         }.getOrDefault(emptyList())
     }
     return results
+}
+
+/**
+ * Desktop [HostFileService.search] only loads a previously saved index. Build one
+ * for any root that has never been crawled (Computer Files is otherwise the only
+ * caller of [HostFileService.indexRoot]).
+ */
+internal suspend fun ensureComposerFileIndexes(hostFiles: HostFileService, roots: List<String>) {
+    roots.forEach { root ->
+        val status = runCatching { hostFiles.indexStatus(root) }.getOrNull() ?: return@forEach
+        if (status.indexedFiles > 0) return@forEach
+        if (status.indexing) {
+            while (true) {
+                delay(100)
+                val next = runCatching { hostFiles.indexStatus(root) }.getOrNull() ?: break
+                if (!next.indexing || next.indexedFiles > 0) break
+            }
+            return@forEach
+        }
+        var sawIndexing = false
+        runCatching {
+            hostFiles.indexRoot(root).first { next ->
+                if (next.indexing) sawIndexing = true
+                (sawIndexing && !next.indexing) || next.indexedFiles > 0
+            }
+        }
+    }
 }
 
 internal fun HostSearchResult.relativePath(): String =
