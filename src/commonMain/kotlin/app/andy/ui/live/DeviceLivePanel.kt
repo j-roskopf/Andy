@@ -8,6 +8,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import app.andy.model.AndroidDevice
 import app.andy.service.AndyServices
 import app.andy.service.MirrorSession
@@ -26,6 +28,9 @@ internal fun DeviceLivePanel(
     showChromeControls: Boolean = true,
     showDeviceHeader: Boolean = true,
     showPopOut: Boolean = true,
+    showContainerChrome: Boolean = true,
+    deviceBorderWidth: Dp = 5.dp,
+    deviceCornerRadius: Dp = 10.dp,
 ) {
     val scope = rememberCoroutineScope()
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
@@ -75,6 +80,9 @@ internal fun DeviceLivePanel(
             showChromeControls = showChromeControls,
             showDeviceHeader = showDeviceHeader,
             showPopOut = showPopOut,
+            showContainerChrome = showContainerChrome,
+            deviceBorderWidth = deviceBorderWidth,
+            deviceCornerRadius = deviceCornerRadius,
             onInput = sendMirrorInput,
             onConnect = ::connect,
         )

@@ -401,7 +401,7 @@ internal object AndyStroke {
     /** Hairline separators between panes and rows (DNA border-subtle weight). */
     val Hairline = 1.dp
     /** Invisible drag target width for vertical pane resize handles. */
-    val PaneHandleHitWidth = 8.dp
+    val PaneHandleHitWidth = 10.dp
     /** Invisible drag target height for horizontal pane resize handles. */
     val PaneHandleHitHeight = 10.dp
 }

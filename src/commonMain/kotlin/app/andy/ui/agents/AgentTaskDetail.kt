@@ -90,6 +90,7 @@ import app.andy.model.AgentSkill
 import app.andy.model.HostFileDocument
 import app.andy.model.HostFileSaveResult
 import app.andy.model.HostSearchMode
+import app.andy.model.HostSearchResult
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
@@ -318,6 +319,16 @@ internal fun AgentTaskDetail(
                 skill.description.contains(command.query, ignoreCase = true)
         }.take(8)
     }.orEmpty()
+    val fileMention = if (slashCommand == null && services.capabilities.hostAutomation) {
+        findComposerFileMention(followUp)
+    } else {
+        null
+    }
+    val mentionResults = composerFileMentionResults(
+        query = fileMention?.query,
+        hostFiles = services.hostFiles,
+        roots = listOfNotNull(skillDirectory),
+    )
     val selectedSkills = remember(followUp, availableSkills) {
         availableSkills.filter { skill -> followUp.referencesSkill(skill) }
     }
@@ -347,6 +358,12 @@ internal fun AgentTaskDetail(
             text = followUp.replaceRange(slash.start, slash.end, insertion),
             selection = TextRange(slash.start + insertion.length),
         )
+        skillMenuDismissed = true
+    }
+
+    fun selectFileMention(result: HostSearchResult) {
+        val mention = fileMention ?: return
+        followUpValue = insertFileMention(followUp, mention, result)
         skillMenuDismissed = true
     }
 
@@ -827,6 +844,10 @@ internal fun AgentTaskDetail(
                                         matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(matchingSkills.first())
                                         return@onPreviewKeyEvent true
                                     }
+                                    if (event.key == Key.Tab && mentionResults.isNotEmpty()) {
+                                        selectFileMention(mentionResults.first())
+                                        return@onPreviewKeyEvent true
+                                    }
                                     if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
                                     if (event.isShiftPressed) return@onPreviewKeyEvent false
                                     if (canSendFollowUp) submitFollowUp()
@@ -899,6 +920,32 @@ internal fun AgentTaskDetail(
                                         }
                                     },
                                     onClick = { selectSkill(skill) },
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = fileMention != null && !skillMenuDismissed,
+                            onDismissRequest = { skillMenuDismissed = true },
+                            modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                            properties = PopupProperties(focusable = false),
+                        ) {
+                            Text(
+                                if (mentionResults.isEmpty()) {
+                                    "no files matching @${fileMention?.query.orEmpty()}"
+                                } else {
+                                    "files matching @${fileMention?.query.orEmpty()}"
+                                },
+                                color = TextSecondary,
+                                fontFamily = MonoFont,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            )
+                            mentionResults.forEach { result ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                    },
+                                    onClick = { selectFileMention(result) },
                                 )
                             }
                         }
