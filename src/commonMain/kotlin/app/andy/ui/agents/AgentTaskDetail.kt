@@ -30,7 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import app.andy.ui.components.AndyHorizontalDivider
+import app.andy.ui.components.bottomBorder
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,6 +56,9 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -107,8 +110,11 @@ import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.ComposerChip
 import app.andy.ui.components.ComposerPlaceholderHint
 import app.andy.ui.components.ComposerToolbarRow
+import app.andy.ui.components.FlyingChatMessage
+import app.andy.ui.components.FlyingChatMessageOverlay
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.LocalOnOpenFileLink
+import app.andy.ui.components.flyingChatMessageTarget
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.ui.components.FilterPill
@@ -204,6 +210,12 @@ internal fun AgentTaskDetail(
     var scrollToLatestRequest by remember(task.id) { mutableStateOf(0) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
+    val density = LocalDensity.current
+    var detailRootCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
+    var transcriptCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
+    var composerFieldCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
+    var flyingMessage by remember(task.id) { mutableStateOf<FlyingChatMessage?>(null) }
+    var flyingMessageSeq by remember(task.id) { mutableStateOf(0L) }
     LaunchedEffect(task.id, task.isActive, task.status) {
         if (!task.isActive) {
             changeSummary = task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
@@ -340,6 +352,7 @@ internal fun AgentTaskDetail(
 
     fun submitFollowUp() {
         if (!supportsResume || !canSendFollowUp) return
+        val willQueue = task.isActive || (queueMode && task.queuedFollowUps.isNotEmpty())
         fun sendOrQueue(message: String, skills: List<AgentSkill>) {
             when {
                 queueMode && (task.isActive || task.queuedFollowUps.isNotEmpty()) ->
@@ -350,6 +363,27 @@ internal fun AgentTaskDetail(
                     services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
             }
         }
+        fun beginFlight(text: String) {
+            if (text.isBlank()) return
+            val root = detailRootCoordinates?.takeIf { it.isAttached } ?: return
+            val composer = composerFieldCoordinates?.takeIf { it.isAttached } ?: return
+            val start = root.localBoundingBoxOf(composer, clipBounds = false)
+            if (start.width <= 0f || start.height <= 0f) return
+            val end = flyingChatMessageTarget(
+                root = root,
+                composer = composer,
+                transcript = transcriptCoordinates?.takeIf { it.isAttached },
+                queued = willQueue,
+                density = density,
+            )
+            flyingMessageSeq += 1
+            flyingMessage = FlyingChatMessage(
+                id = flyingMessageSeq,
+                text = text,
+                start = start,
+                end = end,
+            )
+        }
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
         if (goalCommand != null) {
             services.agentRuns.updateGoal(task.id, goalCommand.goal)
@@ -359,9 +393,12 @@ internal fun AgentTaskDetail(
                 followUpImagePaths = emptyList()
                 return
             }
+            beginFlight(remainder)
             sendOrQueue(remainder, selectedSkills.filter { remainder.referencesSkill(it) })
         } else {
-            sendOrQueue(followUp.trim(), selectedSkills)
+            val trimmed = followUp.trim()
+            beginFlight(trimmed)
+            sendOrQueue(trimmed, selectedSkills)
         }
         followUpValue = TextFieldValue("")
         followUpImagePaths = emptyList()
@@ -424,7 +461,8 @@ internal fun AgentTaskDetail(
     }
 
     CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Box(modifier.onGloballyPositioned { detailRootCoordinates = it }) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -496,7 +534,8 @@ internal fun AgentTaskDetail(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .heightIn(min = 280.dp),
+                .heightIn(min = 280.dp)
+                .onGloballyPositioned { transcriptCoordinates = it },
         ) {
             val terminalModifier = remember { Modifier.fillMaxSize() }
             val imagesStagedLatest = rememberUpdatedState(
@@ -780,6 +819,7 @@ internal fun AgentTaskDetail(
                             maxLines = 7,
                             modifier = Modifier.fillMaxWidth()
                                 .heightIn(min = 94.dp, max = 180.dp)
+                                .onGloballyPositioned { composerFieldCoordinates = it }
                                 .onVoiceDictationShortcut(voiceShortcut, voiceController)
                                 .onPreviewKeyEvent { event ->
                                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -1011,6 +1051,13 @@ internal fun AgentTaskDetail(
             }
         }
     }
+    FlyingChatMessageOverlay(
+        flight = flyingMessage,
+        onFinished = { finished ->
+            if (flyingMessage?.id == finished.id) flyingMessage = null
+        },
+    )
+    }
     }
 }
 
@@ -1177,6 +1224,7 @@ private fun AgentTaskHeader(
     Column(
         Modifier
             .fillMaxWidth()
+            .bottomBorder(Border)
             .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {

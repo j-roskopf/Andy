@@ -257,7 +257,7 @@ internal fun AndyShell(
         val knownProjectIds = remember(state.actionsConfig.projects) {
             state.actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
         }
-        Row(Modifier.fillMaxSize().padding(top = contentTopPadding)) {
+        Row(Modifier.fillMaxSize()) {
             Sidebar(
                 current = state.destination,
                 destinations = visibleDestinations,
@@ -288,11 +288,14 @@ internal fun AndyShell(
                 sdk = state.sdk,
                 updates = services.updates.takeIf { capabilities.updates },
                 mcpRunning = mcpRunning,
-                mcpPort = state.workspaceState.mcpServerPort
+                mcpPort = state.workspaceState.mcpServerPort,
+                // SidebarBg paints under the transparent macOS title bar; content clears the traffic lights.
+                contentTopPadding = contentTopPadding,
             )
             Column(
                 Modifier
                     .fillMaxSize()
+                    .padding(top = contentTopPadding)
                     .background(AndyColors.ContentBg)
             ) {
                 TopChrome(

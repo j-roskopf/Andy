@@ -152,19 +152,19 @@ class AndyDesktopScreenshotTest {
                     waitForIdle()
                     when (scenario) {
                         AndyScreenshotScenario.ProjectsProfiles -> {
-                            onNodeWithText("tasks").performClick()
+                            onNodeWithText("Tasks").performClick()
                             waitForIdle()
                             onNodeWithText("Profiles").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.ProjectsNewBuild -> {
-                            onNodeWithText("tasks").performClick()
+                            onNodeWithText("Tasks").performClick()
                             waitForIdle()
                             onNodeWithText("New build").performClick()
                             waitForIdle()
                         }
                         AndyScreenshotScenario.ProjectsNewSpec -> {
-                            onNodeWithText("tasks").performClick()
+                            onNodeWithText("Tasks").performClick()
                             waitForIdle()
                             onNodeWithText("New spec").performClick()
                             waitForIdle()

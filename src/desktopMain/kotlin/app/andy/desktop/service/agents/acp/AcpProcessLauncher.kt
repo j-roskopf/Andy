@@ -19,11 +19,19 @@ class AcpProcessLauncher(
     fun withDiagnostics(callback: (String) -> Unit): AcpProcessLauncher =
         AcpProcessLauncher(nodeLocator, callback)
 
-    suspend fun preflight(spec: AcpLaunchSpec, binary: String? = null, timeoutMs: Long = 20_000): Result<List<String>> =
+    suspend fun preflight(
+        spec: AcpLaunchSpec,
+        binary: String? = null,
+        env: Map<String, String> = emptyMap(),
+        timeoutMs: Long = 20_000,
+    ): Result<List<String>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val command = commandFor(spec, binary, preflight = true)
-                val process = ProcessBuilder(command).redirectErrorStream(true).start()
+                val process = ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .applyLaunchEnv(env, command)
+                    .start()
                 val output = StringBuilder()
                 val reader = Thread {
                     runCatching { process.inputStream.bufferedReader().useLines { lines -> lines.forEach { output.appendLine(it) } } }
@@ -50,7 +58,7 @@ class AcpProcessLauncher(
         val process = ProcessBuilder(command)
             .directory(File(cwd))
             .redirectError(ProcessBuilder.Redirect.PIPE)
-            .apply { environment().putAll(env) }
+            .applyLaunchEnv(env, command)
             .start()
         Thread({
             runCatching {
@@ -73,8 +81,49 @@ class AcpProcessLauncher(
         }
         is AcpLaunchSpec.Npx -> {
             val runtime = nodeLocator.locate() ?: throw IOException("Node.js/npx was not found")
-            listOf(runtime.npx, "-y", "${spec.packageName}@${spec.version}") +
+            val packageArgs = listOf("-y", "${spec.packageName}@${spec.version}") +
                 if (preflight) listOf("--version") else emptyList()
+            acpNpxCommand(runtime, packageArgs)
         }
     }
+}
+
+private fun ProcessBuilder.applyLaunchEnv(env: Map<String, String>, command: List<String>): ProcessBuilder {
+    if (env.isNotEmpty()) {
+        environment().putAll(env)
+    }
+    ensureNodeDirOnPath(environment(), command)
+    return this
+}
+
+/**
+ * Builds the argv for an npx-backed ACP agent.
+ *
+ * Homebrew/nvm `npx` is a `#!/usr/bin/env node` script. GUI-launched JVMs often lack
+ * `/opt/homebrew/bin` (and similar) on PATH, so exec'ing npx alone fails with
+ * `env: node: No such file or directory`. Invoking the absolute node binary with the
+ * npx script as its argument bypasses that shebang lookup. Windows `.cmd`/`.ps1` shims
+ * stay direct invocations — `node npx.cmd` is not valid there.
+ */
+internal fun acpNpxCommand(runtime: NodeRuntime, packageArgs: List<String>): List<String> {
+    val npx = runtime.npx
+    val lower = npx.lowercase()
+    return if (lower.endsWith(".cmd") || lower.endsWith(".bat") || lower.endsWith(".ps1")) {
+        listOf(npx) + packageArgs
+    } else {
+        listOf(runtime.node, npx) + packageArgs
+    }
+}
+
+/** Ensures the directory containing `node` is on PATH for any nested `env node` shebang. */
+internal fun ensureNodeDirOnPath(environment: MutableMap<String, String>, command: List<String>) {
+    val nodePath = command.firstOrNull()
+        ?.takeIf { File(it).nameWithoutExtension.equals("node", ignoreCase = true) }
+        ?: return
+    val nodeDir = File(nodePath).absoluteFile.parent ?: return
+    val pathKey = environment.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
+    val existing = environment[pathKey].orEmpty()
+    val parts = existing.split(File.pathSeparator).filter { it.isNotEmpty() }
+    if (parts.any { File(it).absoluteFile == File(nodeDir).absoluteFile }) return
+    environment[pathKey] = nodeDir + if (existing.isEmpty()) "" else File.pathSeparator + existing
 }

@@ -86,10 +86,14 @@ internal fun ComposerChip(
         selected -> TextSecondary
         else -> TextSecondary.copy(alpha = 0.70f)
     }
-    // DNA: controls sit on the elevated composer; hover/active are barely lighter fills.
+    // DNA: controls sit on the elevated composer; hover/active are barely tonal fills.
     val container = when {
         !enabled -> Color.Transparent
-        selected -> Color.White.copy(alpha = if (AndyColors.isLight) 0.08f else 0.07f)
+        selected -> if (AndyColors.isLight) {
+            Color.Black.copy(alpha = 0.06f)
+        } else {
+            Color.White.copy(alpha = 0.07f)
+        }
         else -> Color.Transparent
     }
     Row(

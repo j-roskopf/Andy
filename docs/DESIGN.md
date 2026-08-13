@@ -26,12 +26,12 @@ A soft, minimal developer workspace with gallery-airy density and fluid motion. 
 
 ### Light
 
-- **Canvas White** (`#F5F5F5`) — Window background
-- **Sidebar Mist** (`#EDEDED`) — Navigation rail
-- **Pane White** (`#FAFAFA`) — Content panels
-- **Raised White** (`#FFFFFF`) — Elevated cards
+- **Canvas** (`#F2F2F2`) — Window and main content background (recessed base)
+- **Sidebar Mist** (`#E8E8E8`) — Navigation rail
+- **Pane / Well** (`#EBEBEB`) — Secondary panels, kanban lanes, list wells
+- **Raised White** (`#FFFFFF`) — Cards, composer, elevated chrome
 - **Ink Primary** (black @ 88%) — Primary text
-- **Whisper Border** (black @ 6%) — Subtle structural lines
+- **Whisper Border** (black @ 8%) — Subtle structural lines
 
 Max 1 accent color. No purple/blue neon gradients. No pure black (`#000000`).
 

@@ -68,7 +68,7 @@ class AgentAcpManager(
         val processLauncher = launcher.withDiagnostics { line ->
             onDiagnosticsLine(task.id, line.trimEnd())
         }
-        processLauncher.preflight(spec, binary).getOrElse { throw it }
+        processLauncher.preflight(spec, binary, env).getOrElse { throw it }
         val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
         val artifacts = AgentWorkflowArtifacts(scope, task.id, artifactDir)
         val bridge = AcpPermissionBridge(

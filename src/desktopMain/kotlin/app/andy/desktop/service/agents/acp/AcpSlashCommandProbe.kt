@@ -62,7 +62,7 @@ internal class AcpSlashCommandProbe(
         cwd: File,
         env: Map<String, String>,
     ): List<AgentSlashCommand> {
-        launcher.preflight(spec, binary).getOrThrow()
+        launcher.preflight(spec, binary, env).getOrThrow()
         val launched = launcher.launch(spec, binary, cwd.path, env)
         val process = launched.process
         val writer = BufferedWriter(OutputStreamWriter(process.outputStream))
