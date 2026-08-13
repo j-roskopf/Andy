@@ -1,6 +1,7 @@
 package app.andy.terminal
 
 import kotlin.test.Test
+import kotlin.test.assertTrue
 
 /**
  * Entry point for [BossTermPipelineBenchmark]. Skipped unless `-Dandy.bench=1` is set, so a
@@ -20,5 +21,10 @@ class BossTermPipelineBenchmarkTest {
                 ),
             )
         }
+        val failed = results.filter { it.cpuPercent.isNaN() || it.wallSeconds <= 0.0 }
+        assertTrue(
+            failed.isEmpty(),
+            "benchmark variants failed: ${failed.joinToString { it.name + "=" + it.description }}",
+        )
     }
 }

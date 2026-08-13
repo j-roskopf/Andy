@@ -71,44 +71,41 @@ object BossTermPipelineBenchmark {
             description = "Live PTY (`cat` waiting) with no streaming output — measurement floor",
             fps = 15L,
             idle = true,
+            // Pin so production agent defaults cannot leak into the floor measurement.
+            detectFilePaths = true,
+            performanceMode = "latency",
         )
+        // FPS sweep always pins the pre-knob baseline (latency + hyperlinks) so results stay
+        // comparable even after production defaults change.
         val fpsVariants = listOf(idle) + configuredFpsList().map { fps ->
             val label = if (fps <= 0L) "uncapped" else "${fps}fps"
             Variant(
                 name = label,
                 description = if (fps <= 0L) {
-                    "Gate disabled (-Dandy.terminal.repaint.fps=0); BossTerm INTERACTIVE path"
+                    "Gate disabled; latency + hyperlinks (BossTerm INTERACTIVE path)"
                 } else {
-                    "TerminalFrameLimiter cap at $fps fps (agentCli latency mode, default hyperlinks)"
+                    "Frame cap $fps fps; performanceMode=latency; detectFilePaths=true"
                 },
                 fps = fps,
+                detectFilePaths = true,
+                performanceMode = "latency",
             )
         }
         if (System.getProperty("andy.bench.knobs") != "1") return fpsVariants
         return fpsVariants + listOf(
             Variant(
                 name = "15fps+noHyperlinks",
-                description = "15fps + detectFilePaths=false",
+                description = "15fps + detectFilePaths=false + latency",
                 fps = 15L,
                 detectFilePaths = false,
+                performanceMode = "latency",
             ),
             Variant(
                 name = "15fps+throughput",
-                description = "15fps + performanceMode=throughput",
+                description = "15fps + performanceMode=throughput + hyperlinks",
                 fps = 15L,
+                detectFilePaths = true,
                 performanceMode = "throughput",
-            ),
-            Variant(
-                name = "30fps+noHyperlinks",
-                description = "30fps + detectFilePaths=false",
-                fps = 30L,
-                detectFilePaths = false,
-            ),
-            Variant(
-                name = "uncapped+noHyperlinks",
-                description = "Uncapped + detectFilePaths=false",
-                fps = 0L,
-                detectFilePaths = false,
             ),
             Variant(
                 name = "15fps+both",
@@ -131,23 +128,12 @@ object BossTermPipelineBenchmark {
                 detectFilePaths = false,
                 performanceMode = "throughput",
             ),
-            // At 24–30fps the default ~25ms open window (1.5× 60Hz frame) consumes most of
-            // the cycle, so Compose can paint multiple display frames per "capped" tick.
             Variant(
-                name = "24fps+rw12",
-                description = "24fps + renderWindowMs=12 (one 60Hz frame) + throughput + noHyperlinks",
-                fps = 24L,
+                name = "uncapped+both",
+                description = "Uncapped + detectFilePaths=false + performanceMode=throughput",
+                fps = 0L,
                 detectFilePaths = false,
                 performanceMode = "throughput",
-                renderWindowMs = 12L,
-            ),
-            Variant(
-                name = "30fps+rw10",
-                description = "30fps + renderWindowMs=10 + throughput + noHyperlinks",
-                fps = 30L,
-                detectFilePaths = false,
-                performanceMode = "throughput",
-                renderWindowMs = 10L,
             ),
         )
     }
@@ -229,6 +215,8 @@ object BossTermPipelineBenchmark {
 
         withProp("andy.terminal.repaint.fps", variant.fps.toString()) {
             withProp("andy.terminal.repaint.renderWindowMs", variant.renderWindowMs?.toString()) {
+                // Always set both knobs when provided so production agent defaults cannot
+                // silently alter an isolated A/B cell.
                 withProp(
                     "andy.terminal.detectFilePaths",
                     variant.detectFilePaths?.toString(),
