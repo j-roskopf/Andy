@@ -92,6 +92,8 @@ data class WorkspaceState(
     val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,
     val performanceLivePaneWidth: Float = 320f,
+    val rightDockPaneWidth: Float = 460f,
+    val bottomDockPaneHeight: Float = 300f,
     val performanceTab: String = PerformanceTab.Metrics.name,
     val filesTab: String = FilesTab.Files.name,
     val logcatTab: String = LogcatTab.Stream.name,

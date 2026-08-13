@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,6 +67,7 @@ import app.andy.ui.logcat.LogcatPanel
 import app.andy.ui.logcat.LogcatState
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -402,6 +404,9 @@ internal fun ShellDockDrawer(
         reveal.snapTo(0f)
         reveal.animateTo(1f, animationSpec = tween(170, easing = FastOutSlowInEasing))
     }
+    // Pad the header/tabs only. Content is flush to the card bottom so the right/bottom
+    // dock shares a baseline with the project composer (PanelCard's default 20dp bottom
+    // padding was leaving a visible shelf under Live).
     PanelCard(
         modifier.graphicsLayer {
             alpha = 0.72f + reveal.value * 0.28f
@@ -409,95 +414,114 @@ internal fun ShellDockDrawer(
             else translationY = (1f - reveal.value) * 28f
         },
         borderColor = Color.Transparent,
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    when (active?.kind) {
-                        DockTabKind.Terminal -> "Terminal"
-                        DockTabKind.Live -> "Live"
-                        DockTabKind.Logs -> "Logs"
-                        null -> "Pane"
-                    },
-                    color = TextPrimary,
-                    fontFamily = DisplayFont,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    when (active?.kind) {
-                        DockTabKind.Terminal ->
-                            if (active.runId == null) "Run an action to start a shell"
-                            else "Interactive project shell"
-                        DockTabKind.Live ->
-                            device?.displayName ?: targetDisplayName ?: serial ?: "Select a device in the toolbar"
-                        DockTabKind.Logs ->
-                            serial ?: "Select a device in the toolbar"
-                        null -> "Choose Live or Terminal"
-                    },
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                )
-            }
-            OutlinedButton(onClick = onClose) { Text("Close") }
-        }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = AndySpace.Space5, top = AndySpace.Space5, end = AndySpace.Space5),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
         ) {
-            val terminalTabs = pane.tabs.filter { it.kind == DockTabKind.Terminal }
-            pane.tabs.forEach { tab ->
-                val runningAction = tab.runId?.let { id -> running.firstOrNull { it.runId == id } }
-                DockTabPill(
-                    text = when (tab.kind) {
-                        DockTabKind.Live -> "live"
-                        DockTabKind.Logs -> "logs"
-                        DockTabKind.Terminal -> dockTerminalTabLabel(tab, terminalTabs, runningAction)
-                    },
-                    selected = tab.id == active?.id,
-                    color = when (tab.kind) {
-                        DockTabKind.Live -> Cyan
-                        DockTabKind.Logs -> Green
-                        DockTabKind.Terminal -> dockActionStatusColor(runningAction?.status)
-                    },
-                    icon = when (tab.kind) {
-                        DockTabKind.Live -> "▣"
-                        DockTabKind.Logs -> "≡"
-                        DockTabKind.Terminal -> actionIconMarker(runningAction?.icon.orEmpty())
-                    },
-                    onClick = { onSelectTab(tab.id) },
-                    onClose = { onCloseTab(tab.id) },
-                )
-            }
-            Box {
-                Box(
-                    Modifier
-                        .size(28.dp)
-                        .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Control))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
-                        .semantics { contentDescription = "Add pane tab"; role = Role.Button }
-                        .clickable(onClick = {
-                            if (!addMenuExpanded) {
-                                HeavyweightOverlayRegistry.push()
-                            }
-                            addMenuExpanded = true
-                        }),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (active?.kind) {
+                            DockTabKind.Terminal -> "Terminal"
+                            DockTabKind.Live -> "Live"
+                            DockTabKind.Logs -> "Logs"
+                            null -> "Pane"
+                        },
+                        color = TextPrimary,
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        when (active?.kind) {
+                            DockTabKind.Terminal ->
+                                if (active.runId == null) "Run an action to start a shell"
+                                else "Interactive project shell"
+                            DockTabKind.Live ->
+                                device?.displayName ?: targetDisplayName ?: serial ?: "Select a device in the toolbar"
+                            DockTabKind.Logs ->
+                                serial ?: "Select a device in the toolbar"
+                            null -> "Choose Live or Terminal"
+                        },
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                    )
                 }
-                DockLandingMenu(
-                    expanded = addMenuExpanded,
-                    onDismiss = ::dismissAddMenu,
-                    onSelect = { kind ->
-                        dismissAddMenu()
-                        onOpenKind(kind, true)
-                    },
-                )
+                OutlinedButton(onClick = onClose) { Text("Close") }
+            }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val terminalTabs = pane.tabs.filter { it.kind == DockTabKind.Terminal }
+                pane.tabs.forEach { tab ->
+                    val runningAction = tab.runId?.let { id -> running.firstOrNull { it.runId == id } }
+                    DockTabPill(
+                        text = when (tab.kind) {
+                            DockTabKind.Live -> "live"
+                            DockTabKind.Logs -> "logs"
+                            DockTabKind.Terminal -> dockTerminalTabLabel(tab, terminalTabs, runningAction)
+                        },
+                        selected = tab.id == active?.id,
+                        color = when (tab.kind) {
+                            DockTabKind.Live -> Cyan
+                            DockTabKind.Logs -> Green
+                            DockTabKind.Terminal -> dockActionStatusColor(runningAction?.status)
+                        },
+                        icon = when (tab.kind) {
+                            DockTabKind.Live -> "▣"
+                            DockTabKind.Logs -> "≡"
+                            DockTabKind.Terminal -> actionIconMarker(runningAction?.icon.orEmpty())
+                        },
+                        onClick = { onSelectTab(tab.id) },
+                        onClose = { onCloseTab(tab.id) },
+                    )
+                }
+                Box {
+                    Box(
+                        Modifier
+                            .size(28.dp)
+                            .background(AndyColors.Neutral850, RoundedCornerShape(AndyRadius.Control))
+                            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                            .semantics { contentDescription = "Add pane tab"; role = Role.Button }
+                            .clickable(onClick = {
+                                if (!addMenuExpanded) {
+                                    HeavyweightOverlayRegistry.push()
+                                }
+                                addMenuExpanded = true
+                            }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                    DockLandingMenu(
+                        expanded = addMenuExpanded,
+                        onDismiss = ::dismissAddMenu,
+                        onSelect = { kind ->
+                            dismissAddMenu()
+                            onOpenKind(kind, true)
+                        },
+                    )
+                }
             }
         }
-        Box(Modifier.fillMaxSize()) {
+        val liveEdgeToEdge = active?.kind == DockTabKind.Live
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(
+                    start = if (liveEdgeToEdge) 0.dp else AndySpace.Space5,
+                    end = if (liveEdgeToEdge) 0.dp else AndySpace.Space5,
+                    top = AndySpace.Space4,
+                ),
+        ) {
             when (active?.kind) {
                 DockTabKind.Terminal -> {
                     val runId = active.runId
@@ -518,6 +542,10 @@ internal fun ShellDockDrawer(
                             showChromeControls = false,
                             showDeviceHeader = false,
                             showPopOut = false,
+                            // Dock drawer already has PanelCard chrome; skip the nested pane surface.
+                            showContainerChrome = false,
+                            deviceBorderWidth = 0.dp,
+                            deviceCornerRadius = 0.dp,
                         )
                     } else {
                         EmptyState("Live view pauses while another tab is open")

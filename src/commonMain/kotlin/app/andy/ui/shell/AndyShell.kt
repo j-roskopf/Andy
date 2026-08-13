@@ -19,6 +19,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
@@ -35,6 +36,8 @@ import app.andy.ui.bugs.BugsScreen
 import app.andy.ui.catalog.CatalogScreen
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
+import app.andy.ui.components.HorizontalPaneDivider
+import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.controls.ControlsScreen
 import app.andy.ui.design.DesignScreen
@@ -349,6 +352,12 @@ internal fun AndyShell(
                 )
                 val liveDockActive = state.destination != AndyDestination.Live &&
                     state.activeTargetId !in poppedOutTargetIds
+                var rightDockPaneWidth by remember(state.workspaceState.rightDockPaneWidth) {
+                    mutableStateOf(state.workspaceState.rightDockPaneWidth)
+                }
+                var bottomDockPaneHeight by remember(state.workspaceState.bottomDockPaneHeight) {
+                    mutableStateOf(state.workspaceState.bottomDockPaneHeight)
+                }
                 Column(
                     Modifier
                         .fillMaxSize()
@@ -356,7 +365,10 @@ internal fun AndyShell(
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                Row(Modifier.weight(1f).fillMaxWidth()) {
+                Row(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     val actionsActive = state.destination == AndyDestination.Actions
                     val agentsActive = state.destination == AndyDestination.Agents
@@ -598,7 +610,10 @@ internal fun AndyShell(
                     }
                 }
                 if (state.docks.right.visible) {
-                    Spacer(Modifier.width(12.dp))
+                    PaneDivider(
+                        onDrag = { dragX -> rightDockPaneWidth = (rightDockPaneWidth - dragX).coerceIn(280f, 900f) },
+                        onDragEnd = { state.updateWorkspace { it.copy(rightDockPaneWidth = rightDockPaneWidth) } },
+                    )
                     ShellDockDrawer(
                         services = services,
                         pane = state.docks.right,
@@ -617,11 +632,15 @@ internal fun AndyShell(
                         onCloseTab = { state.closeDockTab(DockPlacement.Right, it) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Right, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Right) },
-                        modifier = Modifier.width(460.dp).fillMaxHeight(),
+                        modifier = Modifier.width(rightDockPaneWidth.dp).fillMaxHeight(),
                     )
                 }
                 }
                 if (state.docks.bottom.visible) {
+                    HorizontalPaneDivider(
+                        onDrag = { dragY -> bottomDockPaneHeight = (bottomDockPaneHeight - dragY).coerceIn(150f, 700f) },
+                        onDragEnd = { state.updateWorkspace { it.copy(bottomDockPaneHeight = bottomDockPaneHeight) } },
+                    )
                     ShellDockDrawer(
                         services = services,
                         pane = state.docks.bottom,
@@ -640,7 +659,7 @@ internal fun AndyShell(
                         onCloseTab = { state.closeDockTab(DockPlacement.Bottom, it) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Bottom) },
-                        modifier = Modifier.fillMaxWidth().height(300.dp),
+                        modifier = Modifier.fillMaxWidth().height(bottomDockPaneHeight.dp),
                     )
                 }
                 }

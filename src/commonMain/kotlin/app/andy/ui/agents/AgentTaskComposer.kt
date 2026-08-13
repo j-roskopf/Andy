@@ -91,6 +91,7 @@ import app.andy.model.composerCommandToken
 import app.andy.model.defaultSandboxMode
 import app.andy.model.descriptionFor
 import app.andy.model.groupedByModelFamily
+import app.andy.model.HostSearchResult
 import app.andy.model.labelFor
 import app.andy.model.parseAgentGoalCommand
 import app.andy.model.sandboxControlLabel
@@ -132,6 +133,7 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -191,32 +193,14 @@ internal fun AgentTaskComposerPane(
                         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
                     ) {
                         AgentMark(form.state.agent)
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(
-                                "NEW PROJECT CHAT",
-                                color = Cyan.copy(alpha = 0.78f),
-                                fontFamily = MonoFont,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 9.sp,
-                                letterSpacing = 0.8.sp,
-                            )
-                            Text(
-                                "Start with a direction",
-                                color = TextPrimary,
-                                fontFamily = DisplayFont,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 19.sp,
-                            )
-                        }
+                        Text(
+                            "Start with a direction",
+                            color = TextPrimary,
+                            fontFamily = DisplayFont,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 19.sp,
+                        )
                     }
-                    Spacer(Modifier.height(AndySpace.Space4))
-                    Text(
-                        "Your messages stay attached to ${projectContext.name}.",
-                        color = TextSecondary,
-                        fontFamily = DisplayFont,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center,
-                    )
                     Spacer(Modifier.height(AndySpace.Space4))
                     Column(
                         Modifier.widthIn(max = 540.dp),
@@ -489,6 +473,16 @@ private fun rememberAgentTaskComposerForm(
                 skill.description.contains(command.query, ignoreCase = true)
         }.take(8)
     }.orEmpty()
+    val fileMention = if (slashCommand == null && services.capabilities.hostAutomation) {
+        findComposerFileMention(state.prompt)
+    } else {
+        null
+    }
+    val mentionResults = composerFileMentionResults(
+        query = fileMention?.query,
+        hostFiles = services.hostFiles,
+        roots = listOfNotNull(directory),
+    )
     val selectedSkills = remember(state.prompt, availableSkills) {
         availableSkills.filter { skill -> state.prompt.referencesComposerSkill(skill) }
     }
@@ -572,6 +566,8 @@ private fun rememberAgentTaskComposerForm(
         slashCommand = slashCommand,
         matchingCommands = matchingCommands,
         matchingSkills = matchingSkills,
+        fileMention = fileMention,
+        mentionResults = mentionResults,
         selectedSkills = selectedSkills,
         canSubmit = canSubmit,
         scope = scope,
@@ -593,6 +589,8 @@ private class AgentTaskComposerForm(
     val slashCommand: ComposerSlashCommand?,
     val matchingCommands: List<AgentNativeSlashCommand>,
     val matchingSkills: List<AgentSkill>,
+    val fileMention: ComposerFileMention?,
+    val mentionResults: List<HostSearchResult>,
     val selectedSkills: List<AgentSkill>,
     val canSubmit: Boolean,
     val scope: CoroutineScope,
@@ -645,6 +643,12 @@ private class AgentTaskComposerForm(
         )
         state.skillMenuDismissed = true
     }
+
+    fun selectFileMention(result: HostSearchResult) {
+        val mention = fileMention ?: return
+        state.promptValue = insertFileMention(state.prompt, mention, result)
+        state.skillMenuDismissed = true
+    }
 }
 
 @Composable
@@ -678,12 +682,13 @@ internal fun rememberComposerSlashHighlight(
 internal fun rememberComposerSlashHighlight(
     skillNames: Set<String>,
     commandNames: Set<String>,
-) = remember(skillNames, commandNames, Cyan, Green) {
+) = remember(skillNames, commandNames, Cyan, Green, Yellow) {
     composerSlashTokenTransformation(
         skillNames = skillNames,
         commandNames = commandNames,
         skillColor = Cyan,
         commandColor = Green,
+        mentionColor = Yellow,
     )
 }
 
@@ -717,6 +722,7 @@ private fun AgentChatComposer(
 
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
+    fun selectFileMention(result: HostSearchResult) = form.selectFileMention(result)
 
     ChatComposerFrame(
         modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
@@ -739,6 +745,10 @@ private fun AgentChatComposer(
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
                             form.matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(form.matchingSkills.first())
+                            return@onPreviewKeyEvent true
+                        }
+                        if (event.key == Key.Tab && form.mentionResults.isNotEmpty()) {
+                            selectFileMention(form.mentionResults.first())
                             return@onPreviewKeyEvent true
                         }
                         if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
@@ -812,6 +822,32 @@ private fun AgentChatComposer(
                             }
                         },
                         onClick = { selectSkill(skill) },
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = form.fileMention != null && !state.skillMenuDismissed,
+                onDismissRequest = { state.skillMenuDismissed = true },
+                modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                properties = PopupProperties(focusable = false),
+            ) {
+                Text(
+                    if (form.mentionResults.isEmpty()) {
+                        "no files matching @${form.fileMention?.query.orEmpty()}"
+                    } else {
+                        "files matching @${form.fileMention?.query.orEmpty()}"
+                    },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                )
+                form.mentionResults.forEach { result ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                        },
+                        onClick = { selectFileMention(result) },
                     )
                 }
             }
