@@ -80,43 +80,70 @@ class AcpProcessLauncherTest {
 
     @Test
     fun ensureNodeDirOnPathPrependsNodeDirectory() {
-        val env = mutableMapOf("PATH" to "/usr/bin:/bin")
-        ensureNodeDirOnPath(env, listOf("/opt/homebrew/bin/node", "/opt/homebrew/bin/npx", "--version"))
-        assertEquals("/opt/homebrew/bin" + File.pathSeparator + "/usr/bin:/bin", env["PATH"])
+        val nodeDir = File("opt", "homebrew").resolve("bin").absoluteFile
+        val node = File(nodeDir, "node").path
+        val npx = File(nodeDir, "npx").path
+        val existing = listOf(File("usr", "bin").absolutePath, File("bin").absolutePath)
+            .joinToString(File.pathSeparator)
+        val env = mutableMapOf("PATH" to existing)
+
+        ensureNodeDirOnPath(env, listOf(node, npx, "--version"))
+
+        assertEquals(nodeDir.path + File.pathSeparator + existing, pathValue(env))
     }
 
     @Test
     fun ensureNodeDirOnPathAcceptsExplicitNodeBinaryForShimLaunch() {
-        val env = mutableMapOf("PATH" to "/usr/bin")
-        ensureNodeDirOnPath(
-            env,
-            listOf("/Users/me/.asdf/shims/npx", "-y", "pkg@1"),
-            nodeBinary = "/Users/me/.asdf/installs/nodejs/22.0.0/bin/node",
-        )
-        assertEquals(
-            "/Users/me/.asdf/installs/nodejs/22.0.0/bin" + File.pathSeparator + "/usr/bin",
-            env["PATH"],
-        )
+        val nodeDir = File("Users", "me")
+            .resolve(".asdf")
+            .resolve("installs")
+            .resolve("nodejs")
+            .resolve("22.0.0")
+            .resolve("bin")
+            .absoluteFile
+        val node = File(nodeDir, "node").path
+        val npx = File("Users", "me").resolve(".asdf").resolve("shims").resolve("npx").absolutePath
+        val existing = File("usr", "bin").absolutePath
+        val env = mutableMapOf("PATH" to existing)
+
+        ensureNodeDirOnPath(env, listOf(npx, "-y", "pkg@1"), nodeBinary = node)
+
+        assertEquals(nodeDir.path + File.pathSeparator + existing, pathValue(env))
     }
 
     @Test
     fun ensureNodeDirOnPathIsIdempotent() {
-        val env = mutableMapOf("PATH" to "/opt/homebrew/bin:/usr/bin")
-        ensureNodeDirOnPath(env, listOf("/opt/homebrew/bin/node", "/opt/homebrew/bin/npx"))
-        assertEquals("/opt/homebrew/bin:/usr/bin", env["PATH"])
+        val nodeDir = File("opt", "homebrew").resolve("bin").absoluteFile
+        val node = File(nodeDir, "node").path
+        val npx = File(nodeDir, "npx").path
+        val existing = nodeDir.path + File.pathSeparator + File("usr", "bin").absolutePath
+        val env = mutableMapOf("PATH" to existing)
+
+        ensureNodeDirOnPath(env, listOf(node, npx))
+
+        assertEquals(existing, pathValue(env))
     }
 
     @Test
     fun ensureNodeDirOnPathIgnoresNativeCommands() {
-        val env = mutableMapOf("PATH" to "/usr/bin")
+        val existing = File("usr", "bin").absolutePath
+        val env = mutableMapOf("PATH" to existing)
         ensureNodeDirOnPath(env, listOf("cursor-agent", "acp"))
-        assertEquals("/usr/bin", env["PATH"])
+        assertEquals(existing, pathValue(env))
     }
 
     @Test
     fun ensureNodeDirOnPathCreatesPathWhenMissing() {
+        val nodeDir = File("usr", "local").resolve("bin").absoluteFile
+        val node = File(nodeDir, "node").path
+        val npx = File(nodeDir, "npx").path
         val env = mutableMapOf<String, String>()
-        ensureNodeDirOnPath(env, listOf("/usr/local/bin/node", "/usr/local/bin/npx"))
-        assertTrue(env["PATH"] == "/usr/local/bin" || env["Path"] == "/usr/local/bin")
+
+        ensureNodeDirOnPath(env, listOf(node, npx))
+
+        assertEquals(nodeDir.path, pathValue(env))
     }
+
+    private fun pathValue(env: Map<String, String>): String? =
+        env.entries.firstOrNull { it.key.equals("PATH", ignoreCase = true) }?.value
 }
