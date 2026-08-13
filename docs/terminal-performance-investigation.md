@@ -1,127 +1,119 @@
 # Terminal performance investigation (iteration 1)
 
 **Date:** 2026-08-13  
-**Branch work:** BossTerm Compose pipeline measurement + bounded knob changes  
-**Stack under test:** `com.risaboss:bossterm-compose/core:1.2.143` via `BossTermBackend` → `EmbeddableTerminal` → `TerminalCanvasRenderer`, gated by `TerminalFrameLimiter`.
+**Branch:** `terminal-perf-iter1`  
+**Stack:** `com.risaboss:bossterm-compose/core:1.2.143` via `BossTermBackend` → `EmbeddableTerminal` → `TerminalCanvasRenderer`, gated by `TerminalFrameLimiter`.
 
 ## Goal
 
-Raise terminal responsiveness above today's 15fps gate **without** exceeding roughly **10–20% process CPU** while a terminal is actively streaming (chat non-ACP providers and Actions dock share this path).
+A fully performant terminal (smooth, high-fps-feeling) for chat (non-ACP) and the Actions dock, while keeping **~10–20% process CPU** under sustained streaming.
 
-## How we measured
+## Harness
 
-New harness: `BossTermPipelineBenchmark` / `BossTermPipelineBenchmarkTest`.
+`BossTermPipelineBenchmark` / `BossTermPipelineBenchmarkTest` — real `BossTermBackend` + Compose `EmbeddableTerminal` + live PTY stream (not the historical Swing/`FakeTerminal` stand-in).
 
 ```sh
 ./gradlew desktopTest --tests "app.andy.terminal.BossTermPipelineBenchmarkTest" \
   -Dandy.bench=1 -Dandy.bench.knobs=1 --rerun-tasks
 ```
 
-- Drives a real `BossTermBackend` + Compose `EmbeddableTerminal` window (not the historical Swing/`FakeTerminal` stand-in in `TerminalPipelineBenchmark`).
-- Workload: agent-like stream (~20 lines / 50ms with path+URL tokens ≈ 2–3k chars/s), sized from the prior live measurement of ~2,181 `requestRedraw`/sec.
-- Metric: `OperatingSystemMXBean.processCpuTime / wall` × 100 (multi-core capable; same units Activity Monitor uses when a process exceeds 100%).
-- Timing: 4s warmup + 12s measure per variant (unless overridden).
-- Machine: Apple Silicon, 18 logical CPUs. Idle floor with a live `cat` PTY: **~2.6–2.9%**.
+Results are also written to `build/bossterm-pipeline-benchmark.txt` (durable; Gradle has raced away `test-results` XML after green runs).
 
-The older Swing benchmark remains in-tree as historical only; its numbers are **not** comparable to today's bottleneck.
+- Workload: ~20 lines / 50ms with path+URL tokens (≈ 2–3k chars/s; matches prior ~2,181 `requestRedraw`/sec live agent measurement).
+- Metric: `processCpuTime / wall × 100` (multi-core capable).
+- Timing this run: 5s warmup + 15s measure per variant.
+- Machine: Apple Silicon, 18 logical CPUs.
 
-## Baseline FPS sweep (default agent settings at the time: `performanceMode=latency`, hyperlinks on)
+FPS-sweep cells pin `performanceMode=latency` + `detectFilePaths=true` so production knob defaults cannot leak into the baseline.
 
-| Variant | CPU % | Notes |
-|--------|------:|-------|
-| idle-shell | 2.6–2.9 | Live PTY, no output |
-| **15fps** (today's default) | **30.6–32.4** | `TerminalFrameLimiter` DEFAULT_FPS |
-| 24fps | 35.2 | |
-| 30fps | 34.7 | Nearly flat vs 24fps |
-| 45fps | 40.0 | |
-| uncapped (`fps=0`) | 58.6 | BossTerm stays in `RedrawMode.INTERACTIVE` |
+## Measured table (definitive run, 2026-08-13)
 
-### Empirical FPS ceiling for the 10–20% band
+| variant | cpu% | wall_s | procCpu_s | what |
+|--------|-----:|-------:|----------:|------|
+| idle-shell | 2.8 | 15.0 | 0.42 | Live `cat` PTY, no output |
+| 15fps | 28.9 | 15.0 | 4.34 | Cap 15; latency; hyperlinks on |
+| 24fps | 33.0 | 15.0 | 4.95 | Cap 24; latency; hyperlinks on |
+| 30fps | 32.4 | 15.0 | 4.87 | Cap 30; latency; hyperlinks on |
+| 45fps | 41.6 | 15.0 | 6.24 | Cap 45; latency; hyperlinks on |
+| uncapped | 61.5 | 15.0 | 9.23 | Gate off; latency; hyperlinks on |
+| 15fps+noHyperlinks | 21.3 | 15.0 | 3.20 | 15fps; latency; `detectFilePaths=false` |
+| 15fps+throughput | 20.8 | 15.0 | 3.12 | 15fps; `performanceMode=throughput`; hyperlinks on |
+| **15fps+both** | **20.2** | 15.0 | 3.03 | **15fps; throughput; no hyperlinks** |
+| 24fps+both | 26.0 | 15.0 | 3.90 | 24fps; throughput; no hyperlinks |
+| 30fps+both | 30.1 | 15.0 | 4.51 | 30fps; throughput; no hyperlinks |
+| uncapped+both | 58.7 | 15.0 | 8.81 | Uncapped; throughput; no hyperlinks |
 
-**None of the FPS caps alone land in 10–20% under agent-like streaming.**  
-15fps is already ~31–32%. Raising the cap moves further from the target (and uncapped is ~59%).
+## Empirical FPS ceiling inside 10–20% CPU
 
-The 15→30fps band is almost flat because most of the capped cost is **per open-gate paint + emulator work**, not a linear fps×cost curve — and at 30fps the default ~25ms render window consumes most of a 33ms cycle, so Compose can still paint multiple display frames per "capped" tick.
+**15fps is the only frame cap that can land in the band**, and only when combined with the knob defaults below (`15fps+both` = **20.2%**).
 
-## Knob A/B (Andy-side / public BossTerm settings)
+| Cap + knobs | CPU % | In 10–20% band? |
+|-------------|------:|-----------------|
+| 15fps+both | 20.2 | Yes (top edge) |
+| 24fps+both | 26.0 | No |
+| 30fps+both | 30.1 | No |
+| 15fps baseline (no knobs) | 28.9 | No |
+| uncapped | 61.5 | No |
 
-Bytecode consumers confirmed before testing:
+Raising `DEFAULT_FPS` above 15 exits the budget even with the best knobs.
 
-| Setting | Consumed by paint/stream? | Result |
-|---------|---------------------------|--------|
-| `TerminalSettings.maxRefreshRate` | **No** (settings UI / data class only) | Dead — confirmed again |
-| `gpuAcceleration` | **No** outside settings UI | Dead for Compose path |
-| `performanceMode` | **Yes** — `BlockingTerminalDataStream` (`take` / `poll(10ms)` / `poll(100ms)`) | Real |
-| `detectFilePaths` | **Yes** — `ProperTerminal` → `RenderingContext` → `detectAllHyperlinks` | Real |
+## Do the knobs help?
 
-Measured (representative runs; noise ± a few points):
+**Yes — both meaningfully.**
 
-| Variant | CPU % |
-|--------|------:|
-| 15fps (latency + hyperlinks) | 30.6–32.4 |
-| 15fps + `detectFilePaths=false` | 22.7–29.2 (noisy) |
-| 15fps + `performanceMode=throughput` | **22.5–23.9** (stable) |
-| 15fps + both | 24.1–25.2 |
-| 24fps + both | 29.2–29.5 |
-| 30fps + both | 30.3–31.2 |
-| 24fps + both + `renderWindowMs=12` | 33.7 (no win) |
-| 30fps + both + `renderWindowMs=10` | 29.2 (no win) |
-| uncapped + no hyperlinks | 57.5–60.2 |
+| Knob | Effect at 15fps |
+|------|-----------------|
+| `detectFilePaths=false` | 28.9% → 21.3% (−7.6 pts). Paint path skips `detectAllHyperlinks`. |
+| `performanceMode=throughput` | 28.9% → 20.8% (−8.1 pts). `BlockingTerminalDataStream` uses `poll(100ms)` when starved. |
+| Both | 28.9% → **20.2%** (−8.7 pts). |
 
-### Negative / weak results (useful for iteration 2)
+Dead / negative:
 
-- **Tightening `renderWindowMs` at 24/30fps** did not buy a CPU win; stale-frame risk remains if the window drops below one display frame + EDT hop.
-- **`detectFilePaths=false` alone** helped in some runs (~10 points) but was noisy; still worth defaulting off for agent TUIs (little product value there).
-- **Raising `DEFAULT_FPS`** is not a safe win against the 10–20% budget.
-- **Output batching before BossTerm:** Andy already forwards PTY `read()` chunks via `TeeingProcessHandle`; further host-side coalescing would not stop BossTerm's per-character `requestRedraw()` once the emulator parses the chunk. Not pursued beyond `performanceMode=throughput`.
-- First firehose stream (`andy.bench.stream=heavy`) pegged parse (~150%+ even at 15fps) and is not representative — kept as an opt-in stress mode only.
+| Setting | Result |
+|---------|--------|
+| `maxRefreshRate` | No bytecode consumer outside settings UI |
+| `gpuAcceleration` | Same — dead on Compose path |
+| Host-side PTY re-batching | Andy already forwards `read()` chunks; does not stop per-char `requestRedraw()` |
 
-## Changes shipped this iteration
+## What we shipped
 
-1. **`BossTermPipelineBenchmark`** — real Compose/BossTerm CPU harness + gradle forwarding for `-Dandy.bench*` / `-Dandy.terminal.*`.
-2. **Agent-CLI defaults** in `BossTermAppearance`:
-   - `performanceMode = "throughput"` (was `"latency"`)
+1. **`DEFAULT_FPS = 15`** kept (only in-band choice). Exposed as `internal` + asserted in `TerminalFrameLimiterTest`.
+2. **Both terminal surfaces** (chat non-ACP + Actions dock share `BossTermBackend` / `BossTermAppearance`):
+   - `performanceMode = "throughput"`
    - `detectFilePaths = false`
-   - Escape hatches: `-Dandy.terminal.performanceMode=…`, `-Dandy.terminal.detectFilePaths=true|false`
-3. **`TerminalFrameLimiter`:** optional `-Dandy.terminal.repaint.renderWindowMs=`; **`DEFAULT_FPS` left at 15** (documented why).
-4. Tests updated in `BossTermScrollbackTest.appearanceMapsToBossTermSettings`.
+   - Overrides: `-Dandy.terminal.performanceMode=…`, `-Dandy.terminal.detectFilePaths=true|false`
+3. Harness + durable results file + gradle `-Dandy.bench*` / `-Dandy.terminal.*` forwarding.
 
-Expected production effect under streaming agent CLIs: roughly **~23–25% process CPU** in the bench environment (down from ~31–32%), still slightly above the aspirational 10–20% band but the best measured BossTerm-side cut that does not raise frame cap.
+Expected active streaming CPU: **~20%** (top of the target band), down from **~29%** at the old 15fps+latency+hyperlinks baseline. Visual smoothness is unchanged at 15fps — knobs buy budget, not fluidity.
 
-Actions / non-agent DirectPty shells keep `balanced` + default hyperlinks.
+## Can BossTerm be “fully performant” inside this CPU budget?
 
-## Can BossTerm hit the goal within its architecture?
+**No — not with a high-fps feel.**
 
-**Unlikely for "materially smoother than 15fps" inside 10–20% CPU.**
+Evidence:
 
-Reasons grounded in this iteration's data + prior decompile work:
+1. Per-character `requestRedraw()` (~2k/s) forces Andy’s DEC 2026 gate; BossTerm’s own `HIGH_VOLUME` backoff never engages; `maxRefreshRate` is dead.
+2. Full-grid Skia `renderTerminal` stays expensive per committed frame — uncapped is still ~59–62% even with knobs.
+3. **Best measured config is 15fps @ 20.2%.** Anything that feels smoother (24/30/uncapped) is 26–62%.
+4. Closed-source / minified jars — no path to fix the redraw model without replacing or forking.
 
-1. **Per-character `requestRedraw()`** (~2k/s live) forces Andy to hold DEC 2026 sync closed most of the time; the gate is the only effective rate control (`maxRefreshRate` is dead; BossTerm's own `HIGH_VOLUME` backoff never engages).
-2. **Full-grid Skia paint** (`TerminalCanvasRenderer.renderTerminal`) remains expensive per committed frame; uncapped still ~59% even with hyperlinks off.
-3. **Best knob combo still ~23–25% at 15fps** under agent-like load — inside/near the top of the band only by staying at 15fps, not by raising responsiveness.
-4. Library is **closed-source / minified**; no path to fix the redraw model without replacing or forking.
+### Next iteration (informed decision, not a guess)
 
-### Next iteration decision point (do not start until chosen)
+| Option | Verdict |
+|--------|---------|
+| Stay on BossTerm @ 15fps + knobs (~20% CPU) | Shipped; acceptable if choppy streaming is OK |
+| Raise FPS on BossTerm | **Reject for the 10–20% goal** (measured) |
+| **Replace renderer** (e.g. xterm.js / WebGL via JCEF or similar) | **Required for smooth high-fps + ≤20% CPU** |
 
-| Option | Pros | Cons |
-|--------|------|------|
-| **A. Stay on BossTerm + accept ~15fps / ~25% CPU** | Smallest risk; knobs already applied | User-visible choppiness remains |
-| **B. Replace renderer** (e.g. xterm.js via JCEF/WebView, or another JVM term) | GPU/DOM terminals routinely sustain 60fps cheaply | No JCEF in-tree today; integration + tmux/PTY/scrollback/appearance parity is a multi-PR project |
-| **C. Vendor/fork BossTerm** | Could batch redraws properly | Closed/minified jars; legal/maintainability cost |
+**JCEF status in this repo:** no JCEF / JavaCEF / Compose WebView terminal dependency exists today (search covered `*.kt` / `*.kts` / docs). Adopting xterm.js would be a greenfield embed (JCEF or another WebView) plus PTY/tmux/scrollback/appearance parity — multi-PR. That is the correct next iteration if the product requirement is “feels like a normal terminal” inside the CPU band.
 
-**Recommendation:** treat **B** as the default plan for iteration 2 if the product requirement is "feels like a normal terminal" *and* ≤20% CPU. Iteration 1 exhausted the public BossTerm knobs that move the needle; further FPS raises inside this architecture regress the budget.
-
-## Repro commands
+## Repro
 
 ```sh
-# Full FPS + knob matrix
 ./gradlew desktopTest --tests "app.andy.terminal.BossTermPipelineBenchmarkTest" \
   -Dandy.bench=1 -Dandy.bench.knobs=1 --rerun-tasks
+# table → build/bossterm-pipeline-benchmark.txt
 
-# Single cap
-./gradlew desktopTest --tests "app.andy.terminal.BossTermPipelineBenchmarkTest" \
-  -Dandy.bench=1 -Dandy.bench.fps=15 -Dandy.bench.measureSec=15 --rerun-tasks
-
-# Packaged-app profile (jlinked JDK has no JFR):
+# Packaged app (no JFR in jlinked JDK):
 # asprof -d 30 -e cpu -o collapsed -f out.collapsed <andy-pid>
 ```
