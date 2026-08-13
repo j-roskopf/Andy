@@ -510,8 +510,20 @@ val andyDesktopTestParallelForks =
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
-    // TEMPORARY (perf investigation): forward -Dandy.bench to the test JVM.
-    System.getProperty("andy.bench")?.let { systemProperty("andy.bench", it) }
+    // Forward -Dandy.bench* / -Dandy.terminal.* into the test JVM for pipeline benchmarks.
+    listOf(
+        "andy.bench",
+        "andy.bench.fps",
+        "andy.bench.knobs",
+        "andy.bench.warmupSec",
+        "andy.bench.measureSec",
+        "andy.bench.stream",
+        "andy.terminal.repaint.fps",
+        "andy.terminal.performanceMode",
+        "andy.terminal.detectFilePaths",
+    ).forEach { key ->
+        System.getProperty(key)?.let { systemProperty(key, it) }
+    }
     // Opt-in live macOS whisper bottle install smoke (downloads Homebrew bottles).
     System.getProperty("andy.voice.live.smoke")?.let { systemProperty("andy.voice.live.smoke", it) }
     System.getProperty("andy.voice.live.home")?.let { systemProperty("andy.voice.live.home", it) }

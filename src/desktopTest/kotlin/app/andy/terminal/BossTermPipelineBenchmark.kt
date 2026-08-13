@@ -45,6 +45,8 @@ object BossTermPipelineBenchmark {
         val fps: Long,
         val detectFilePaths: Boolean? = null,
         val performanceMode: String? = null,
+        /** When true, argv is a quiet `cat` instead of the streaming workload. */
+        val idle: Boolean = false,
     )
 
     class Result(
@@ -62,7 +64,13 @@ object BossTermPipelineBenchmark {
     }
 
     private fun variants(): List<Variant> {
-        val fpsVariants = configuredFpsList().map { fps ->
+        val idle = Variant(
+            name = "idle-shell",
+            description = "Live PTY (`cat` waiting) with no streaming output — measurement floor",
+            fps = 15L,
+            idle = true,
+        )
+        val fpsVariants = listOf(idle) + configuredFpsList().map { fps ->
             val label = if (fps <= 0L) "uncapped" else "${fps}fps"
             Variant(
                 name = label,
@@ -104,26 +112,45 @@ object BossTermPipelineBenchmark {
     }
 
     /**
-     * Sustained high-volume PTY output in the same ballpark as a busy agent CLI
-     * (thousands of characters/sec with newlines + path/URL tokens that exercise hyperlink
-     * detection), without a pure `yes` firehose that spends all CPU in the parse loop.
+     * Sustained streaming output sized like a busy agent CLI (~2k redraw-driving chars/sec
+     * with newlines + path/URL tokens), not a `yes` firehose. A prior live measurement saw
+     * ~2,181 `requestRedraw`/sec; this aims for that order of magnitude so the frame gate —
+     * not the emulator parse loop — dominates the A/B.
+     *
+     * Override with `-Dandy.bench.stream=heavy` for a parse-stress firehose.
      */
-    private val streamCommand = listOf(
-        "/bin/sh",
-        "-c",
-        """
-        line=0
-        while true; do
-          i=0
-          while [ ${'$'}i -lt 40 ]; do
-            printf 'agent[%05d] working… step=%d path=/Users/joer/Code/Andy/Andy/src/Main.kt url=https://example.com/x\n' ${'$'}line ${'$'}i
-            line=${'$'}((line+1))
-            i=${'$'}((i+1))
-          done
-          sleep 0.005
-        done
-        """.trimIndent(),
-    )
+    private fun streamCommand(): List<String> {
+        val heavy = System.getProperty("andy.bench.stream") == "heavy"
+        val script = if (heavy) {
+            """
+            line=0
+            while true; do
+              i=0
+              while [ ${'$'}i -lt 40 ]; do
+                printf 'agent[%05d] working… step=%d path=/Users/joer/Code/Andy/Andy/src/Main.kt url=https://example.com/x\n' ${'$'}line ${'$'}i
+                line=${'$'}((line+1))
+                i=${'$'}((i+1))
+              done
+              sleep 0.005
+            done
+            """.trimIndent()
+        } else {
+            """
+            line=0
+            while true; do
+              # ~20 lines / 50ms ≈ 400 lines/s ≈ ~2–3k chars/s with the format below
+              i=0
+              while [ ${'$'}i -lt 20 ]; do
+                printf 'agent[%05d] working… step=%d path=/Users/joer/Code/Andy/Andy/src/Main.kt url=https://example.com/x\n' ${'$'}line ${'$'}i
+                line=${'$'}((line+1))
+                i=${'$'}((i+1))
+              done
+              sleep 0.05
+            done
+            """.trimIndent()
+        }
+        return listOf("/bin/sh", "-c", script)
+    }
 
     @Composable
     private fun TerminalHost(session: BossTermBackend) {
@@ -165,10 +192,15 @@ object BossTermPipelineBenchmark {
                 variant.detectFilePaths?.toString(),
             ) {
                 withProp("andy.terminal.performanceMode", variant.performanceMode) {
+                    val argv = if (variant.idle) {
+                        listOf("/bin/sh", "-c", "cat")
+                    } else {
+                        streamCommand()
+                    }
                     session = TerminalSessions.create(
                         TerminalLaunchRequest(
                             sessionId = "bossterm-bench-${variant.name}-${System.nanoTime()}",
-                            argv = streamCommand,
+                            argv = argv,
                             cols = 120,
                             rows = 40,
                             mode = TerminalMode.DirectPty,
