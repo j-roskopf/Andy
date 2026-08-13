@@ -27,7 +27,6 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettingsOverride {
     val theme = toBossTermTheme()
-    val detectFilePaths = resolvedDetectFilePaths(agentCliMode)
     return TerminalSettingsOverride(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
@@ -41,7 +40,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettingsOverride(
         aiAssistantsEnabled = false,
         disableLineSpacingInAlternateBuffer = true,
         performanceMode = resolvedPerformanceMode(agentCliMode),
-        detectFilePaths = detectFilePaths,
+        detectFilePaths = resolvedDetectFilePaths(agentCliMode),
         enableMouseReporting = forwardMouseToApplication || !agentCliMode,
         forceActionOnMouseReporting = agentCliMode && !forwardMouseToApplication,
         // BossTerm 1.2.143 accumulates fractional deltas only on its local-history path.
@@ -58,8 +57,7 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
     forwardMouseToApplication: Boolean = false,
 ): TerminalSettings {
     val theme = toBossTermTheme()
-    val detectFilePaths = resolvedDetectFilePaths(agentCliMode)
-    val base = TerminalSettings(
+    return TerminalSettings(
         fontSize = fontSize,
         fontName = fontFamily.bossTermFontName(),
         activeThemeId = theme.id,
@@ -72,40 +70,40 @@ fun TerminalAppearanceSnapshot.toBossTermSettings(
         autoInjectShellIntegration = false,
         disableLineSpacingInAlternateBuffer = true,
         performanceMode = resolvedPerformanceMode(agentCliMode),
+        detectFilePaths = resolvedDetectFilePaths(agentCliMode),
         enableMouseReporting = forwardMouseToApplication || !agentCliMode,
         forceActionOnMouseReporting = agentCliMode && !forwardMouseToApplication,
         mouseScrollThreshold = if (forwardMouseToApplication) 0f else 1f,
         simulateMouseScrollInAlternateScreen = !forwardMouseToApplication,
     )
-    // null → leave BossTerm's data-class default (enabled); non-null → agent default or -D override.
-    return if (detectFilePaths == null) base else base.copy(detectFilePaths = detectFilePaths)
 }
 
 /**
- * `-Dandy.terminal.performanceMode=latency|balanced|throughput` overrides the agent/default
- * mapping. Used by [BossTermPipelineBenchmark] and available as an escape hatch in the field.
+ * `-Dandy.terminal.performanceMode=latency|balanced|throughput` overrides the default.
  * BossTerm's [ai.rever.bossterm.compose.terminal.BlockingTerminalDataStream] uses this at
  * init: latency=`take()`, balanced=`poll(10ms)`, throughput=`poll(100ms)`.
  *
- * Agent CLIs default to **throughput**: measured ~25% lower process CPU than latency under
- * streaming load (see `docs/terminal-performance-investigation.md`) with no echo regression
- * on the poll-when-empty path (poll still returns as soon as a chunk arrives).
+ * Default **throughput** for every Andy-embedded terminal (agent chat + Actions dock): the
+ * 2026-08 BossTerm Compose bench measured 15fps+throughput at 20.8% process CPU vs 28.9%
+ * for latency under agent-like streaming (see `docs/terminal-performance-investigation.md`).
+ * Poll still returns as soon as a chunk arrives, so keystroke echo is not delayed by the
+ * 100ms timeout.
  */
-private fun resolvedPerformanceMode(agentCliMode: Boolean): String =
+private fun resolvedPerformanceMode(@Suppress("UNUSED_PARAMETER") agentCliMode: Boolean): String =
     System.getProperty("andy.terminal.performanceMode")?.takeIf { it.isNotBlank() }
-        ?: if (agentCliMode) "throughput" else "balanced"
+        ?: "throughput"
 
 /**
  * `-Dandy.terminal.detectFilePaths=true|false` overrides the default.
  *
- * Agent CLIs default to **false**: BossTerm's `TerminalCanvasRenderer.detectAllHyperlinks`
- * runs on the paint path when enabled, and A/B runs showed a real (if noisier) CPU cut with
- * it off. Embedded agent TUIs rarely need clickable path detection; Actions/direct shells
- * keep BossTerm's default (enabled) unless the property overrides.
+ * Default **false**: `TerminalCanvasRenderer.detectAllHyperlinks` runs on the paint path when
+ * enabled. The same bench: 15fps+noHyperlinks = 21.3%, 15fps+both = **20.2%** (the only
+ * configuration that lands at the top of the 10–20% active-CPU band). Both terminal surfaces
+ * share [BossTermBackend], so this applies to chat and Actions alike; re-enable with
+ * `-Dandy.terminal.detectFilePaths=true` if clickable paths are needed.
  */
-private fun resolvedDetectFilePaths(agentCliMode: Boolean): Boolean? {
-    System.getProperty("andy.terminal.detectFilePaths")?.toBooleanStrictOrNull()?.let { return it }
-    return if (agentCliMode) false else null
+private fun resolvedDetectFilePaths(@Suppress("UNUSED_PARAMETER") agentCliMode: Boolean): Boolean {
+    return System.getProperty("andy.terminal.detectFilePaths")?.toBooleanStrictOrNull() ?: false
 }
 
 /** ARGB packed as Compose Color expects (`0xAARRGGBB`). */

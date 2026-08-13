@@ -207,16 +207,16 @@ class TerminalFrameLimiter(
         /**
          * Default cap, in frames per second.
          *
-         * Kept at 15 after the BossTerm Compose re-measure (2026-08): under agent-like streaming,
-         * 24/30/45fps all landed above the 10–20% process-CPU target, and even 15fps sits near
-         * ~30% without the agent-CLI knob defaults in [BossTermAppearance]. Raising this without
-         * a cheaper renderer regresses the budget — see
+         * Empirically the **only** frame rate that can sit inside the 10–20% active-CPU band
+         * under agent-like streaming once [BossTermAppearance] applies throughput mode and
+         * disables per-frame hyperlink detection (measured **20.2%** at 15fps+both;
+         * 24fps+both = 26.0%). Higher caps are available via
+         * `-Dandy.terminal.repaint.fps=<n>`; `0` disables. See
          * `docs/terminal-performance-investigation.md`.
          *
-         * Override with `-Dandy.terminal.repaint.fps=<n>` (same property as before); `0` disables.
          * User input bypasses the cap via [flushNow].
          */
-        private const val DEFAULT_FPS = 15L
+        internal const val DEFAULT_FPS = 15L
 
         /** Backgrounded sessions render to nothing, so this only bounds request churn. */
         private const val DEFAULT_BACKGROUND_INTERVAL_MS = 500L

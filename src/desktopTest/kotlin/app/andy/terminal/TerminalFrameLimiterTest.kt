@@ -88,6 +88,24 @@ private class FakeRedrawGate : SynchronizedUpdateGate {
 
 class TerminalFrameLimiterTest {
 
+    @Test
+    fun `default fps stays at the measured 10-20 percent CPU ceiling`() {
+        // 15fps + throughput + no hyperlinks measured 20.2% process CPU; 24fps+both was 26%.
+        // Raising DEFAULT_FPS without a cheaper renderer exits the budget band — see
+        // docs/terminal-performance-investigation.md.
+        assertEquals(15L, TerminalFrameLimiter.DEFAULT_FPS)
+        val previous = System.getProperty("andy.terminal.repaint.fps")
+        try {
+            System.clearProperty("andy.terminal.repaint.fps")
+            val limiter = TerminalFrameLimiter(gate = FakeRedrawGate())
+            assertTrue(limiter.isEnabled, "default 15fps cap must be enabled")
+            limiter.close()
+        } finally {
+            if (previous == null) System.clearProperty("andy.terminal.repaint.fps")
+            else System.setProperty("andy.terminal.repaint.fps", previous)
+        }
+    }
+
     private fun limiter(
         gate: SynchronizedUpdateGate,
         intervalMs: Long = 25L,

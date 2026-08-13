@@ -757,6 +757,11 @@ class BossTermScrollbackTest {
         assertEquals("throughput", agent.performanceMode)
         assertEquals(false, agent.detectFilePaths)
 
+        // Same perf defaults on the Actions / DirectPty surface (agentCliMode=false).
+        val actions = TerminalAppearanceSnapshot().toBossTermSettingsOverride(agentCliMode = false)
+        assertEquals("throughput", actions.performanceMode)
+        assertEquals(false, actions.detectFilePaths)
+
         val tmuxAttach = TerminalAppearanceSnapshot().toBossTermSettingsOverride(
             agentCliMode = true,
             forwardMouseToApplication = true,
