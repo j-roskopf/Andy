@@ -366,9 +366,28 @@ private fun KanbanSummaryMetric(label: String, value: Int, color: Color) {
 }
 
 private fun isCompletedLane(lane: KanbanLane): Boolean =
-    lane.id.equals("done", ignoreCase = true) ||
-        lane.name.contains("done", ignoreCase = true) ||
-        lane.name.contains("complete", ignoreCase = true)
+    isCompletedKanbanLane(laneId = lane.id, laneName = lane.name)
+
+/**
+ * Treats a lane as completed only for explicit done-ish ids/labels.
+ *
+ * Substring matching is intentionally avoided so names like "Incomplete", "Undone",
+ * or "Not done" do not inflate the board's done total.
+ */
+internal fun isCompletedKanbanLane(laneId: String, laneName: String): Boolean {
+    if (laneId.equals("done", ignoreCase = true)) return true
+    val name = laneName.trim()
+    if (name.isEmpty()) return false
+    val lower = name.lowercase()
+    if (UNFINISHED_LANE_LABEL.containsMatchIn(lower)) return false
+    return COMPLETED_LANE_LABEL.containsMatchIn(lower)
+}
+
+private val COMPLETED_LANE_LABEL =
+    Regex("""\b(done|complete|completed|finished)\b""")
+
+private val UNFINISHED_LANE_LABEL =
+    Regex("""\b(incomplete|undone|not[\s-]+done|not[\s-]+complete[d]?)\b""")
 
 @Composable
 private fun KanbanLaneColumn(

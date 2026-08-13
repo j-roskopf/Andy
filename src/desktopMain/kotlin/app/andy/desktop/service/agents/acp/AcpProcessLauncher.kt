@@ -27,10 +27,10 @@ class AcpProcessLauncher(
     ): Result<List<String>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val command = commandFor(spec, binary, preflight = true)
-                val process = ProcessBuilder(command)
+                val prepared = prepareCommand(spec, binary, preflight = true)
+                val process = ProcessBuilder(prepared.command)
                     .redirectErrorStream(true)
-                    .applyLaunchEnv(env, command)
+                    .applyLaunchEnv(env, prepared.command, prepared.nodeBinary)
                     .start()
                 val output = StringBuilder()
                 val reader = Thread {
@@ -44,7 +44,7 @@ class AcpProcessLauncher(
                 if (process.exitValue() != 0) {
                     error(output.toString().trim().ifBlank { "ACP preflight exited with ${process.exitValue()}" })
                 }
-                command
+                prepared.command
             }
         }
 
@@ -54,11 +54,11 @@ class AcpProcessLauncher(
         cwd: String,
         env: Map<String, String>,
     ): AcpProcess = withContext(Dispatchers.IO) {
-        val command = commandFor(spec, binary, preflight = false)
-        val process = ProcessBuilder(command)
+        val prepared = prepareCommand(spec, binary, preflight = false)
+        val process = ProcessBuilder(prepared.command)
             .directory(File(cwd))
             .redirectError(ProcessBuilder.Redirect.PIPE)
-            .applyLaunchEnv(env, command)
+            .applyLaunchEnv(env, prepared.command, prepared.nodeBinary)
             .start()
         Thread({
             runCatching {
@@ -70,55 +70,114 @@ class AcpProcessLauncher(
             isDaemon = true
             start()
         }
-        AcpProcess(process, command)
+        AcpProcess(process, prepared.command)
     }
 
-    private fun commandFor(spec: AcpLaunchSpec, binary: String?, preflight: Boolean): List<String> = when (spec) {
-        is AcpLaunchSpec.Native -> if (preflight) {
-            listOf(binary ?: spec.command, "--version")
-        } else {
-            listOf(binary ?: spec.command) + spec.args
+    private fun prepareCommand(spec: AcpLaunchSpec, binary: String?, preflight: Boolean): PreparedAcpCommand =
+        when (spec) {
+            is AcpLaunchSpec.Native -> PreparedAcpCommand(
+                command = if (preflight) {
+                    listOf(binary ?: spec.command, "--version")
+                } else {
+                    listOf(binary ?: spec.command) + spec.args
+                },
+                nodeBinary = null,
+            )
+            is AcpLaunchSpec.Npx -> {
+                val runtime = nodeLocator.locate() ?: throw IOException("Node.js/npx was not found")
+                val packageArgs = listOf("-y", "${spec.packageName}@${spec.version}") +
+                    if (preflight) listOf("--version") else emptyList()
+                PreparedAcpCommand(
+                    command = acpNpxCommand(runtime, packageArgs),
+                    nodeBinary = runtime.node,
+                )
+            }
         }
-        is AcpLaunchSpec.Npx -> {
-            val runtime = nodeLocator.locate() ?: throw IOException("Node.js/npx was not found")
-            val packageArgs = listOf("-y", "${spec.packageName}@${spec.version}") +
-                if (preflight) listOf("--version") else emptyList()
-            acpNpxCommand(runtime, packageArgs)
-        }
-    }
 }
 
-private fun ProcessBuilder.applyLaunchEnv(env: Map<String, String>, command: List<String>): ProcessBuilder {
+private data class PreparedAcpCommand(
+    val command: List<String>,
+    val nodeBinary: String?,
+)
+
+private fun ProcessBuilder.applyLaunchEnv(
+    env: Map<String, String>,
+    command: List<String>,
+    nodeBinary: String? = null,
+): ProcessBuilder {
     if (env.isNotEmpty()) {
         environment().putAll(env)
     }
-    ensureNodeDirOnPath(environment(), command)
+    ensureNodeDirOnPath(environment(), command, nodeBinary)
     return this
 }
 
 /**
  * Builds the argv for an npx-backed ACP agent.
  *
- * Homebrew/nvm `npx` is a `#!/usr/bin/env node` script. GUI-launched JVMs often lack
- * `/opt/homebrew/bin` (and similar) on PATH, so exec'ing npx alone fails with
- * `env: node: No such file or directory`. Invoking the absolute node binary with the
- * npx script as its argument bypasses that shebang lookup. Windows `.cmd`/`.ps1` shims
- * stay direct invocations — `node npx.cmd` is not valid there.
+ * Homebrew/nvm `npx` is usually a `#!/usr/bin/env node` script. GUI-launched JVMs often
+ * lack `/opt/homebrew/bin` (and similar) on PATH, so exec'ing that script alone fails with
+ * `env: node: No such file or directory`. For those JS entry points, invoke the absolute
+ * node binary with the npx script as its argument.
+ *
+ * asdf/Volta-style native or shell shims are not valid Node scripts — wrapping them with
+ * `node` fails — so those stay direct invocations. [ensureNodeDirOnPath] still prepends
+ * the node directory so nested `env node` lookups succeed. Windows `.cmd`/`.ps1` shims
+ * also stay direct — `node npx.cmd` is not valid there.
  */
-internal fun acpNpxCommand(runtime: NodeRuntime, packageArgs: List<String>): List<String> {
+internal fun acpNpxCommand(
+    runtime: NodeRuntime,
+    packageArgs: List<String>,
+    isNodeScript: (String) -> Boolean = ::npxLooksLikeNodeScript,
+): List<String> {
     val npx = runtime.npx
     val lower = npx.lowercase()
-    return if (lower.endsWith(".cmd") || lower.endsWith(".bat") || lower.endsWith(".ps1")) {
-        listOf(npx) + packageArgs
-    } else {
+    if (lower.endsWith(".cmd") || lower.endsWith(".bat") || lower.endsWith(".ps1")) {
+        return listOf(npx) + packageArgs
+    }
+    return if (isNodeScript(npx)) {
         listOf(runtime.node, npx) + packageArgs
+    } else {
+        listOf(npx) + packageArgs
     }
 }
 
-/** Ensures the directory containing `node` is on PATH for any nested `env node` shebang. */
-internal fun ensureNodeDirOnPath(environment: MutableMap<String, String>, command: List<String>) {
-    val nodePath = command.firstOrNull()
-        ?.takeIf { File(it).nameWithoutExtension.equals("node", ignoreCase = true) }
+/** True when [path] is a Node-executed script (shebang or plain JS), not a native/shell shim. */
+internal fun npxLooksLikeNodeScript(path: String): Boolean {
+    val file = File(path)
+    if (!file.isFile) {
+        // Missing/unreadable path: keep the historical unix wrap (Homebrew/nvm).
+        return true
+    }
+    val firstLine = runCatching {
+        file.bufferedReader().use { it.readLine() }
+    }.getOrNull() ?: return true
+    if (firstLine.startsWith("#!")) {
+        return firstLine.contains("node", ignoreCase = true)
+    }
+    val trimmed = firstLine.trimStart()
+    return trimmed.startsWith("//") ||
+        trimmed.startsWith("/*") ||
+        trimmed.startsWith("'use strict'") ||
+        trimmed.startsWith("\"use strict\"") ||
+        trimmed.startsWith("import ") ||
+        trimmed.contains("require(") ||
+        trimmed.contains("module.exports")
+}
+
+/**
+ * Ensures the directory containing `node` is on PATH for any nested `env node` shebang.
+ *
+ * [nodeBinary] covers direct npx-shim launches where argv[0] is not `node`.
+ */
+internal fun ensureNodeDirOnPath(
+    environment: MutableMap<String, String>,
+    command: List<String>,
+    nodeBinary: String? = null,
+) {
+    val nodePath = nodeBinary
+        ?: command.firstOrNull()
+            ?.takeIf { File(it).nameWithoutExtension.equals("node", ignoreCase = true) }
         ?: return
     val nodeDir = File(nodePath).absoluteFile.parent ?: return
     val pathKey = environment.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH"
