@@ -282,6 +282,14 @@ object BossTermPipelineBenchmark {
 
     fun run(): List<Result> {
         val results = mutableListOf<Result>()
+        // Durable copy — Gradle has been observed to delete test-results XML after a
+        // successful run when a concurrent cleanup races the binary results file.
+        val outFile = java.io.File(
+            System.getProperty("andy.bench.out")
+                ?: "build/bossterm-pipeline-benchmark.txt",
+        )
+        outFile.parentFile?.mkdirs()
+        outFile.writeText("BossTerm Compose pipeline benchmark\n")
         for (variant in variants()) {
             println("[bossterm-bench] starting ${variant.name} …")
             val result = try {
@@ -292,17 +300,29 @@ object BossTermPipelineBenchmark {
                 Result(variant.name, "FAILED: ${t.message}", Double.NaN, 0.0, 0.0)
             }
             results += result
-            println(
-                "[bossterm-bench] %-22s cpu=%5.1f%%  wall=%.1fs  procCpu=%.2fs  %s".format(
-                    result.name,
-                    result.cpuPercent,
-                    result.wallSeconds,
-                    result.processCpuSeconds,
-                    result.description,
-                ),
+            val line = "[bossterm-bench] %-22s cpu=%5.1f%%  wall=%.1fs  procCpu=%.2fs  %s".format(
+                result.name,
+                result.cpuPercent,
+                result.wallSeconds,
+                result.processCpuSeconds,
+                result.description,
             )
+            println(line)
+            outFile.appendText(line + "\n")
             Thread.sleep(1_500)
         }
+        outFile.appendText("\n=== summary ===\n")
+        outFile.appendText(
+            "%-22s %7s %8s %10s  %s\n".format("variant", "cpu%", "wall_s", "procCpu_s", "what"),
+        )
+        for (r in results) {
+            outFile.appendText(
+                "%-22s %6.1f%% %8.1f %10.2f  %s\n".format(
+                    r.name, r.cpuPercent, r.wallSeconds, r.processCpuSeconds, r.description,
+                ),
+            )
+        }
+        println("[bossterm-bench] wrote ${outFile.absolutePath}")
         return results
     }
 }
