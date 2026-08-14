@@ -10,7 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** Human-readable labels for sparse ACP tool-call metadata (especially Andy MCP). */
 object AcpToolCallPresentation {
-    const val DetailSeparator = "\n--- tool output\n"
+    /** Control-character framing avoids collisions with ordinary edited file or command content. */
+    const val DetailSeparator = "\u001eandy-tool-output\u001f"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val genericTitles = setOf("", "tool", "Tool")

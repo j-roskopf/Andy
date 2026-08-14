@@ -44,6 +44,17 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun parseToolCallFileContentKeepsSeparatorLikeFileContent() {
+        val content = parseToolCallFileContent(
+            "README.md\n--- old\nold\n+++ new\nheading\n--- tool output\nbody",
+        )
+
+        assertNotNull(content)
+        assertEquals("heading\n--- tool output\nbody", content.newText)
+        assertNull(content.extraDetail)
+    }
+
+    @Test
     fun parseToolCallFileContentReadsAbsolutePathReadShape() {
         val content = parseToolCallFileContent(
             """
