@@ -1486,8 +1486,8 @@ private fun ToolBlock(
     val body = remember(rawBody) { AcpToolCallPresentation.displayDetail(rawBody) }
     val expandable = images.isNotEmpty() ||
         AcpToolCallPresentation.detailAddsInformation(headline, body)
-    val fileContent = remember(rawBody) {
-        parseToolCallFileContent(rawBody) ?: parseToolCallFileArguments(rawBody)
+    val fileContent = remember(rawBody, kind) {
+        parseToolCallFileContent(rawBody) ?: parseToolCallFileArguments(rawBody, kind)
     }
     // Command results arrive as {"exitCode":…,"stdout":"<a diff>"}, so the diff worth reviewing is
     // one level inside the payload rather than the payload itself.

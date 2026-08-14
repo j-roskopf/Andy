@@ -1,5 +1,6 @@
 package app.andy.domain
 
+import app.andy.model.AgentToolKind
 import app.andy.model.DiffLineKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -73,6 +74,21 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun structuredEditArgumentsAcceptRootPathsButSearchPayloadsStayArguments() {
+        val edit = parseToolCallFileArguments(
+            """{"file_path":"README.md","old_string":"old","new_string":"new"}""",
+            AgentToolKind.Edit,
+        )
+        val search = parseToolCallFileArguments(
+            """{"path":"src/Main.kt","search":"TODO"}""",
+            AgentToolKind.Search,
+        )
+
+        assertEquals("README.md", assertNotNull(edit).path)
+        assertNull(search)
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))
@@ -115,5 +131,17 @@ class ToolCallFileContentTest {
         )
         assertEquals("two", diff.lines[1].text)
         assertEquals("three", diff.lines[2].text)
+    }
+
+    @Test
+    fun largeSnapshotsUseBoundedLinearDiffing() {
+        val oldText = (1..1_100).joinToString("\n") { "old $it" }
+        val newText = (1..1_100).joinToString("\n") { "new $it" }
+
+        val diff = diffTextLines("large.txt", oldText, newText)
+
+        assertEquals(1_100, diff.deletions)
+        assertEquals(1_100, diff.additions)
+        assertEquals(2_200, diff.lines.size)
     }
 }

@@ -1,6 +1,7 @@
 package app.andy.domain
 
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentToolKind
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import kotlinx.serialization.json.Json
@@ -33,7 +34,7 @@ fun parseToolCallFileContent(text: String): ToolCallFileContent? {
             .lineSequence()
             .firstOrNull { it.isNotBlank() }
             ?.trim()
-            ?.takeIf { looksLikeFilePath(it) }
+            ?.takeIf { looksLikeStructuredFilePath(it) }
             ?: return null
         val oldText = trimmed.substring(oldIndex + OldMarker.length, newIndex)
         val newText = trimmed.substring(newIndex + NewMarker.length)
@@ -52,22 +53,27 @@ fun parseToolCallFileContent(text: String): ToolCallFileContent? {
 
 private val toolArgumentJson = Json { ignoreUnknownKeys = true; isLenient = true }
 private val PathArgumentKeys = listOf("path", "file_path", "filePath", "file", "target_file", "uri")
-private val OldTextArgumentKeys = listOf("old_string", "oldText", "old_str", "old", "before", "search")
-private val NewTextArgumentKeys = listOf("new_string", "newText", "new_str", "new", "after", "content", "contents", "replace")
+private val ExplicitOldTextArgumentKeys = listOf("old_string", "oldText", "old_str")
+private val ExplicitNewTextArgumentKeys = listOf("new_string", "newText", "new_str", "replace")
+private val AmbiguousOldTextArgumentKeys = listOf("old", "before", "search")
+private val AmbiguousNewTextArgumentKeys = listOf("new", "after", "content", "contents")
 
 /**
  * Edit and write tools frequently send their arguments as JSON instead of a rendered diff.
  * Recognizing that shape lets the transcript show a real diff rather than the payload.
  */
-fun parseToolCallFileArguments(text: String): ToolCallFileContent? {
+fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolCallFileContent? {
     val trimmed = text.trim()
     if (!trimmed.startsWith("{")) return null
     val obj = runCatching { toolArgumentJson.parseToJsonElement(trimmed) }.getOrNull() as? JsonObject ?: return null
     val path = PathArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
-        ?.takeIf { looksLikeFilePath(it) }
+        ?.takeIf { looksLikeStructuredFilePath(it) }
         ?: return null
-    val oldText = OldTextArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
-    val newText = NewTextArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+    val editKind = kind == AgentToolKind.Edit || kind == AgentToolKind.Delete || kind == AgentToolKind.Move
+    val oldKeys = ExplicitOldTextArgumentKeys + if (editKind) AmbiguousOldTextArgumentKeys else emptyList()
+    val newKeys = ExplicitNewTextArgumentKeys + if (editKind) AmbiguousNewTextArgumentKeys else emptyList()
+    val oldText = oldKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+    val newText = newKeys.firstNotNullOfOrNull { obj.stringValue(it) }
     if (oldText == null && newText == null) return null
     return ToolCallFileContent(path = path, oldText = oldText, newText = newText)
 }
@@ -87,6 +93,14 @@ private fun looksLikeProviderPayload(text: String): Boolean {
         firstLine.startsWith("[") ||
         firstLine.startsWith("- **") ||
         ProviderAssignment.containsMatchIn(firstLine)
+}
+
+private fun looksLikeStructuredFilePath(text: String): Boolean {
+    val trimmed = text.trim()
+    return trimmed.isNotBlank() &&
+        trimmed.length <= 512 &&
+        !trimmed.contains('\n') &&
+        !looksLikeProviderPayload(trimmed)
 }
 
 internal fun looksLikeFilePath(text: String): Boolean {
@@ -153,8 +167,16 @@ private sealed interface LineDiffOp {
     data class Addition(val text: String) : LineDiffOp
 }
 
+private const val MaxLcsCells = 1_000_000L
+
 private fun lineDiffOperations(oldLines: List<String>, newLines: List<String>): List<LineDiffOp> {
   if (oldLines == newLines) return oldLines.map(LineDiffOp::Context)
+  // The exact LCS implementation is quadratic in memory and this function can run while an
+  // expanded tool row is being composed. Keep large snapshots responsive by falling back to a
+  // linear all-delete/all-add representation rather than allocating an unbounded matrix.
+  if (oldLines.size.toLong() * newLines.size.toLong() > MaxLcsCells) {
+    return oldLines.map(LineDiffOp::Deletion) + newLines.map(LineDiffOp::Addition)
+  }
   val lcs = longestCommonSubsequence(oldLines, newLines)
   val operations = mutableListOf<LineDiffOp>()
   var oldIndex = 0
