@@ -78,4 +78,26 @@ class ShellDocksTest {
         assertEquals("terminal:run-1", pane.activeTabId)
         assertEquals("Server", pane.activeTab?.title)
     }
+
+    @Test
+    fun movingLivePreservesCustomTitle() {
+        val docks = ShellDocks()
+            .withLiveExclusive(DockPlacement.Right)
+            .update(DockPlacement.Right) { it.renameTab("live", "Phone") }
+            .withLiveExclusive(DockPlacement.Bottom)
+
+        assertEquals("Phone", docks.bottom.tabs.single { it.kind == DockTabKind.Live }.title)
+        assertFalse(docks.right.tabs.any { it.kind == DockTabKind.Live })
+    }
+
+    @Test
+    fun movingTerminalPreservesCustomTitle() {
+        val docks = ShellDocks()
+            .withTerminalExclusive(DockPlacement.Right, "run-1")
+            .update(DockPlacement.Right) { it.renameTab("terminal:run-1", "Build") }
+            .withTerminalExclusive(DockPlacement.Bottom, "run-1")
+
+        assertEquals("Build", docks.bottom.tabs.single { it.runId == "run-1" }.title)
+        assertFalse(docks.right.tabs.any { it.runId == "run-1" })
+    }
 }

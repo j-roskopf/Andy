@@ -336,14 +336,7 @@ internal fun AndyShell(
                     onPlacementIconClick = state::onPlacementIconClick,
                     onProjectPaneClick = {
                         state.updateWorkspace {
-                            it.copy(
-                                projectListPaneVisible = !it.projectListPaneVisible,
-                                projectListPaneWidth = if (it.projectListPaneVisible) {
-                                    it.projectListPaneWidth
-                                } else {
-                                    300f
-                                },
-                            )
+                            it.copy(projectListPaneVisible = !it.projectListPaneVisible)
                         }
                     },
                     onDismissDockLanding = state::dismissDockLanding,

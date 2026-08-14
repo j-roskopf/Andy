@@ -92,10 +92,11 @@ internal data class DockTab(
     val title: String? = null,
 ) {
     companion object {
-        fun live(): DockTab = DockTab(id = "live", kind = DockTabKind.Live)
+        fun live(title: String? = null): DockTab =
+            DockTab(id = "live", kind = DockTabKind.Live, title = title)
         fun logs(): DockTab = DockTab(id = "logs", kind = DockTabKind.Logs)
-        fun terminal(runId: String): DockTab =
-            DockTab(id = "terminal:$runId", kind = DockTabKind.Terminal, runId = runId)
+        fun terminal(runId: String, title: String? = null): DockTab =
+            DockTab(id = "terminal:$runId", kind = DockTabKind.Terminal, runId = runId, title = title)
     }
 }
 
@@ -191,15 +192,18 @@ internal data class ShellDocks(
 
     /** Live is a single mirror session — keep at most one Live tab across both panes. */
     fun withLiveExclusive(placement: DockPlacement): ShellDocks {
+        val existingTitle = tabTitle(DockTabKind.Live)
         val clearedOther = when (placement) {
             DockPlacement.Right -> copy(bottom = bottom.withoutKind(DockTabKind.Live))
             DockPlacement.Bottom -> copy(right = right.withoutKind(DockTabKind.Live))
         }
-        return clearedOther.update(placement) { it.withTab(DockTab.live()) }
+        return clearedOther.update(placement) { it.withTab(DockTab.live(title = existingTitle)) }
     }
 
     fun withTerminalExclusive(placement: DockPlacement, runId: String): ShellDocks {
-        val tab = DockTab.terminal(runId)
+        val existingTitle = right.tabs.firstOrNull { it.runId == runId }?.title
+            ?: bottom.tabs.firstOrNull { it.runId == runId }?.title
+        val tab = DockTab.terminal(runId, title = existingTitle)
         val withoutElsewhere = when (placement) {
             DockPlacement.Right -> copy(bottom = bottom.closeTab(tab.id).let { if (it.tabs.isEmpty()) DockPane(visible = false) else it })
             DockPlacement.Bottom -> copy(right = right.closeTab(tab.id).let { if (it.tabs.isEmpty()) DockPane(visible = false) else it })
@@ -211,6 +215,10 @@ internal data class ShellDocks(
         )
         return normalized.update(placement) { it.withTab(tab) }
     }
+
+    private fun tabTitle(kind: DockTabKind): String? =
+        right.tabs.firstOrNull { it.kind == kind }?.title
+            ?: bottom.tabs.firstOrNull { it.kind == kind }?.title
 }
 
 @Composable
