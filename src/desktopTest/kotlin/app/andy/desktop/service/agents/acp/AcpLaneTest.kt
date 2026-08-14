@@ -195,6 +195,26 @@ class AcpLaneTest {
         assertEquals("README.md", parsed.path)
         assertEquals("old", parsed.oldText)
         assertEquals("new", parsed.newText)
+
+        val bundled = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json-output"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.COMPLETED,
+                    content = emptyList(),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                    rawOutput = buildJsonObject { put("success", true) },
+                ),
+                atMillis = 2,
+            ),
+        )
+        assertEquals(mapped.detail, bundled.detail)
     }
 
     @Test

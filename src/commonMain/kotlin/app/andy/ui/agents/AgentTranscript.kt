@@ -90,6 +90,7 @@ import app.andy.model.AgentSpawnPresentation
 import app.andy.model.AgentTask
 import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
+import app.andy.model.AgentToolState
 import app.andy.model.isRetriableConnectionStallMessage
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.model.stripDecisionCheckpointMarkup
@@ -691,6 +692,7 @@ private fun TranscriptEvent(
                 locations = event.locations,
                 images = event.images,
                 color = Cyan,
+                forceVisible = event.state == AgentToolState.Failed,
                 onToolFileOpen = onToolFileOpen,
             )
         }
@@ -703,6 +705,7 @@ private fun TranscriptEvent(
                 summary = event.summary,
                 detail = event.detail,
                 color = if (event.isError) Red else TextSecondary,
+                forceVisible = event.isError,
                 onToolFileOpen = onToolFileOpen,
             )
         }
@@ -1286,6 +1289,7 @@ private fun CompactToolCallsBlock(
                             locations = event.locations,
                             images = event.images,
                             color = Cyan,
+                            forceVisible = event.state == AgentToolState.Failed,
                             indent = TranscriptAsideContentIndent,
                             onToolFileOpen = onToolFileOpen,
                         )
@@ -1299,6 +1303,7 @@ private fun CompactToolCallsBlock(
                             summary = event.summary,
                             detail = event.detail,
                             color = if (event.isError) Red else TextSecondary,
+                            forceVisible = event.isError,
                             indent = TranscriptAsideContentIndent,
                             onToolFileOpen = onToolFileOpen,
                         )
@@ -1472,10 +1477,11 @@ private fun ToolBlock(
     locations: List<String> = emptyList(),
     images: List<AgentToolImage> = emptyList(),
     color: Color,
+    forceVisible: Boolean = false,
     indent: Dp = TranscriptAsideIndent,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
 ) {
-    if (toolRowShowsNothing(name, summary, detail, locations, images.isNotEmpty())) return
+    if (!forceVisible && toolRowShowsNothing(name, summary, detail, locations, images.isNotEmpty())) return
     val headline = toolBlockHeadline(name, summary, kind, locations)
     val rawBody = detail
         .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
@@ -1847,7 +1853,14 @@ internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
     // Content-free calls are not rendered as rows, so they must not colour the group headline
     // either — but they still happened, so a group made only of them is counted, not named.
     val toolCalls = allCalls.filterNot {
-        toolRowShowsNothing(it.toolName, it.summary, it.detail, it.locations, it.images.isNotEmpty())
+        toolRowShowsNothing(
+            it.toolName,
+            it.summary,
+            it.detail,
+            it.locations,
+            it.images.isNotEmpty(),
+            isFailure = it.state == AgentToolState.Failed,
+        )
     }
     if (toolCalls.isEmpty()) {
         val count = allCalls.size
@@ -1909,8 +1922,9 @@ internal fun toolRowShowsNothing(
     detail: String,
     locations: List<String>,
     hasImages: Boolean,
+    isFailure: Boolean = false,
 ): Boolean {
-    if (hasImages || locations.any { it.isNotBlank() }) return false
+    if (isFailure || hasImages || locations.any { it.isNotBlank() }) return false
     if (!AcpToolCallPresentation.isGenericTitle(name?.trim().orEmpty())) return false
     return AcpToolCallPresentation.isMinimalOutput(summary) &&
         AcpToolCallPresentation.isMinimalOutput(detail)

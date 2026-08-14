@@ -574,6 +574,7 @@ class AgentTranscriptTest {
         assertTrue(toolRowShowsNothing("tool", "No details", "No details", emptyList(), hasImages = false))
         assertFalse(toolRowShowsNothing("tool", "", "", listOf("src/Main.kt"), hasImages = false))
         assertFalse(toolRowShowsNothing("tool", "", "", emptyList(), hasImages = true))
+        assertFalse(toolRowShowsNothing("tool", "", "", emptyList(), hasImages = false, isFailure = true))
         assertFalse(toolRowShowsNothing("grep", "", "", emptyList(), hasImages = false))
 
         val bookkeeping = (1..3).map { index ->
