@@ -84,7 +84,7 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     }
     if (!arguments.startsWith("{")) {
         val fileMutation = kind == AgentToolKind.Edit || kind == AgentToolKind.Delete || kind == AgentToolKind.Move
-        return arguments.takeIf { fileMutation && looksLikeStructuredFilePath(it) }
+        return arguments.takeIf { fileMutation && looksLikePrimitiveFilePath(it) }
             ?.let { ToolCallFileContent(path = it, oldText = null, newText = null, extraDetail = extraDetail) }
     }
     val obj = runCatching { toolArgumentJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
@@ -126,6 +126,14 @@ private fun looksLikeStructuredFilePath(text: String): Boolean {
         trimmed.length <= 512 &&
         !trimmed.contains('\n') &&
         !looksLikeProviderPayload(trimmed)
+}
+
+private fun looksLikePrimitiveFilePath(text: String): Boolean {
+    val trimmed = text.trim()
+    if (!looksLikeStructuredFilePath(trimmed)) return false
+    return trimmed.contains('/') ||
+        trimmed.contains('\\') ||
+        trimmed.substringAfterLast('/').substringAfterLast('\\').contains('.')
 }
 
 internal fun looksLikeFilePath(text: String): Boolean {

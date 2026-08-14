@@ -5,6 +5,7 @@ import app.andy.model.DiffLineKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class UnifiedDiffTest {
@@ -96,6 +97,29 @@ class UnifiedDiffTest {
             "--- a/message.txt\n+++ b/message.txt\n@@ -1 +1 @@\n-old\n+new",
             patch,
         )
+    }
+
+    @Test
+    fun extractedUnifiedDiffKeepsAllFilesForMultiFileRejection() {
+        val patch = """
+            diff --git a/one.txt b/one.txt
+            --- a/one.txt
+            +++ b/one.txt
+            @@ -1 +1 @@
+            -one
+            +ONE
+            diff --git a/two.txt b/two.txt
+            --- a/two.txt
+            +++ b/two.txt
+            @@ -1 +1 @@
+            -two
+            +TWO
+        """.trimIndent()
+
+        val extracted = extractUnifiedDiffText("$patch\nwarning after patch")
+
+        assertEquals(patch, extracted)
+        assertNull(detectUnifiedDiff(extracted.orEmpty()))
     }
 
     @Test

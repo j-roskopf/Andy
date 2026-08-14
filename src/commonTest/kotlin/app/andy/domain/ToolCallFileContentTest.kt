@@ -176,6 +176,12 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun primitiveMutationStatusIsNotTreatedAsAPath() {
+        assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
+        assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))

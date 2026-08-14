@@ -44,6 +44,11 @@ fun extractUnifiedDiffText(text: String): String? {
             continue
         }
         if (oldLinesRemaining == 0 && newLinesRemaining == 0) {
+            if (line.startsWith("diff --git ") || line.startsWith("--- ")) {
+                endLine = index
+                sawHunk = false
+                continue
+            }
             if (line.startsWith("\\ No newline at end of file")) {
                 endLine = index
                 continue
