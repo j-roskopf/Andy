@@ -80,7 +80,7 @@ private fun countHeaderPairsOutsideHunks(text: String): Int {
 
 /** Parses a unified diff into numbered add/delete/context lines for inline review. */
 fun parseUnifiedDiff(text: String, path: String): AgentFileDiff {
-    if (text.contains("Binary files ") && text.contains(" differ")) {
+    if (text.lineSequence().any { it.startsWith("Binary files ") && it.endsWith(" differ") }) {
         return AgentFileDiff(path = path, lines = emptyList(), isBinary = true)
     }
 

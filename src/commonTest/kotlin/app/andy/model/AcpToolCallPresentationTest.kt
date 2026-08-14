@@ -285,6 +285,10 @@ class AcpToolCallPresentationTest {
             ),
             update,
         )
+        val plainPreDiffOutput = AcpToolCallPresentation.mergeToolCalls(
+            first.copy(detail = "warning: formatter skipped generated file"),
+            update,
+        )
         val withOutput = AcpToolCallPresentation.mergeToolCalls(
             merged,
             AgentEvent.ToolCall(
@@ -327,6 +331,7 @@ class AcpToolCallPresentationTest {
             "$diff${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
             preDiffOutput.detail,
         )
+        assertEquals(preDiffOutput.detail, plainPreDiffOutput.detail)
         assertEquals(AgentToolState.Completed, merged.state)
         assertEquals(
             "$diff${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",

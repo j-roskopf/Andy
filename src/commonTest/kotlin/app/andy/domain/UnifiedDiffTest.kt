@@ -63,6 +63,22 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun parseUnifiedDiffDoesNotTreatChangedTextAsBinaryMetadata() {
+        val text = """
+            --- a/message.txt
+            +++ b/message.txt
+            @@ -1 +1 @@
+            -ordinary text
+            +Binary files may differ
+        """.trimIndent()
+
+        val diff = detectUnifiedDiff(text)
+
+        assertFalse(diff?.isBinary == true)
+        assertEquals(listOf("ordinary text", "Binary files may differ"), diff?.lines?.map { it.text })
+    }
+
+    @Test
     fun detectUnifiedDiffDeclinesMultiFilePatches() {
         val text = """
             diff --git a/src/First.kt b/src/First.kt

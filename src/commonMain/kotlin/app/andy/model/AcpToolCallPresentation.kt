@@ -364,7 +364,10 @@ object AcpToolCallPresentation {
             a == b -> a
             b.contains(a) -> b
             a.contains(b) -> a
-            isRenderedFileDiff(b) -> detailExtra(a)?.let { "$b$DetailSeparator$it" } ?: b
+            isRenderedFileDiff(b) -> {
+                val extra = detailExtra(a) ?: a.takeUnless { isJsonObject(it) }
+                extra?.let { "$b$DetailSeparator$it" } ?: b
+            }
             isRenderedFileDiff(a) -> appendExtraDetail(a, b)
             isJsonObject(a) -> "$a$DetailSeparator$b"
             else -> "$a\n$b"
