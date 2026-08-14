@@ -620,6 +620,34 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun stallMentionsStayVisibleInTranscriptDisplay() {
+        val events = listOf(
+            AgentEvent.AssistantText(
+                atMillis = 1,
+                text = "connection stalled is a known failure mode, including `http/2 stream closed`.",
+            ),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        assertEquals(events.single(), displayed.single())
+    }
+
+    @Test
+    fun trailingStallLineIsStrippedButPriorOutputStays() {
+        val events = listOf(
+            AgentEvent.AssistantText(
+                atMillis = 1,
+                text = "Here is the patch.\n\nError: RetriableError: Connection stalled",
+            ),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        val text = displayed.single() as AgentEvent.AssistantText
+        assertEquals("Here is the patch.", text.text)
+    }
+
+    @Test
     fun http2CancelErrorsAreHiddenFromTranscriptDisplay() {
         val events = listOf(
             AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),

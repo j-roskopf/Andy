@@ -17,7 +17,9 @@ class AgentConnectionRecoveryTest {
     fun detectsCursorProviderStallMessages() {
         assertTrue("Error: RetriableError: Connection stalled".isRetriableConnectionStallMessage())
         assertTrue("RetriableError: Connection stalled repeatedly".isRetriableConnectionStallMessage())
-        assertTrue("connection stalled".isRetriableConnectionStallMessage())
+        assertTrue(
+            "\n\nError: RetriableError: Connection stalled\n".isRetriableConnectionStallMessage(),
+        )
         assertTrue(
             "Error: RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)"
                 .isRetriableConnectionStallMessage(),
@@ -29,9 +31,48 @@ class AgentConnectionRecoveryTest {
     }
 
     @Test
-    fun ignoresUnrelatedErrors() {
+    fun ignoresMentionsAndUnrelatedErrors() {
+        assertFalse("connection stalled".isRetriableConnectionStallMessage())
+        assertFalse("http/2 stream closed".isRetriableConnectionStallMessage())
+        assertFalse(" stalled".isRetriableConnectionStallMessage())
+        assertFalse(
+            "connection stalled is a known, named failure mode".isRetriableConnectionStallMessage(),
+        )
+        assertFalse(
+            "If you see literal `connection stalled` or `http/2 stream closed`, that's the provider"
+                .isRetriableConnectionStallMessage(),
+        )
         assertFalse("Error: ENOENT: no such file".isRetriableConnectionStallMessage())
         assertFalse("ACP prompt failed".isRetriableConnectionStallMessage())
+        assertFalse(
+            """
+            Andy auto-retries by sending Continue where you left off.
+            The regex matches connection stalled as a substring, which is the bug.
+            """.trimIndent().hasRetriableConnectionStallError(),
+        )
+        assertFalse(
+            """
+            The error looks like:
+                Error: RetriableError: Connection stalled
+            """.trimIndent().hasRetriableConnectionStallError(),
+        )
+        assertFalse(
+            "Here is the quoted form:\n> Error: RetriableError: Connection stalled"
+                .hasRetriableConnectionStallError(),
+        )
+        val indentedQuote = """
+            The error looks like:
+                Error: RetriableError: Connection stalled
+        """.trimIndent()
+        assertEquals(indentedQuote, indentedQuote.stripTrailingConnectionStallError())
+    }
+
+    @Test
+    fun trailingStallLineCountsAsTransportDrop() {
+        val partial = "Here is the patch.\n\nError: RetriableError: Connection stalled"
+        assertFalse(partial.isRetriableConnectionStallMessage())
+        assertTrue(partial.hasRetriableConnectionStallError())
+        assertEquals("Here is the patch.", partial.stripTrailingConnectionStallError())
     }
 
     @Test
@@ -43,6 +84,32 @@ class AgentConnectionRecoveryTest {
         assertTrue(events.hasRetriableConnectionStall())
         assertTrue(shouldShowConnectionStallBanner(events, isActive = false))
         assertFalse(shouldShowConnectionStallBanner(events, isActive = true))
+    }
+
+    @Test
+    fun coalescesStreamDeltasBeforeDetectingStalls() {
+        val events = listOf(
+            AgentEvent.AssistantText(1, "Error: RetriableError: ", isStreamDelta = true),
+            AgentEvent.AssistantText(2, "Connection stalled", isStreamDelta = true),
+        )
+        assertTrue(events.hasRetriableConnectionStall())
+        assertFalse(
+            listOf(AgentEvent.AssistantText(1, " stalled", isStreamDelta = true))
+                .hasRetriableConnectionStall(),
+        )
+    }
+
+    @Test
+    fun mentionsInAssistantTextDoNotCountAsStalls() {
+        val events = listOf(
+            AgentEvent.UserMessage(1, "why am I getting connection stalled situations?"),
+            AgentEvent.AssistantText(
+                2,
+                "connection stalled is a known failure mode. Andy matches `http/2 stream closed`.",
+            ),
+        )
+        assertFalse(events.hasRetriableConnectionStall())
+        assertFalse(shouldShowConnectionStallBanner(events, isActive = false))
     }
 
     @Test
