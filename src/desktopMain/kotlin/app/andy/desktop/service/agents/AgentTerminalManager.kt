@@ -688,8 +688,10 @@ class AgentTerminalManager(
                 }
             }
 
+            // Rust DirectPty is ready once start() returns — ultra-fast stubs
+            // (`/usr/bin/true`) can already be exited by here, so do not require isAlive.
             val viewReady = when (session) {
-                is RustTerminalBackend -> session.isAlive
+                is RustTerminalBackend -> session.pid != null || session.exitCode.value != null
                 is TmuxAttachBackend -> session.hasLiveViewer()
                 else -> false
             }

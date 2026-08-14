@@ -79,7 +79,16 @@ class RustTerminalBackend(
     override val frameTick: StateFlow<Long> = _frameTick.asStateFlow()
 
     override val isAlive: Boolean
-        get() = processHandleRef.get()?.isAlive() == true
+        get() {
+            // Stay alive until an exit code is published. Ultra-fast stubs like
+            // `/usr/bin/true` can flip PtyProcess.isAlive false before waitJob's
+            // waitFor() lands; awaitDirectPtyExit would then start its grace window
+            // and occasionally resolve UNKNOWN (-1) → AgentStatus.Error, which also
+            // stalls project-workflow awaits that only watch for Completed.
+            if (_exitCode.value != null) return false
+            val handle = processHandleRef.get() ?: return false
+            return handle.isAlive() || started.get()
+        }
 
     override val pid: Long?
         get() = processHandleRef.get()?.getPid()?.takeIf { it > 0 }
@@ -162,6 +171,14 @@ class RustTerminalBackend(
         waitJob = scope.launch {
             val code = runCatching { handle.waitFor() }.getOrElse { -1 }
             _exitCode.compareAndSet(null, code)
+        }
+        // If the process already exited before waitJob was scheduled, ensure we still
+        // publish — compareAndSet is a no-op once waitJob (or close) wins.
+        if (!handle.isAlive()) {
+            scope.launch {
+                val code = runCatching { handle.waitFor() }.getOrElse { -1 }
+                _exitCode.compareAndSet(null, code)
+            }
         }
         scrapeJob = scope.launch { scrapeLoop() }
         paintJob = scope.launch { paintLoop() }
