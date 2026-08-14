@@ -79,6 +79,7 @@ import app.andy.loadImageBitmap
 import app.andy.domain.ToolCallFileContent
 import app.andy.domain.detectUnifiedDiff
 import app.andy.domain.diffFromToolCallFileContent
+import app.andy.domain.extractUnifiedDiffText
 import app.andy.domain.looksLikeFilePath
 import app.andy.domain.parseToolCallFileArguments
 import app.andy.domain.parseToolCallFileContent
@@ -1497,9 +1498,18 @@ private fun ToolBlock(
     }
     // Command results arrive as {"exitCode":…,"stdout":"<a diff>"}, so the diff worth reviewing is
     // one level inside the payload rather than the payload itself.
-    val payloadDiff = remember(rawBody) {
+    val payloadDiffData = remember(rawBody) {
         (AcpToolCallPresentation.payloadTextValues(rawBody) + rawBody)
-            .firstNotNullOfOrNull { detectUnifiedDiff(it) }
+            .firstNotNullOfOrNull { candidate ->
+                val patch = extractUnifiedDiffText(candidate) ?: candidate
+                detectUnifiedDiff(patch)?.let { patch to it }
+            }
+    }
+    val payloadDiff = payloadDiffData?.second
+    val payloadExtraBody = remember(rawBody, payloadDiffData) {
+        payloadDiffData?.first
+            ?.let { AcpToolCallPresentation.displayDetailExcludingPayload(rawBody, it) }
+            .orEmpty()
     }
     val openableContent = fileContent ?: locations.firstOrNull { looksLikeFilePath(it) }?.let {
         ToolCallFileContent(path = it, oldText = null, newText = null)
@@ -1543,6 +1553,7 @@ private fun ToolBlock(
             body = body,
             fileContent = fileContent,
             diff = payloadDiff,
+            diffExtraBody = payloadExtraBody,
             images = images,
             onOpen = onToolFileOpen,
         )
@@ -1554,6 +1565,7 @@ private fun ToolCallDetailBody(
     body: String,
     fileContent: ToolCallFileContent?,
     diff: AgentFileDiff?,
+    diffExtraBody: String = "",
     images: List<AgentToolImage> = emptyList(),
     onOpen: (ToolCallFileContent) -> Unit,
 ) {
@@ -1609,6 +1621,18 @@ private fun ToolCallDetailBody(
     }
     if (diff != null) {
         ToolCallDiff(diff, modifier = Modifier.padding(top = 4.dp))
+        if (diffExtraBody.isNotBlank()) {
+            ChatMarkdown(
+                toolDetailMarkdown(diffExtraBody),
+                density = AndyMarkdownDensity.Thinking,
+                lineHeight = 16.sp,
+                preserveLineBreaks = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
         return
     }
     if (body.isBlank()) return

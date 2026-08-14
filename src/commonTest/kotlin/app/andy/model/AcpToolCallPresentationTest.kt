@@ -215,6 +215,18 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun displayDetailCanExcludeNestedDiffWhileKeepingMetadata() {
+        val diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new"
+        val payload = """{"exitCode":7,"stdout":"${diff.replace("\n", "\\n")}","stderr":"warning"}"""
+
+        val rendered = AcpToolCallPresentation.displayDetailExcludingPayload(payload, diff)
+
+        assertTrue(rendered.contains("exitCode"))
+        assertTrue(rendered.contains("warning"))
+        assertFalse(rendered.contains("--- a/file.txt"))
+    }
+
+    @Test
     fun placeholderDetailsCountAsNoOutput() {
         assertTrue(AcpToolCallPresentation.isMinimalOutput("No details"))
         assertTrue(AcpToolCallPresentation.isMinimalOutput("none"))

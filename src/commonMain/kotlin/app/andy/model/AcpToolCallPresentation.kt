@@ -245,6 +245,21 @@ object AcpToolCallPresentation {
         return renderJsonMarkdown(element)
     }
 
+    fun displayDetailExcludingPayload(text: String, excluded: String): String {
+        val trimmed = text.trim()
+        if (!looksLikeJson(trimmed)) return trimmed.replace(excluded, "").trim()
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return trimmed
+        return removePayload(element, excluded)?.let(::renderJsonMarkdown).orEmpty()
+    }
+
+    private fun removePayload(element: JsonElement, excluded: String): JsonElement? = when (element) {
+        is JsonObject -> JsonObject(
+            element.mapNotNull { (key, value) -> removePayload(value, excluded)?.let { key to it } }.toMap(),
+        ).takeIf { it.isNotEmpty() }
+        is JsonArray -> JsonArray(element.mapNotNull { removePayload(it, excluded) }).takeIf { it.isNotEmpty() }
+        is JsonPrimitive -> element.takeUnless { it.isString && it.content == excluded }
+    }
+
     /**
      * The command output, file body, or diff a payload wraps, in the order the keys appear. These
      * are the only parts of a payload worth reading in full, so the transcript renders them as

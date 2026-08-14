@@ -300,7 +300,8 @@ class AgentTranscriptUiTest {
                 +    println("new output")
                  }
             """.trimIndent()
-            val payload = """{"exitCode":0,"stdout":"${diffText.replace("\n", "\\n").replace("\"", "\\\"")}","stderr":""}"""
+            val payload =
+                """{"exitCode":7,"stdout":"${diffText.replace("\n", "\\n").replace("\"", "\\\"")}","stderr":"formatter warning"}"""
 
             setContent {
                 AndyTheme {
@@ -326,6 +327,8 @@ class AgentTranscriptUiTest {
                 .fetchSemanticsNodes()
                 .let { assertTrue(it.isNotEmpty(), "diff body was not rendered") }
             assertTrue(onAllNodesWithText("\"stdout\"", substring = true).fetchSemanticsNodes().isEmpty())
+            onNodeWithText("formatter warning", substring = true).assertExists()
+            onNodeWithText("exitCode:", substring = true).assertExists()
             // The row used to render the entire payload as one 4 KB line of text.
             val longestRendered = onAllNodesWithText("", substring = true)
                 .fetchSemanticsNodes()

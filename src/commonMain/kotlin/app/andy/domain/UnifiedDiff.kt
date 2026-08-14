@@ -19,6 +19,12 @@ fun looksLikeUnifiedDiff(text: String): Boolean {
     return sawOld && sawNew
 }
 
+/** Returns the patch portion while leaving any leading command diagnostics outside it. */
+fun extractUnifiedDiffText(text: String): String? {
+    val start = Regex("""(?m)^(?:diff --git |--- )""").find(text)?.range?.first ?: return null
+    return text.substring(start).takeIf(::looksLikeUnifiedDiff)
+}
+
 /** Path referenced by the diff's `+++`/`---` headers, stripping the `a/`/`b/` prefixes git adds. */
 fun unifiedDiffPath(text: String): String? {
     val newHeader = text.lineSequence().firstOrNull { it.startsWith("+++ ") }
