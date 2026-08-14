@@ -123,6 +123,21 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun extractedUnifiedDiffDoesNotConsumeDiagnosticSeparator() {
+        val patch = """
+            --- a/one.txt
+            +++ b/one.txt
+            @@ -1 +1 @@
+            -one
+            +ONE
+        """.trimIndent()
+
+        val extracted = extractUnifiedDiffText("$patch\n--- stderr ---\nwarning")
+
+        assertEquals(patch, extracted)
+    }
+
+    @Test
     fun detectUnifiedDiffDeclinesMultiFilePatches() {
         val text = """
             diff --git a/src/First.kt b/src/First.kt

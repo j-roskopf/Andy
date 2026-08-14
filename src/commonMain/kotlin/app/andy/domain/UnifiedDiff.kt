@@ -44,7 +44,9 @@ fun extractUnifiedDiffText(text: String): String? {
             continue
         }
         if (oldLinesRemaining == 0 && newLinesRemaining == 0) {
-            if (line.startsWith("diff --git ") || line.startsWith("--- ")) {
+            val startsNextFile = line.startsWith("diff --git ") ||
+                (line.startsWith("--- ") && lines.getOrNull(index + 1)?.startsWith("+++ ") == true)
+            if (startsNextFile) {
                 endLine = index
                 sawHunk = false
                 continue
