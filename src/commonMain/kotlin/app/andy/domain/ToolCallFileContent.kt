@@ -109,8 +109,12 @@ private fun JsonObject.stringValue(key: String, allowEmpty: Boolean = false): St
 fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
     diffTextLines(content.path, content.oldText, content.newText)
 
-private val WindowsDriveLetter = Regex("""^[A-Za-z]:\\""")
+private val WindowsDriveLetter = Regex("""^[A-Za-z]:[\\/]""")
 private val ProviderAssignment = Regex("""^[A-Za-z][A-Za-z0-9 _-]*\s*=""")
+private val DiagnosticPrefix = Regex(
+    """^(?:failed|failure|error|warning|permission|unable|could|cannot|can't|did not|edit(?:ed)?|moved?|deleted?|completed|success)\b""",
+    RegexOption.IGNORE_CASE,
+)
 private val ConventionalExtensionlessFiles = setOf(
     "BUILD",
     "CMakeLists",
@@ -151,6 +155,9 @@ private fun looksLikePrimitiveFilePath(text: String): Boolean {
     if (trimmed.any { it == '\t' || it == '\r' }) return false
     if (trimmed.any { it in "{}[]\"'<>|?*" }) return false
     if (':' in trimmed && !WindowsDriveLetter.containsMatchIn(trimmed)) return false
+    if (DiagnosticPrefix.containsMatchIn(trimmed)) return false
+    val hasSeparator = trimmed.contains('/') || trimmed.contains('\\')
+    if (trimmed.any { it.isWhitespace() } && hasSeparator) return false
     return trimmed.contains('/') ||
         trimmed.contains('\\') ||
         trimmed.substringAfterLast('/').substringAfterLast('\\').contains('.') ||

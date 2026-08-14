@@ -188,6 +188,10 @@ class ToolCallFileContentTest {
             "My File.kt",
             parseToolCallFileArguments("My File.kt", AgentToolKind.Edit)?.path,
         )
+        assertEquals(
+            "C:/src/Main.kt",
+            parseToolCallFileArguments("C:/src/Main.kt", AgentToolKind.Edit)?.path,
+        )
     }
 
     @Test
@@ -195,6 +199,7 @@ class ToolCallFileContentTest {
         assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
         assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
         assertNull(parseToolCallFileArguments("permission denied: src/Main.kt", AgentToolKind.Edit))
+        assertNull(parseToolCallFileArguments("failed to edit src/Main.kt", AgentToolKind.Edit))
     }
 
     @Test
