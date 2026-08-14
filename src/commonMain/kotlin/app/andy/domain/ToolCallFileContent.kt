@@ -111,6 +111,23 @@ fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
 
 private val WindowsDriveLetter = Regex("""^[A-Za-z]:\\""")
 private val ProviderAssignment = Regex("""^[A-Za-z][A-Za-z0-9 _-]*\s*=""")
+private val ConventionalExtensionlessFiles = setOf(
+    "BUILD",
+    "CMakeLists",
+    "COPYING",
+    "Dockerfile",
+    "Gemfile",
+    "Jenkinsfile",
+    "Justfile",
+    "LICENSE",
+    "Makefile",
+    "NOTICE",
+    "Procfile",
+    "Rakefile",
+    "README",
+    "Vagrantfile",
+    "WORKSPACE",
+)
 
 private fun looksLikeProviderPayload(text: String): Boolean {
     val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
@@ -136,7 +153,8 @@ private fun looksLikePrimitiveFilePath(text: String): Boolean {
     if (':' in trimmed && !WindowsDriveLetter.containsMatchIn(trimmed)) return false
     return trimmed.contains('/') ||
         trimmed.contains('\\') ||
-        trimmed.substringAfterLast('/').substringAfterLast('\\').contains('.')
+        trimmed.substringAfterLast('/').substringAfterLast('\\').contains('.') ||
+        trimmed in ConventionalExtensionlessFiles
 }
 
 internal fun looksLikeFilePath(text: String): Boolean {

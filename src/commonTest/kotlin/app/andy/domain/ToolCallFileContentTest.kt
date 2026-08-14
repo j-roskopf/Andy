@@ -176,6 +176,13 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun conventionalExtensionlessPrimitivePathsRemainOpenable() {
+        listOf("Dockerfile", "Makefile", "LICENSE").forEach { path ->
+            assertEquals(path, parseToolCallFileArguments(path, AgentToolKind.Move)?.path)
+        }
+    }
+
+    @Test
     fun primitiveMutationStatusIsNotTreatedAsAPath() {
         assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
         assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
