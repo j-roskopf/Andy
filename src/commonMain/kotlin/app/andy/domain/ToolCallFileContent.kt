@@ -148,7 +148,7 @@ private fun looksLikeStructuredFilePath(text: String): Boolean {
 private fun looksLikePrimitiveFilePath(text: String): Boolean {
     val trimmed = text.trim()
     if (!looksLikeStructuredFilePath(trimmed)) return false
-    if (trimmed.any { it.isWhitespace() }) return false
+    if (trimmed.any { it == '\t' || it == '\r' }) return false
     if (trimmed.any { it in "{}[]\"'<>|?*" }) return false
     if (':' in trimmed && !WindowsDriveLetter.containsMatchIn(trimmed)) return false
     return trimmed.contains('/') ||

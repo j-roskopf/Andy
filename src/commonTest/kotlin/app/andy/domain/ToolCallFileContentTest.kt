@@ -183,6 +183,14 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun primitivePathsMayContainSpaces() {
+        assertEquals(
+            "My File.kt",
+            parseToolCallFileArguments("My File.kt", AgentToolKind.Edit)?.path,
+        )
+    }
+
+    @Test
     fun primitiveMutationStatusIsNotTreatedAsAPath() {
         assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
         assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
