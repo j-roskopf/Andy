@@ -1,5 +1,6 @@
 package app.andy.domain
 
+import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentToolKind
 import app.andy.model.DiffLineKind
 import kotlin.test.Test
@@ -27,6 +28,19 @@ class ToolCallFileContentTest {
         assertEquals("fun old()", content.oldText)
         assertEquals("fun new()", content.newText)
         assertTrue(content.hasDiff)
+    }
+
+    @Test
+    fun parseToolCallFileContentSeparatesOutputAfterTheDiff() {
+        val content = parseToolCallFileContent(
+            "src/Main.kt\n--- old\nold\n+++ new\nnew" +
+                AcpToolCallPresentation.DetailSeparator +
+                "warning: formatter skipped generated file",
+        )
+
+        assertNotNull(content)
+        assertEquals("new", content.newText)
+        assertEquals("warning: formatter skipped generated file", content.extraDetail)
     }
 
     @Test
@@ -143,5 +157,15 @@ class ToolCallFileContentTest {
         assertEquals(1_100, diff.deletions)
         assertEquals(1_100, diff.additions)
         assertEquals(2_200, diff.lines.size)
+    }
+
+    @Test
+    fun highlySkewedSnapshotsAlsoUseBoundedLinearDiffing() {
+        val oldText = (1..10_001).joinToString("\n") { "old $it" }
+
+        val diff = diffTextLines("skewed.txt", oldText, "new")
+
+        assertEquals(10_001, diff.deletions)
+        assertEquals(1, diff.additions)
     }
 }

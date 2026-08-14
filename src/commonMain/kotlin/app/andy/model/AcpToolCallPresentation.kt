@@ -10,6 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** Human-readable labels for sparse ACP tool-call metadata (especially Andy MCP). */
 object AcpToolCallPresentation {
+    const val DetailSeparator = "\n--- tool output\n"
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val genericTitles = setOf("", "tool", "Tool")
     /** Provider titles that are only a verb/kind — useful detail lives in args, locations, or a later update. */
@@ -359,7 +361,7 @@ object AcpToolCallPresentation {
             a.isBlank() -> b
             b.isBlank() -> a
             isRenderedFileDiff(b) -> b
-            isRenderedFileDiff(a) -> a
+            isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
             a == b -> a
             b.contains(a) -> b
             a.contains(b) -> a

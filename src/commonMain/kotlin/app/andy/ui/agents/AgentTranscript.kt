@@ -1586,6 +1586,18 @@ private fun ToolCallDetailBody(
                         .verticalScroll(rememberScrollState()),
                 )
             }
+            fileContent.extraDetail?.takeIf { it.isNotBlank() }?.let { extra ->
+                ChatMarkdown(
+                    toolDetailMarkdown(extra),
+                    density = AndyMarkdownDensity.Thinking,
+                    lineHeight = 16.sp,
+                    preserveLineBreaks = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
         }
         return
     }

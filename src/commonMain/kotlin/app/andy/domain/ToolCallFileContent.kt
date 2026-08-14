@@ -1,5 +1,6 @@
 package app.andy.domain
 
+import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentToolKind
 import app.andy.model.DiffLine
@@ -14,6 +15,7 @@ data class ToolCallFileContent(
     val path: String,
     val oldText: String?,
     val newText: String?,
+    val extraDetail: String? = null,
 ) {
     /** ACP diff payloads always carry an old snapshot (possibly empty for a new file). */
     val hasDiff: Boolean get() = oldText != null
@@ -37,8 +39,16 @@ fun parseToolCallFileContent(text: String): ToolCallFileContent? {
             ?.takeIf { looksLikeStructuredFilePath(it) }
             ?: return null
         val oldText = trimmed.substring(oldIndex + OldMarker.length, newIndex)
-        val newText = trimmed.substring(newIndex + NewMarker.length)
-        return ToolCallFileContent(path = path, oldText = oldText, newText = newText)
+        val newAndExtra = trimmed.substring(newIndex + NewMarker.length)
+        val separatorIndex = newAndExtra.indexOf(AcpToolCallPresentation.DetailSeparator)
+        val newText = if (separatorIndex >= 0) newAndExtra.substring(0, separatorIndex) else newAndExtra
+        val extraDetail = if (separatorIndex >= 0) {
+            newAndExtra.substring(separatorIndex + AcpToolCallPresentation.DetailSeparator.length)
+                .takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        return ToolCallFileContent(path = path, oldText = oldText, newText = newText, extraDetail = extraDetail)
     }
 
     val firstLine = trimmed.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
@@ -168,13 +178,17 @@ private sealed interface LineDiffOp {
 }
 
 private const val MaxLcsCells = 1_000_000L
+private const val MaxLcsDimension = 10_000
 
 private fun lineDiffOperations(oldLines: List<String>, newLines: List<String>): List<LineDiffOp> {
   if (oldLines == newLines) return oldLines.map(LineDiffOp::Context)
   // The exact LCS implementation is quadratic in memory and this function can run while an
   // expanded tool row is being composed. Keep large snapshots responsive by falling back to a
   // linear all-delete/all-add representation rather than allocating an unbounded matrix.
-  if (oldLines.size.toLong() * newLines.size.toLong() > MaxLcsCells) {
+  if (oldLines.size > MaxLcsDimension ||
+      newLines.size > MaxLcsDimension ||
+      oldLines.size.toLong() * newLines.size.toLong() > MaxLcsCells
+  ) {
     return oldLines.map(LineDiffOp::Deletion) + newLines.map(LineDiffOp::Addition)
   }
   val lcs = longestCommonSubsequence(oldLines, newLines)
