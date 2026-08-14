@@ -3169,7 +3169,7 @@ class DesktopAgentRunService(
                 val file = File(location).let { if (it.isAbsolute) it else File(root, location) }
                 val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return@mapNotNullTo null
                 val relative = runCatching { canonical.relativeTo(root) }.getOrNull() ?: return@mapNotNullTo null
-                relative.path.takeUnless { it.startsWith("..") }
+                relative.invariantSeparatorsPath.takeUnless { it.startsWith("..") }
             }
     }
 
@@ -5007,7 +5007,7 @@ class DesktopAgentRunService(
         val completedChanges = currentTask(taskId)?.let { task ->
             val baseline = task.changeBaselineTree
             task.cwd?.takeIf { baseline != null }?.let { cwd ->
-                worktrees.changeSnapshot(cwd, baseline)
+                worktrees.changeSnapshot(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
             }
         }
         updateTask(taskId) { task ->

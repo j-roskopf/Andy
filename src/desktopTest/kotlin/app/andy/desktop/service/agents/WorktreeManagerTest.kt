@@ -325,6 +325,12 @@ class WorktreeManagerTest {
 
             val unscoped = assertNotNull(manager.changeSummary(repo.absolutePath, baseline))
             assertEquals(listOf("other.kt", "touched.kt", "unrelated.kt"), unscoped.files.map { it.path })
+
+            val scopedSnapshot = assertNotNull(
+                manager.changeSnapshot(repo.absolutePath, baseline, listOf("touched.kt")),
+            )
+            assertEquals(listOf("touched.kt"), scopedSnapshot.summary.files.map { it.path })
+            assertEquals(setOf("touched.kt"), scopedSnapshot.diffs.keys)
         } finally {
             repo.deleteRecursively()
         }

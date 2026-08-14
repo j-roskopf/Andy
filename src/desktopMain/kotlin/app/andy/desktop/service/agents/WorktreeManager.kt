@@ -185,9 +185,16 @@ class WorktreeManager(
         return AgentChangeSummary(changes)
     }
 
-    /** Captures a task's completed change set before later work in the repository can alter it. */
-    fun changeSnapshot(dir: String, baselineTree: String?): AgentThreadChangeSnapshot? {
-        val summary = changeSummary(dir, baselineTree) ?: return null
+    /**
+     * Captures a task's completed change set before later work in the repository can alter it.
+     * [paths] is forwarded to [changeSummary] so the frozen snapshot matches the live scoped view.
+     */
+    fun changeSnapshot(
+        dir: String,
+        baselineTree: String?,
+        paths: Collection<String>? = null,
+    ): AgentThreadChangeSnapshot? {
+        val summary = changeSummary(dir, baselineTree, paths) ?: return null
         val diffs = summary.files.associate { change ->
             change.path to (fileDiff(dir, change.path, baselineTree) ?: AgentFileDiff(path = change.path, lines = emptyList()))
         }
