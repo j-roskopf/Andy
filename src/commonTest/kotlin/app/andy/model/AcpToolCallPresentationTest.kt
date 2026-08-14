@@ -154,6 +154,95 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun jsonToolDetailsBecomeReadableMarkdown() {
+        val presented = AcpToolCallPresentation.present(
+            title = "Search",
+            rawInput = """{"query":"ToolBlock","case_sensitive":false,"paths":["src","test"]}""",
+            rawOutput = null,
+            contentDetails = "",
+        )
+
+        assertEquals(
+            """
+            - **query:** ToolBlock
+            - **case sensitive:** false
+            - **paths:**
+              - src
+              - test
+            """.trimIndent(),
+            presented.detail,
+        )
+        assertFalse(presented.detail.contains("{"))
+        assertFalse(presented.detail.contains("\"query\""))
+    }
+
+    @Test
+    fun echoedArgumentsDoNotCountAsExtraDetail() {
+        val headline = "totalMatches=45, truncated=false"
+        val body = AcpToolCallPresentation.displayDetail("""{"totalMatches":45,"truncated":false}""")
+
+        assertFalse(body.contains("{"))
+        assertFalse(AcpToolCallPresentation.detailAddsInformation(headline, body))
+        assertFalse(AcpToolCallPresentation.detailAddsInformation(headline, ""))
+        assertTrue(
+            AcpToolCallPresentation.detailAddsInformation(headline, "$body\n- **path:** src/Main.kt"),
+        )
+    }
+
+    /** `{"exitCode":0,"stdout":"…"}` is the shape every shell tool returns; the output is the point. */
+    @Test
+    fun commandResultOutputRendersAsABlockNotAnInlineValue() {
+        val payload = """{"exitCode":0,"stdout":"first line\nsecond line","stderr":""}"""
+
+        val body = AcpToolCallPresentation.displayDetail(payload)
+
+        assertFalse(body.contains("{"))
+        assertFalse(body.contains("\"stdout\""))
+        assertEquals(
+            """
+            - **exitCode:** 0
+            - **stdout:**
+            ```
+            first line
+            second line
+            ```
+            - **stderr:** —
+            """.trimIndent(),
+            body,
+        )
+        assertEquals(listOf("first line\nsecond line"), AcpToolCallPresentation.payloadTextValues(payload))
+        assertTrue(AcpToolCallPresentation.payloadTextValues("plain text output").isEmpty())
+    }
+
+    @Test
+    fun displayDetailCanExcludeNestedDiffWhileKeepingMetadata() {
+        val diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new"
+        val stdout = "warning before patch\n$diff"
+        val payload = """{"exitCode":7,"stdout":"${stdout.replace("\n", "\\n")}","stderr":"warning after patch"}"""
+
+        val rendered = AcpToolCallPresentation.displayDetailExcludingPayload(payload, diff)
+
+        assertTrue(rendered.contains("exitCode"))
+        assertTrue(rendered.contains("warning before patch"))
+        assertTrue(rendered.contains("warning after patch"))
+        assertFalse(rendered.contains("--- a/file.txt"))
+    }
+
+    @Test
+    fun placeholderDetailsCountAsNoOutput() {
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("No details"))
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("none"))
+        assertFalse(AcpToolCallPresentation.isMinimalOutput("42 matches"))
+    }
+
+    @Test
+    fun markdownToolDetailsRemainMarkdown() {
+        val detail = "### Matches\n\n- `AgentTranscript.kt`\n- `AgentModels.kt`"
+
+        assertEquals(detail, AcpToolCallPresentation.displayDetail(detail))
+    }
+
+    @Test
     fun mergeKeepsRicherNameAndDoesNotRegressState() {
         val first = AgentEvent.ToolCall(
             atMillis = 1,
@@ -177,6 +266,123 @@ class AcpToolCallPresentationTest {
         assertEquals("./gradlew test", merged.toolName)
         assertEquals("./gradlew test", merged.summary)
         assertEquals(AgentToolState.InProgress, merged.state)
+    }
+
+    @Test
+    fun mergeKeepsStructuredCompletionDiffAtTheStartOfDetail() {
+        val first = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Edit File",
+            summary = "path=src/Foo.kt, replacement=updated",
+            detail = """{"path":"src/Foo.kt","replacement":"updated"}""",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+        )
+        val diff = "src/Foo.kt\n--- old\nold\n+++ new\nupdated"
+        val update = AgentEvent.ToolCall(
+            atMillis = 2,
+            toolName = "tool",
+            summary = "Foo.kt",
+            detail = diff,
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Completed,
+        )
+
+        val merged = AcpToolCallPresentation.mergeToolCalls(first, update)
+        val preDiffOutput = AcpToolCallPresentation.mergeToolCalls(
+            first.copy(
+                detail = first.detail +
+                    AcpToolCallPresentation.DetailSeparator +
+                    "warning: formatter skipped generated file",
+            ),
+            update,
+        )
+        val plainPreDiffOutput = AcpToolCallPresentation.mergeToolCalls(
+            first.copy(detail = "warning: formatter skipped generated file"),
+            update,
+        )
+        val withOutput = AcpToolCallPresentation.mergeToolCalls(
+            merged,
+            AgentEvent.ToolCall(
+                atMillis = 3,
+                toolName = "tool",
+                summary = "warning",
+                detail = "warning: formatter skipped generated file",
+                toolCallId = "call-1",
+                kind = AgentToolKind.Edit,
+                state = AgentToolState.Completed,
+            ),
+        )
+        val repeatedOutput = AcpToolCallPresentation.mergeToolCalls(
+            withOutput,
+            AgentEvent.ToolCall(
+                atMillis = 4,
+                toolName = "tool",
+                summary = "warning",
+                detail = "warning: formatter skipped generated file",
+                toolCallId = "call-1",
+                kind = AgentToolKind.Edit,
+                state = AgentToolState.Completed,
+            ),
+        )
+        val secondOutput = AcpToolCallPresentation.mergeToolCalls(
+            withOutput,
+            AgentEvent.ToolCall(
+                atMillis = 5,
+                toolName = "tool",
+                summary = "result",
+                detail = "formatting completed with warnings",
+                toolCallId = "call-1",
+                kind = AgentToolKind.Edit,
+                state = AgentToolState.Completed,
+            ),
+        )
+
+        assertEquals(diff, merged.detail)
+        assertEquals(
+            "$diff${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
+            preDiffOutput.detail,
+        )
+        assertEquals(preDiffOutput.detail, plainPreDiffOutput.detail)
+        assertEquals(AgentToolState.Completed, merged.state)
+        assertEquals(
+            "$diff${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
+            withOutput.detail,
+        )
+        assertEquals(withOutput.detail, repeatedOutput.detail)
+        assertEquals(
+            "$diff${AcpToolCallPresentation.DetailSeparator}" +
+                "warning: formatter skipped generated file\nformatting completed with warnings",
+            secondOutput.detail,
+        )
+    }
+
+    @Test
+    fun mergeKeepsEditArgumentsParseableWhenOutputArrives() {
+        val arguments = """{"file_path":"README.md","old_string":"old","new_string":"new"}"""
+        val pending = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Edit File",
+            summary = "README.md",
+            detail = arguments,
+            toolCallId = "edit-arguments",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+        )
+        val completed = pending.copy(
+            atMillis = 2,
+            detail = "warning: formatter skipped generated file",
+            state = AgentToolState.Completed,
+        )
+
+        val merged = AcpToolCallPresentation.mergeToolCalls(pending, completed)
+
+        assertEquals(
+            "$arguments${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
+            merged.detail,
+        )
     }
 
     @Test

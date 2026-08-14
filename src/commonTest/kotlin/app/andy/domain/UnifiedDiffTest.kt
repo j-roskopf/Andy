@@ -10,8 +10,7 @@ import kotlin.test.assertTrue
 class UnifiedDiffTest {
     @Test
     fun parseUnifiedDiffTracksLineNumbersAndKinds() {
-        val diff = parseUnifiedDiff(
-            """
+        val text = """
             diff --git a/src/Example.kt b/src/Example.kt
             index 111..222 100644
             --- a/src/Example.kt
@@ -23,9 +22,8 @@ class UnifiedDiffTest {
             +import added
             +import also
              import keep
-            """.trimIndent(),
-            "src/Example.kt",
-        )
+            """.trimIndent()
+        val diff = parseUnifiedDiff(text, "src/Example.kt")
 
         assertEquals("src/Example.kt", diff.path)
         assertEquals(2, diff.additions)
@@ -49,6 +47,9 @@ class UnifiedDiffTest {
         assertEquals(null, diff.lines[3].oldLineNumber)
         assertEquals(12, diff.lines[3].newLineNumber)
         assertEquals("import added", diff.lines[3].text)
+        assertTrue(looksLikeUnifiedDiff(text))
+        assertEquals("src/Example.kt", unifiedDiffPath(text))
+        assertEquals(diff, detectUnifiedDiff(text))
     }
 
     @Test
@@ -59,6 +60,90 @@ class UnifiedDiffTest {
         )
         assertTrue(diff.isBinary)
         assertTrue(diff.lines.isEmpty())
+    }
+
+    @Test
+    fun parseUnifiedDiffDoesNotTreatChangedTextAsBinaryMetadata() {
+        val text = """
+            --- a/message.txt
+            +++ b/message.txt
+            @@ -1 +1 @@
+            -ordinary text
+            +Binary files may differ
+        """.trimIndent()
+
+        val diff = detectUnifiedDiff(text)
+
+        assertFalse(diff?.isBinary == true)
+        assertEquals(listOf("ordinary text", "Binary files may differ"), diff?.lines?.map { it.text })
+    }
+
+    @Test
+    fun detectUnifiedDiffDeclinesMultiFilePatches() {
+        val text = """
+            diff --git a/src/First.kt b/src/First.kt
+            --- a/src/First.kt
+            +++ b/src/First.kt
+            @@ -1 +1 @@
+            -old first
+            +new first
+            diff --git a/src/Second.kt b/src/Second.kt
+            --- a/src/Second.kt
+            +++ b/src/Second.kt
+            @@ -1 +1 @@
+            -old second
+            +new second
+        """.trimIndent()
+
+        assertTrue(looksLikeUnifiedDiff(text))
+        assertEquals(null, detectUnifiedDiff(text))
+    }
+
+    @Test
+    fun detectUnifiedDiffDoesNotCountAddedSourceAsAFileHeader() {
+        val text = """
+            --- /dev/null
+            +++ b/operators.txt
+            @@ -0,0 +1 @@
+            +++ value
+        """.trimIndent()
+
+        val diff = detectUnifiedDiff(text)
+
+        assertEquals("operators.txt", diff?.path)
+        assertEquals(listOf("++ value"), diff?.lines?.map { it.text })
+        assertTrue(diff?.isNewFile == true)
+    }
+
+    @Test
+    fun unifiedDiffPathIgnoresDevNullHeaderTimestamp() {
+        val text = """
+            --- a/deleted.txt	2026-08-14 10:00:00
+            +++ /dev/null	2026-08-14 10:01:00
+            @@ -1 +0,0 @@
+            -gone
+        """.trimIndent()
+
+        assertEquals("deleted.txt", unifiedDiffPath(text))
+        assertEquals("deleted.txt", detectUnifiedDiff(text)?.path)
+    }
+
+    @Test
+    fun detectUnifiedDiffDeclinesHeaderOnlyMultiFilePatches() {
+        val text = """
+            --- a/first.txt
+            +++ b/first.txt
+            @@ -1 +1 @@
+            -old
+            +new
+            --- a/second.txt
+            +++ b/second.txt
+            @@ -1 +1 @@
+            -old
+            +new
+        """.trimIndent()
+
+        assertEquals(null, detectUnifiedDiff(text))
     }
 
     @Test

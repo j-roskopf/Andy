@@ -281,8 +281,13 @@ private suspend fun callRawTool(
         writer.write("\n")
         writer.flush()
 
-        val line = reader.readLine() ?: error("no response for $name")
-        val root = json.parseToJsonElement(line).jsonObject
+        // The SDK may emit a notification (for example tools/list_changed) before the call
+        // response. Linux CI exposed this ordering more often than macOS, so match by request id
+        // instead of assuming the next line is our response.
+        val root = generateSequence { reader.readLine() }
+            .map { json.parseToJsonElement(it).jsonObject }
+            .firstOrNull { it["id"]?.jsonPrimitive?.contentOrNull == "2" }
+            ?: error("no response for $name")
         val rpcError = root["error"]?.jsonObject
         if (rpcError != null) {
             return@use true to (rpcError["message"]?.jsonPrimitive?.contentOrNull ?: rpcError.toString())

@@ -162,7 +162,8 @@ object AcpEventMapper {
         atMillis: Long,
         terminalOutput: (String) -> String?,
     ): AgentEvent.ToolCall {
-        val details = content.joinToString("\n") { it.render(terminalOutput) }
+        val contentDetails = content.joinToString("\n") { it.render(terminalOutput) }
+        val details = contentDetails
             .ifBlank { listOfNotNull(rawInput, rawOutput).joinToString("\n") }
         val presented = AcpToolCallPresentation.present(title, rawInput, rawOutput, details)
         val summary = AcpToolCallPresentation.enrichSummary(
@@ -170,11 +171,25 @@ object AcpEventMapper {
             kind = kind.toAgentKind(),
             locations = locations,
         )
+        // Structured edit calls need their original JSON until the transcript has had a chance to
+        // recognize file fields. Attach output separately; ToolBlock formats it after parsing.
+        val structuredInput = rawInput?.takeIf {
+            content.none { item -> item is ToolCallContent.Diff } &&
+                (kind == ToolKind.EDIT || kind == ToolKind.DELETE || kind == ToolKind.MOVE) &&
+                !AcpToolCallPresentation.isMinimalOutput(it)
+        }
+        val detail = structuredInput?.let { input ->
+            val extra = listOfNotNull(
+                contentDetails.takeIf { it.isNotBlank() },
+                rawOutput?.takeUnless { AcpToolCallPresentation.isMinimalOutput(it) },
+            ).distinct().joinToString("\n")
+            if (extra.isBlank()) input else "$input${AcpToolCallPresentation.DetailSeparator}$extra"
+        } ?: presented.detail
         return AgentEvent.ToolCall(
             atMillis = atMillis,
             toolName = presented.toolName,
             summary = summary,
-            detail = presented.detail,
+            detail = detail,
             toolCallId = id,
             kind = kind.toAgentKind(),
             state = status.toAgentState(),

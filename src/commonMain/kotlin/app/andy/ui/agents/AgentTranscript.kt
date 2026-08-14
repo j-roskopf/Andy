@@ -77,15 +77,21 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
 import app.andy.domain.ToolCallFileContent
+import app.andy.domain.detectUnifiedDiff
+import app.andy.domain.diffFromToolCallFileContent
+import app.andy.domain.extractUnifiedDiffText
 import app.andy.domain.looksLikeFilePath
+import app.andy.domain.parseToolCallFileArguments
 import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
+import app.andy.model.AgentFileDiff
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSpawnPresentation
 import app.andy.model.AgentTask
 import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
+import app.andy.model.AgentToolState
 import app.andy.model.isRetriableConnectionStallMessage
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.model.stripDecisionCheckpointMarkup
@@ -687,6 +693,7 @@ private fun TranscriptEvent(
                 locations = event.locations,
                 images = event.images,
                 color = Cyan,
+                forceVisible = event.state == AgentToolState.Failed,
                 onToolFileOpen = onToolFileOpen,
             )
         }
@@ -699,6 +706,7 @@ private fun TranscriptEvent(
                 summary = event.summary,
                 detail = event.detail,
                 color = if (event.isError) Red else TextSecondary,
+                forceVisible = event.isError,
                 onToolFileOpen = onToolFileOpen,
             )
         }
@@ -1282,6 +1290,7 @@ private fun CompactToolCallsBlock(
                             locations = event.locations,
                             images = event.images,
                             color = Cyan,
+                            forceVisible = event.state == AgentToolState.Failed,
                             indent = TranscriptAsideContentIndent,
                             onToolFileOpen = onToolFileOpen,
                         )
@@ -1295,6 +1304,7 @@ private fun CompactToolCallsBlock(
                             summary = event.summary,
                             detail = event.detail,
                             color = if (event.isError) Red else TextSecondary,
+                            forceVisible = event.isError,
                             indent = TranscriptAsideContentIndent,
                             onToolFileOpen = onToolFileOpen,
                         )
@@ -1468,17 +1478,39 @@ private fun ToolBlock(
     locations: List<String> = emptyList(),
     images: List<AgentToolImage> = emptyList(),
     color: Color,
+    forceVisible: Boolean = false,
     indent: Dp = TranscriptAsideIndent,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
 ) {
+    if (!forceVisible && toolRowShowsNothing(name, summary, detail, locations, images.isNotEmpty())) return
     val headline = toolBlockHeadline(name, summary, kind, locations)
-    val body = detail
+    val rawBody = detail
         .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
         .orEmpty()
         .ifBlank { summary.takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }.orEmpty() }
-        .ifBlank { name.orEmpty() }
-    val expandable = images.isNotEmpty() || (body.isNotBlank() && body != headline)
-    val fileContent = remember(body) { parseToolCallFileContent(body) }
+    // Persisted transcripts and the MCP lane both hand back provider payloads verbatim, so the
+    // JSON-to-Markdown conversion has to happen here rather than where events are first mapped.
+    val body = remember(rawBody) { AcpToolCallPresentation.displayDetail(rawBody) }
+    val expandable = images.isNotEmpty() ||
+        AcpToolCallPresentation.detailAddsInformation(headline, body)
+    val fileContent = remember(rawBody, kind) {
+        parseToolCallFileContent(rawBody) ?: parseToolCallFileArguments(rawBody, kind)
+    }
+    // Command results arrive as {"exitCode":…,"stdout":"<a diff>"}, so the diff worth reviewing is
+    // one level inside the payload rather than the payload itself.
+    val payloadDiffData = remember(rawBody) {
+        (AcpToolCallPresentation.payloadTextValues(rawBody) + rawBody)
+            .firstNotNullOfOrNull { candidate ->
+                val patch = extractUnifiedDiffText(candidate) ?: candidate
+                detectUnifiedDiff(patch)?.let { patch to it }
+            }
+    }
+    val payloadDiff = payloadDiffData?.second
+    val payloadExtraBody = remember(rawBody, payloadDiffData) {
+        payloadDiffData?.first
+            ?.let { AcpToolCallPresentation.displayDetailExcludingPayload(rawBody, it) }
+            .orEmpty()
+    }
     val openableContent = fileContent ?: locations.firstOrNull { looksLikeFilePath(it) }?.let {
         ToolCallFileContent(path = it, oldText = null, newText = null)
     }
@@ -1520,6 +1552,8 @@ private fun ToolBlock(
         ToolCallDetailBody(
             body = body,
             fileContent = fileContent,
+            diff = payloadDiff,
+            diffExtraBody = payloadExtraBody,
             images = images,
             onOpen = onToolFileOpen,
         )
@@ -1530,6 +1564,8 @@ private fun ToolBlock(
 private fun ToolCallDetailBody(
     body: String,
     fileContent: ToolCallFileContent?,
+    diff: AgentFileDiff?,
+    diffExtraBody: String = "",
     images: List<AgentToolImage> = emptyList(),
     onOpen: (ToolCallFileContent) -> Unit,
 ) {
@@ -1548,23 +1584,29 @@ private fun ToolCallDetailBody(
                     lineHeight = 16.sp,
                 )
             }
-            val preview = when {
-                fileContent.hasDiff -> buildString {
-                    if (!fileContent.oldText.isNullOrBlank()) {
-                        append("--- old\n")
-                        append(fileContent.oldText.orEmpty())
-                    }
-                    if (!fileContent.newText.isNullOrBlank()) {
-                        if (isNotEmpty()) append('\n')
-                        append("+++ new\n")
-                        append(fileContent.newText.orEmpty())
-                    }
-                }
-                else -> fileContent.newText.orEmpty()
+            val fileDiff = if (fileContent.hasDiff) {
+                remember(fileContent) { diffFromToolCallFileContent(fileContent) }
+            } else {
+                diff
             }
-            if (preview.isNotBlank()) {
+            val preview = fileContent.newText.orEmpty()
+            if (fileDiff != null) {
+                ToolCallDiff(fileDiff)
+            } else if (preview.isNotBlank()) {
                 ChatMarkdown(
-                    preview,
+                    toolDetailMarkdown(preview, fileContent.path),
+                    density = AndyMarkdownDensity.Thinking,
+                    lineHeight = 16.sp,
+                    preserveLineBreaks = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+            fileContent.extraDetail?.takeIf { it.isNotBlank() }?.let { extra ->
+                ChatMarkdown(
+                    toolDetailMarkdown(extra),
                     density = AndyMarkdownDensity.Thinking,
                     lineHeight = 16.sp,
                     preserveLineBreaks = true,
@@ -1577,9 +1619,25 @@ private fun ToolCallDetailBody(
         }
         return
     }
+    if (diff != null) {
+        ToolCallDiff(diff, modifier = Modifier.padding(top = 4.dp))
+        if (diffExtraBody.isNotBlank()) {
+            ChatMarkdown(
+                toolDetailMarkdown(diffExtraBody),
+                density = AndyMarkdownDensity.Thinking,
+                lineHeight = 16.sp,
+                preserveLineBreaks = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
+        return
+    }
     if (body.isBlank()) return
     ChatMarkdown(
-        body,
+        toolDetailMarkdown(body),
         density = AndyMarkdownDensity.Thinking,
         lineHeight = 16.sp,
         preserveLineBreaks = true,
@@ -1589,6 +1647,79 @@ private fun ToolCallDetailBody(
             .heightIn(max = 220.dp)
             .verticalScroll(rememberScrollState()),
     )
+}
+
+@Composable
+private fun ToolCallDiff(diff: AgentFileDiff, modifier: Modifier = Modifier) {
+    var viewMode by remember(diff) { mutableStateOf(DiffViewMode.Unified) }
+    AgentFileDiffViewer(
+        diff = diff,
+        viewMode = viewMode,
+        onViewModeChange = { viewMode = it },
+        onCollapse = {},
+        showCollapseControl = false,
+        maxHeight = 220.dp,
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
+/** Keeps authored Markdown intact while giving plain source/terminal output a highlighted code block. */
+internal fun toolDetailMarkdown(body: String, path: String? = null): String {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty() || looksLikeMarkdown(trimmed)) return trimmed
+    return if (path != null || looksLikeCode(trimmed)) {
+        fencedCodeBlock(trimmed, codeLanguageForPath(path))
+    } else {
+        trimmed
+    }
+}
+
+private fun looksLikeMarkdown(text: String): Boolean = text.lineSequence().any { line ->
+    val trimmed = line.trimStart()
+    trimmed.startsWith("```") ||
+        trimmed.startsWith("~~~") ||
+        Regex("""^#{1,6}\s+""").containsMatchIn(trimmed) ||
+        trimmed.startsWith("> ") ||
+        Regex("""^[-*+]\s+""").containsMatchIn(trimmed) ||
+        Regex("""^\d+[.)]\s+""").containsMatchIn(trimmed) ||
+        Regex("""^\|.+\|$""").containsMatchIn(trimmed)
+}
+
+private fun looksLikeCode(text: String): Boolean =
+    text.contains('\n') && text.lineSequence().any { line ->
+        line.startsWith("    ") ||
+            line.startsWith("\t") ||
+            Regex("""^\s*(fun|class|interface|object|enum|data class|val|var|import|package|def|function|const|let|fn|struct)\b""")
+                .containsMatchIn(line) ||
+            Regex("""^\s*([+>$]|at\s+\S+|[A-Za-z0-9_./-]+:\d+:)""").containsMatchIn(line) ||
+            line.trimEnd().endsWith("{") ||
+            line.trimEnd().endsWith(";")
+    }
+
+private fun codeLanguageForPath(path: String?): String = when (path?.substringAfterLast('.', "").orEmpty().lowercase()) {
+    "kt", "kts" -> "kotlin"
+    "java" -> "java"
+    "js", "mjs", "cjs" -> "javascript"
+    "ts", "tsx" -> "typescript"
+    "py" -> "python"
+    "rs" -> "rust"
+    "go" -> "go"
+    "rb" -> "ruby"
+    "sh", "bash", "zsh" -> "shell"
+    "json" -> "json"
+    "yaml", "yml" -> "yaml"
+    "md", "markdown" -> "markdown"
+    "html" -> "html"
+    "css" -> "css"
+    "sql" -> "sql"
+    else -> ""
+}
+
+/** Wraps [body] in a Markdown fence long enough to survive any backtick runs already inside it. */
+private fun fencedCodeBlock(body: String, language: String = ""): String {
+    val longestRun = Regex("`+").findAll(body).maxOfOrNull { it.value.length } ?: 0
+    val fence = "`".repeat(maxOf(3, longestRun + 1))
+    return "$fence$language\n$body\n$fence"
 }
 
 @Composable
@@ -1738,10 +1869,26 @@ private fun compactActivityHeadline(events: List<AgentEvent>): String {
 }
 
 internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
-    val toolCalls = events.filterIsInstance<AgentEvent.ToolCall>()
-    if (toolCalls.isEmpty()) {
+    val allCalls = events.filterIsInstance<AgentEvent.ToolCall>()
+    if (allCalls.isEmpty()) {
         val count = events.size
         return "$count tool ${if (count == 1) "result" else "results"}"
+    }
+    // Content-free calls are not rendered as rows, so they must not colour the group headline
+    // either — but they still happened, so a group made only of them is counted, not named.
+    val toolCalls = allCalls.filterNot {
+        toolRowShowsNothing(
+            it.toolName,
+            it.summary,
+            it.detail,
+            it.locations,
+            it.images.isNotEmpty(),
+            isFailure = it.state == AgentToolState.Failed,
+        )
+    }
+    if (toolCalls.isEmpty()) {
+        val count = allCalls.size
+        return "$count tool ${if (count == 1) "call" else "calls"}"
     }
     if (toolCalls.size == 1) {
         val call = toolCalls.single()
@@ -1773,7 +1920,48 @@ internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
     }
 }
 
-private fun toolBlockHeadline(
+private const val ToolHeadlineLimit = 160
+
+/**
+ * A row headline is a label, but the fields it comes from are provider-controlled: a `summary` can
+ * be a whole multi-line command or a 4 KB command result. Collapse it to one short line and leave
+ * the rest to the expanded body.
+ */
+internal fun condenseToolHeadline(text: String): String {
+    val collapsed = text.replace(Regex("""\s+"""), " ").trim()
+    return if (collapsed.length <= ToolHeadlineLimit) {
+        collapsed
+    } else {
+        collapsed.take(ToolHeadlineLimit).trimEnd() + "…"
+    }
+}
+
+/**
+ * ACP lanes emit bookkeeping tool events carrying only a call id — no name, arguments, output, or
+ * location. A row for one of those says nothing at all, so the transcript leaves it out.
+ */
+internal fun toolRowShowsNothing(
+    name: String?,
+    summary: String,
+    detail: String,
+    locations: List<String>,
+    hasImages: Boolean,
+    isFailure: Boolean = false,
+): Boolean {
+    if (isFailure || hasImages || locations.any { it.isNotBlank() }) return false
+    if (!AcpToolCallPresentation.isGenericTitle(name?.trim().orEmpty())) return false
+    return AcpToolCallPresentation.isMinimalOutput(summary) &&
+        AcpToolCallPresentation.isMinimalOutput(detail)
+}
+
+internal fun toolBlockHeadline(
+    name: String?,
+    summary: String,
+    kind: AgentToolKind?,
+    locations: List<String>,
+): String = condenseToolHeadline(rawToolBlockHeadline(name, summary, kind, locations))
+
+private fun rawToolBlockHeadline(
     name: String?,
     summary: String,
     kind: AgentToolKind?,
@@ -1786,7 +1974,8 @@ private fun toolBlockHeadline(
         .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
     // Bare "Edit" / "Terminal" labels read as empty chrome — prefer an action phrase, and
     // when we do have a path/command, lead with Edited/Ran rather than "Edit: path".
-    if (AcpToolCallPresentation.isSparseToolTitle(label) || label.isBlank()) {
+    // A generic "tool" is not a name at all, so it must never prefix the summary.
+    if (AcpToolCallPresentation.isGenericOrSparseTitle(label) || label.isBlank()) {
         return toolActionPhrase(label, detail.ifBlank { summary }, kind, locations)
     }
     return when {
@@ -1798,6 +1987,13 @@ private fun toolBlockHeadline(
 }
 
 private fun toolActionPhrase(
+    toolName: String,
+    summary: String,
+    kind: AgentToolKind? = null,
+    locations: List<String> = emptyList(),
+): String = condenseToolHeadline(rawToolActionPhrase(toolName, summary, kind, locations))
+
+private fun rawToolActionPhrase(
     toolName: String,
     summary: String,
     kind: AgentToolKind? = null,
@@ -1824,9 +2020,22 @@ private fun toolActionPhrase(
         lower in CommandToolNames || kind == AgentToolKind.Execute ->
             trimmedSummary.takeIf { it.isNotBlank() }?.let { "Ran $it" } ?: "Ran command"
         trimmedSummary.isNotBlank() -> trimmedSummary
-        toolName.isNotBlank() -> toolName
-        else -> "Tool call"
+        toolName.isNotBlank() && !AcpToolCallPresentation.isGenericTitle(toolName) -> toolName
+        else -> toolKindPhrase(kind) ?: "Tool call"
     }
+}
+
+/** Last resort when a provider sent neither a usable name nor arguments: name the action by kind. */
+private fun toolKindPhrase(kind: AgentToolKind?): String? = when (kind) {
+    AgentToolKind.Read -> "Read file"
+    AgentToolKind.Edit -> "Edited file"
+    AgentToolKind.Delete -> "Deleted file"
+    AgentToolKind.Move -> "Moved file"
+    AgentToolKind.Search -> "Searched"
+    AgentToolKind.Execute -> "Ran command"
+    AgentToolKind.Think -> "Thought"
+    AgentToolKind.Fetch -> "Fetched a resource"
+    AgentToolKind.Other, null -> null
 }
 
 private val ReadToolNames = setOf(

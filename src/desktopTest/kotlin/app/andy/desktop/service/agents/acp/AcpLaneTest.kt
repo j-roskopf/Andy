@@ -169,6 +169,82 @@ class AcpLaneTest {
     }
 
     @Test
+    fun mapperKeepsArgumentOnlyEditJsonUntilStructuredParsing() {
+        val mapped = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.PENDING,
+                    content = emptyList(),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                ),
+                atMillis = 1,
+            ),
+        )
+
+        assertTrue(mapped.detail.startsWith("{"))
+        val parsed = assertIs<app.andy.domain.ToolCallFileContent>(
+            app.andy.domain.parseToolCallFileArguments(mapped.detail, mapped.kind),
+        )
+        assertEquals("README.md", parsed.path)
+        assertEquals("old", parsed.oldText)
+        assertEquals("new", parsed.newText)
+
+        val bundled = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json-output"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.COMPLETED,
+                    content = emptyList(),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                    rawOutput = buildJsonObject { put("success", true) },
+                ),
+                atMillis = 2,
+            ),
+        )
+        assertEquals(mapped.detail, bundled.detail)
+
+        val withContent = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json-content"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.COMPLETED,
+                    content = listOf(
+                        com.agentclientprotocol.model.ToolCallContent.Content(
+                            content = ContentBlock.Text("warning: formatter skipped generated file"),
+                        ),
+                    ),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                ),
+                atMillis = 3,
+            ),
+        )
+        val withContentParsed = assertIs<app.andy.domain.ToolCallFileContent>(
+            app.andy.domain.parseToolCallFileArguments(withContent.detail, withContent.kind),
+        )
+        assertEquals("README.md", withContentParsed.path)
+        assertEquals("warning: formatter skipped generated file", withContentParsed.extraDetail)
+    }
+
+    @Test
     fun mapperPreservesAssistantTextAndToolState() {
         val assistant = AcpEventMapper.map(
             SessionUpdate.AgentMessageChunk(ContentBlock.Text("hello")),
@@ -376,6 +452,105 @@ class AcpLaneTest {
             assertEquals("hello", (loaded[0] as AgentEvent.AssistantText).text)
             assertEquals("done", (loaded[1] as AgentEvent.ToolCall).summary)
             assertTrue(root.resolve("task-1/transcript.jsonl").isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    /**
+     * cursor-agent announces a call with its title and empty arguments, then reports completion in a
+     * separate update carrying only status and output. Replacing the stored row erased the title and
+     * left finished calls persisted as pending rows with nothing in them.
+     */
+    @Test
+    fun transcriptStoreMergesSparseToolCallUpdatesInsteadOfOverwriting() {
+        val root = createTempDirectory("andy-acp-tool-merge").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.upsert(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 1,
+                    toolName = "Read File",
+                    summary = "",
+                    detail = "{}",
+                    toolCallId = "call-1",
+                    kind = AgentToolKind.Read,
+                    state = AgentToolState.Pending,
+                ),
+            )
+            store.upsert(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "tool",
+                    summary = "content=alpha line",
+                    detail = """{"content":"alpha line"}""",
+                    toolCallId = "call-1",
+                    kind = AgentToolKind.Read,
+                    state = AgentToolState.Completed,
+                ),
+            )
+
+            val row = assertIs<AgentEvent.ToolCall>(store.load("task-1").single())
+            assertEquals("Read File", row.toolName)
+            assertEquals(AgentToolState.Completed, row.state)
+            assertTrue(row.detail.contains("alpha line"), "lost the output: ${row.detail}")
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    /**
+     * The real cursor-agent sequence for an edit: a pending row with a bare title and no arguments,
+     * then a completing update whose `content` carries the path plus before/after text. The stored
+     * row has to end up with both, and in the shape the transcript's diff viewer parses.
+     */
+    @Test
+    fun editToolCallKeepsItsPathAndDiffAcrossUpdates() {
+        val root = createTempDirectory("andy-acp-edit-diff").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            val callId = "call-b6cc1564-0"
+            store.upsert(
+                "task-1",
+                AcpEventMapper.map(
+                    SessionUpdate.ToolCall(
+                        toolCallId = com.agentclientprotocol.model.ToolCallId(callId),
+                        title = "Edit File",
+                        kind = ToolKind.EDIT,
+                        status = ToolCallStatus.PENDING,
+                        rawInput = buildJsonObject { },
+                    ),
+                )!!,
+            )
+            store.upsert(
+                "task-1",
+                AcpEventMapper.map(
+                    SessionUpdate.ToolCallUpdate(
+                        toolCallId = com.agentclientprotocol.model.ToolCallId(callId),
+                        status = ToolCallStatus.COMPLETED,
+                        content = listOf(
+                            com.agentclientprotocol.model.ToolCallContent.Diff(
+                                path = "/tmp/probe/notes.txt",
+                                oldText = "alpha line\n",
+                                newText = "ALPHA line\n",
+                            ),
+                        ),
+                    ),
+                )!!,
+            )
+
+            val row = assertIs<AgentEvent.ToolCall>(store.load("task-1").single())
+            assertEquals("Edit File", row.toolName)
+            assertEquals(AgentToolState.Completed, row.state)
+            val parsed = assertIs<app.andy.domain.ToolCallFileContent>(
+                app.andy.domain.parseToolCallFileContent(row.detail),
+            )
+            assertEquals("/tmp/probe/notes.txt", parsed.path)
+            assertEquals("alpha line", parsed.oldText?.trim())
+            assertEquals("ALPHA line", parsed.newText?.trim())
+            assertTrue(parsed.hasDiff)
         } finally {
             root.deleteRecursively()
         }
