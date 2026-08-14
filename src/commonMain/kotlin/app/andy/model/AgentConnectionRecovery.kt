@@ -24,26 +24,32 @@ private val RETRIABLE_STALL_LINE = Regex(
     """(?i)^(?:error:\s*)?retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?)\s*$""",
 )
 
-private fun CharSequence.nonEmptyLines(): List<String> =
-    lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+private fun CharSequence.rawNonEmptyLines(): List<String> =
+    lineSequence().map { it.trimEnd() }.filter { it.isNotBlank() }.toList()
+
+/** Provider stall lines are flush-left. Indented or `>`-quoted examples are not. */
+private fun String.isProviderStallLine(): Boolean {
+    if (isEmpty()) return false
+    val first = first()
+    if (first == ' ' || first == '\t' || first == '>') return false
+    return RETRIABLE_STALL_LINE.matches(trim())
+}
 
 /** True when [text] is only a provider stall error (blank lines allowed). */
 fun CharSequence.isRetriableConnectionStallMessage(): Boolean {
-    val lines = nonEmptyLines()
-    return lines.isNotEmpty() && lines.all { RETRIABLE_STALL_LINE.matches(it) }
+    val lines = rawNonEmptyLines()
+    return lines.isNotEmpty() && lines.all { it.isProviderStallLine() }
 }
 
 /** True when the last non-empty line is a provider stall error. */
-fun CharSequence.hasRetriableConnectionStallError(): Boolean {
-    val last = nonEmptyLines().lastOrNull() ?: return false
-    return RETRIABLE_STALL_LINE.matches(last)
-}
+fun CharSequence.hasRetriableConnectionStallError(): Boolean =
+    rawNonEmptyLines().lastOrNull()?.isProviderStallLine() == true
 
 /** Drops a trailing stall error so partial output before the drop stays visible. */
 fun CharSequence.stripTrailingConnectionStallError(): String {
     val lines = toString().split('\n')
     val last = lines.indexOfLast { it.trim().isNotEmpty() }
-    if (last < 0 || !RETRIABLE_STALL_LINE.matches(lines[last].trim())) return toString()
+    if (last < 0 || !lines[last].trimEnd().isProviderStallLine()) return toString()
     var end = last
     while (end > 0 && lines[end - 1].isBlank()) end--
     return lines.take(end).joinToString("\n").trimEnd()

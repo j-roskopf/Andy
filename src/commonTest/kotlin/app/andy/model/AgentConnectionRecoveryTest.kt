@@ -50,6 +50,21 @@ class AgentConnectionRecoveryTest {
             The regex matches connection stalled as a substring, which is the bug.
             """.trimIndent().hasRetriableConnectionStallError(),
         )
+        assertFalse(
+            """
+            The error looks like:
+                Error: RetriableError: Connection stalled
+            """.trimIndent().hasRetriableConnectionStallError(),
+        )
+        assertFalse(
+            "Here is the quoted form:\n> Error: RetriableError: Connection stalled"
+                .hasRetriableConnectionStallError(),
+        )
+        val indentedQuote = """
+            The error looks like:
+                Error: RetriableError: Connection stalled
+        """.trimIndent()
+        assertEquals(indentedQuote, indentedQuote.stripTrailingConnectionStallError())
     }
 
     @Test
