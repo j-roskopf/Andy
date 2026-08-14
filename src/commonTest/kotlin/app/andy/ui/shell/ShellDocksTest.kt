@@ -68,4 +68,14 @@ class ShellDocksTest {
         assertFalse(pane.visible)
         assertEquals(1, pane.tabs.size)
     }
+
+    @Test
+    fun renameTabKeepsIdentityAndNormalizesTitle() {
+        val pane = DockPane()
+            .withTab(DockTab.terminal("run-1"))
+            .renameTab("terminal:run-1", "  Server  ")
+
+        assertEquals("terminal:run-1", pane.activeTabId)
+        assertEquals("Server", pane.activeTab?.title)
+    }
 }

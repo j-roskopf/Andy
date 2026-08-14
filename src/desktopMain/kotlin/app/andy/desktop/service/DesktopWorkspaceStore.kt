@@ -110,6 +110,8 @@ class DesktopWorkspaceStore(
             workspaceSidebarExpanded = props.getProperty("workspaceSidebarExpanded")?.toBooleanStrictOrNull() ?: true,
             workspaceStatusExpanded = props.getProperty("workspaceStatusExpanded")?.toBooleanStrictOrNull() ?: false,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
+            projectListPaneVisible = props.getProperty("projectListPaneVisible")?.toBooleanStrictOrNull() ?: true,
+            projectListPaneWidth = props.getProperty("projectListPaneWidth")?.toFloatOrNull()?.coerceIn(220f, 600f) ?: 300f,
             proxyRules = loadProxyRules(props),
             pairedWifiDevices = loadPairedWifi(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 720f,
@@ -214,6 +216,8 @@ class DesktopWorkspaceStore(
             setProperty("workspaceSidebarExpanded", state.workspaceSidebarExpanded.toString())
             setProperty("workspaceStatusExpanded", state.workspaceStatusExpanded.toString())
             setProperty("projectsIntroductionCompleted", state.projectsIntroductionCompleted.toString())
+            setProperty("projectListPaneVisible", state.projectListPaneVisible.toString())
+            setProperty("projectListPaneWidth", state.projectListPaneWidth.toString())
             setProperty("proxyRuleCount", state.proxyRules.size.toString())
             state.proxyRules.forEachIndexed { index, rule ->
                 val prefix = "proxyRule.$index."

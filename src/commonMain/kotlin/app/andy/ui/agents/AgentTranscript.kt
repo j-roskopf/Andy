@@ -1906,22 +1906,25 @@ internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
         val call = toolCalls.single()
         return toolActionPhrase(call.toolName, call.summary, call.kind, call.locations)
     }
-    val phrases = toolCalls.map { toolActionPhrase(it.toolName, it.summary, it.kind, it.locations) }
-    val readCount = toolCalls.count { it.toolName.lowercase() in ReadToolNames || it.kind == AgentToolKind.Read }
-    val commandCount = toolCalls.count { it.toolName.lowercase() in CommandToolNames || it.kind == AgentToolKind.Execute }
-    val agentCount = toolCalls.count { AgentSpawnPresentation.isAgentSpawn(it.toolName, it.summary, it.detail) }
-    val editCount = toolCalls.count {
-        it.kind == AgentToolKind.Edit || it.toolName.lowercase() in EditToolNames
-    }
+    val counts = toolCalls.groupingBy { it.activityCategory() }.eachCount()
     val summaryParts = buildList {
-        if (agentCount > 0) add(AgentSpawnPresentation.spawningHeadline(agentCount))
-        if (readCount > 0) add("read $readCount ${if (readCount == 1) "file" else "files"}")
-        if (editCount > 0) add("edited $editCount ${if (editCount == 1) "file" else "files"}")
-        if (commandCount > 0) add("ran $commandCount ${if (commandCount == 1) "command" else "commands"}")
+        counts[ToolActivityCategory.Spawn]?.let { add(AgentSpawnPresentation.spawningHeadline(it)) }
+        counts[ToolActivityCategory.Read]?.let { add("read $it ${if (it == 1) "file" else "files"}") }
+        counts[ToolActivityCategory.Search]?.let { add(if (it == 1) "searched" else "searched $it times") }
+        counts[ToolActivityCategory.Edit]?.let { add("edited $it ${if (it == 1) "file" else "files"}") }
+        counts[ToolActivityCategory.Command]?.let { add("ran $it ${if (it == 1) "command" else "commands"}") }
+        counts[ToolActivityCategory.Fetch]?.let { add("fetched $it ${if (it == 1) "resource" else "resources"}") }
     }
     if (summaryParts.isNotEmpty()) {
-        return summaryParts.joinToString(", ")
+        val other = counts[ToolActivityCategory.Other] ?: 0
+        val parts = if (other > 0) {
+            summaryParts + "$other other tool ${if (other == 1) "call" else "calls"}"
+        } else {
+            summaryParts
+        }
+        return parts.joinToString(", ")
     }
+    val phrases = toolCalls.map { toolActionPhrase(it.toolName, it.summary, it.kind, it.locations) }
     val meaningfulPhrases = phrases.filter { it.isNotBlank() && !AcpToolCallPresentation.isMinimalOutput(it) }
     if (meaningfulPhrases.isEmpty()) {
         val count = toolCalls.size
@@ -1930,6 +1933,40 @@ internal fun compactToolActivityHeadline(events: List<AgentEvent>): String {
     return meaningfulPhrases.take(3).joinToString(", ").let { headline ->
         if (meaningfulPhrases.size > 3) "$headline, …" else headline
     }
+}
+
+private enum class ToolActivityCategory { Spawn, Read, Search, Edit, Command, Fetch, Other }
+
+/**
+ * Every call in a group lands in exactly one bucket, so the group headline can account for all of
+ * them. Naming only the recognized categories dropped the rest of the group from the headline
+ * entirely — a turn of one read and eight greps was headlined "read 1 file" — and cursor-agent makes
+ * that the common case: it reports every kind as [AgentToolKind.Other] and titles a shell call with
+ * the command itself, leaving the arguments as the only evidence of what ran.
+ */
+private fun AgentEvent.ToolCall.activityCategory(): ToolActivityCategory {
+    if (AgentSpawnPresentation.isAgentSpawn(toolName, summary, detail)) return ToolActivityCategory.Spawn
+    val declared = kind?.takeUnless { it == AgentToolKind.Other }
+    if (declared != null) return declared.activityCategory()
+    val lower = toolName.trim().lowercase()
+    return when {
+        lower in SearchToolNames -> ToolActivityCategory.Search
+        lower in ReadToolNames -> ToolActivityCategory.Read
+        lower in EditToolNames -> ToolActivityCategory.Edit
+        lower in CommandToolNames -> ToolActivityCategory.Command
+        else -> AcpToolCallPresentation.inferKindFromArguments(detail)
+            ?.activityCategory()
+            ?: ToolActivityCategory.Other
+    }
+}
+
+private fun AgentToolKind.activityCategory(): ToolActivityCategory = when (this) {
+    AgentToolKind.Read -> ToolActivityCategory.Read
+    AgentToolKind.Search -> ToolActivityCategory.Search
+    AgentToolKind.Edit, AgentToolKind.Delete, AgentToolKind.Move -> ToolActivityCategory.Edit
+    AgentToolKind.Execute -> ToolActivityCategory.Command
+    AgentToolKind.Fetch -> ToolActivityCategory.Fetch
+    AgentToolKind.Think, AgentToolKind.Other -> ToolActivityCategory.Other
 }
 
 private const val ToolHeadlineLimit = 160
@@ -2023,6 +2060,8 @@ private fun rawToolActionPhrase(
         }
     return when {
         AgentSpawnPresentation.isAgentSpawn(toolName, summary, "") -> AgentSpawnPresentation.spawningHeadline(1)
+        lower in SearchToolNames || kind == AgentToolKind.Search ->
+            trimmedSummary.takeIf { it.isNotBlank() }?.let { "Searched $it" } ?: "Searched"
         lower in ReadToolNames || kind == AgentToolKind.Read ->
             trimmedSummary.takeIf { it.isNotBlank() }?.let { "Read $it" } ?: "Read file"
         lower in EditToolNames || kind == AgentToolKind.Edit || kind == AgentToolKind.Delete ->
@@ -2051,7 +2090,11 @@ private fun toolKindPhrase(kind: AgentToolKind?): String? = when (kind) {
 }
 
 private val ReadToolNames = setOf(
-    "read", "read file", "grep", "glob", "list_dir", "file_read", "get_network_request", "search",
+    "read", "read file", "read_file", "file_read", "get_network_request",
+)
+private val SearchToolNames = setOf(
+    "grep", "grep_search", "glob", "glob_file_search", "search", "find", "file_search",
+    "codebase_search", "list_dir", "list dir", "web search", "web_search",
 )
 private val CommandToolNames = setOf(
     "shell", "run_terminal_cmd", "bash", "terminal", "execute", "run", "command",

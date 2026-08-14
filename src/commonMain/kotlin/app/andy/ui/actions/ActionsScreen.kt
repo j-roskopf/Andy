@@ -408,15 +408,20 @@ private fun ProjectCockpit(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val railWidth = AndyLayout.ListWidth
         val chatMinWidth = 620.dp
+        var projectPaneWidth by remember(workspaceState.projectListPaneWidth) {
+            mutableStateOf(workspaceState.projectListPaneWidth)
+        }
 
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                WorkspaceRail(
-                    Modifier.width(railWidth).fillMaxHeight(),
-                    contentSpacing = AndySpace.Space2,
-                ) {
+                if (workspaceState.projectListPaneVisible) {
+                    WorkspaceRail(
+                        Modifier
+                            .width(projectPaneWidth.dp)
+                            .fillMaxHeight(),
+                        contentSpacing = AndySpace.Space2,
+                    ) {
                     ProjectsSidebarHeader(
                         query = query,
                         onQueryChange = { query = it },
@@ -506,7 +511,27 @@ private fun ProjectCockpit(
                             )
                         }
                     }
-                    ProjectsSidebarFooter()
+                        ProjectsSidebarFooter()
+                    }
+                    PaneDivider(
+                        drawLine = false,
+                        onDrag = { dragX ->
+                            projectPaneWidth = (projectPaneWidth + dragX).coerceIn(0f, 600f)
+                        },
+                        onDragEnd = {
+                            if (projectPaneWidth < 80f) {
+                                projectPaneWidth = AndyLayout.ListWidth.value
+                                onUpdateWorkspace {
+                                    it.copy(projectListPaneVisible = false, projectListPaneWidth = AndyLayout.ListWidth.value)
+                                }
+                            } else {
+                                projectPaneWidth = projectPaneWidth.coerceAtLeast(220f)
+                                onUpdateWorkspace {
+                                    it.copy(projectListPaneVisible = true, projectListPaneWidth = projectPaneWidth)
+                                }
+                            }
+                        },
+                    )
                 }
                 val current = project
                 if (current == null) {

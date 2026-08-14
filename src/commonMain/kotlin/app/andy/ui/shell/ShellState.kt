@@ -353,6 +353,10 @@ internal class ShellState(
         }
     }
 
+    fun renameDockTab(placement: DockPlacement, tabId: String, title: String) {
+        docks = docks.update(placement) { it.renameTab(tabId, title) }
+    }
+
     fun closeDockTab(placement: DockPlacement, tabId: String) {
         val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
         if (tab?.kind == DockTabKind.Terminal && tab.runId != null) {

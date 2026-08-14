@@ -38,6 +38,20 @@ object AcpToolCallPresentation {
         "command", "cmd", "path", "file_path", "filePath", "file", "target",
         "uri", "url", "query", "pattern", "description",
     )
+    /** `"file_path":` in raw arguments, `- **file path:**` once [renderJsonMarkdown] has run. */
+    private val argumentKey = Regex("""\*\*([A-Za-z0-9 _]{1,40}):\*\*|"([A-Za-z0-9_]{1,40})"\s*:""")
+    private val commandArgumentKeys = setOf("command", "cmd", "script", "shell_command")
+    private val editArgumentKeys = setOf(
+        "old_string", "new_string", "old_str", "new_str", "replace_all",
+        "content", "contents", "file_text", "patch", "diff", "edits",
+    )
+    private val searchArgumentKeys = setOf(
+        "pattern", "glob", "glob_pattern", "regex", "query", "search_term", "output_mode",
+    )
+    private val readArgumentKeys = setOf(
+        "file_path", "filepath", "path", "target_file", "notebook_path", "offset", "limit",
+    )
+    private const val ArgumentKeyLineLimit = 16
 
     data class Presented(
         val toolName: String,
@@ -121,6 +135,36 @@ object AcpToolCallPresentation {
     /** True when the title is only a bare verb/kind with no path or command yet. */
     fun isSparseToolTitle(title: String): Boolean =
         title.trim().lowercase() in sparseToolTitles
+
+    /**
+     * Names the action from the tool's own payload, for providers that report every call as
+     * [AgentToolKind.Other] and title a shell call with the command itself (cursor-agent). Accepts
+     * every shape a transcript can hold: the JSON arguments as sent, the Markdown the store
+     * persisted for them, and a rendered diff sent with no arguments at all.
+     */
+    fun inferKindFromArguments(text: String): AgentToolKind? {
+        if (text.isBlank()) return null
+        // Only the argument bullets count. Command output and file bodies follow them in a fenced
+        // block, and a file that happens to contain `"command":` must not be read as a command.
+        val arguments = text.lineSequence()
+            .takeWhile { !fenceMarkerLine.matches(it.trim()) }
+            .take(ArgumentKeyLineLimit)
+            .joinToString("\n")
+        val keys = argumentKey.findAll(arguments)
+            .mapNotNull { match ->
+                match.groupValues.drop(1).firstOrNull { it.isNotBlank() }
+                    ?.trim()?.lowercase()?.replace(' ', '_')
+            }
+            .toSet()
+        return when {
+            keys.any { it in commandArgumentKeys } -> AgentToolKind.Execute
+            keys.any { it in editArgumentKeys } -> AgentToolKind.Edit
+            keys.any { it in searchArgumentKeys } -> AgentToolKind.Search
+            keys.any { it in readArgumentKeys } -> AgentToolKind.Read
+            isRenderedFileDiff(text) -> AgentToolKind.Edit
+            else -> null
+        }
+    }
 
     fun formatMcpToolName(name: String): String {
         val trimmed = name.trim()
