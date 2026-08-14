@@ -137,6 +137,19 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun structuredArgumentsPreserveEmptyOldSnapshot() {
+        val content = parseToolCallFileArguments(
+            """{"file_path":"new.txt","old_string":"","new_string":"one\ntwo"}""",
+            AgentToolKind.Edit,
+        )
+
+        assertNotNull(content)
+        assertEquals("", content.oldText)
+        assertTrue(content.hasDiff)
+        assertTrue(diffFromToolCallFileContent(content).isNewFile)
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))

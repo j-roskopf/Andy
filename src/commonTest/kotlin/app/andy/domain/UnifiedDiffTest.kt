@@ -100,6 +100,19 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun unifiedDiffPathIgnoresDevNullHeaderTimestamp() {
+        val text = """
+            --- a/deleted.txt	2026-08-14 10:00:00
+            +++ /dev/null	2026-08-14 10:01:00
+            @@ -1 +0,0 @@
+            -gone
+        """.trimIndent()
+
+        assertEquals("deleted.txt", unifiedDiffPath(text))
+        assertEquals("deleted.txt", detectUnifiedDiff(text)?.path)
+    }
+
+    @Test
     fun detectUnifiedDiffDeclinesHeaderOnlyMultiFilePatches() {
         val text = """
             --- a/first.txt

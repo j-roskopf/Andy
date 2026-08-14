@@ -21,10 +21,12 @@ fun looksLikeUnifiedDiff(text: String): Boolean {
 
 /** Path referenced by the diff's `+++`/`---` headers, stripping the `a/`/`b/` prefixes git adds. */
 fun unifiedDiffPath(text: String): String? {
-    val newHeader = text.lineSequence().firstOrNull { it.startsWith("+++ ") }?.removePrefix("+++ ")?.trim()
-    val oldHeader = text.lineSequence().firstOrNull { it.startsWith("--- ") }?.removePrefix("--- ")?.trim()
+    val newHeader = text.lineSequence().firstOrNull { it.startsWith("+++ ") }
+        ?.removePrefix("+++ ")?.substringBefore('\t')?.trim()
+    val oldHeader = text.lineSequence().firstOrNull { it.startsWith("--- ") }
+        ?.removePrefix("--- ")?.substringBefore('\t')?.trim()
     val candidate = newHeader?.takeUnless { it == "/dev/null" } ?: oldHeader?.takeUnless { it == "/dev/null" }
-    return candidate?.substringBefore('\t')?.removePrefix("b/")?.removePrefix("a/")
+    return candidate?.removePrefix("b/")?.removePrefix("a/")
 }
 
 /** Parses [text] as a unified diff if it looks like one, otherwise returns null. */

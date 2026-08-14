@@ -90,14 +90,17 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     val editKind = kind == AgentToolKind.Edit || kind == AgentToolKind.Delete || kind == AgentToolKind.Move
     val oldKeys = ExplicitOldTextArgumentKeys + if (editKind) AmbiguousOldTextArgumentKeys else emptyList()
     val newKeys = ExplicitNewTextArgumentKeys + if (editKind) AmbiguousNewTextArgumentKeys else emptyList()
-    val oldText = oldKeys.firstNotNullOfOrNull { obj.stringValue(it) }
-    val newText = newKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+    val oldText = oldKeys.firstNotNullOfOrNull { obj.stringValue(it, allowEmpty = true) }
+    val newText = newKeys.firstNotNullOfOrNull { obj.stringValue(it, allowEmpty = true) }
     if (oldText == null && newText == null) return null
     return ToolCallFileContent(path = path, oldText = oldText, newText = newText, extraDetail = extraDetail)
 }
 
-private fun JsonObject.stringValue(key: String): String? =
-    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.takeIf { it.isNotEmpty() }
+private fun JsonObject.stringValue(key: String, allowEmpty: Boolean = false): String? =
+    (this[key] as? JsonPrimitive)
+        ?.takeIf { it.isString }
+        ?.contentOrNull
+        ?.takeIf { allowEmpty || it.isNotEmpty() }
 
 fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
     diffTextLines(content.path, content.oldText, content.newText)

@@ -364,11 +364,17 @@ object AcpToolCallPresentation {
             a == b -> a
             b.contains(a) -> b
             a.contains(b) -> a
-            isRenderedFileDiff(b) -> b
+            isRenderedFileDiff(b) -> detailExtra(a)?.let { "$b$DetailSeparator$it" } ?: b
             isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
             isJsonObject(a) -> "$a$DetailSeparator$b"
             else -> "$a\n$b"
         }
+    }
+
+    private fun detailExtra(text: String): String? {
+        val separatorIndex = text.indexOf(DetailSeparator)
+        if (separatorIndex < 0) return null
+        return text.substring(separatorIndex + DetailSeparator.length).takeIf { it.isNotBlank() }
     }
 
     private fun isJsonObject(text: String): Boolean =

@@ -215,6 +215,33 @@ class AcpLaneTest {
             ),
         )
         assertEquals(mapped.detail, bundled.detail)
+
+        val withContent = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json-content"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.COMPLETED,
+                    content = listOf(
+                        com.agentclientprotocol.model.ToolCallContent.Content(
+                            content = ContentBlock.Text("warning: formatter skipped generated file"),
+                        ),
+                    ),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                ),
+                atMillis = 3,
+            ),
+        )
+        val withContentParsed = assertIs<app.andy.domain.ToolCallFileContent>(
+            app.andy.domain.parseToolCallFileArguments(withContent.detail, withContent.kind),
+        )
+        assertEquals("README.md", withContentParsed.path)
+        assertEquals("warning: formatter skipped generated file", withContentParsed.extraDetail)
     }
 
     @Test
