@@ -155,11 +155,23 @@ class WorktreeManager(
         return snapshotTree(dir)
     }
 
-    fun changeSummary(dir: String, baselineTree: String?): AgentChangeSummary? {
+    /**
+     * [paths], when non-null, restricts the diff to those repo-relative paths (e.g. the files an
+     * agent's tool calls actually touched) so unrelated changes elsewhere in the working directory
+     * — from another concurrent task, a build step, a manual edit — aren't attributed to this task.
+     * A non-null empty collection short-circuits to "no changes" without shelling out to git.
+     */
+    fun changeSummary(dir: String, baselineTree: String?, paths: Collection<String>? = null): AgentChangeSummary? {
         if (!isGitRepo(dir) || baselineTree == null) return null
+        if (paths != null && paths.isEmpty()) return AgentChangeSummary(emptyList())
         val currentTree = snapshotTree(dir) ?: return null
         if (currentTree == baselineTree) return AgentChangeSummary(emptyList())
-        val numstat = git(dir, "diff", "--numstat", "--no-renames", baselineTree, currentTree)
+        val args = mutableListOf("diff", "--numstat", "--no-renames", baselineTree, currentTree)
+        if (paths != null) {
+            args += "--"
+            args += paths
+        }
+        val numstat = git(dir, args, emptyMap())
         if (numstat.exitCode != 0) return null
         val changes = numstat.output.lineSequence().mapNotNull { line ->
             val fields = line.split('\t', limit = 3)

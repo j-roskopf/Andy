@@ -14,7 +14,7 @@ developers. Use it to manage devices and emulators, manage projects with AI, mir
 apps, and drive day-to-day mobile workflows from one place. The desktop app is
 the recommended experience and includes the full feature set. A smaller subset
 of Andy is also available on the web at
-[andy.joetr.com](https://www.andy.joetr.com).
+[andy.joetr.com](https://andy.joetr.com).
 
 **Basic iOS Simulator support** is available on macOS: discover simulators,
 boot and shut them down, open Simulator.app, and stream a live mirror with
@@ -165,7 +165,7 @@ Browse the host filesystem from multi-root folders, open files in a syntax-theme
 
 ### Andy for web
 
-The browser build at [andy.joetr.com](https://www.andy.joetr.com) provides a
+The browser build at [andy.joetr.com](https://andy.joetr.com) provides a
 smaller subset of Andy's functionality. For the complete experience, use the
 desktop app. The browser build can connect directly with WebUSB or through
 Andy's pinned tracebox distribution. The bridge keeps ADB on loopback and
@@ -316,6 +316,20 @@ PR CI runs `./gradlew desktopTest` on Linux/macOS/Windows, plus macOS-only
 `verifyRoborazziDesktop`. Opt-in suites that need a device, Simulator, or live
 agent CLI — and how to run them locally — are documented in
 [docs/TESTS.md](docs/TESTS.md).
+
+## Building from source
+
+`./gradlew run` and `./gradlew runDistributable` compile Andy's native terminal
+engine with Cargo, so **Rust** (stable) must be installed and on your `PATH`.
+Java 21+ is also required.
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+./gradlew run
+```
+
+Open a new terminal after install if `cargo` is still not found.
 
 ## Runtime Requirements
 
