@@ -644,11 +644,16 @@ private fun AndroidDevicesTab(
         }
         if (allowWifiPairing && disconnectedPairedWifi.isNotEmpty()) {
             item {
-                PanelCard {
-                    Text("Wireless devices", color = TextPrimary, fontWeight = FontWeight.Bold)
-                    if (state.wifiStatus.isNotBlank()) {
-                        Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
+                Text(
+                    "Wireless devices",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            if (state.wifiStatus.isNotBlank()) {
+                item {
+                    Text(state.wifiStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 }
             }
             items(disconnectedPairedWifi, key = { it.id }) { paired ->

@@ -155,11 +155,23 @@ class WorktreeManager(
         return snapshotTree(dir)
     }
 
-    fun changeSummary(dir: String, baselineTree: String?): AgentChangeSummary? {
+    /**
+     * [paths], when non-null, restricts the diff to those repo-relative paths (e.g. the files an
+     * agent's tool calls actually touched) so unrelated changes elsewhere in the working directory
+     * — from another concurrent task, a build step, a manual edit — aren't attributed to this task.
+     * A non-null empty collection short-circuits to "no changes" without shelling out to git.
+     */
+    fun changeSummary(dir: String, baselineTree: String?, paths: Collection<String>? = null): AgentChangeSummary? {
         if (!isGitRepo(dir) || baselineTree == null) return null
+        if (paths != null && paths.isEmpty()) return AgentChangeSummary(emptyList())
         val currentTree = snapshotTree(dir) ?: return null
         if (currentTree == baselineTree) return AgentChangeSummary(emptyList())
-        val numstat = git(dir, "diff", "--numstat", "--no-renames", baselineTree, currentTree)
+        val args = mutableListOf("diff", "--numstat", "--no-renames", baselineTree, currentTree)
+        if (paths != null) {
+            args += "--"
+            args += paths
+        }
+        val numstat = git(dir, args, emptyMap())
         if (numstat.exitCode != 0) return null
         val changes = numstat.output.lineSequence().mapNotNull { line ->
             val fields = line.split('\t', limit = 3)
@@ -173,9 +185,16 @@ class WorktreeManager(
         return AgentChangeSummary(changes)
     }
 
-    /** Captures a task's completed change set before later work in the repository can alter it. */
-    fun changeSnapshot(dir: String, baselineTree: String?): AgentThreadChangeSnapshot? {
-        val summary = changeSummary(dir, baselineTree) ?: return null
+    /**
+     * Captures a task's completed change set before later work in the repository can alter it.
+     * [paths] is forwarded to [changeSummary] so the frozen snapshot matches the live scoped view.
+     */
+    fun changeSnapshot(
+        dir: String,
+        baselineTree: String?,
+        paths: Collection<String>? = null,
+    ): AgentThreadChangeSnapshot? {
+        val summary = changeSummary(dir, baselineTree, paths) ?: return null
         val diffs = summary.files.associate { change ->
             change.path to (fileDiff(dir, change.path, baselineTree) ?: AgentFileDiff(path = change.path, lines = emptyList()))
         }

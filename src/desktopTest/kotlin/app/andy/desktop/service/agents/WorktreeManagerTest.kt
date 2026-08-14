@@ -294,6 +294,48 @@ class WorktreeManagerTest {
         }
     }
 
+    @Test
+    fun changeSummaryRestrictsToProvidedPaths() {
+        val repo = File.createTempFile("andy-change-summary-paths", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            File(repo, "touched.kt").writeText("one\n")
+            File(repo, "other.kt").writeText("one\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val baseline = assertNotNull(manager.captureChangeBaseline(repo.absolutePath))
+
+            File(repo, "touched.kt").writeText("one\ntwo\n")
+            File(repo, "other.kt").writeText("one\ntwo\n")
+            File(repo, "unrelated.kt").writeText("new\n")
+
+            val scoped = assertNotNull(
+                manager.changeSummary(repo.absolutePath, baseline, listOf("touched.kt")),
+            )
+            assertEquals(listOf("touched.kt"), scoped.files.map { it.path })
+
+            val empty = assertNotNull(manager.changeSummary(repo.absolutePath, baseline, emptyList()))
+            assertTrue(empty.files.isEmpty())
+
+            val unscoped = assertNotNull(manager.changeSummary(repo.absolutePath, baseline))
+            assertEquals(listOf("other.kt", "touched.kt", "unrelated.kt"), unscoped.files.map { it.path })
+
+            val scopedSnapshot = assertNotNull(
+                manager.changeSnapshot(repo.absolutePath, baseline, listOf("touched.kt")),
+            )
+            assertEquals(listOf("touched.kt"), scopedSnapshot.summary.files.map { it.path })
+            assertEquals(setOf("touched.kt"), scopedSnapshot.diffs.keys)
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
     private fun git(dir: File, vararg args: String) {
         val process = ProcessBuilder(listOf("git", "-C", dir.absolutePath) + args)
             .redirectErrorStream(true)

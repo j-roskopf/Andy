@@ -24,6 +24,7 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentToolKind
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
@@ -3141,17 +3142,35 @@ class DesktopAgentRunService(
 
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
-        task.completedChanges?.let { return@withContext it.summary }
         val baseline = task.changeBaselineTree ?: return@withContext null
         val cwd = task.cwd ?: return@withContext null
-        worktrees.changeSummary(cwd, baseline)
+        worktrees.changeSummary(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
     }
 
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = withContext(Dispatchers.IO) {
         val task = currentTask(taskId) ?: return@withContext null
-        task.completedChanges?.diffs?.get(relativePath)?.let { return@withContext it }
         val cwd = task.cwd ?: return@withContext null
         worktrees.fileDiff(cwd, relativePath, task.changeBaselineTree)
+    }
+
+    /**
+     * Repo-relative paths this task's own tool calls edited/deleted/moved, per its transcript —
+     * used to scope [changeSummary] to the agent's actual work instead of the whole working tree.
+     * Empty when the task has no structured tool-call locations yet (e.g. the Terminal lane),
+     * in which case the caller falls back to a whole-directory diff.
+     */
+    private fun touchedPaths(taskId: String, cwd: String): Set<String> {
+        val root = runCatching { File(cwd).canonicalFile }.getOrNull() ?: return emptySet()
+        return loadAcpEventsForDisplay(taskId)
+            .filterIsInstance<AgentEvent.ToolCall>()
+            .filter { it.kind == AgentToolKind.Edit || it.kind == AgentToolKind.Delete || it.kind == AgentToolKind.Move }
+            .flatMap { it.locations }
+            .mapNotNullTo(mutableSetOf()) { location ->
+                val file = File(location).let { if (it.isAbsolute) it else File(root, location) }
+                val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return@mapNotNullTo null
+                val relative = runCatching { canonical.relativeTo(root) }.getOrNull() ?: return@mapNotNullTo null
+                relative.invariantSeparatorsPath.takeUnless { it.startsWith("..") }
+            }
     }
 
     override suspend fun refreshCliStatuses() {
@@ -4988,7 +5007,7 @@ class DesktopAgentRunService(
         val completedChanges = currentTask(taskId)?.let { task ->
             val baseline = task.changeBaselineTree
             task.cwd?.takeIf { baseline != null }?.let { cwd ->
-                worktrees.changeSnapshot(cwd, baseline)
+                worktrees.changeSnapshot(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
             }
         }
         updateTask(taskId) { task ->
