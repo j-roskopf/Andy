@@ -58,6 +58,21 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun structuredFilePathsMayContainSpaces() {
+        val diff = parseToolCallFileContent(
+            "/Users/dev/My Project/Main.kt\n--- old\nfun old()\n+++ new\nfun new()",
+        )
+        val arguments = parseToolCallFileArguments(
+            """{"file_path":"/Users/dev/My Project/Main.kt","old_string":"fun old()","new_string":"fun new()"}""",
+        )
+
+        assertEquals("/Users/dev/My Project/Main.kt", assertNotNull(diff).path)
+        assertEquals("/Users/dev/My Project/Main.kt", assertNotNull(arguments).path)
+        assertTrue(looksLikeFilePath("/Users/dev/My Project/Main.kt"))
+        assertTrue(looksLikeFilePath("My Project/Main.kt"))
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))
@@ -76,6 +91,7 @@ class ToolCallFileContentTest {
         assertNull(parseToolCallFileContent(payload))
         assertNull(parseToolCallFileArguments(payload))
         assertFalse(looksLikeFilePath(payload))
+        assertNull(parseToolCallFileContent("exitCode=0, stdout=diff --git a/src/Main.kt b/src/Main.kt"))
         assertFalse(looksLikeFilePath("- **command:** ls src/Main.kt"))
         assertTrue(looksLikeFilePath("src/Main.kt"))
         assertTrue(looksLikeFilePath("/Users/dev/project/Main.kt"))

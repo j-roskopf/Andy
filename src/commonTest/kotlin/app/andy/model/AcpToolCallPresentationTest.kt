@@ -255,6 +255,34 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun mergeKeepsStructuredCompletionDiffAtTheStartOfDetail() {
+        val first = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Edit File",
+            summary = "path=src/Foo.kt, replacement=updated",
+            detail = """{"path":"src/Foo.kt","replacement":"updated"}""",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+        )
+        val diff = "src/Foo.kt\n--- old\nold\n+++ new\nupdated"
+        val update = AgentEvent.ToolCall(
+            atMillis = 2,
+            toolName = "tool",
+            summary = "Foo.kt",
+            detail = diff,
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Completed,
+        )
+
+        val merged = AcpToolCallPresentation.mergeToolCalls(first, update)
+
+        assertEquals(diff, merged.detail)
+        assertEquals(AgentToolState.Completed, merged.state)
+    }
+
+    @Test
     fun mergePrefersActionPathOverSparseEditLabel() {
         val first = AgentEvent.ToolCall(
             atMillis = 1,

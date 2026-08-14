@@ -63,6 +63,27 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun detectUnifiedDiffDeclinesMultiFilePatches() {
+        val text = """
+            diff --git a/src/First.kt b/src/First.kt
+            --- a/src/First.kt
+            +++ b/src/First.kt
+            @@ -1 +1 @@
+            -old first
+            +new first
+            diff --git a/src/Second.kt b/src/Second.kt
+            --- a/src/Second.kt
+            +++ b/src/Second.kt
+            @@ -1 +1 @@
+            -old second
+            +new second
+        """.trimIndent()
+
+        assertTrue(looksLikeUnifiedDiff(text))
+        assertEquals(null, detectUnifiedDiff(text))
+    }
+
+    @Test
     fun diffForNewFileMarksEveryLineAsAddition() {
         val diff = diffForNewFile("new.kt", "one\ntwo\n")
         assertTrue(diff.isNewFile)

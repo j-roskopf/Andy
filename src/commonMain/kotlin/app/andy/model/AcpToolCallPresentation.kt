@@ -358,12 +358,18 @@ object AcpToolCallPresentation {
         return when {
             a.isBlank() -> b
             b.isBlank() -> a
+            isRenderedFileDiff(b) -> b
+            isRenderedFileDiff(a) -> a
             a == b -> a
             b.contains(a) -> b
             a.contains(b) -> a
             else -> "$a\n$b"
         }
     }
+
+    /** ToolCallContent.Diff's stable text shape; it must remain at byte zero for domain parsing. */
+    private fun isRenderedFileDiff(text: String): Boolean =
+        text.contains("\n--- old\n") && text.contains("\n+++ new\n")
 
     private fun extractLikelyInput(detail: String): String? {
         val lines = detail.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()

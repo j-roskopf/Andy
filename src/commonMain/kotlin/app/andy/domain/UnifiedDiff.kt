@@ -30,6 +30,12 @@ fun unifiedDiffPath(text: String): String? {
 /** Parses [text] as a unified diff if it looks like one, otherwise returns null. */
 fun detectUnifiedDiff(text: String): AgentFileDiff? {
     if (!looksLikeUnifiedDiff(text)) return null
+    // AgentFileDiff represents one file. Rendering a multi-file patch as one file resets line
+    // numbers at each later hunk and can let a binary entry hide earlier textual changes.
+    val fileCount = text.lineSequence().count { it.startsWith("diff --git ") }
+        .takeIf { it > 0 }
+        ?: text.lineSequence().count { it.startsWith("+++ ") }
+    if (fileCount != 1) return null
     val path = unifiedDiffPath(text) ?: "diff"
     return runCatching { parseUnifiedDiff(text, path) }.getOrNull()
         ?.takeIf { it.isBinary || it.lines.isNotEmpty() }

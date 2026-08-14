@@ -24,7 +24,7 @@ private const val NewMarker = "\n+++ new\n"
 /** Parses tool output shaped like ACP [ToolCallContent.Diff] rendering. */
 fun parseToolCallFileContent(text: String): ToolCallFileContent? {
     val trimmed = text.trim()
-    if (trimmed.isEmpty()) return null
+    if (trimmed.isEmpty() || looksLikeProviderPayload(trimmed)) return null
 
     val oldIndex = trimmed.indexOf(OldMarker)
     val newIndex = trimmed.indexOf(NewMarker)
@@ -79,15 +79,22 @@ fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
     diffTextLines(content.path, content.oldText, content.newText)
 
 private val WindowsDriveLetter = Regex("""^[A-Za-z]:\\""")
-private const val PathPunctuation = "{}[]\"'`,;()<>|*?\n"
+private val ProviderAssignment = Regex("""^[A-Za-z][A-Za-z0-9 _-]*\s*=""")
+
+private fun looksLikeProviderPayload(text: String): Boolean {
+    val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+    return firstLine.startsWith("{") ||
+        firstLine.startsWith("[") ||
+        firstLine.startsWith("- **") ||
+        ProviderAssignment.containsMatchIn(firstLine)
+}
 
 internal fun looksLikeFilePath(text: String): Boolean {
     val trimmed = text.trim()
-    if (trimmed.isBlank() || trimmed.length > 512) return false
-    // Provider payloads are full of slashes and dots, so "has a slash" is not enough: a path is a
-    // single bare token. Anything carrying whitespace or JSON punctuation is a payload, not a path,
-    // and must not be offered as a file to open.
-    if (trimmed.any { it.isWhitespace() || it in PathPunctuation }) return false
+    if (trimmed.isBlank() || trimmed.length > 512 || trimmed.contains('\n')) return false
+    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("- **")) return false
+    // Paths from ACP's structured path field or the dedicated first line may legally contain spaces.
+    // Payload-shaped outer text is rejected before reaching this helper.
     if (trimmed.startsWith("/") || trimmed.startsWith("~/")) return true
     if (WindowsDriveLetter.containsMatchIn(trimmed)) return true
     return trimmed.contains('/') && trimmed.contains('.')
