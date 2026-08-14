@@ -164,6 +164,45 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun primitiveMovePathRemainsOpenableWithOutput() {
+        val content = parseToolCallFileArguments(
+            "README.md${AcpToolCallPresentation.DetailSeparator}moved",
+            AgentToolKind.Move,
+        )
+
+        assertNotNull(content)
+        assertEquals("README.md", content.path)
+        assertEquals("moved", content.extraDetail)
+    }
+
+    @Test
+    fun conventionalExtensionlessPrimitivePathsRemainOpenable() {
+        listOf("Dockerfile", "Makefile", "LICENSE").forEach { path ->
+            assertEquals(path, parseToolCallFileArguments(path, AgentToolKind.Move)?.path)
+        }
+    }
+
+    @Test
+    fun primitivePathsMayContainSpaces() {
+        assertEquals(
+            "My File.kt",
+            parseToolCallFileArguments("My File.kt", AgentToolKind.Edit)?.path,
+        )
+        assertEquals(
+            "C:/src/Main.kt",
+            parseToolCallFileArguments("C:/src/Main.kt", AgentToolKind.Edit)?.path,
+        )
+    }
+
+    @Test
+    fun primitiveMutationStatusIsNotTreatedAsAPath() {
+        assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
+        assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
+        assertNull(parseToolCallFileArguments("permission denied: src/Main.kt", AgentToolKind.Edit))
+        assertNull(parseToolCallFileArguments("failed to edit src/Main.kt", AgentToolKind.Edit))
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))

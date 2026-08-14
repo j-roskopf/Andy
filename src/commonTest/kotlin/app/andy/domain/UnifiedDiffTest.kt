@@ -5,6 +5,7 @@ import app.andy.model.DiffLineKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class UnifiedDiffTest {
@@ -76,6 +77,64 @@ class UnifiedDiffTest {
 
         assertFalse(diff?.isBinary == true)
         assertEquals(listOf("ordinary text", "Binary files may differ"), diff?.lines?.map { it.text })
+    }
+
+    @Test
+    fun extractedUnifiedDiffLeavesSurroundingDiagnosticsOutside() {
+        val text = """
+            warning before patch
+            --- a/message.txt
+            +++ b/message.txt
+            @@ -1 +1 @@
+            -old
+            +new
+            warning after patch
+        """.trimIndent()
+
+        val patch = extractUnifiedDiffText(text)
+
+        assertEquals(
+            "--- a/message.txt\n+++ b/message.txt\n@@ -1 +1 @@\n-old\n+new",
+            patch,
+        )
+    }
+
+    @Test
+    fun extractedUnifiedDiffKeepsAllFilesForMultiFileRejection() {
+        val patch = """
+            diff --git a/one.txt b/one.txt
+            --- a/one.txt
+            +++ b/one.txt
+            @@ -1 +1 @@
+            -one
+            +ONE
+            diff --git a/two.txt b/two.txt
+            --- a/two.txt
+            +++ b/two.txt
+            @@ -1 +1 @@
+            -two
+            +TWO
+        """.trimIndent()
+
+        val extracted = extractUnifiedDiffText("$patch\nwarning after patch")
+
+        assertEquals(patch, extracted)
+        assertNull(detectUnifiedDiff(extracted.orEmpty()))
+    }
+
+    @Test
+    fun extractedUnifiedDiffDoesNotConsumeDiagnosticSeparator() {
+        val patch = """
+            --- a/one.txt
+            +++ b/one.txt
+            @@ -1 +1 @@
+            -one
+            +ONE
+        """.trimIndent()
+
+        val extracted = extractUnifiedDiffText("$patch\n--- stderr ---\nwarning")
+
+        assertEquals(patch, extracted)
     }
 
     @Test

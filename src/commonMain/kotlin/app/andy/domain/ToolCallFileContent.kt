@@ -82,7 +82,11 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     } else {
         null
     }
-    if (!arguments.startsWith("{")) return null
+    if (!arguments.startsWith("{")) {
+        val fileMutation = kind == AgentToolKind.Edit || kind == AgentToolKind.Delete || kind == AgentToolKind.Move
+        return arguments.takeIf { fileMutation && looksLikePrimitiveFilePath(it) }
+            ?.let { ToolCallFileContent(path = it, oldText = null, newText = null, extraDetail = extraDetail) }
+    }
     val obj = runCatching { toolArgumentJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
     val path = PathArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
         ?.takeIf { looksLikeStructuredFilePath(it) }
@@ -105,8 +109,29 @@ private fun JsonObject.stringValue(key: String, allowEmpty: Boolean = false): St
 fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
     diffTextLines(content.path, content.oldText, content.newText)
 
-private val WindowsDriveLetter = Regex("""^[A-Za-z]:\\""")
+private val WindowsDriveLetter = Regex("""^[A-Za-z]:[\\/]""")
 private val ProviderAssignment = Regex("""^[A-Za-z][A-Za-z0-9 _-]*\s*=""")
+private val DiagnosticPrefix = Regex(
+    """^(?:failed|failure|error|warning|permission|unable|could|cannot|can't|did not|edit(?:ed)?|moved?|deleted?|completed|success)\b""",
+    RegexOption.IGNORE_CASE,
+)
+private val ConventionalExtensionlessFiles = setOf(
+    "BUILD",
+    "CMakeLists",
+    "COPYING",
+    "Dockerfile",
+    "Gemfile",
+    "Jenkinsfile",
+    "Justfile",
+    "LICENSE",
+    "Makefile",
+    "NOTICE",
+    "Procfile",
+    "Rakefile",
+    "README",
+    "Vagrantfile",
+    "WORKSPACE",
+)
 
 private fun looksLikeProviderPayload(text: String): Boolean {
     val firstLine = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
@@ -122,6 +147,21 @@ private fun looksLikeStructuredFilePath(text: String): Boolean {
         trimmed.length <= 512 &&
         !trimmed.contains('\n') &&
         !looksLikeProviderPayload(trimmed)
+}
+
+private fun looksLikePrimitiveFilePath(text: String): Boolean {
+    val trimmed = text.trim()
+    if (!looksLikeStructuredFilePath(trimmed)) return false
+    if (trimmed.any { it == '\t' || it == '\r' }) return false
+    if (trimmed.any { it in "{}[]\"'<>|?*" }) return false
+    if (':' in trimmed && !WindowsDriveLetter.containsMatchIn(trimmed)) return false
+    if (DiagnosticPrefix.containsMatchIn(trimmed)) return false
+    val hasSeparator = trimmed.contains('/') || trimmed.contains('\\')
+    if (trimmed.any { it.isWhitespace() } && hasSeparator) return false
+    return trimmed.contains('/') ||
+        trimmed.contains('\\') ||
+        trimmed.substringAfterLast('/').substringAfterLast('\\').contains('.') ||
+        trimmed in ConventionalExtensionlessFiles
 }
 
 internal fun looksLikeFilePath(text: String): Boolean {

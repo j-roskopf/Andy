@@ -242,6 +242,26 @@ class AcpLaneTest {
         )
         assertEquals("README.md", withContentParsed.path)
         assertEquals("warning: formatter skipped generated file", withContentParsed.extraDetail)
+
+        val primitiveMove = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("move-primitive-input"),
+                    title = "Move File",
+                    kind = ToolKind.MOVE,
+                    status = ToolCallStatus.COMPLETED,
+                    content = emptyList(),
+                    rawInput = kotlinx.serialization.json.JsonPrimitive("README.md"),
+                    rawOutput = buildJsonObject { put("moved", true) },
+                ),
+                atMillis = 4,
+            ),
+        )
+        val primitiveMoveParsed = assertIs<app.andy.domain.ToolCallFileContent>(
+            app.andy.domain.parseToolCallFileArguments(primitiveMove.detail, primitiveMove.kind),
+        )
+        assertEquals("README.md", primitiveMoveParsed.path)
+        assertEquals("""{"moved":true}""", primitiveMoveParsed.extraDetail)
     }
 
     @Test
