@@ -576,19 +576,26 @@ internal fun replayCaptureReadableLines(
 ): List<String> {
     val seen = LinkedHashSet<String>()
     val captured = mutableListOf<String>()
+    fun absorb(lines: List<String>) {
+        for (line in lines) {
+            val key = line.trim()
+            if (key.isEmpty() || key in seen) continue
+            seen += key
+            captured += line
+        }
+    }
     RustScrollbackCapture(cols, rows).use { replay ->
         var offset = 0
         while (offset < content.length) {
             val end = minOf(offset + chunkSize, content.length)
             replay.feed(content.substring(offset, end))
-            for (line in replay.styledRows().map { it.plain }) {
-                val key = line.trim()
-                if (key.isEmpty() || key in seen) continue
-                seen += key
-                captured += line
-            }
+            // Viewport sample during feed — cheap and catches lines before they leave the
+            // screen. A full history walk every chunk would hang on large tees.
+            absorb(replay.styledRows(maxRows = rows).map { it.plain })
             offset = end
         }
+        // Final pass includes scrollback history so oversized chunks aren't lost.
+        absorb(replay.styledRows().map { it.plain })
     }
     return captured
 }

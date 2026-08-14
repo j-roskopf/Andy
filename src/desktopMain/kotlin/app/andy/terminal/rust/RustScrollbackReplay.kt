@@ -139,17 +139,23 @@ internal class RustScrollbackCapture(
         }
 
         // maxRows == 0: history + viewport (legacy BossTerm behavior for raw-tee collapse).
+        // Page through history in viewport-sized chunks — one JNI fillFrame per history
+        // line is O(history) and hangs CI when scrolling_history is 10_000.
         val history = frame.historySize.coerceAtLeast(0)
         val savedOffset = frame.displayOffset
         val out = ArrayList<StyledTerminalRow>(history + rows)
         try {
             if (history > 0) {
-                engine.scrollDisplay(history - savedOffset)
-                for (offset in history downTo 1) {
+                var offset = history
+                while (offset > 0) {
                     val current = engine.displayOffset()
                     if (current != offset) engine.scrollDisplay(offset - current)
                     if (!engine.fillFrame(frame)) break
-                    out += styledRowFromFrame(frame, 0)
+                    val page = minOf(frame.rows, offset)
+                    for (row in 0 until page) {
+                        out += styledRowFromFrame(frame, row)
+                    }
+                    offset -= page
                 }
                 engine.scrollToBottom()
             }
