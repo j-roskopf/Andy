@@ -82,7 +82,11 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     } else {
         null
     }
-    if (!arguments.startsWith("{")) return null
+    if (!arguments.startsWith("{")) {
+        val fileMutation = kind == AgentToolKind.Edit || kind == AgentToolKind.Delete || kind == AgentToolKind.Move
+        return arguments.takeIf { fileMutation && looksLikeStructuredFilePath(it) }
+            ?.let { ToolCallFileContent(path = it, oldText = null, newText = null, extraDetail = extraDetail) }
+    }
     val obj = runCatching { toolArgumentJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
     val path = PathArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
         ?.takeIf { looksLikeStructuredFilePath(it) }

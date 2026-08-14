@@ -79,6 +79,26 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun extractedUnifiedDiffLeavesSurroundingDiagnosticsOutside() {
+        val text = """
+            warning before patch
+            --- a/message.txt
+            +++ b/message.txt
+            @@ -1 +1 @@
+            -old
+            +new
+            warning after patch
+        """.trimIndent()
+
+        val patch = extractUnifiedDiffText(text)
+
+        assertEquals(
+            "--- a/message.txt\n+++ b/message.txt\n@@ -1 +1 @@\n-old\n+new",
+            patch,
+        )
+    }
+
+    @Test
     fun detectUnifiedDiffDeclinesMultiFilePatches() {
         val text = """
             diff --git a/src/First.kt b/src/First.kt

@@ -22,7 +22,47 @@ fun looksLikeUnifiedDiff(text: String): Boolean {
 /** Returns the patch portion while leaving any leading command diagnostics outside it. */
 fun extractUnifiedDiffText(text: String): String? {
     val start = Regex("""(?m)^(?:diff --git |--- )""").find(text)?.range?.first ?: return null
-    return text.substring(start).takeIf(::looksLikeUnifiedDiff)
+    val suffix = text.substring(start)
+    if (!looksLikeUnifiedDiff(suffix)) return null
+    val lines = suffix.split('\n')
+    var endLine = -1
+    var sawHunk = false
+    var oldLinesRemaining = 0
+    var newLinesRemaining = 0
+    for ((index, line) in lines.withIndex()) {
+        val hunk = HunkHeader.find(line)
+        if (hunk != null) {
+            sawHunk = true
+            oldLinesRemaining = hunk.groupValues[2].toIntOrNull() ?: 1
+            newLinesRemaining = hunk.groupValues[4].toIntOrNull() ?: 1
+            endLine = index
+            continue
+        }
+        if (!sawHunk) {
+            endLine = index
+            if (line.startsWith("Binary files ") && line.endsWith(" differ")) break
+            continue
+        }
+        if (oldLinesRemaining == 0 && newLinesRemaining == 0) {
+            if (line.startsWith("\\ No newline at end of file")) {
+                endLine = index
+                continue
+            }
+            break
+        }
+        when (line.firstOrNull()) {
+            ' ' -> {
+                oldLinesRemaining = (oldLinesRemaining - 1).coerceAtLeast(0)
+                newLinesRemaining = (newLinesRemaining - 1).coerceAtLeast(0)
+            }
+            '-' -> oldLinesRemaining = (oldLinesRemaining - 1).coerceAtLeast(0)
+            '+' -> newLinesRemaining = (newLinesRemaining - 1).coerceAtLeast(0)
+            '\\' -> Unit
+            else -> break
+        }
+        endLine = index
+    }
+    return lines.take(endLine + 1).joinToString("\n").takeIf { it.isNotBlank() }
 }
 
 /** Path referenced by the diff's `+++`/`---` headers, stripping the `a/`/`b/` prefixes git adds. */

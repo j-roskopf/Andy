@@ -18,6 +18,7 @@ import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.AgentUserInputOption
+import app.andy.domain.parseToolCallFileArguments
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -176,7 +177,8 @@ object AcpEventMapper {
         val structuredInput = rawInput?.takeIf {
             content.none { item -> item is ToolCallContent.Diff } &&
                 (kind == ToolKind.EDIT || kind == ToolKind.DELETE || kind == ToolKind.MOVE) &&
-                !AcpToolCallPresentation.isMinimalOutput(it)
+                !AcpToolCallPresentation.isMinimalOutput(it) &&
+                parseToolCallFileArguments(it, kind.toAgentKind()) != null
         }
         val detail = structuredInput?.let { input ->
             val extra = listOfNotNull(

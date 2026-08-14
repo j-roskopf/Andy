@@ -164,6 +164,18 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun primitiveMovePathRemainsOpenableWithOutput() {
+        val content = parseToolCallFileArguments(
+            "README.md${AcpToolCallPresentation.DetailSeparator}moved",
+            AgentToolKind.Move,
+        )
+
+        assertNotNull(content)
+        assertEquals("README.md", content.path)
+        assertEquals("moved", content.extraDetail)
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))
