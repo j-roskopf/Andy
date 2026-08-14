@@ -170,11 +170,20 @@ object AcpEventMapper {
             kind = kind.toAgentKind(),
             locations = locations,
         )
+        // Argument-only calls need the original JSON until the transcript has had a chance to
+        // recognize structured edit fields. ToolBlock formats it only after that parse attempt.
+        val detail = rawInput
+            ?.takeIf {
+                content.isEmpty() &&
+                    rawOutput.isNullOrBlank() &&
+                    !AcpToolCallPresentation.isMinimalOutput(it)
+            }
+            ?: presented.detail
         return AgentEvent.ToolCall(
             atMillis = atMillis,
             toolName = presented.toolName,
             summary = summary,
-            detail = presented.detail,
+            detail = detail,
             toolCallId = id,
             kind = kind.toAgentKind(),
             state = status.toAgentState(),

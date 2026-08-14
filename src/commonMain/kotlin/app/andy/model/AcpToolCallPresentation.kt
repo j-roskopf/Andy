@@ -360,11 +360,11 @@ object AcpToolCallPresentation {
         return when {
             a.isBlank() -> b
             b.isBlank() -> a
-            isRenderedFileDiff(b) -> b
-            isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
             a == b -> a
             b.contains(a) -> b
             a.contains(b) -> a
+            isRenderedFileDiff(b) -> b
+            isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
             else -> "$a\n$b"
         }
     }

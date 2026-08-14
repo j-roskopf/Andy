@@ -169,6 +169,35 @@ class AcpLaneTest {
     }
 
     @Test
+    fun mapperKeepsArgumentOnlyEditJsonUntilStructuredParsing() {
+        val mapped = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-json"),
+                    title = "Edit File",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.PENDING,
+                    content = emptyList(),
+                    rawInput = buildJsonObject {
+                        put("file_path", "README.md")
+                        put("old_string", "old")
+                        put("new_string", "new")
+                    },
+                ),
+                atMillis = 1,
+            ),
+        )
+
+        assertTrue(mapped.detail.startsWith("{"))
+        val parsed = assertIs<app.andy.domain.ToolCallFileContent>(
+            app.andy.domain.parseToolCallFileArguments(mapped.detail, mapped.kind),
+        )
+        assertEquals("README.md", parsed.path)
+        assertEquals("old", parsed.oldText)
+        assertEquals("new", parsed.newText)
+    }
+
+    @Test
     fun mapperPreservesAssistantTextAndToolState() {
         val assistant = AcpEventMapper.map(
             SessionUpdate.AgentMessageChunk(ContentBlock.Text("hello")),

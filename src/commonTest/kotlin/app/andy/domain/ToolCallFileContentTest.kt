@@ -165,7 +165,8 @@ class ToolCallFileContentTest {
 
         val diff = diffTextLines("skewed.txt", oldText, "new")
 
-        assertEquals(10_001, diff.deletions)
+        assertEquals(2_001, diff.deletions)
         assertEquals(1, diff.additions)
+        assertEquals("… 8001 lines omitted", diff.lines[2_000].text)
     }
 }

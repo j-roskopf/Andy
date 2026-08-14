@@ -179,6 +179,7 @@ private sealed interface LineDiffOp {
 
 private const val MaxLcsCells = 1_000_000L
 private const val MaxLcsDimension = 10_000
+private const val MaxFallbackLinesPerSide = 2_000
 
 private fun lineDiffOperations(oldLines: List<String>, newLines: List<String>): List<LineDiffOp> {
   if (oldLines == newLines) return oldLines.map(LineDiffOp::Context)
@@ -189,7 +190,7 @@ private fun lineDiffOperations(oldLines: List<String>, newLines: List<String>): 
       newLines.size > MaxLcsDimension ||
       oldLines.size.toLong() * newLines.size.toLong() > MaxLcsCells
   ) {
-    return oldLines.map(LineDiffOp::Deletion) + newLines.map(LineDiffOp::Addition)
+    return boundedFallbackOperations(oldLines, newLines)
   }
   val lcs = longestCommonSubsequence(oldLines, newLines)
   val operations = mutableListOf<LineDiffOp>()
@@ -225,6 +226,18 @@ private fun lineDiffOperations(oldLines: List<String>, newLines: List<String>): 
   }
   return operations
 }
+
+private fun boundedFallbackOperations(oldLines: List<String>, newLines: List<String>): List<LineDiffOp> =
+  buildList {
+    addAll(oldLines.take(MaxFallbackLinesPerSide).map(LineDiffOp::Deletion))
+    if (oldLines.size > MaxFallbackLinesPerSide) {
+      add(LineDiffOp.Deletion("… ${oldLines.size - MaxFallbackLinesPerSide} lines omitted"))
+    }
+    addAll(newLines.take(MaxFallbackLinesPerSide).map(LineDiffOp::Addition))
+    if (newLines.size > MaxFallbackLinesPerSide) {
+      add(LineDiffOp.Addition("… ${newLines.size - MaxFallbackLinesPerSide} lines omitted"))
+    }
+  }
 
 private fun longestCommonSubsequence(left: List<String>, right: List<String>): List<String> {
   val table = Array(left.size + 1) { IntArray(right.size + 1) }

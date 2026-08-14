@@ -289,6 +289,18 @@ class AcpToolCallPresentationTest {
                 state = AgentToolState.Completed,
             ),
         )
+        val repeatedOutput = AcpToolCallPresentation.mergeToolCalls(
+            withOutput,
+            AgentEvent.ToolCall(
+                atMillis = 4,
+                toolName = "tool",
+                summary = "warning",
+                detail = "warning: formatter skipped generated file",
+                toolCallId = "call-1",
+                kind = AgentToolKind.Edit,
+                state = AgentToolState.Completed,
+            ),
+        )
 
         assertEquals(diff, merged.detail)
         assertEquals(AgentToolState.Completed, merged.state)
@@ -296,6 +308,7 @@ class AcpToolCallPresentationTest {
             "$diff${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
             withOutput.detail,
         )
+        assertEquals(withOutput.detail, repeatedOutput.detail)
     }
 
     @Test
