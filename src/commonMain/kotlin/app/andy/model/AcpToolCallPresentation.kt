@@ -257,7 +257,15 @@ object AcpToolCallPresentation {
             element.mapNotNull { (key, value) -> removePayload(value, excluded)?.let { key to it } }.toMap(),
         ).takeIf { it.isNotEmpty() }
         is JsonArray -> JsonArray(element.mapNotNull { removePayload(it, excluded) }).takeIf { it.isNotEmpty() }
-        is JsonPrimitive -> element.takeUnless { it.isString && it.content == excluded }
+        is JsonPrimitive -> {
+            if (!element.isString) {
+                element
+            } else {
+                element.content.replace(excluded, "").trim()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let(::JsonPrimitive)
+            }
+        }
     }
 
     /**

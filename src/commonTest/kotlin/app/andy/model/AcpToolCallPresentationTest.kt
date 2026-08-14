@@ -217,12 +217,14 @@ class AcpToolCallPresentationTest {
     @Test
     fun displayDetailCanExcludeNestedDiffWhileKeepingMetadata() {
         val diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new"
-        val payload = """{"exitCode":7,"stdout":"${diff.replace("\n", "\\n")}","stderr":"warning"}"""
+        val stdout = "warning before patch\n$diff"
+        val payload = """{"exitCode":7,"stdout":"${stdout.replace("\n", "\\n")}","stderr":"warning after patch"}"""
 
         val rendered = AcpToolCallPresentation.displayDetailExcludingPayload(payload, diff)
 
         assertTrue(rendered.contains("exitCode"))
-        assertTrue(rendered.contains("warning"))
+        assertTrue(rendered.contains("warning before patch"))
+        assertTrue(rendered.contains("warning after patch"))
         assertFalse(rendered.contains("--- a/file.txt"))
     }
 

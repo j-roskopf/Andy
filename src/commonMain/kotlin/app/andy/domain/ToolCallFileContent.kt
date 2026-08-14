@@ -92,7 +92,7 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     val newKeys = ExplicitNewTextArgumentKeys + if (editKind) AmbiguousNewTextArgumentKeys else emptyList()
     val oldText = oldKeys.firstNotNullOfOrNull { obj.stringValue(it, allowEmpty = true) }
     val newText = newKeys.firstNotNullOfOrNull { obj.stringValue(it, allowEmpty = true) }
-    if (oldText == null && newText == null) return null
+    if (oldText == null && newText == null && kind != AgentToolKind.Delete && kind != AgentToolKind.Move) return null
     return ToolCallFileContent(path = path, oldText = oldText, newText = newText, extraDetail = extraDetail)
 }
 

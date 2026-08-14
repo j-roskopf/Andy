@@ -150,6 +150,20 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun pathOnlyDeleteArgumentsRemainOpenableWithOutput() {
+        val arguments = """{"path":"README.md"}"""
+        val content = parseToolCallFileArguments(
+            "$arguments${AcpToolCallPresentation.DetailSeparator}deleted",
+            AgentToolKind.Delete,
+        )
+
+        assertNotNull(content)
+        assertEquals("README.md", content.path)
+        assertFalse(content.hasDiff)
+        assertEquals("deleted", content.extraDetail)
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))

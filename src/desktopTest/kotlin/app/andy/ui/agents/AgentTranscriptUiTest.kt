@@ -300,8 +300,9 @@ class AgentTranscriptUiTest {
                 +    println("new output")
                  }
             """.trimIndent()
+            val stdout = "warning before patch\n$diffText"
             val payload =
-                """{"exitCode":7,"stdout":"${diffText.replace("\n", "\\n").replace("\"", "\\\"")}","stderr":"formatter warning"}"""
+                """{"exitCode":7,"stdout":"${stdout.replace("\n", "\\n").replace("\"", "\\\"")}","stderr":"formatter warning"}"""
 
             setContent {
                 AndyTheme {
@@ -327,6 +328,7 @@ class AgentTranscriptUiTest {
                 .fetchSemanticsNodes()
                 .let { assertTrue(it.isNotEmpty(), "diff body was not rendered") }
             assertTrue(onAllNodesWithText("\"stdout\"", substring = true).fetchSemanticsNodes().isEmpty())
+            onNodeWithText("warning before patch", substring = true).assertExists()
             onNodeWithText("formatter warning", substring = true).assertExists()
             onNodeWithText("exitCode:", substring = true).assertExists()
             // The row used to render the entire payload as one 4 KB line of text.
