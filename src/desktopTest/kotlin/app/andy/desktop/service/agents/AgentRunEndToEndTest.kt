@@ -236,6 +236,12 @@ class AgentQueuedFollowUpTest {
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            // Must be a DesktopWorkspaceStore: agentMessageDeliveryMode() only reads Queue
+            // from that concrete type. FakeWorkspaceStore silently falls back to Immediate,
+            // which can live-write follow-ups into the first PTY and then auto-resume a
+            // leftover queue entry — UserMessage order no longer matches the assertion.
+            val workspaceStore = DesktopWorkspaceStore(File(dir, "workspace.properties"))
+            workspaceStore.save(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue))
             service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
@@ -243,7 +249,7 @@ class AgentQueuedFollowUpTest {
                 adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
                 worktrees = WorktreeManager(File(dir, "worktrees")),
                 mcp = FakeMcp(),
-                workspaceStore = FakeWorkspaceStore(),
+                workspaceStore = workspaceStore,
                 actionConfig = FakeActionConfig(),
                 // Fast-exiting fake agents race the tmux-attach path; run them in-process.
                 terminalMode = AgentTerminalMode.DirectPty,
