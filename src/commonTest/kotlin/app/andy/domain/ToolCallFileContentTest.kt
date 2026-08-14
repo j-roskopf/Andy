@@ -179,6 +179,7 @@ class ToolCallFileContentTest {
     fun primitiveMutationStatusIsNotTreatedAsAPath() {
         assertNull(parseToolCallFileArguments("permission denied", AgentToolKind.Delete))
         assertNull(parseToolCallFileArguments("edit completed", AgentToolKind.Edit))
+        assertNull(parseToolCallFileArguments("permission denied: src/Main.kt", AgentToolKind.Edit))
     }
 
     @Test
