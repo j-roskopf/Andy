@@ -443,6 +443,55 @@
     }
   }
 
+  const TOOL_KIND_PHRASES = {
+    read: "Read file",
+    edit: "Edited file",
+    delete: "Deleted file",
+    move: "Moved file",
+    search: "Searched",
+    execute: "Ran command",
+    think: "Thought",
+    fetch: "Fetched a resource",
+  };
+
+  function summarizeJsonValue(value) {
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.map(summarizeJsonValue).filter(Boolean).join(", ");
+    if (typeof value === "object") {
+      return Object.entries(value)
+        .map(([key, entry]) => {
+          const text = summarizeJsonValue(entry);
+          return text ? `${key}=${text}` : "";
+        })
+        .filter(Boolean)
+        .join(", ");
+    }
+    return String(value);
+  }
+
+  // Agents often echo their arguments back as a JSON payload. A key=value line is readable on a
+  // phone; a wall of braces is not.
+  function toolDetailText(text) {
+    const trimmed = (text || "").trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
+    try {
+      return summarizeJsonValue(JSON.parse(trimmed));
+    } catch (_) {
+      return trimmed;
+    }
+  }
+
+  function toolBubbleText(ev) {
+    const detail = toolDetailText(ev.summary) || toolDetailText(ev.detail) || (ev.locations || [])[0] || "";
+    const name = (ev.toolName || "").trim();
+    // "tool" is a placeholder the agent sends when it has no name to give, so it must never
+    // stand in as one.
+    const label = name.toLowerCase() === "tool" ? "" : name;
+    const fallback = TOOL_KIND_PHRASES[(ev.kind || "").toLowerCase()] || "Tool call";
+    const text = label && detail ? `${label} — ${detail}` : label || detail || fallback;
+    return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  }
+
   function renderTranscript() {
     const root = $("transcript");
     if (!root || chatLoading) return;
@@ -464,7 +513,7 @@
         el.textContent = `thinking: ${(ev.text || "").slice(0, 240)}`;
       } else if (type === "tool" || type === "tool-result") {
         el.className = "bubble tool";
-        el.textContent = `${ev.toolName || "tool"} — ${ev.summary || ev.detail || type}`;
+        el.textContent = toolBubbleText(ev);
       } else if (type === "permission") {
         el.className = "bubble meta";
         el.textContent = `permission: ${ev.question || ev.toolName || ""}`;

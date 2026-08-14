@@ -3,6 +3,10 @@ package app.andy.domain
 import app.andy.model.AgentFileDiff
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** Parsed file reference from an ACP tool-call detail block. */
 data class ToolCallFileContent(
@@ -10,7 +14,8 @@ data class ToolCallFileContent(
     val oldText: String?,
     val newText: String?,
 ) {
-    val hasDiff: Boolean get() = !oldText.isNullOrEmpty() || !newText.isNullOrEmpty()
+    /** ACP diff payloads always carry an old snapshot (possibly empty for a new file). */
+    val hasDiff: Boolean get() = oldText != null
 }
 
 private const val OldMarker = "\n--- old\n"
@@ -45,14 +50,47 @@ fun parseToolCallFileContent(text: String): ToolCallFileContent? {
     )
 }
 
+private val toolArgumentJson = Json { ignoreUnknownKeys = true; isLenient = true }
+private val PathArgumentKeys = listOf("path", "file_path", "filePath", "file", "target_file", "uri")
+private val OldTextArgumentKeys = listOf("old_string", "oldText", "old_str", "old", "before", "search")
+private val NewTextArgumentKeys = listOf("new_string", "newText", "new_str", "new", "after", "content", "contents", "replace")
+
+/**
+ * Edit and write tools frequently send their arguments as JSON instead of a rendered diff.
+ * Recognizing that shape lets the transcript show a real diff rather than the payload.
+ */
+fun parseToolCallFileArguments(text: String): ToolCallFileContent? {
+    val trimmed = text.trim()
+    if (!trimmed.startsWith("{")) return null
+    val obj = runCatching { toolArgumentJson.parseToJsonElement(trimmed) }.getOrNull() as? JsonObject ?: return null
+    val path = PathArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+        ?.takeIf { looksLikeFilePath(it) }
+        ?: return null
+    val oldText = OldTextArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+    val newText = NewTextArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
+    if (oldText == null && newText == null) return null
+    return ToolCallFileContent(path = path, oldText = oldText, newText = newText)
+}
+
+private fun JsonObject.stringValue(key: String): String? =
+    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.takeIf { it.isNotEmpty() }
+
 fun diffFromToolCallFileContent(content: ToolCallFileContent): AgentFileDiff =
     diffTextLines(content.path, content.oldText, content.newText)
 
+private val WindowsDriveLetter = Regex("""^[A-Za-z]:\\""")
+private const val PathPunctuation = "{}[]\"'`,;()<>|*?\n"
+
 internal fun looksLikeFilePath(text: String): Boolean {
-    if (text.isBlank()) return false
-    if (text.startsWith("/") || text.startsWith("~/")) return true
-    if (Regex("""^[A-Za-z]:\\""").containsMatchIn(text)) return true
-    return text.contains('/') && text.contains('.')
+    val trimmed = text.trim()
+    if (trimmed.isBlank() || trimmed.length > 512) return false
+    // Provider payloads are full of slashes and dots, so "has a slash" is not enough: a path is a
+    // single bare token. Anything carrying whitespace or JSON punctuation is a payload, not a path,
+    // and must not be offered as a file to open.
+    if (trimmed.any { it.isWhitespace() || it in PathPunctuation }) return false
+    if (trimmed.startsWith("/") || trimmed.startsWith("~/")) return true
+    if (WindowsDriveLetter.containsMatchIn(trimmed)) return true
+    return trimmed.contains('/') && trimmed.contains('.')
 }
 
 /** Builds numbered diff lines from optional before/after snapshots. */

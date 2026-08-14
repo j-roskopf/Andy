@@ -1,6 +1,7 @@
 package app.andy.model
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -19,6 +20,10 @@ object AcpToolCallPresentation {
     )
     private val minimalSuccessOutput =
         Regex("""^\{\s*"?success"?\s*[:=]\s*true\s*\}$""", RegexOption.IGNORE_CASE)
+    /** Placeholders some providers send in place of an empty payload; they state nothing. */
+    private val placeholderOutput = setOf("no details", "none", "n/a", "null", "undefined")
+    private val diffHunkHeader = Regex("""(?m)^@@ .+ @@""")
+    private const val InlineValueLimit = 160
     private val embeddedMcpToolName =
         Regex("""\bmcp_(?:andy|emu)_([a-z0-9_]+)\b""", RegexOption.IGNORE_CASE)
     private val fenceMarkerLine = Regex("""^(`{3,}|~{3,})\S*$""")
@@ -133,6 +138,7 @@ object AcpToolCallPresentation {
     fun isMinimalOutput(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || minimalSuccessOutput.matches(trimmed)) return true
+        if (trimmed.lowercase() in placeholderOutput) return true
         if (trimmed == "{}" || trimmed == "[]") return true
         parseJson(trimmed)?.let { obj ->
             if (obj.isEmpty()) return true
@@ -171,15 +177,26 @@ object AcpToolCallPresentation {
     ): Pair<String, String> {
         val content = contentDetails.trim()
         val inputSummary = summarizeArguments(rawInput)
-        val detail = when {
-            content.isNotBlank() -> content
+        val sections = when {
+            content.isNotBlank() -> listOf(null to content)
             rawInput.isNotBlank() && rawOutput.isNotBlank() &&
                 !isMinimalOutput(rawInput) && !isMinimalOutput(rawOutput) ->
-                "$rawInput\n$rawOutput"
-            rawInput.isNotBlank() && !isMinimalOutput(rawInput) -> rawInput
-            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> rawOutput
-            else -> ""
+                listOf("Input" to rawInput, "Output" to rawOutput)
+            rawInput.isNotBlank() && !isMinimalOutput(rawInput) -> listOf(null to rawInput)
+            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> listOf(null to rawOutput)
+            else -> emptyList()
         }
+        // The summary is derived from the payload as sent; only the body is reformatted, so
+        // rendering choices can never change which text is judged minimal or promoted to a headline.
+        val rawDetail = sections.joinToString("\n") { it.second }
+        val detail = sections.joinToString("\n\n") { (label, value) ->
+            val rendered = displayDetail(value)
+            when {
+                rendered.isBlank() -> ""
+                label == null -> rendered
+                else -> "### $label\n$rendered"
+            }
+        }.trim()
         val firstContentLine = firstMeaningfulLine(content)
         val summary = when {
             inputSummary.isNotBlank() -> inputSummary
@@ -187,12 +204,105 @@ object AcpToolCallPresentation {
                 summarizeArguments(firstContentLine).ifBlank {
                     if (looksLikeFilePath(firstContentLine)) shortenPath(firstContentLine) else firstContentLine
                 }
-            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) -> firstMeaningfulLine(rawOutput)
-            else -> firstMeaningfulLine(detail).let { line ->
+            rawOutput.isNotBlank() && !isMinimalOutput(rawOutput) ->
+                jsonArgumentSummary(rawOutput).ifBlank { firstMeaningfulLine(rawOutput) }
+            else -> firstMeaningfulLine(rawDetail).let { line ->
                 if (looksLikeFilePath(line)) shortenPath(line) else line
             }
         }
         return summary to detail
+    }
+
+    /**
+     * True when [detail] states something [headline] does not. Providers routinely echo their
+     * arguments as the body of a row whose headline was derived from those same arguments, which
+     * makes the row look expandable while revealing nothing.
+     */
+    fun detailAddsInformation(headline: String, detail: String): Boolean {
+        val detailKey = comparisonKey(detail)
+        if (detailKey.isEmpty()) return false
+        return !comparisonKey(headline).contains(detailKey)
+    }
+
+    private fun comparisonKey(text: String): String = text.filter { it.isLetterOrDigit() }.lowercase()
+
+    /** `key=value` summary for a JSON payload only; other text has no arguments to summarize. */
+    private fun jsonArgumentSummary(text: String): String =
+        parseJson(text)?.let { summarizeArguments(text) }.orEmpty()
+
+    /**
+     * Converts a complete JSON payload to compact Markdown so transcript expansion never exposes
+     * transport syntax. Non-JSON content is preserved for Markdown/code/diff rendering in the UI.
+     */
+    fun displayDetail(text: String): String {
+        val trimmed = text.trim()
+        if (!looksLikeJson(trimmed)) return trimmed
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return trimmed
+        // A payload with nothing to say renders as nothing, leaving the row unexpandable.
+        return renderJsonMarkdown(element)
+    }
+
+    /**
+     * The command output, file body, or diff a payload wraps, in the order the keys appear. These
+     * are the only parts of a payload worth reading in full, so the transcript renders them as
+     * blocks — a diff viewer or a highlighted code fence — instead of a truncated `key=value` line.
+     */
+    fun payloadTextValues(text: String): List<String> {
+        val trimmed = text.trim()
+        if (!looksLikeJson(trimmed)) return emptyList()
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return emptyList()
+        return blockTextValues(element)
+    }
+
+    private fun blockTextValues(element: JsonElement): List<String> = when (element) {
+        is JsonObject -> element.values.flatMap { blockTextValues(it) }
+        is JsonArray -> element.flatMap { blockTextValues(it) }
+        is JsonPrimitive -> if (element.isBlockText()) listOf(element.content) else emptyList()
+    }
+
+    /** Long or multi-line strings are content; short ones belong inline next to their key. */
+    private fun JsonPrimitive.isBlockText(): Boolean =
+        isString && (content.contains('\n') || content.length > InlineValueLimit)
+
+    private fun renderJsonMarkdown(element: JsonElement): String = when (element) {
+        is JsonObject -> element.entries.joinToString("\n") { (key, value) ->
+            val label = humanize(key)
+            when {
+                value is JsonPrimitive && value.isBlockText() -> "- **$label:**\n${fencedBlock(value.content)}"
+                value is JsonPrimitive -> "- **$label:** ${renderPrimitive(value)}"
+                else -> {
+                    val nested = renderJsonMarkdown(value)
+                    "- **$label:**\n${nested.prependIndent("  ")}"
+                }
+            }
+        }
+        is JsonArray -> element.joinToString("\n") { value ->
+            when {
+                value is JsonPrimitive && value.isBlockText() -> fencedBlock(value.content)
+                value is JsonPrimitive -> "- ${renderPrimitive(value)}"
+                else -> "-\n${renderJsonMarkdown(value).prependIndent("  ")}"
+            }
+        }
+        is JsonPrimitive -> if (element.isBlockText()) fencedBlock(element.content) else renderPrimitive(element)
+    }
+
+    /** Fence long enough to survive backticks in the body, so Markdown cannot break mid-payload. */
+    private fun fencedBlock(body: String): String {
+        val longestRun = Regex("`+").findAll(body).maxOfOrNull { it.value.length } ?: 0
+        val fence = "`".repeat(maxOf(3, longestRun + 1))
+        return "$fence${payloadLanguage(body)}\n${body.trimEnd()}\n$fence"
+    }
+
+    private fun payloadLanguage(body: String): String =
+        if (body.startsWith("diff --git") || diffHunkHeader.containsMatchIn(body)) "diff" else ""
+
+    private fun renderPrimitive(value: JsonPrimitive): String {
+        val content = value.contentOrNull ?: value.toString()
+        return when {
+            content.contains('\n') -> "\n${content.prependIndent("  ")}"
+            content.isBlank() -> "—"
+            else -> content
+        }
     }
 
     /** "Edit src/Foo.kt" / "Delete `path`" → action verb + remainder for the summary line. */
@@ -241,8 +351,10 @@ object AcpToolCallPresentation {
             .orEmpty()
 
     private fun richerDetail(first: String, second: String): String {
-        val a = first.trim()
-        val b = second.trim()
+        // An empty-arguments placeholder states nothing, and prepending it to real content would
+        // hide the shape of that content — a leading "{}" stops a diff from being recognized.
+        val a = first.trim().takeUnless { isMinimalOutput(it) }.orEmpty()
+        val b = second.trim().takeUnless { isMinimalOutput(it) }.orEmpty()
         return when {
             a.isBlank() -> b
             b.isBlank() -> a

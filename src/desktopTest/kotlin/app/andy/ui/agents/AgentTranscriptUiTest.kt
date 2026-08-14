@@ -7,10 +7,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -241,6 +244,95 @@ class AgentTranscriptUiTest {
             assertEquals(0, restored.index)
             assertEquals(0, restored.offset)
             onNodeWithTag("transcript-row-UserMessage-41-41").assertIsDisplayed()
+        }
+
+    /** Persisted rows keep the provider's raw payload, so the transcript must format it on render. */
+    @Test
+    fun toolRowsShowNeitherRawJsonNorTheGenericToolLabel() =
+        runTranscriptUiTest {
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "search the repo"),
+                            AgentEvent.ToolResult(
+                                atMillis = 2,
+                                toolName = "tool",
+                                summary = "totalMatches=45, truncated=false",
+                                detail = """{"totalMatches":45,"truncated":false}""",
+                                isError = false,
+                            ),
+                            AgentEvent.ToolResult(
+                                atMillis = 3,
+                                toolName = "tool",
+                                summary = "",
+                                detail = "",
+                                isError = false,
+                            ),
+                        ),
+                        isActive = false,
+                        autoExpandActivitySections = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithText("totalMatches=45, truncated=false").assertIsDisplayed()
+            // A call carrying only an id has nothing to say, so it gets no row at all.
+            assertTrue(onAllNodesWithText("Tool call", substring = true).fetchSemanticsNodes().isEmpty())
+            assertTrue(onAllNodesWithText("{", substring = true).fetchSemanticsNodes().isEmpty())
+            assertTrue(onAllNodesWithText("tool:", substring = true).fetchSemanticsNodes().isEmpty())
+        }
+
+    /** A shell result wraps its diff in JSON; the row must show the diff, not the transport. */
+    @Test
+    fun commandResultDiffRendersInTheDiffViewer() =
+        runTranscriptUiTest {
+            val diffText = """
+                diff --git a/src/Main.kt b/src/Main.kt
+                index c0fcac9..7b39bbc 100644
+                --- a/src/Main.kt
+                +++ b/src/Main.kt
+                @@ -1,3 +1,3 @@
+                 fun main() {
+                -    println("old output")
+                +    println("new output")
+                 }
+            """.trimIndent()
+            val payload = """{"exitCode":0,"stdout":"${diffText.replace("\n", "\\n").replace("\"", "\\\"")}","stderr":""}"""
+
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "show me the diff"),
+                            AgentEvent.ToolCall(
+                                atMillis = 2,
+                                toolName = "tool",
+                                summary = "exitCode=0, stdout=$diffText",
+                                detail = payload,
+                            ),
+                        ),
+                        isActive = false,
+                        autoExpandActivitySections = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onAllNodesWithText("println(\"new output\")", substring = true)
+                .fetchSemanticsNodes()
+                .let { assertTrue(it.isNotEmpty(), "diff body was not rendered") }
+            assertTrue(onAllNodesWithText("\"stdout\"", substring = true).fetchSemanticsNodes().isEmpty())
+            // The row used to render the entire payload as one 4 KB line of text.
+            val longestRendered = onAllNodesWithText("", substring = true)
+                .fetchSemanticsNodes()
+                .flatMap { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty() }
+                .maxOfOrNull { it.text.length }
+                ?: 0
+            assertTrue(longestRendered <= 200, "rendered a $longestRendered-character blob")
         }
 
     @Test

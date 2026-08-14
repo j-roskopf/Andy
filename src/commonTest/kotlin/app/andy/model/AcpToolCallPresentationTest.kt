@@ -154,6 +154,81 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun jsonToolDetailsBecomeReadableMarkdown() {
+        val presented = AcpToolCallPresentation.present(
+            title = "Search",
+            rawInput = """{"query":"ToolBlock","case_sensitive":false,"paths":["src","test"]}""",
+            rawOutput = null,
+            contentDetails = "",
+        )
+
+        assertEquals(
+            """
+            - **query:** ToolBlock
+            - **case sensitive:** false
+            - **paths:**
+              - src
+              - test
+            """.trimIndent(),
+            presented.detail,
+        )
+        assertFalse(presented.detail.contains("{"))
+        assertFalse(presented.detail.contains("\"query\""))
+    }
+
+    @Test
+    fun echoedArgumentsDoNotCountAsExtraDetail() {
+        val headline = "totalMatches=45, truncated=false"
+        val body = AcpToolCallPresentation.displayDetail("""{"totalMatches":45,"truncated":false}""")
+
+        assertFalse(body.contains("{"))
+        assertFalse(AcpToolCallPresentation.detailAddsInformation(headline, body))
+        assertFalse(AcpToolCallPresentation.detailAddsInformation(headline, ""))
+        assertTrue(
+            AcpToolCallPresentation.detailAddsInformation(headline, "$body\n- **path:** src/Main.kt"),
+        )
+    }
+
+    /** `{"exitCode":0,"stdout":"…"}` is the shape every shell tool returns; the output is the point. */
+    @Test
+    fun commandResultOutputRendersAsABlockNotAnInlineValue() {
+        val payload = """{"exitCode":0,"stdout":"first line\nsecond line","stderr":""}"""
+
+        val body = AcpToolCallPresentation.displayDetail(payload)
+
+        assertFalse(body.contains("{"))
+        assertFalse(body.contains("\"stdout\""))
+        assertEquals(
+            """
+            - **exitCode:** 0
+            - **stdout:**
+            ```
+            first line
+            second line
+            ```
+            - **stderr:** —
+            """.trimIndent(),
+            body,
+        )
+        assertEquals(listOf("first line\nsecond line"), AcpToolCallPresentation.payloadTextValues(payload))
+        assertTrue(AcpToolCallPresentation.payloadTextValues("plain text output").isEmpty())
+    }
+
+    @Test
+    fun placeholderDetailsCountAsNoOutput() {
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("No details"))
+        assertTrue(AcpToolCallPresentation.isMinimalOutput("none"))
+        assertFalse(AcpToolCallPresentation.isMinimalOutput("42 matches"))
+    }
+
+    @Test
+    fun markdownToolDetailsRemainMarkdown() {
+        val detail = "### Matches\n\n- `AgentTranscript.kt`\n- `AgentModels.kt`"
+
+        assertEquals(detail, AcpToolCallPresentation.displayDetail(detail))
+    }
+
+    @Test
     fun mergeKeepsRicherNameAndDoesNotRegressState() {
         val first = AgentEvent.ToolCall(
             atMillis = 1,

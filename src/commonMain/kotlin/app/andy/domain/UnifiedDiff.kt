@@ -5,6 +5,35 @@ import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 
 private val HunkHeader = Regex("""^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s@@""")
+private val HunkMarker = Regex("""(?m)^@@ .+ @@""")
+
+/** True when [text] looks like a unified diff (---/+++ headers plus at least one @@ hunk). */
+fun looksLikeUnifiedDiff(text: String): Boolean {
+    if (!HunkMarker.containsMatchIn(text)) return false
+    var sawOld = false
+    var sawNew = false
+    text.lineSequence().forEach { line ->
+        if (line.startsWith("--- ")) sawOld = true
+        if (line.startsWith("+++ ")) sawNew = true
+    }
+    return sawOld && sawNew
+}
+
+/** Path referenced by the diff's `+++`/`---` headers, stripping the `a/`/`b/` prefixes git adds. */
+fun unifiedDiffPath(text: String): String? {
+    val newHeader = text.lineSequence().firstOrNull { it.startsWith("+++ ") }?.removePrefix("+++ ")?.trim()
+    val oldHeader = text.lineSequence().firstOrNull { it.startsWith("--- ") }?.removePrefix("--- ")?.trim()
+    val candidate = newHeader?.takeUnless { it == "/dev/null" } ?: oldHeader?.takeUnless { it == "/dev/null" }
+    return candidate?.substringBefore('\t')?.removePrefix("b/")?.removePrefix("a/")
+}
+
+/** Parses [text] as a unified diff if it looks like one, otherwise returns null. */
+fun detectUnifiedDiff(text: String): AgentFileDiff? {
+    if (!looksLikeUnifiedDiff(text)) return null
+    val path = unifiedDiffPath(text) ?: "diff"
+    return runCatching { parseUnifiedDiff(text, path) }.getOrNull()
+        ?.takeIf { it.isBinary || it.lines.isNotEmpty() }
+}
 
 /** Parses a unified diff into numbered add/delete/context lines for inline review. */
 fun parseUnifiedDiff(text: String, path: String): AgentFileDiff {

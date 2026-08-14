@@ -3,6 +3,7 @@ package app.andy.domain
 import app.andy.model.DiffLineKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -40,6 +41,44 @@ class ToolCallFileContentTest {
         assertEquals("/Users/dev/project/Main.kt", content.path)
         assertNull(content.oldText)
         assertEquals("package demo", content.newText)
+        assertFalse(content.hasDiff)
+    }
+
+    @Test
+    fun parseToolCallFileArgumentsReadsJsonEditPayload() {
+        val content = parseToolCallFileArguments(
+            """{"file_path":"src/Main.kt","old_string":"fun old()","new_string":"fun new()"}""",
+        )
+
+        assertNotNull(content)
+        assertEquals("src/Main.kt", content.path)
+        assertEquals("fun old()", content.oldText)
+        assertEquals("fun new()", content.newText)
+        assertTrue(content.hasDiff)
+    }
+
+    @Test
+    fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
+        assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
+        assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))
+        assertNull(parseToolCallFileArguments("not json"))
+    }
+
+    /**
+     * A command result is one long line full of slashes and dots. Treating it as a path rendered the
+     * whole payload as a clickable file name instead of showing the diff it carried.
+     */
+    @Test
+    fun commandResultPayloadIsNeverMistakenForAFilePath() {
+        val payload =
+            """{"exitCode":0,"stdout":"diff --git a/src/Main.kt b/src/Main.kt\n--- a/src/Main.kt\n","stderr":""}"""
+
+        assertNull(parseToolCallFileContent(payload))
+        assertNull(parseToolCallFileArguments(payload))
+        assertFalse(looksLikeFilePath(payload))
+        assertFalse(looksLikeFilePath("- **command:** ls src/Main.kt"))
+        assertTrue(looksLikeFilePath("src/Main.kt"))
+        assertTrue(looksLikeFilePath("/Users/dev/project/Main.kt"))
     }
 
     @Test

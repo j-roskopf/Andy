@@ -381,6 +381,105 @@ class AcpLaneTest {
         }
     }
 
+    /**
+     * cursor-agent announces a call with its title and empty arguments, then reports completion in a
+     * separate update carrying only status and output. Replacing the stored row erased the title and
+     * left finished calls persisted as pending rows with nothing in them.
+     */
+    @Test
+    fun transcriptStoreMergesSparseToolCallUpdatesInsteadOfOverwriting() {
+        val root = createTempDirectory("andy-acp-tool-merge").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.upsert(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 1,
+                    toolName = "Read File",
+                    summary = "",
+                    detail = "{}",
+                    toolCallId = "call-1",
+                    kind = AgentToolKind.Read,
+                    state = AgentToolState.Pending,
+                ),
+            )
+            store.upsert(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "tool",
+                    summary = "content=alpha line",
+                    detail = """{"content":"alpha line"}""",
+                    toolCallId = "call-1",
+                    kind = AgentToolKind.Read,
+                    state = AgentToolState.Completed,
+                ),
+            )
+
+            val row = assertIs<AgentEvent.ToolCall>(store.load("task-1").single())
+            assertEquals("Read File", row.toolName)
+            assertEquals(AgentToolState.Completed, row.state)
+            assertTrue(row.detail.contains("alpha line"), "lost the output: ${row.detail}")
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    /**
+     * The real cursor-agent sequence for an edit: a pending row with a bare title and no arguments,
+     * then a completing update whose `content` carries the path plus before/after text. The stored
+     * row has to end up with both, and in the shape the transcript's diff viewer parses.
+     */
+    @Test
+    fun editToolCallKeepsItsPathAndDiffAcrossUpdates() {
+        val root = createTempDirectory("andy-acp-edit-diff").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            val callId = "call-b6cc1564-0"
+            store.upsert(
+                "task-1",
+                AcpEventMapper.map(
+                    SessionUpdate.ToolCall(
+                        toolCallId = com.agentclientprotocol.model.ToolCallId(callId),
+                        title = "Edit File",
+                        kind = ToolKind.EDIT,
+                        status = ToolCallStatus.PENDING,
+                        rawInput = buildJsonObject { },
+                    ),
+                )!!,
+            )
+            store.upsert(
+                "task-1",
+                AcpEventMapper.map(
+                    SessionUpdate.ToolCallUpdate(
+                        toolCallId = com.agentclientprotocol.model.ToolCallId(callId),
+                        status = ToolCallStatus.COMPLETED,
+                        content = listOf(
+                            com.agentclientprotocol.model.ToolCallContent.Diff(
+                                path = "/tmp/probe/notes.txt",
+                                oldText = "alpha line\n",
+                                newText = "ALPHA line\n",
+                            ),
+                        ),
+                    ),
+                )!!,
+            )
+
+            val row = assertIs<AgentEvent.ToolCall>(store.load("task-1").single())
+            assertEquals("Edit File", row.toolName)
+            assertEquals(AgentToolState.Completed, row.state)
+            val parsed = assertIs<app.andy.domain.ToolCallFileContent>(
+                app.andy.domain.parseToolCallFileContent(row.detail),
+            )
+            assertEquals("/tmp/probe/notes.txt", parsed.path)
+            assertEquals("alpha line", parsed.oldText?.trim())
+            assertEquals("ALPHA line", parsed.newText?.trim())
+            assertTrue(parsed.hasDiff)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun stopReasonsProduceConfidentTurnBoundaries() {
         assertEquals(app.andy.model.AgentStatus.Done, AcpStatusModel.fromStopReason("end_turn").status)

@@ -518,6 +518,94 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun genericToolNameNeverPrefixesTheHeadline() {
+        assertEquals(
+            "totalMatches=45, truncated=false",
+            toolBlockHeadline(
+                name = "tool",
+                summary = "totalMatches=45, truncated=false",
+                kind = null,
+                locations = emptyList(),
+            ),
+        )
+    }
+
+    @Test
+    fun genericToolNameWithoutArgumentsFallsBackToKindOrCallPhrase() {
+        assertEquals(
+            "Searched",
+            toolBlockHeadline(name = "tool", summary = "", kind = AgentToolKind.Search, locations = emptyList()),
+        )
+        assertEquals(
+            "Tool call",
+            toolBlockHeadline(name = "tool", summary = "", kind = null, locations = emptyList()),
+        )
+    }
+
+    /** Providers put whole command results in `summary`; a headline is a label, not a payload. */
+    @Test
+    fun commandResultHeadlineCollapsesToOneShortLine() {
+        val diff = buildString {
+            appendLine("diff --git a/src/Main.kt b/src/Main.kt")
+            appendLine("--- a/src/Main.kt")
+            appendLine("+++ b/src/Main.kt")
+            appendLine("@@ -1,2 +1,2 @@")
+            appendLine("-    println(\"old\")")
+            appendLine("+    println(\"new\")")
+            repeat(200) { appendLine("+    line $it") }
+        }
+
+        val headline = toolBlockHeadline(
+            name = "tool",
+            summary = "exitCode=0, stdout=$diff",
+            kind = null,
+            locations = emptyList(),
+        )
+
+        assertFalse(headline.contains('\n'))
+        assertTrue(headline.length <= 161, "headline was ${headline.length} chars")
+        assertTrue(headline.startsWith("exitCode=0, stdout=diff --git"))
+        assertTrue(headline.endsWith("…"))
+    }
+
+    @Test
+    fun contentFreeToolRowsAreOmittedAndOnlyCounted() {
+        assertTrue(toolRowShowsNothing("tool", "", "", emptyList(), hasImages = false))
+        assertTrue(toolRowShowsNothing("tool", "No details", "No details", emptyList(), hasImages = false))
+        assertFalse(toolRowShowsNothing("tool", "", "", listOf("src/Main.kt"), hasImages = false))
+        assertFalse(toolRowShowsNothing("tool", "", "", emptyList(), hasImages = true))
+        assertFalse(toolRowShowsNothing("grep", "", "", emptyList(), hasImages = false))
+
+        val bookkeeping = (1..3).map { index ->
+            AgentEvent.ToolCall(atMillis = index.toLong(), toolName = "tool", summary = "", detail = "")
+        }
+        assertEquals("3 tool calls", compactToolActivityHeadline(bookkeeping))
+        assertEquals(
+            "Ran ./gradlew desktopTest",
+            compactToolActivityHeadline(
+                bookkeeping + AgentEvent.ToolCall(
+                    atMillis = 4,
+                    toolName = "Terminal",
+                    summary = "./gradlew desktopTest",
+                    kind = AgentToolKind.Execute,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun toolDetailsPreserveMarkdownAndFencePlainCode() {
+        val markdown = "### Result\n\n- first\n- second"
+        assertEquals(markdown, toolDetailMarkdown(markdown))
+
+        val code = "fun main() {\n    println(\"hello\")\n}"
+        assertEquals(
+            "```kotlin\n$code\n```",
+            toolDetailMarkdown(code, "src/Main.kt"),
+        )
+    }
+
+    @Test
     fun connectionStallErrorsAreHiddenFromTranscriptDisplay() {
         val events = listOf(
             AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),

@@ -10,8 +10,7 @@ import kotlin.test.assertTrue
 class UnifiedDiffTest {
     @Test
     fun parseUnifiedDiffTracksLineNumbersAndKinds() {
-        val diff = parseUnifiedDiff(
-            """
+        val text = """
             diff --git a/src/Example.kt b/src/Example.kt
             index 111..222 100644
             --- a/src/Example.kt
@@ -23,9 +22,8 @@ class UnifiedDiffTest {
             +import added
             +import also
              import keep
-            """.trimIndent(),
-            "src/Example.kt",
-        )
+            """.trimIndent()
+        val diff = parseUnifiedDiff(text, "src/Example.kt")
 
         assertEquals("src/Example.kt", diff.path)
         assertEquals(2, diff.additions)
@@ -49,6 +47,9 @@ class UnifiedDiffTest {
         assertEquals(null, diff.lines[3].oldLineNumber)
         assertEquals(12, diff.lines[3].newLineNumber)
         assertEquals("import added", diff.lines[3].text)
+        assertTrue(looksLikeUnifiedDiff(text))
+        assertEquals("src/Example.kt", unifiedDiffPath(text))
+        assertEquals(diff, detectUnifiedDiff(text))
     }
 
     @Test

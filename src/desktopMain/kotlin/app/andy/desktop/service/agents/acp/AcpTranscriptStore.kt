@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents.acp
 
+import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentQuotaWindow
@@ -29,15 +30,26 @@ class AcpTranscriptStore(
     }
 
     fun upsert(taskId: String, event: AgentEvent) = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
-        val id = (event as? AgentEvent.ToolCall)?.toolCallId
-        if (id == null) {
+        val incoming = event as? AgentEvent.ToolCall
+        val id = incoming?.toolCallId
+        if (incoming == null || id == null) {
             appendUnlocked(taskId, event)
             return@synchronized
         }
         val file = fileFor(taskId)
         val entries = loadUnlocked(file).toMutableList()
         val index = entries.indexOfLast { (it.toModel() as? AgentEvent.ToolCall)?.toolCallId == id }
-        if (index < 0) entries += event.toDto() else entries[index] = event.toDto()
+        if (index < 0) {
+            entries += incoming.toDto()
+        } else {
+            // A provider update repeats only what changed: cursor-agent sends the title once and
+            // the output later, with no title and often no status. Overwriting the stored row threw
+            // away whichever half arrived first, which is how completed calls persisted as pending
+            // rows with no arguments. Merge exactly as the in-memory transcript does.
+            val previous = entries[index].toModel() as? AgentEvent.ToolCall
+            val merged = previous?.let { AcpToolCallPresentation.mergeToolCalls(it, incoming) } ?: incoming
+            entries[index] = merged.toDto()
+        }
         writeUnlocked(file, entries)
     }
 
