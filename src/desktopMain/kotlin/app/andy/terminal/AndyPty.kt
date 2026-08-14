@@ -6,13 +6,13 @@ import com.pty4j.WinSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Thin pty4j wrapper so the Rust terminal path does not depend on BossTerm. */
 interface AndyPtyHandle {
-    suspend fun read(): String?
+    /** Raw PTY bytes, or null at EOF. Callers own UTF-8 framing across reads. */
+    suspend fun read(): ByteArray?
     suspend fun writeBytes(bytes: ByteArray)
     suspend fun resize(cols: Int, rows: Int)
     suspend fun kill()
@@ -50,7 +50,8 @@ private class Pty4jHandle(
     private val input: InputStream = process.inputStream
     private val readBuf = ByteArray(64 * 1024)
 
-    override suspend fun read(): String? = withContext(Dispatchers.IO) {
+    override suspend fun read(): ByteArray? = withContext(Dispatchers.IO) {
+        // Drain buffered bytes after process exit — do not gate on isAlive() alone.
         if (!isAlive() && input.available() <= 0) return@withContext null
         val n = try {
             // Blocking read; returns -1 at EOF.
@@ -59,7 +60,7 @@ private class Pty4jHandle(
             -1
         }
         if (n <= 0) return@withContext null
-        String(readBuf, 0, n, StandardCharsets.UTF_8)
+        readBuf.copyOf(n)
     }
 
     override suspend fun writeBytes(bytes: ByteArray) = withContext(Dispatchers.IO) {

@@ -326,6 +326,11 @@ class AgentQueuedFollowUpTest {
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
             store.save(AgentStoreState(binaryOverrides = mapOf(AgentKind.Codex.cliName to shell.absolutePath)))
+            // Must be a DesktopWorkspaceStore: agentMessageDeliveryMode() only reads Queue
+            // from that concrete type. FakeWorkspaceStore silently falls back to Immediate,
+            // which races live-terminal write vs enqueue under DirectPty.
+            val workspaceStore = DesktopWorkspaceStore(File(dir, "workspace.properties"))
+            workspaceStore.save(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue))
             service = DesktopAgentRunService(
                 scope = scope,
                 store = store,
@@ -333,7 +338,7 @@ class AgentQueuedFollowUpTest {
                 adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
                 worktrees = WorktreeManager(File(dir, "worktrees")),
                 mcp = FakeMcp(),
-                workspaceStore = FakeWorkspaceStore(WorkspaceState(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue)),
+                workspaceStore = workspaceStore,
                 actionConfig = FakeActionConfig(),
                 terminalMode = AgentTerminalMode.DirectPty,
             )
@@ -351,7 +356,9 @@ class AgentQueuedFollowUpTest {
             }
 
             service.queueFollowUp(task.id, "queued follow-up")
-            delay(100)
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
+                while (service.tasks.value.first { it.id == task.id }.queuedFollowUps.isEmpty()) delay(25)
+            }
             service.stop(task.id)
             withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
                 while (service.tasks.value.first { it.id == task.id }.status == AgentStatus.Working) delay(25)

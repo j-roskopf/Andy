@@ -347,7 +347,7 @@ internal fun extractSelection(frame: RustTerminalFrame, range: CellRange): Strin
         val c1 = if (row == endRow) n.endCol else frame.columns - 1
         var line = StringBuilder()
         for (col in c0..c1.coerceAtLeast(c0)) {
-            line.append(frame.cellChar(row, col))
+            line.append(frame.cellString(row, col))
         }
         sb.append(line.toString().trimEnd())
         if (row < endRow) sb.append('\n')
@@ -372,7 +372,7 @@ private fun DrawScope.paintFrame(
 ) {
     val cols = frame.columns
     val rows = frame.rows
-    if (cols <= 0 || rows <= 0 || frame.chars.isEmpty()) {
+    if (cols <= 0 || rows <= 0 || frame.codePoints.isEmpty()) {
         drawRect(fallbackBg)
         return
     }
@@ -381,7 +381,7 @@ private fun DrawScope.paintFrame(
     for (row in 0 until rows) {
         for (col in 0 until cols) {
             val idx = row * cols + col
-            if (idx >= frame.chars.size) continue
+            if (idx >= frame.codePoints.size) continue
             var fg = frame.fgArgb[idx]
             var bg = frame.bgArgb[idx]
             val attr = frame.attrs[idx].toInt()
@@ -402,16 +402,21 @@ private fun DrawScope.paintFrame(
                 topLeft = Offset(left, top),
                 size = Size(cellWidth + 0.5f, cellHeight + 0.5f),
             )
-            val ch = frame.chars[idx]
-            if (ch != ' ' && ch != '\u0000') {
+            val cp = frame.codePoints[idx]
+            if (cp != ' '.code && cp != 0) {
+                val glyph = if (Character.isValidCodePoint(cp)) {
+                    String(Character.toChars(cp))
+                } else {
+                    "\uFFFD"
+                }
                 val useBold = attr and RustTerminalAttrs.BOLD != 0
                 val primary = if (useBold) boldFont else font
-                val glyphFont = primary.takeIf { it.typeface?.getUTF32Glyph(ch.code) != 0.toShort() }
-                    ?: fallbackFonts.getOrPut(ch.code) { resolveFallbackFont(ch.code, fontSizePx) }
+                val glyphFont = primary.takeIf { it.typeface?.getUTF32Glyph(cp) != 0.toShort() }
+                    ?: fallbackFonts.getOrPut(cp) { resolveFallbackFont(cp, fontSizePx) }
                     ?: primary
                 textPaint.color = fg
                 native.drawString(
-                    ch.toString(),
+                    glyph,
                     left,
                     top + cellHeight * 0.78f,
                     glyphFont,

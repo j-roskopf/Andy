@@ -38,8 +38,16 @@ internal object RustTerminalNative {
             return@runCatching file
         }
 
-        javaClass.classLoader.getResourceAsStream(resourcePath)?.use {
-            Files.copy(it, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        javaClass.classLoader.getResourceAsStream(resourcePath)?.use { stream ->
+            try {
+                Files.copy(stream, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: Exception) {
+                // Windows locks a loaded DLL; a second concurrent Andy process cannot replace it.
+                // Fall back to the already-extracted library when present.
+                check(target.isFile) {
+                    "Failed to extract andy-terminal-engine library and no existing copy at ${target.absolutePath}"
+                }
+            }
         } ?: error("Missing packaged andy-terminal-engine library: $resourcePath")
         System.load(target.absolutePath)
         System.setProperty(

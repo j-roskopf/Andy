@@ -7,8 +7,8 @@ import app.andy.terminal.ScrollbackAnsiCursor
 import app.andy.terminal.ScrollbackAnsiSnapshot
 import app.andy.terminal.ScrollbackAnsiTee
 import app.andy.terminal.TerminalSession
+import app.andy.terminal.buildTerminalLaunchEnvironment
 import app.andy.terminal.resolveTerminalWorkingDirectory
-import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +24,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -139,12 +138,14 @@ class RustTerminalBackend(
 
         engine.setPalette(appearanceRef.get().toRustPaletteArgb())
 
-        val environment = HashMap(env).apply {
-            scrubInheritedTerminalEnvironment(this)
+        // Seed from the normal launch environment (process + login shell) before applying
+        // per-start overrides. Tmux viewers often pass emptyMap() and still need TMUX_TMPDIR /
+        // locale from the host so the client can find the andy server socket.
+        val environment = HashMap(buildTerminalLaunchEnvironment(env)).apply {
             put("TERM", "xterm-256color")
             put("COLORTERM", "truecolor")
             if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
-                put("LC_CTYPE", "UTF-8")
+                putIfAbsent("LC_CTYPE", "UTF-8")
             }
         }
         val handle = AndyPty.spawn(
@@ -223,10 +224,11 @@ class RustTerminalBackend(
     }
 
     private suspend fun readLoop(handle: AndyPtyHandle) {
-        while (scope.isActive && handle.isAlive()) {
-            val chunk = runCatching { handle.read() }.getOrNull() ?: break
-            if (chunk.isEmpty()) continue
-            val bytes = chunk.toByteArray(StandardCharsets.UTF_8)
+        // Keep reading until EOF — isAlive() can flip false while the pipe still has
+        // final buffered output from a short-lived process.
+        while (scope.isActive) {
+            val bytes = runCatching { handle.read() }.getOrNull() ?: break
+            if (bytes.isEmpty()) continue
             scrollbackTee.append(bytes, 0, bytes.size)
             engine.advance(bytes)
             mouseFlagsCached.set(engine.mouseFlags())

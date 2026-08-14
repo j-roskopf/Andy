@@ -14,7 +14,8 @@ class RustTerminalEngine(
     private var columns: Int = columns.coerceAtLeast(1)
     private var rows: Int = rows.coerceAtLeast(1)
 
-    private var chars = CharArray(this.columns * this.rows)
+    /** Unicode scalar values per cell (supports supplementary-plane glyphs). */
+    private var codePoints = IntArray(this.columns * this.rows)
     private var fgArgb = IntArray(this.columns * this.rows)
     private var bgArgb = IntArray(this.columns * this.rows)
     private var attrs = ByteArray(this.columns * this.rows)
@@ -114,7 +115,7 @@ class RustTerminalEngine(
     fun fillFrame(into: RustTerminalFrame): Boolean {
         checkOpen()
         ensureBuffers(columns * rows)
-        val rc = nativeFillSnapshot(handle, chars, fgArgb, bgArgb, attrs, meta)
+        val rc = nativeFillSnapshot(handle, codePoints, fgArgb, bgArgb, attrs, meta)
         if (rc != 0) return false
         into.columns = meta[0]
         into.rows = meta[1]
@@ -124,7 +125,7 @@ class RustTerminalEngine(
         into.syncBufferedBytes = meta[5]
         into.displayOffset = meta[6]
         into.historySize = meta[7]
-        into.chars = chars
+        into.codePoints = codePoints
         into.fgArgb = fgArgb
         into.bgArgb = bgArgb
         into.attrs = attrs
@@ -139,8 +140,8 @@ class RustTerminalEngine(
     }
 
     private fun ensureBuffers(cellCount: Int) {
-        if (chars.size < cellCount) {
-            chars = CharArray(cellCount)
+        if (codePoints.size < cellCount) {
+            codePoints = IntArray(cellCount)
             fgArgb = IntArray(cellCount)
             bgArgb = IntArray(cellCount)
             attrs = ByteArray(cellCount)
@@ -177,7 +178,7 @@ class RustTerminalEngine(
         @JvmStatic external fun nativeCellBold(handle: Long, row: Int, col: Int): Boolean
         @JvmStatic external fun nativeFillSnapshot(
             handle: Long,
-            chars: CharArray,
+            codePoints: IntArray,
             fgArgb: IntArray,
             bgArgb: IntArray,
             attrs: ByteArray,
@@ -196,7 +197,7 @@ class RustTerminalFrame {
     var syncBufferedBytes: Int = 0
     var displayOffset: Int = 0
     var historySize: Int = 0
-    var chars: CharArray = CharArray(0)
+    var codePoints: IntArray = IntArray(0)
     var fgArgb: IntArray = IntArray(0)
     var bgArgb: IntArray = IntArray(0)
     var attrs: ByteArray = ByteArray(0)
@@ -211,24 +212,34 @@ class RustTerminalFrame {
         displayOffset = other.displayOffset
         historySize = other.historySize
         val n = columns * rows
-        if (chars.size < n) {
-            chars = CharArray(n)
+        if (codePoints.size < n) {
+            codePoints = IntArray(n)
             fgArgb = IntArray(n)
             bgArgb = IntArray(n)
             attrs = ByteArray(n)
         }
         if (n > 0) {
-            System.arraycopy(other.chars, 0, chars, 0, n)
+            System.arraycopy(other.codePoints, 0, codePoints, 0, n)
             System.arraycopy(other.fgArgb, 0, fgArgb, 0, n)
             System.arraycopy(other.bgArgb, 0, bgArgb, 0, n)
             System.arraycopy(other.attrs, 0, attrs, 0, n)
         }
     }
 
-    fun cellChar(row: Int, col: Int): Char {
-        if (row !in 0 until rows || col !in 0 until columns) return ' '
+    fun cellCodePoint(row: Int, col: Int): Int {
+        if (row !in 0 until rows || col !in 0 until columns) return ' '.code
         val idx = row * columns + col
-        return if (idx in chars.indices) chars[idx] else ' '
+        return if (idx in codePoints.indices) codePoints[idx] else ' '.code
+    }
+
+    fun cellChar(row: Int, col: Int): Char {
+        val cp = cellCodePoint(row, col)
+        return if (cp in Char.MIN_VALUE.code..Char.MAX_VALUE.code) cp.toChar() else '\uFFFD'
+    }
+
+    fun cellString(row: Int, col: Int): String {
+        val cp = cellCodePoint(row, col).takeIf { it > 0 } ?: ' '.code
+        return if (Character.isValidCodePoint(cp)) String(Character.toChars(cp)) else "\uFFFD"
     }
 }
 

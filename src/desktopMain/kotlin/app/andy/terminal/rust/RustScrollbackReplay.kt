@@ -127,11 +127,40 @@ internal class RustScrollbackCapture(
         if (!engine.fillFrame(frame)) return emptyList()
         val rows = frame.rows
         if (rows <= 0 || frame.columns <= 0) return emptyList()
-        val wanted = if (maxRows > 0) minOf(maxRows, rows) else rows
-        val start = rows - wanted
-        val out = ArrayList<StyledTerminalRow>(wanted)
-        for (row in start until rows) {
-            out += styledRowFromFrame(frame, row)
+
+        if (maxRows > 0) {
+            val wanted = minOf(maxRows, rows)
+            val start = rows - wanted
+            val out = ArrayList<StyledTerminalRow>(wanted)
+            for (row in start until rows) {
+                out += styledRowFromFrame(frame, row)
+            }
+            return out
+        }
+
+        // maxRows == 0: history + viewport (legacy BossTerm behavior for raw-tee collapse).
+        val history = frame.historySize.coerceAtLeast(0)
+        val savedOffset = frame.displayOffset
+        val out = ArrayList<StyledTerminalRow>(history + rows)
+        try {
+            if (history > 0) {
+                engine.scrollDisplay(history - savedOffset)
+                for (offset in history downTo 1) {
+                    val current = engine.displayOffset()
+                    if (current != offset) engine.scrollDisplay(offset - current)
+                    if (!engine.fillFrame(frame)) break
+                    out += styledRowFromFrame(frame, 0)
+                }
+                engine.scrollToBottom()
+            }
+            if (engine.fillFrame(frame)) {
+                for (row in 0 until frame.rows) {
+                    out += styledRowFromFrame(frame, row)
+                }
+            }
+        } finally {
+            val restore = engine.displayOffset()
+            if (restore != savedOffset) engine.scrollDisplay(savedOffset - restore)
         }
         return out
     }
@@ -152,7 +181,7 @@ internal fun styledRowFromFrame(frame: RustTerminalFrame, row: Int): StyledTermi
     var emitted = false
     for (col in 0 until cols) {
         val idx = row * cols + col
-        val ch = frame.chars.getOrElse(idx) { ' ' }
+        val ch = codePointToString(frame.codePoints.getOrElse(idx) { ' '.code })
         plainBuilder.append(ch)
         val fg = frame.fgArgb.getOrElse(idx) { 0 }
         val bg = frame.bgArgb.getOrElse(idx) { 0 }
@@ -171,6 +200,15 @@ internal fun styledRowFromFrame(frame: RustTerminalFrame, row: Int): StyledTermi
     // Trim ANSI to the same visible length.
     val trimmedAnsi = trimAnsiToPlainLength(ansi.toString(), plain.length)
     return StyledTerminalRow(plain = plain, ansi = trimmedAnsi + "\u001b[0m")
+}
+
+private fun codePointToString(codePoint: Int): String {
+    val cp = if (codePoint <= 0) ' '.code else codePoint
+    return if (Character.isValidCodePoint(cp)) {
+        String(Character.toChars(cp))
+    } else {
+        "\uFFFD"
+    }
 }
 
 private fun cellStyleToSgr(fg: Int, bg: Int, attr: Int): String {

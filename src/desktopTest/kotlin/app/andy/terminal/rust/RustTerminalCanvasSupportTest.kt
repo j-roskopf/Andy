@@ -45,12 +45,12 @@ class RustTerminalCanvasSupportTest {
         val frame = RustTerminalFrame().apply {
             columns = 6
             rows = 2
-            chars = CharArray(12) { ' ' }
-            chars[0] = 'a'
-            chars[1] = 'b'
-            chars[2] = ' '
-            chars[6] = 'c'
-            chars[7] = 'd'
+            codePoints = IntArray(12) { ' '.code }
+            codePoints[0] = 'a'.code
+            codePoints[1] = 'b'.code
+            codePoints[2] = ' '.code
+            codePoints[6] = 'c'.code
+            codePoints[7] = 'd'.code
         }
         val text = extractSelection(frame, CellRange(0, 0, 1, 1))
         assertEquals("ab\ncd", text)

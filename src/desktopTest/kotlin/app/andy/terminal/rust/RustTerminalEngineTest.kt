@@ -102,8 +102,8 @@ class RustTerminalEngineTest {
             assertTrue(engine.fillFrame(frame))
             assertEquals(20, frame.columns)
             assertEquals(4, frame.rows)
-            assertEquals('H', frame.chars[0])
-            assertEquals('i', frame.chars[1])
+            assertEquals('H'.code, frame.codePoints[0])
+            assertEquals('i'.code, frame.codePoints[1])
             assertTrue(frame.attrs[0].toInt() and RustTerminalAttrs.BOLD != 0)
             assertEquals(0xFFE06C75.toInt(), frame.fgArgb[0])
         }

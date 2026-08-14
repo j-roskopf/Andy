@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use jni::objects::{JByteArray, JClass, JCharArray, JIntArray};
+use jni::objects::{JByteArray, JClass, JIntArray};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 use parking_lot::Mutex;
@@ -253,7 +253,8 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeStop
 ///
 /// `meta` length ≥ 8:
 /// `[columns, rows, cursorRow, cursorCol, altScreen, syncBufferedBytes, displayOffset, historySize]`.
-/// `chars` / `fgArgb` / `bgArgb` / `attrs` length ≥ `columns * rows`.
+/// `codePoints` / `fgArgb` / `bgArgb` / `attrs` length ≥ `columns * rows`.
+/// `codePoints` stores Unicode scalar values (supports supplementary-plane glyphs).
 ///
 /// Returns `0` on success, `-1` on error (bad handle / short buffers).
 #[no_mangle]
@@ -261,7 +262,7 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFill
     env: JNIEnv<'local>,
     _class: JClass<'local>,
     handle: jlong,
-    chars: JCharArray<'local>,
+    code_points: JIntArray<'local>,
     fg_argb: JIntArray<'local>,
     bg_argb: JIntArray<'local>,
     attrs: JByteArray<'local>,
@@ -272,7 +273,7 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFill
         return -1;
     };
     let cell_count = snap.columns * snap.rows;
-    let Ok(chars_len) = env.get_array_length(&chars) else {
+    let Ok(code_points_len) = env.get_array_length(&code_points) else {
         return -1;
     };
     let Ok(fg_len) = env.get_array_length(&fg_argb) else {
@@ -287,7 +288,7 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFill
     let Ok(meta_len) = env.get_array_length(&meta) else {
         return -1;
     };
-    if chars_len < cell_count as i32
+    if code_points_len < cell_count as i32
         || fg_len < cell_count as i32
         || bg_len < cell_count as i32
         || attrs_len < cell_count as i32
@@ -296,13 +297,13 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFill
         return -1;
     }
 
-    let mut char_buf = vec![0u16; cell_count];
+    let mut code_point_buf = vec![0i32; cell_count];
     let mut fg_buf = vec![0i32; cell_count];
     let mut bg_buf = vec![0i32; cell_count];
     let mut attr_buf = vec![0i8; cell_count];
 
     for (i, cell) in snap.cells.iter().enumerate() {
-        char_buf[i] = cell.ch as u32 as u16;
+        code_point_buf[i] = cell.ch as u32 as i32;
         fg_buf[i] = cell.fg_argb as i32;
         bg_buf[i] = cell.bg_argb as i32;
         let mut a = 0u8;
@@ -327,7 +328,7 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeFill
         attr_buf[i] = a as i8;
     }
 
-    if env.set_char_array_region(&chars, 0, &char_buf).is_err() {
+    if env.set_int_array_region(&code_points, 0, &code_point_buf).is_err() {
         return -1;
     }
     if env.set_int_array_region(&fg_argb, 0, &fg_buf).is_err() {
