@@ -1784,9 +1784,13 @@ private fun toolBlockHeadline(
         .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
         .orEmpty()
         .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
+    // Bare "Edit" / "Terminal" labels read as empty chrome — prefer an action phrase, and
+    // when we do have a path/command, lead with Edited/Ran rather than "Edit: path".
+    if (AcpToolCallPresentation.isSparseToolTitle(label) || label.isBlank()) {
+        return toolActionPhrase(label, detail.ifBlank { summary }, kind, locations)
+    }
     return when {
-        detail.isNotBlank() && label.isNotBlank() && !label.equals(detail, ignoreCase = true) ->
-            "$label: $detail"
+        detail.isNotBlank() && !label.equals(detail, ignoreCase = true) -> "$label: $detail"
         label.isNotBlank() -> label
         detail.isNotBlank() -> detail
         else -> toolActionPhrase(label, summary, kind, locations)
@@ -1805,12 +1809,18 @@ private fun toolActionPhrase(
         .takeUnless { AcpToolCallPresentation.isMinimalOutput(it) }
         .orEmpty()
         .ifBlank { AcpToolCallPresentation.enrichSummary("", kind, locations) }
+        .let { text ->
+            // Avoid "Ran Terminal" / "Edited Edit" when the only "summary" is the sparse label.
+            if (AcpToolCallPresentation.isSparseToolTitle(text)) "" else text
+        }
     return when {
         AgentSpawnPresentation.isAgentSpawn(toolName, summary, "") -> AgentSpawnPresentation.spawningHeadline(1)
         lower in ReadToolNames || kind == AgentToolKind.Read ->
             trimmedSummary.takeIf { it.isNotBlank() }?.let { "Read $it" } ?: "Read file"
-        lower in EditToolNames || kind == AgentToolKind.Edit ->
-            trimmedSummary.takeIf { it.isNotBlank() }?.let { "Edited $it" } ?: "Edited file"
+        lower in EditToolNames || kind == AgentToolKind.Edit || kind == AgentToolKind.Delete ->
+            trimmedSummary.takeIf { it.isNotBlank() }?.let {
+                if (kind == AgentToolKind.Delete || lower == "delete") "Deleted $it" else "Edited $it"
+            } ?: if (kind == AgentToolKind.Delete || lower == "delete") "Deleted file" else "Edited file"
         lower in CommandToolNames || kind == AgentToolKind.Execute ->
             trimmedSummary.takeIf { it.isNotBlank() }?.let { "Ran $it" } ?: "Ran command"
         trimmedSummary.isNotBlank() -> trimmedSummary
@@ -1819,9 +1829,16 @@ private fun toolActionPhrase(
     }
 }
 
-private val ReadToolNames = setOf("read", "grep", "glob", "list_dir", "file_read", "get_network_request")
-private val CommandToolNames = setOf("shell", "run_terminal_cmd", "bash", "write", "strreplace")
-private val EditToolNames = setOf("edit", "edit file", "edit_file", "str_replace", "apply_patch", "write")
+private val ReadToolNames = setOf(
+    "read", "read file", "grep", "glob", "list_dir", "file_read", "get_network_request", "search",
+)
+private val CommandToolNames = setOf(
+    "shell", "run_terminal_cmd", "bash", "terminal", "execute", "run", "command",
+)
+private val EditToolNames = setOf(
+    "edit", "edit file", "edit_file", "editing files", "str_replace", "apply_patch",
+    "write", "delete", "create", "update",
+)
 
 /**
  * Lazy identity for a transcript row. Must stay stable while streamed text / tool

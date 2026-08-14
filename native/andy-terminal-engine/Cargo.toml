@@ -1,0 +1,30 @@
+[package]
+name = "andy_terminal_engine"
+version = "0.1.0"
+edition = "2021"
+description = "Spike: alacritty_terminal engine for Andy, exposed to the JVM via JNI"
+license = "MIT"
+publish = false
+
+[lib]
+name = "andy_terminal_engine"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi-cli"]
+
+[features]
+default = []
+# Enables the UniFFI bindgen binary used by the Phase-0 boundary probe.
+uniffi-cli = ["uniffi/cli"]
+
+[dependencies]
+alacritty_terminal = "0.26"
+parking_lot = "0.12"
+jni = "0.21"
+uniffi = "0.32"
+
+[build-dependencies]
+# none — UniFFI proc-macro scaffolding needs no build.rs

@@ -215,6 +215,22 @@ class DesktopAgentRunService(
     private val acpPlanModeSyncJobs = ConcurrentHashMap<String, Job>()
 
     /**
+     * Serializes minting a brand-new `agy` conversation per workspace. `agy` only exposes
+     * "the last conversation used in this workspace" as a single global pointer, not
+     * anything scoped to the process Andy just spawned — so two fresh Antigravity launches
+     * racing in the same cwd can each capture the *other's* new conversation id (see
+     * [captureAntigravityConversationId]). Holding this from spawn through capture for one
+     * launch before the next one starts keeps that shared signal unambiguous.
+     */
+    private val antigravityConversationMintLocks = ConcurrentHashMap<String, Mutex>()
+
+    private fun antigravityConversationMintLock(cwd: String?): Mutex {
+        val key = cwd?.takeIf { it.isNotBlank() }?.let { runCatching { File(it).canonicalPath }.getOrDefault(it) }
+            ?: System.getProperty("user.home")
+        return antigravityConversationMintLocks.computeIfAbsent(key) { Mutex() }
+    }
+
+    /**
      * Window visibility/focus, pushed by the GUI. Terminal foreground cadence deliberately
      * ignores this — scraping must stay fast while the user is in another app, otherwise
      * the finished turn we want to notify about is detected late.
@@ -287,7 +303,7 @@ class DesktopAgentRunService(
         }
     }
 
-    internal fun terminalView(taskId: String) = terminals.terminalView(taskId)
+    internal fun rustTerminal(taskId: String) = terminals.rustTerminal(taskId)
 
     /** Push latest Settings terminal appearance into live agent sessions. */
     internal fun reloadTerminalAppearance() = terminals.reloadAppearance()
@@ -335,7 +351,7 @@ class DesktopAgentRunService(
     internal fun hasScrollback(taskId: String): Boolean = terminals.hasScrollback(taskId)
 
     /**
-     * Read-only BossTerm scrollback viewer for ended chats. Caller owns dispose.
+     * Read-only Rust scrollback viewer for ended chats. Caller owns dispose.
      * Does not restart the provider CLI — use [reattachSession] / [resume] for that.
      */
     internal fun openScrollbackReplay(taskId: String) =
@@ -355,14 +371,14 @@ class DesktopAgentRunService(
     /** True while the chat is mounted in the UI, focused or not. */
     internal fun isChatOpen(taskId: String): Boolean = taskId in viewingTaskIds
 
-    /** True while the local BossTerm/PTY viewer attached to tmux is still running. */
+    /** True while the local PTY viewer attached to tmux is still running. */
     internal fun isViewerAlive(taskId: String): Boolean = terminals.isViewerAlive(taskId)
 
     /**
-     * Reattach a BossTerm viewer to a live tmux session (GUI reopen while daemon/agent continues).
+     * Reattach a Rust viewer to a live tmux session (GUI reopen while daemon/agent continues).
      */
     internal suspend fun attachTerminalIfNeeded(taskId: String) {
-        if (terminals.terminalView(taskId) != null) return
+        if (terminals.rustTerminal(taskId) != null) return
         val task = currentTask(taskId)
         val preferredStatus = task?.status?.let { status ->
             AgentStatusSnapshot(status, confident = task.statusConfident)
@@ -1043,7 +1059,13 @@ class DesktopAgentRunService(
 
     private suspend fun createAndStart(draft: AgentTaskDraft, taskId: String?): AgentTask {
         ready.await()
-        _providerDefaults.update { it + (draft.agent to draft.providerDefaults()) }
+        // A task's explicit lane is a one-off override. Only the settings panel changes the
+        // provider preference, so an older terminal chat cannot silently turn ACP off for all
+        // future chats with the same provider.
+        _providerDefaults.update { existing ->
+            val defaults = draft.providerDefaults().copy(lane = existing[draft.agent]?.lane)
+            existing + (draft.agent to defaults)
+        }
         _lastUsedAgent.value = draft.agent
         val discoveredSkillPaths = if (draft.skills.isEmpty()) {
             emptySet()
@@ -1099,7 +1121,7 @@ class DesktopAgentRunService(
                 status = AgentStatus.Error,
                 errorMessage = "existing worktree path is missing or not a directory",
                 vendorSessionId = null,
-                lane = draft.lane ?: resolveLane(draft.agent),
+                lane = draft.lane ?: preferredLane(draft.agent),
                 createdAtMillis = now,
                 finishedAtMillis = now,
             )
@@ -1142,7 +1164,7 @@ class DesktopAgentRunService(
             provenance = draft.provenance,
             status = null,
             vendorSessionId = null,
-            lane = draft.lane ?: resolveLane(draft.agent),
+            lane = draft.lane ?: preferredLane(draft.agent),
             createdAtMillis = now,
         )
 
@@ -1242,6 +1264,18 @@ class DesktopAgentRunService(
             nextAdapter.buildInteractiveCommand(resolvedBinary, currentTask(task.id) ?: task, mcpUrl)
         }
         return task
+    }
+
+    override fun setProviderLane(agent: AgentKind, lane: AgentLaneKind) {
+        val normalized = if (lane == AgentLaneKind.Acp && !agent.acpSupported) {
+            AgentLaneKind.Terminal
+        } else {
+            lane
+        }
+        _providerDefaults.update { existing ->
+            existing + (agent to (existing[agent] ?: AgentProviderDefaults()).copy(lane = normalized))
+        }
+        scope.launch { persist() }
     }
 
     private fun isLaunchInProgress(taskId: String): Boolean =
@@ -1476,19 +1510,23 @@ class DesktopAgentRunService(
             )
         }.getOrNull() ?: return
 
+        // Keep Done + finishedAtMillis: this is view-only (no new turn). Clearing them
+        // forced Working→Done on the resumed idle prompt and dinged a false "finished".
         val queued = taskForResume.copy(
             cwd = AgentScratchWorkspace.resolveCwd(taskForResume.cwd),
-            status = null,
+            status = AgentStatus.Done,
+            statusConfident = true,
             exitCode = null,
             errorMessage = null,
-            finishedAtMillis = null,
+            finishedAtMillis = taskForResume.finishedAtMillis ?: System.currentTimeMillis(),
             unread = false,
+            resumable = true,
         )
         val rollbackSnapshot = taskForResume
         upsertTask(queued)
         scope.launch {
             persist()
-            val terminalReady = launchRun(queued, writeAfterStart = null) { resumeAdapter, binary, mcpUrl ->
+            val terminalReady = launchRun(queued, writeAfterStart = null, quietResume = true) { resumeAdapter, binary, mcpUrl ->
                 resumeAdapter.buildInteractiveResumeCommand(
                     binary,
                     currentTask(taskId) ?: queued,
@@ -1853,6 +1891,7 @@ class DesktopAgentRunService(
     private fun launchRun(
         task: AgentTask,
         writeAfterStart: String? = null,
+        quietResume: Boolean = false,
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
     ): CompletableDeferred<Boolean> {
         val handle = TaskHandle()
@@ -1866,7 +1905,7 @@ class DesktopAgentRunService(
                     return@withPermit
                 }
                 try {
-                    runProcess(task.id, handle, argvBuilder, writeAfterStart, onTerminalStarted = {
+                    runProcess(task.id, handle, argvBuilder, writeAfterStart, quietResume, onTerminalStarted = {
                         terminalReady.complete(true)
                     })
                 } catch (error: Throwable) {
@@ -1893,7 +1932,7 @@ class DesktopAgentRunService(
     ) {
         // Await only when not on the UI thread. createAndStart intentionally
         // skips this so Compose Main never blocks across BossTerm initialization.
-        val terminalReady = launchRun(task, writeAfterStart, argvBuilder)
+        val terminalReady = launchRun(task, writeAfterStart, argvBuilder = argvBuilder)
         withTimeoutOrNull(20_000) { terminalReady.await() }
     }
 
@@ -1902,6 +1941,7 @@ class DesktopAgentRunService(
         handle: TaskHandle,
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
         writeAfterStart: String? = null,
+        quietResume: Boolean = false,
         onTerminalStarted: () -> Unit = {},
     ) {
         val task = currentTask(taskId) ?: return
@@ -1961,6 +2001,18 @@ class DesktopAgentRunService(
             finishTask(taskId, AgentStatus.Error, exitCode = null, error = it.message ?: "failed to build command")
             return
         }
+        // The one-shot lane handoff seed has now been embedded in argv or will be typed below.
+        // Clear it before the live task snapshot is used for later resumes/reconnects.
+        if (taskForLaunch.continuationPrompt != null) {
+            updateTask(taskId) { current ->
+                if (current.continuationPrompt == taskForLaunch.continuationPrompt) {
+                    current.copy(continuationPrompt = null)
+                } else {
+                    current
+                }
+            }
+            persist()
+        }
         val projectEnv = taskForLaunch.projectId?.let { projectId ->
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
@@ -1970,7 +2022,21 @@ class DesktopAgentRunService(
             }
         }
 
-        updateTask(taskId) { it.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis()) }
+        if (quietResume) {
+            // View-only reattach: stay Done. Publishing Working here made the idle prompt
+            // scrape look like a freshly finished turn (notification ding).
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentStatus.Done,
+                    statusConfident = true,
+                    resumable = true,
+                    finishedAtMillis = it.finishedAtMillis ?: System.currentTimeMillis(),
+                    startedAtMillis = it.startedAtMillis ?: System.currentTimeMillis(),
+                )
+            }
+        } else {
+            updateTask(taskId) { it.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis()) }
+        }
         persist()
         reconcileWorkflowRun(taskId)
 
@@ -1980,6 +2046,17 @@ class DesktopAgentRunService(
         }
 
         val launchTask = currentTask(taskId) ?: taskForLaunch
+        // Only a genuine fresh mint (no id `agy` can already resume) needs capture — and
+        // therefore serialization. A known-good id is trusted as-is; running discovery
+        // against it too would risk clobbering it with an unrelated concurrent conversation.
+        val agyMintLock = if (launchTask.agent == AgentKind.Antigravity &&
+            AntigravityConversationIds.resolveForTask(launchTask) == null
+        ) {
+            antigravityConversationMintLock(launchTask.cwd)
+        } else {
+            null
+        }
+        agyMintLock?.lock()
         val agyBeforeConversationId = if (launchTask.agent == AgentKind.Antigravity) {
             AntigravityConversationIds.lastForWorkspace(launchTask.cwd)
         } else {
@@ -2036,23 +2113,29 @@ class DesktopAgentRunService(
                 argv = argv,
                 env = env,
                 onStatusSnapshot = { snapshot -> applyStatusSnapshot(taskId, snapshot) },
+                quietResume = quietResume,
             )
         }.getOrElse { error ->
+            agyMintLock?.unlock()
             finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to start: ${error.message}")
             return
         }
         writeLaunchDiagnostics(taskId, binary, argv, projectEnv)
         onTerminalStarted()
 
-        if (launchTask.agent == AgentKind.Antigravity) {
+        if (agyMintLock != null) {
             scope.launch(Dispatchers.IO) {
-                captureAntigravityConversationId(
-                    taskId = taskId,
-                    cwd = launchTask.cwd,
-                    before = agyBeforeConversationId,
-                    launchedPrompt = agyLaunchedPrompt,
-                    startedAtMillis = agyLaunchStartedAt,
-                )
+                try {
+                    captureAntigravityConversationId(
+                        taskId = taskId,
+                        cwd = launchTask.cwd,
+                        before = agyBeforeConversationId,
+                        launchedPrompt = agyLaunchedPrompt,
+                        startedAtMillis = agyLaunchStartedAt,
+                    )
+                } finally {
+                    agyMintLock.unlock()
+                }
             }
         }
         if (launchTask.agent == AgentKind.OpenCode) {
@@ -2371,11 +2454,22 @@ class DesktopAgentRunService(
         }
         onTerminalStarted()
         ensureAcpArtifactMonitor(taskId, started.artifacts)
+        val acpPrompt = writeAfterStart?.takeIf { it.isNotBlank() } ?: launchTask.promptForCli()
+        if (launchTask.continuationPrompt != null) {
+            updateTask(taskId) { current ->
+                if (current.continuationPrompt == launchTask.continuationPrompt) {
+                    current.copy(continuationPrompt = null)
+                } else {
+                    current
+                }
+            }
+            persist()
+        }
         appendEvents(
             taskId,
-            listOf(AgentEvent.UserMessage(System.currentTimeMillis(), launchTask.promptForCli(), launchTask.skills, launchTask.imagePaths)),
+            listOf(AgentEvent.UserMessage(System.currentTimeMillis(), acpPrompt, launchTask.skills, launchTask.imagePaths)),
         )
-        val success = acpManager.prompt(taskId, launchTask.promptForCli(), launchTask.imagePaths)
+        val success = acpManager.prompt(taskId, acpPrompt, launchTask.imagePaths)
         if (!success) {
             appendLaunchDiagnostics(taskId, "acpPromptFailed=true\n")
         }
@@ -2988,8 +3082,14 @@ class DesktopAgentRunService(
         }
         val adapter = adapters[task.agent] ?: return null
         val binary = binaryFor(task.agent) ?: task.agent.cliName
-        val changeDirectory = "cd ${shellQuote(AgentScratchWorkspace.resolveCwd(task.cwd))} && "
-        return changeDirectory + adapter.interactiveResumeCommand(binary, task)
+        // Resolve vendor session for External open: disk lookup, then ACP id as shared key.
+        val forResume = enrichTaskWithVendorSession(task)
+            ?: task.acpSessionId?.takeIf { it.isNotBlank() }?.let { acpId ->
+                task.copy(vendorSessionId = task.vendorSessionId?.takeIf { it.isNotBlank() } ?: acpId)
+            }
+            ?: task
+        val changeDirectory = "cd ${shellQuote(AgentScratchWorkspace.resolveCwd(forResume.cwd))} && "
+        return changeDirectory + adapter.interactiveResumeCommand(binary, forResume)
     }
 
     override suspend fun openInTerminal(taskId: String): CommandResult = withContext(Dispatchers.IO) {
@@ -3282,6 +3382,9 @@ class DesktopAgentRunService(
             else -> agent.defaultLane()
         }
     }
+
+    private fun preferredLane(agent: AgentKind): AgentLaneKind =
+        _providerDefaults.value[agent]?.lane ?: resolveLane(agent)
 
     private fun unavailableCliMessage(agent: AgentKind): String {
         val issue = _cliStatuses.value.firstOrNull { it.kind == agent }?.issue
@@ -4686,7 +4789,13 @@ class DesktopAgentRunService(
     }
 
     private fun persistAcpSessionId(taskId: String, sessionId: String) {
-        updateTask(taskId) { it.copy(acpSessionId = sessionId) }
+        updateTask(taskId) { task ->
+            task.copy(
+                acpSessionId = sessionId,
+                // Share the conversation id so Terminal view can --resume the same thread.
+                vendorSessionId = task.vendorSessionId?.takeIf { it.isNotBlank() } ?: sessionId,
+            )
+        }
         scope.launch { persist() }
     }
 

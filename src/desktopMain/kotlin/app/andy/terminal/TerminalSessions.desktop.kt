@@ -1,18 +1,24 @@
 package app.andy.terminal
 
 import app.andy.desktop.service.agents.AgentScratchWorkspace
+import app.andy.terminal.rust.RustTerminalBackend
+import app.andy.terminal.rust.RustTerminalNative
 
 actual object TerminalSessions {
     actual fun create(request: TerminalLaunchRequest): TerminalSession {
         val cwd = AgentScratchWorkspace.resolveCwd(request.cwd)
         return when (request.mode) {
             TerminalMode.DirectPty -> {
-                val session = BossTermBackend(
+                check(RustTerminalNative.isAvailable()) {
+                    "andy-terminal-engine native library missing for ${System.getProperty("os.name")} " +
+                        "${System.getProperty("os.arch")}"
+                }
+                val session = RustTerminalBackend(
                     sessionId = request.sessionId,
                     cols = request.cols,
                     rows = request.rows,
                     appearance = request.appearance,
-                    agentCliMode = request.agentCli,
+                    forwardMouseToApplication = request.agentCli,
                 )
                 session.start(request.argv, cwd, request.env)
                 session

@@ -8,7 +8,6 @@ import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.desktop.service.agents.discoverKnownAgentSkillNames
-import app.andy.desktop.service.agents.inferAgentLaneFromArtifacts
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
@@ -230,6 +229,7 @@ class McpAgentRunClient(
 
     private suspend fun refreshTasks() {
         refreshComposerOptions()
+        refreshProviderDefaults()
         // Snapshot before the fetch: the list we are about to request is produced after the
         // daemon acknowledged these reads, so it already reflects them.
         val settledReads = daemonAckedReadTaskIds.toSet()
@@ -259,12 +259,10 @@ class McpAgentRunClient(
             title = obj.string("title") ?: id,
             prompt = obj.string("prompt")?.takeIf { it.isNotBlank() } ?: obj.string("title").orEmpty(),
             agent = agent,
-            lane = inferAgentLaneFromArtifacts(
-                taskId = id,
-                declaredLane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") },
-                agent = agent,
-                agentsDir = sharedAgentArtifactsDir,
-            ),
+            // The daemon has already resolved legacy artifacts and persists the authoritative
+            // lane. Re-inferring locally would see both ACP and terminal artifacts after a
+            // handoff and could remount the wrong surface.
+            lane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") } ?: agent.defaultLane(),
             projectId = obj.string("projectId")?.takeIf { it.isNotBlank() },
             cwd = obj.string("cwd")?.takeIf { it.isNotBlank() },
             status = app.andy.model.AgentStatus.entries.firstOrNull { it.name == statusName },
@@ -457,6 +455,19 @@ class McpAgentRunClient(
         }
     }
 
+    private suspend fun refreshProviderDefaults() {
+        val raw = runCatching { callTool("chat.provider_preferences", emptyMap()) }.getOrNull() ?: return
+        val providers = runCatching { json.parseToJsonElement(raw).jsonObject["providers"]?.jsonArray }.getOrNull()
+            ?: return
+        _providerDefaults.value = providers.mapNotNull { element ->
+            val obj = element.jsonObject
+            val agent = AgentKind.entries.firstOrNull { it.name == obj.string("agent") } ?: return@mapNotNull null
+            val lane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") }
+                ?: agent.defaultLane()
+            agent to AgentProviderDefaults(lane = lane)
+        }.toMap()
+    }
+
     private fun parseDaemonAgentStatus(element: kotlinx.serialization.json.JsonElement): AgentCliStatus? {
         val obj = element.jsonObject
         val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
@@ -645,6 +656,7 @@ class McpAgentRunClient(
                     put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
                 }
                 draft.provenance?.let { put("provenance", it.toJsonObject()) }
+                draft.lane?.let { put("lane", JsonPrimitive(it.name)) }
             },
         )
         refreshTasks()
@@ -671,6 +683,18 @@ class McpAgentRunClient(
 
     override fun completeWorkflowRun(taskId: String) = Unit
     override suspend fun retry(taskId: String) = Unit
+
+    override fun setProviderLane(agent: AgentKind, lane: AgentLaneKind) {
+        scope.launch {
+            runCatching {
+                callTool(
+                    "chat.set_provider_lane",
+                    mapOf("agent" to JsonPrimitive(agent.name), "lane" to JsonPrimitive(lane.name)),
+                )
+            }
+            refreshProviderDefaults()
+        }
+    }
 
     override fun resume(
         taskId: String,
@@ -908,12 +932,7 @@ class McpAgentRunClient(
     }
     override fun events(taskId: String): StateFlow<List<AgentEvent>> {
         val task = _tasks.value.firstOrNull { it.id == taskId }
-        val lane = inferAgentLaneFromArtifacts(
-            taskId = taskId,
-            declaredLane = task?.lane,
-            agent = task?.agent,
-            agentsDir = sharedAgentArtifactsDir,
-        )
+        val lane = task?.lane ?: AgentLaneKind.Terminal
         if (lane != AgentLaneKind.Acp) return emptyEvents
         val flow = eventFlows.computeIfAbsent(taskId) {
             MutableStateFlow(localTranscriptStore.load(taskId))

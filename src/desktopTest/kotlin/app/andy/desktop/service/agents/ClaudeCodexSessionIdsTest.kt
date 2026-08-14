@@ -29,22 +29,29 @@ class ClaudeCodexSessionIdsTest {
     }
 
     @Test
-    fun claudeFindsSessionByPromptInProjectJsonl() {
-        val home = kotlin.io.path.createTempDirectory("andy-claude-home").toFile()
-        val cwd = kotlin.io.path.createTempDirectory("andy-claude-cwd").toFile().absolutePath
+    fun claudeResolveForTaskNeverBackfillsWithoutStoredId() {
+        val home = kotlin.io.path.createTempDirectory("andy-claude-resolve").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-claude-resolve-cwd").toFile().absolutePath
         try {
             val encoded = ClaudeSessionIds.encodeProjectPath(cwd)!!
             val project = File(home, ".claude/projects/$encoded")
             project.mkdirs()
-            val sessionId = "11111111-1111-1111-1111-111111111111"
+            val sessionId = "22222222-2222-2222-2222-222222222222"
             File(project, "$sessionId.jsonl").writeText(
-                """
-                {"type":"queue-operation","operation":"enqueue","sessionId":"$sessionId","content":"build the feature flag UI"}
-                """.trimIndent(),
+                """{"type":"queue-operation","sessionId":"$sessionId","content":"ship the navbar fix"}""",
             )
-            val found = ClaudeSessionIds.findByPrompt("build the feature flag UI", cwd, home)
-            assertEquals(sessionId, found)
-            assertTrue(ClaudeSessionIds.sessionContainsPrompt(sessionId, "build the feature flag", cwd, home))
+            // A matching session exists on disk, but the task never had an id
+            // captured for it. resolveForTask must not fuzzy-guess a match —
+            // a missing id is a different bug, not something to paper over.
+            val task = AgentTask(
+                id = "task-1",
+                title = "t",
+                prompt = "ship the navbar fix",
+                agent = AgentKind.ClaudeCode,
+                cwd = cwd,
+                createdAtMillis = 1L,
+            )
+            assertNull(ClaudeSessionIds.resolveForTask(task, home))
         } finally {
             home.deleteRecursively()
             File(cwd).deleteRecursively()
@@ -52,9 +59,9 @@ class ClaudeCodexSessionIdsTest {
     }
 
     @Test
-    fun claudeResolveForTaskBackfillsFromDisk() {
-        val home = kotlin.io.path.createTempDirectory("andy-claude-resolve").toFile()
-        val cwd = kotlin.io.path.createTempDirectory("andy-claude-resolve-cwd").toFile().absolutePath
+    fun claudeResolveForTaskUsesStoredIdWhenPromptMatches() {
+        val home = kotlin.io.path.createTempDirectory("andy-claude-resolve-2").toFile()
+        val cwd = kotlin.io.path.createTempDirectory("andy-claude-resolve-cwd-2").toFile().absolutePath
         try {
             val encoded = ClaudeSessionIds.encodeProjectPath(cwd)!!
             val project = File(home, ".claude/projects/$encoded")
@@ -69,10 +76,10 @@ class ClaudeCodexSessionIdsTest {
                 prompt = "ship the navbar fix",
                 agent = AgentKind.ClaudeCode,
                 cwd = cwd,
+                vendorSessionId = sessionId,
                 createdAtMillis = 1L,
             )
-            val resolved = ClaudeSessionIds.resolveForTask(task, home)
-            assertEquals(sessionId, resolved)
+            assertEquals(sessionId, ClaudeSessionIds.resolveForTask(task, home))
         } finally {
             home.deleteRecursively()
             File(cwd).deleteRecursively()
@@ -90,7 +97,7 @@ class ClaudeCodexSessionIdsTest {
     }
 
     @Test
-    fun codexFindsSessionByPromptInRollout() {
+    fun codexResolveForTaskNeverBackfillsWithoutStoredId() {
         val home = kotlin.io.path.createTempDirectory("andy-codex-home").toFile()
         val cwd = kotlin.io.path.createTempDirectory("andy-codex-cwd").toFile().absolutePath
         try {
@@ -103,8 +110,18 @@ class ClaudeCodexSessionIdsTest {
                 {"type":"event_msg","payload":{"type":"user_message","message":"add dark mode toggle"}}
                 """.trimIndent(),
             )
-            val found = CodexSessionIds.findByPrompt("add dark mode toggle", cwd, home)
-            assertEquals(sessionId, found)
+            // A matching rollout exists on disk, but the task never had an id
+            // captured for it. resolveForTask must not fuzzy-guess a match —
+            // a missing id is a different bug, not something to paper over.
+            val task = AgentTask(
+                id = "task-3",
+                title = "t",
+                prompt = "add dark mode toggle",
+                agent = AgentKind.Codex,
+                cwd = cwd,
+                createdAtMillis = 1L,
+            )
+            assertNull(CodexSessionIds.resolveForTask(task, home))
         } finally {
             home.deleteRecursively()
             File(cwd).deleteRecursively()
@@ -132,8 +149,10 @@ class ClaudeCodexSessionIdsTest {
                 createdAtMillis = 1L,
             )
             assertEquals(sessionId, CodexSessionIds.resolveForTask(task, home))
-            assertEquals(
-                sessionId,
+            // A stored id that does not actually correspond to any rollout for
+            // this task must not be papered over by re-discovering some other
+            // session that happens to match the prompt text.
+            assertNull(
                 CodexSessionIds.resolveForTask(
                     task.copy(vendorSessionId = "55555555-5555-5555-5555-555555555555"),
                     home,

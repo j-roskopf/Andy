@@ -697,6 +697,44 @@ class AgentStatusTrackerTest {
     }
 
     @Test
+    fun quietResumeSeedKeepsAntigravityIdleFromPublishingWorking() = runBlocking {
+        // Quiet --conversation reopen settles at an idle `>` prompt. Seeding Done (as
+        // AgentTerminalManager.start does for quietResume) must not emit Working, or
+        // attention would ding Working→Done as a false finish.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-status-agy-quiet", null).also {
+                it.delete()
+                it.mkdirs()
+            }
+            val session = FakeTerminalSession()
+            val emitted = mutableListOf<AgentStatusSnapshot>()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-agy-quiet",
+                agent = AgentKind.Antigravity,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = { emitted += it },
+                initialSnapshot = AgentStatusSnapshot(AgentStatus.Done, confident = true),
+                suppressPrematureIdle = false,
+            )
+            tracker.start()
+            session.emitBuffer("Antigravity agent ready\n> ")
+            kotlinx.coroutines.delay(700)
+            assertEquals(AgentStatus.Done, tracker.status.value.status)
+            assertTrue(tracker.status.value.confident)
+            assertFalse(
+                emitted.any { it.status == AgentStatus.Working },
+                "quiet Antigravity resume must not publish Working before idle Done; saw $emitted",
+            )
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun remountSoftIdleWithoutHooksKeepsSeededDone() = runBlocking {
         // Switching chat windows rebuilds the tracker with a Done seed. If the Done latch
         // is cleared before the first confident idle scrape, soft idle must not invent

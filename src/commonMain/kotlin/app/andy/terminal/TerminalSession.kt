@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Backend-agnostic PTY + emulator seam.
  *
- * Desktop uses BossTerm (Compose-native emulator + Pty4J). Wasm remains a no-op stub.
+ * Desktop uses the Rust VT engine (`alacritty_terminal`) + Pty4J. Wasm remains a no-op stub.
  */
 interface TerminalSession {
     /** Opaque id for UI/host lookup (usually the agent task id). */
@@ -58,7 +58,7 @@ enum class TerminalMode {
     /** Detached `tmux -L andy` session — headless daemon executor. */
     TmuxAgent,
 
-    /** Attach BossTerm to an existing `tmux -L andy` session for GUI. */
+    /** Attach the Rust terminal viewer to an existing `tmux -L andy` session for GUI. */
     TmuxAttach,
 }
 

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +78,11 @@ import app.andy.EditorSyntaxThemePreview
 import app.andy.isToggleableInSidebar
 import app.andy.loadImageBitmap
 import app.andy.model.WorkspaceState
+import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
+import app.andy.model.AgentModelOption
+import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
@@ -87,6 +92,8 @@ import app.andy.model.OrchestrationProviderRole
 import app.andy.model.ProxyStartOptions
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
+import app.andy.model.acpSupported
+import app.andy.model.defaultLane
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AppUpdateService
@@ -187,6 +194,7 @@ internal fun SettingsScreen(
     }
     var portText by remember(workspaceState.mcpServerPort) { mutableStateOf(workspaceState.mcpServerPort.toString()) }
     val toolNames = remember { services.mcp.getToolNames() }
+    val providerModels by services.agentRuns.providerModels.collectAsState()
 
     val mcpStatus by services.mcp.status.collectAsState("stopped")
     val mcpRunning by services.mcp.running.collectAsState(false)
@@ -209,8 +217,9 @@ internal fun SettingsScreen(
             )
             DesktopSettingsCategory.Agents -> {
                 if (services.orchestrationPreferences !is UnavailableOrchestrationPreferencesService) {
-                    OrchestrationPreferencesPanel(services.orchestrationPreferences)
+                    OrchestrationPreferencesPanel(services.orchestrationPreferences, providerModels)
                 }
+                AgentExecutionPreferencesPanel(services)
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
@@ -798,11 +807,12 @@ private fun AgentTranscriptPanel(
 @Composable
 private fun OrchestrationPreferencesPanel(
     service: OrchestrationPreferencesService,
+    providerModels: Map<AgentKind, List<AgentModelOption>>,
 ) {
     var prefs by remember { mutableStateOf(service.load()) }
     // Keep notes draft independent of normalized prefs so trailing newlines/spaces aren't wiped mid-edit.
     var notesText by remember { mutableStateOf(prefs.preferences.joinToString("\n")) }
-    var expandedRole by remember { mutableStateOf<OrchestrationProviderRole?>(null) }
+    var expandedMenu by remember { mutableStateOf<Pair<OrchestrationProviderRole, OrchestrationMenu>?>(null) }
 
     fun persist(next: OrchestrationPreferences) {
         val normalized = next.normalized()
@@ -814,12 +824,19 @@ private fun OrchestrationPreferencesPanel(
         SettingsSectionHeader(
             title = "Orchestration",
             description = "Default providers for /andy-loop, handoff, advisor, and committee. " +
-                "Loop uses Implementation as the worker and Audit as the verifier. " +
+                "Choose a model and permission dial for each role; unset values inherit the provider " +
+                "default or the parent task. Loop uses Implementation as the worker and Audit as the verifier. " +
                 "Saved to ~/.andy/orchestration-preferences.json.",
         )
         OrchestrationProviderRole.entries.forEach { role ->
+            val roleSettings = prefs.settingsFor(role)
+            val agent = prefs.agentFor(role)
+            val modelOptions = AgentModelCatalog.options(agent, providerModels)
+            val modelLabel = roleSettings.model?.let { model ->
+                AgentModelCatalog.option(agent, model, providerModels)?.label ?: model
+            } ?: "provider default"
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -831,22 +848,90 @@ private fun OrchestrationPreferencesPanel(
                 )
                 Box {
                     SettingsChoicePill(
-                        label = prefs.agentFor(role).label,
+                        label = agent.label,
                         selected = true,
                         contentDescription = "${role.label} provider",
-                        onClick = { expandedRole = role },
+                        onClick = { expandedMenu = role to OrchestrationMenu.Provider },
                     )
                     DropdownMenu(
-                        expanded = expandedRole == role,
-                        onDismissRequest = { expandedRole = null },
+                        expanded = expandedMenu == (role to OrchestrationMenu.Provider),
+                        onDismissRequest = { expandedMenu = null },
                         containerColor = AndyColors.Neutral750,
                     ) {
                         AgentKind.entries.forEach { kind ->
                             DropdownMenuItem(
                                 text = { Text(kind.label, color = TextPrimary) },
                                 onClick = {
-                                    persist(prefs.withAgent(role, kind))
-                                    expandedRole = null
+                                    val next = prefs.withAgent(role, kind)
+                                    val selectedModel = next.settingsFor(role).model
+                                    persist(
+                                        if (selectedModel == null || AgentModelCatalog.option(kind, selectedModel, providerModels) != null) {
+                                            next
+                                        } else {
+                                            next.withModel(role, null)
+                                        },
+                                    )
+                                    expandedMenu = null
+                                },
+                            )
+                        }
+                    }
+                }
+                Box {
+                    SettingsChoicePill(
+                        label = modelLabel,
+                        selected = true,
+                        contentDescription = "${role.label} model",
+                        onClick = { expandedMenu = role to OrchestrationMenu.Model },
+                    )
+                    DropdownMenu(
+                        expanded = expandedMenu == (role to OrchestrationMenu.Model),
+                        onDismissRequest = { expandedMenu = null },
+                        containerColor = AndyColors.Neutral750,
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("provider default", color = TextPrimary) },
+                            onClick = {
+                                persist(prefs.withModel(role, null))
+                                expandedMenu = null
+                            },
+                        )
+                        modelOptions.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label, color = TextPrimary) },
+                                onClick = {
+                                    persist(prefs.withModel(role, option.id))
+                                    expandedMenu = null
+                                },
+                            )
+                        }
+                    }
+                }
+                Box {
+                    SettingsChoicePill(
+                        label = prefs.autonomyFor(role)?.label ?: "inherit parent",
+                        selected = true,
+                        contentDescription = "${role.label} permissions",
+                        onClick = { expandedMenu = role to OrchestrationMenu.Autonomy },
+                    )
+                    DropdownMenu(
+                        expanded = expandedMenu == (role to OrchestrationMenu.Autonomy),
+                        onDismissRequest = { expandedMenu = null },
+                        containerColor = AndyColors.Neutral750,
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("inherit parent", color = TextPrimary) },
+                            onClick = {
+                                persist(prefs.withAutonomy(role, null))
+                                expandedMenu = null
+                            },
+                        )
+                        AgentAutonomy.entries.forEach { autonomy ->
+                            DropdownMenuItem(
+                                text = { Text(autonomy.label, color = TextPrimary) },
+                                onClick = {
+                                    persist(prefs.withAutonomy(role, autonomy))
+                                    expandedMenu = null
                                 },
                             )
                         }
@@ -872,6 +957,50 @@ private fun OrchestrationPreferencesPanel(
             textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
             colors = fieldColors(),
         )
+    }
+}
+
+private enum class OrchestrationMenu {
+    Provider,
+    Model,
+    Autonomy,
+}
+
+@Composable
+private fun AgentExecutionPreferencesPanel(services: AndyServices) {
+    val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
+
+    PanelCard(Modifier.fillMaxWidth()) {
+        SettingsSectionHeader(
+            title = "Chat interface",
+            description = "Choose how new chats start for each provider. ACP is the default wherever the provider supports it.",
+        )
+        AgentKind.entries.forEach { agent ->
+            val selectedLane = providerDefaults[agent]?.lane ?: agent.defaultLane()
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(agent.label, color = TextSecondary, fontSize = 13.sp, modifier = Modifier.width(150.dp))
+                if (agent.acpSupported) {
+                    SettingsChoicePill(
+                        label = "ACP",
+                        selected = selectedLane == AgentLaneKind.Acp,
+                        contentDescription = "Use ACP for ${agent.label}",
+                        onClick = { services.agentRuns.setProviderLane(agent, AgentLaneKind.Acp) },
+                    )
+                } else {
+                    Text("ACP unavailable", color = TextSecondary, fontSize = 12.sp)
+                }
+                SettingsChoicePill(
+                    label = "Terminal",
+                    selected = selectedLane == AgentLaneKind.Terminal,
+                    contentDescription = "Use terminal for ${agent.label}",
+                    onClick = { services.agentRuns.setProviderLane(agent, AgentLaneKind.Terminal) },
+                )
+            }
+        }
     }
 }
 

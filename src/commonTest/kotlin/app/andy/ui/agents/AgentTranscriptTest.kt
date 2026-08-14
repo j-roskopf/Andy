@@ -430,6 +430,62 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun compactToolActivityHeadlineUsesActionPhrasesForSparseSingleCalls() {
+        assertEquals(
+            "Edited file",
+            compactToolActivityHeadline(
+                listOf(
+                    AgentEvent.ToolCall(
+                        atMillis = 1,
+                        toolName = "Edit",
+                        summary = "",
+                        kind = AgentToolKind.Edit,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            "Ran command",
+            compactToolActivityHeadline(
+                listOf(
+                    AgentEvent.ToolCall(
+                        atMillis = 1,
+                        toolName = "Terminal",
+                        summary = "",
+                        kind = AgentToolKind.Execute,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            "Edited SettingsScreen.kt",
+            compactToolActivityHeadline(
+                listOf(
+                    AgentEvent.ToolCall(
+                        atMillis = 1,
+                        toolName = "Edit",
+                        summary = "SettingsScreen.kt",
+                        kind = AgentToolKind.Edit,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            "Ran ./gradlew desktopTest",
+            compactToolActivityHeadline(
+                listOf(
+                    AgentEvent.ToolCall(
+                        atMillis = 1,
+                        toolName = "Terminal",
+                        summary = "./gradlew desktopTest",
+                        kind = AgentToolKind.Execute,
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun compactToolActivityHeadlineUsesSpawningCopyForTaskTools() {
         val events = listOf(
             AgentEvent.ToolCall(

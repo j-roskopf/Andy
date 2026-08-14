@@ -113,4 +113,95 @@ class AcpToolCallPresentationTest {
             ),
         )
     }
+
+    @Test
+    fun parsesActionTitleIntoVerbAndPath() {
+        val presented = AcpToolCallPresentation.present(
+            title = "Edit src/commonMain/kotlin/app/andy/ui/agents/AgentTranscript.kt",
+            rawInput = "{}",
+            rawOutput = null,
+            contentDetails = "",
+        )
+        assertEquals("Edit", presented.toolName)
+        assertEquals("AgentTranscript.kt", AcpToolCallPresentation.enrichSummary(
+            presented.summary,
+            AgentToolKind.Edit,
+            emptyList(),
+        ))
+    }
+
+    @Test
+    fun executeTitleFallsBackToCommandString() {
+        val presented = AcpToolCallPresentation.present(
+            title = "./gradlew desktopTest --tests AcpToolCallPresentationTest",
+            rawInput = "{}",
+            rawOutput = null,
+            contentDetails = "",
+        )
+        assertEquals("./gradlew desktopTest --tests AcpToolCallPresentationTest", presented.toolName)
+        assertEquals("./gradlew desktopTest --tests AcpToolCallPresentationTest", presented.summary)
+    }
+
+    @Test
+    fun commandArgumentBecomesSummaryAlone() {
+        val (summary, _) = AcpToolCallPresentation.formatSummary(
+            toolName = "Terminal",
+            rawInput = """{"command":"git status --short","cwd":"/Users/dev/Andy"}""",
+            rawOutput = "",
+            contentDetails = "",
+        )
+        assertEquals("git status --short", summary)
+    }
+
+    @Test
+    fun mergeKeepsRicherNameAndDoesNotRegressState() {
+        val first = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Terminal",
+            summary = "",
+            detail = "{}",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Execute,
+            state = AgentToolState.InProgress,
+        )
+        val update = AgentEvent.ToolCall(
+            atMillis = 2,
+            toolName = "./gradlew test",
+            summary = "./gradlew test",
+            detail = "./gradlew test",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Execute,
+            state = AgentToolState.Pending,
+        )
+        val merged = AcpToolCallPresentation.mergeToolCalls(first, update)
+        assertEquals("./gradlew test", merged.toolName)
+        assertEquals("./gradlew test", merged.summary)
+        assertEquals(AgentToolState.InProgress, merged.state)
+    }
+
+    @Test
+    fun mergePrefersActionPathOverSparseEditLabel() {
+        val first = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Edit",
+            summary = "",
+            detail = "{}",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+        )
+        val update = AgentEvent.ToolCall(
+            atMillis = 2,
+            toolName = "Edit",
+            summary = "src/Foo.kt",
+            detail = "Edit src/Foo.kt",
+            toolCallId = "call-1",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+            locations = listOf("/Users/dev/Andy/src/Foo.kt"),
+        )
+        val merged = AcpToolCallPresentation.mergeToolCalls(first, update)
+        assertEquals("Edit", merged.toolName)
+        assertEquals("Foo.kt", merged.summary)
+    }
 }

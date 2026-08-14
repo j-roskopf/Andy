@@ -1,6 +1,5 @@
 package app.andy.ui.actions
 
-import ai.rever.bossterm.compose.EmbeddableTerminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,9 +13,10 @@ import androidx.compose.ui.graphics.Color
 import app.andy.desktop.service.DesktopActionRunService
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.model.WorkspaceState
+import app.andy.model.panelBackgroundArgb
 import app.andy.model.toTerminalAppearance
 import app.andy.service.AndyServices
-import app.andy.terminal.panelBackgroundArgb
+import app.andy.terminal.rust.RustTerminalCanvas
 import kotlinx.coroutines.flow.MutableStateFlow
 
 private val NoWorkspace = MutableStateFlow(WorkspaceState())
@@ -27,8 +27,8 @@ actual fun ProjectTerminalSurface(
     runId: String,
     modifier: Modifier,
 ) {
-    val view = (services.actionRuns as? DesktopActionRunService)?.terminalView(runId)
-    if (view == null) return
+    val actionRuns = services.actionRuns as? DesktopActionRunService
+    val rustBackend = actionRuns?.rustTerminal(runId) ?: return
 
     val workspaceStore = services.workspaceStore as? DesktopWorkspaceStore
     val workspaceFlow = remember(workspaceStore) { workspaceStore?.state ?: NoWorkspace }
@@ -41,14 +41,10 @@ actual fun ProjectTerminalSurface(
     }
 
     Box(modifier.background(terminalPanelBackground)) {
-        key(runId, view.state) {
-            EmbeddableTerminal(
-                state = view.state,
-                settingsOverride = view.settingsOverride,
-                command = view.command,
-                workingDirectory = view.workingDirectory,
-                environment = view.environment,
-                platformServices = view.platformServices,
+        key(runId, "rust") {
+            RustTerminalCanvas(
+                backend = rustBackend,
+                appearance = appearance,
                 autoFocus = true,
                 modifier = Modifier.fillMaxSize(),
             )

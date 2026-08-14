@@ -8,7 +8,11 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
+import app.andy.model.acpSupported
+import app.andy.model.defaultLane
 import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.ContextualActionKind
@@ -55,7 +59,8 @@ private val agentToolsJson = Json { encodeDefaults = true; ignoreUnknownKeys = t
  * @param callerTaskId When this MCP session is bound to an Andy chat (HTTP URL
  *   `?andyTaskId=` or an explicit `callerTaskId` arg), omitted `autonomy` on
  *   [chat.start] inherits that parent's autonomy so orchestrated workers match
- *   the parent's permission dial.
+ *   the parent's permission dial. Omitted project and directory values inherit
+ *   the same parent's project context as well.
  */
 fun Server.registerAgentProjectTools(
     agentRuns: AgentRunService,
@@ -161,6 +166,8 @@ fun Server.registerAgentProjectTools(
                         put("parentWorktreeTaskId", task.parentWorktreeTaskId.orEmpty())
                         put("attachAndyMcp", task.attachAndyMcp)
                         put("autonomy", task.autonomy.name)
+                        put("model", task.model.orEmpty())
+                        put("sandboxMode", task.sandboxMode?.name.orEmpty())
                         put("unread", task.unread)
                         put("archived", task.archived)
                         put("transcriptCompressed", task.transcriptCompressed)
@@ -319,6 +326,42 @@ fun Server.registerAgentProjectTools(
         textResult(buildJsonArray { events.forEach { add(it.toWire()) } }.toString())
     }
 
+    register(
+        name = "chat.provider_preferences",
+        description = "Read the default ACP or terminal lane for every agent provider",
+    ) {
+        textResult(
+            buildJsonObject {
+                put("providers", buildJsonArray {
+                    AgentKind.entries.forEach { agent ->
+                        add(buildJsonObject {
+                            put("agent", agent.name)
+                            put("lane", agentRuns.providerDefaults.value[agent]?.lane?.name ?: agent.defaultLane().name)
+                            put("acpSupported", agent.acpSupported)
+                        })
+                    }
+                })
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "chat.set_provider_lane",
+        description = "Set the default transport lane for a provider",
+        properties = mapOf(
+            "agent" to buildJsonObject { put("type", "string") },
+            "lane" to buildJsonObject { put("type", "string"); put("description", "ACP or Terminal") },
+        ),
+        required = listOf("agent", "lane"),
+    ) { args ->
+        val agent = AgentKind.entries.firstOrNull { it.name.equals(str(args, "agent"), ignoreCase = true) }
+            ?: error("unknown agent")
+        val lane = AgentLaneKind.entries.firstOrNull { it.name.equals(str(args, "lane"), ignoreCase = true) }
+            ?: error("unknown lane; expected ACP or Terminal")
+        agentRuns.setProviderLane(agent, lane)
+        textResult("{\"ok\":true,\"agent\":\"${agent.name}\",\"lane\":\"${if (lane == AgentLaneKind.Acp && !agent.acpSupported) AgentLaneKind.Terminal else lane}\"}")
+    }
+
     addTool(
         "chat.subscribe",
         "Stream structured transcript events for an ACP chat until cancelled",
@@ -362,11 +405,11 @@ fun Server.registerAgentProjectTools(
             },
             "projectId" to buildJsonObject {
                 put("type", "string")
-                put("description", "Optional project id")
+                put("description", "Optional project id; inherited from the caller when omitted")
             },
             "directory" to buildJsonObject {
                 put("type", "string")
-                put("description", "Working directory")
+                put("description", "Working directory; inherited from the caller when omitted")
             },
             "useWorktree" to buildJsonObject {
                 put("type", "boolean")
@@ -395,6 +438,10 @@ fun Server.registerAgentProjectTools(
             "model" to buildJsonObject {
                 put("type", "string")
                 put("description", "Optional model id (empty = provider default)")
+            },
+            "lane" to buildJsonObject {
+                put("type", "string")
+                put("description", "Optional one-off lane override: ACP or Terminal")
             },
             "autonomy" to buildJsonObject {
                 put("type", "string")
@@ -438,15 +485,16 @@ fun Server.registerAgentProjectTools(
             it.name.equals(agentName, ignoreCase = true) ||
                 it.cliName.equals(agentName, ignoreCase = true)
         } ?: error("unknown agent: $agentName")
-        val autonomyName = str(args, "autonomy")
-        val autonomy = autonomyName?.let { name ->
-            AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
-                ?: error("unknown autonomy: $name")
-        } ?: inheritedAutonomy(
+        val parentTask = inheritedParentTask(
             agentRuns = agentRuns,
             explicitCallerTaskId = str(args, "callerTaskId"),
             sessionCallerTaskId = callerTaskId,
         )
+        val autonomyName = str(args, "autonomy")
+        val autonomy = autonomyName?.let { name ->
+            AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                ?: error("unknown autonomy: $name")
+        } ?: parentTask?.autonomy ?: AgentAutonomy.Standard
         val model = str(args, "model")?.takeIf { it.isNotBlank() }
         val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
         val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
@@ -454,6 +502,14 @@ fun Server.registerAgentProjectTools(
             ?: false
         // Reuse wins over create when both are supplied (matches workflow draft normalization).
         val useWorktree = requestedUseWorktree && existingWorktreePath == null
+        val projectId = str(args, "projectId")?.takeIf { it.isNotBlank() }
+            ?: parentTask?.projectId
+        val directory = str(args, "directory")?.takeIf { it.isNotBlank() }
+            ?: parentTask?.let { parent ->
+                // A child that creates a new worktree needs the repository root; a normal
+                // child should continue in the parent's current worktree/directory.
+                if (requestedUseWorktree) parent.originDir ?: parent.cwd else parent.cwd ?: parent.originDir
+            }
         val attachAndyMcp = args["attachAndyMcp"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["attachAndyMcp"]?.jsonPrimitive?.booleanOrNull
             ?: false
@@ -463,14 +519,18 @@ fun Server.registerAgentProjectTools(
                 title = str(args, "title")?.takeIf { it.isNotBlank() } ?: prompt.take(48),
                 prompt = prompt,
                 agent = agent,
-                projectId = str(args, "projectId")?.takeIf { it.isNotBlank() },
-                directory = str(args, "directory")?.takeIf { it.isNotBlank() },
+                projectId = projectId,
+                directory = directory,
                 useWorktree = useWorktree,
                 existingWorktreePath = existingWorktreePath,
                 baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
                 attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
                 model = model,
+                lane = str(args, "lane")?.let { name ->
+                    AgentLaneKind.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                        ?: error("unknown lane; expected ACP or Terminal")
+                },
                 imagePaths = imagePaths,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
@@ -1065,11 +1125,20 @@ internal fun inheritedAutonomy(
     explicitCallerTaskId: String?,
     sessionCallerTaskId: String?,
 ): AgentAutonomy {
+    return inheritedParentTask(agentRuns, explicitCallerTaskId, sessionCallerTaskId)?.autonomy
+        ?: AgentAutonomy.Standard
+}
+
+/** Resolves the task that owns an MCP session, preferring an explicit caller id. */
+internal fun inheritedParentTask(
+    agentRuns: AgentRunService,
+    explicitCallerTaskId: String?,
+    sessionCallerTaskId: String?,
+): AgentTask? {
     val parentId = explicitCallerTaskId?.takeIf { it.isNotBlank() }
         ?: sessionCallerTaskId?.takeIf { it.isNotBlank() }
-        ?: return AgentAutonomy.Standard
-    return agentRuns.tasks.value.firstOrNull { it.id == parentId }?.autonomy
-        ?: AgentAutonomy.Standard
+        ?: return null
+    return agentRuns.tasks.value.firstOrNull { it.id == parentId }
 }
 
 /** Tool names added by [registerAgentProjectTools]. */
@@ -1077,6 +1146,8 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.list",
     "chat.composer_options",
     "chat.events",
+    "chat.provider_preferences",
+    "chat.set_provider_lane",
     "chat.subscribe",
     "chat.start",
     "chat.stop",

@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentQueuedFollowUp
@@ -191,6 +192,7 @@ class DesktopAgentTaskStoreTest {
             useWorktree = true,
             attachAndyMcp = true,
             maxBudgetUsd = 4.0,
+            lane = AgentLaneKind.Terminal,
         )
         store.save(
             AgentStoreState(
@@ -202,6 +204,26 @@ class DesktopAgentTaskStoreTest {
         val loaded = store.load()
         assertEquals(mapOf(AgentKind.Codex to defaults), loaded.providerDefaults)
         assertEquals(AgentKind.Codex, loaded.lastUsedAgent)
+    }
+
+    @Test
+    fun persistedLaneWinsWhenAChatHasBothLaneArtifacts() = withStore { store ->
+        val task = AgentTask(
+            id = "task-handoff",
+            title = "handoff",
+            prompt = "continue",
+            agent = AgentKind.Codex,
+            status = AgentStatus.Done,
+            lane = AgentLaneKind.Terminal,
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+        )
+        store.taskDir(task.id).mkdirs()
+        store.transcriptFile(task.id).writeText("{\"type\":\"user\"}\n")
+        store.scrollbackFile(task.id).writeText("\u001b[0m>")
+        store.save(AgentStoreState(tasks = listOf(task)))
+
+        assertEquals(AgentLaneKind.Terminal, store.load().tasks.single().lane)
     }
 
     @Test

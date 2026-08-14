@@ -58,8 +58,8 @@ class TerminalSessionTest {
 
         session.close()
 
-        // Completing at all is the regression. BossTerm dispose may report 0, SIGTERM (143),
-        // or [BossTermBackend.CLOSED_EXIT_CODE] depending on how the PTY was reaped.
+        // Completing at all is the regression. Dispose may report 0, SIGTERM (143),
+        // or [RustTerminalBackend.CLOSED_EXIT_CODE] depending on how the PTY was reaped.
         val exitCode = withTimeout(15_000) { session.exitCode.first { it != null } }
         assertTrue(exitCode != null, "close must complete the exitCode flow")
     }
@@ -97,7 +97,7 @@ class TerminalSessionTest {
                 argv = argv,
                 env = mapOf("NODE_OPTIONS" to "--require /tmp/should-be-scrubbed.js"),
             ),
-        ) as BossTermBackend
+        ) as app.andy.terminal.rust.RustTerminalBackend
         try {
             withTimeout(15_000) { session.exitCode.first { it != null } }
             val exported = session.scrollbackAnsi()

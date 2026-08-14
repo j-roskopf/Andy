@@ -320,10 +320,11 @@ In addition to the existing device tools:
 
 ## Agent transport lanes
 
-Claude Code, Codex, Cursor, OpenCode, and Pi always use the ACP stdio lane. ACP
+Claude Code, Codex, Cursor, OpenCode, and Pi default to the ACP stdio lane. ACP
 sessions use the official Kotlin ACP client, persist structured JSONL transcripts
-under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep their ACP session id
-separate from vendor CLI session ids. The GUI renders those events with the
+under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep an ACP session id that
+Andy also mirrors into `vendorSessionId` when possible so **External** can open a
+native CLI `--resume` of the same conversation. The GUI renders ACP events with the
 structured transcript surface; the CLI uses the same event stream via
 `chat.subscribe` in `andy attach`. Both can continue a stored session after restart.
 

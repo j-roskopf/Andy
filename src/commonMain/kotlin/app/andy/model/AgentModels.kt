@@ -481,7 +481,7 @@ data class AgentTask(
     val acpSessionId: String? = null,
     /** Last ACP prompt stop reason, retained for diagnostics and recovery. */
     val stopReason: String? = null,
-    /** Transport lane is fixed at creation and remains stable across resume. */
+    /** Transport lane is fixed at creation (provider default / settings); not switched live. */
     val lane: AgentLaneKind = AgentLaneKind.Terminal,
     val createdAtMillis: Long,
     val startedAtMillis: Long? = null,
@@ -713,6 +713,8 @@ data class AgentProviderDefaults(
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
+    /** Explicit provider preference; null keeps the provider's ACP-capable default. */
+    val lane: AgentLaneKind? = null,
 )
 
 /** A locally installed agent skill that can be attached to a follow-up prompt. */

@@ -161,18 +161,19 @@ class TmuxAndyTest {
                 ),
             )
             backend.attach()
-            val view = assertNotNull(backend.terminalView())
+            val rust = assertNotNull(backend.rustTerminal())
             val deadline = System.currentTimeMillis() + 5_000
-            while ((!BossTermAccess.isUsingAlternateBuffer(view.state) ||
-                    !BossTermAccess.isMouseReporting(view.state)) &&
+            while ((rust.mouseFlags() and app.andy.terminal.rust.RustMouseFlags.REPORTING) == 0 &&
                 System.currentTimeMillis() < deadline
             ) {
                 Thread.sleep(25)
             }
-            assertTrue(BossTermAccess.isUsingAlternateBuffer(view.state), "tmux client did not enter alternate buffer")
-            assertTrue(BossTermAccess.isMouseReporting(view.state), "tmux client did not enable mouse reporting")
+            assertTrue(
+                (rust.mouseFlags() and app.andy.terminal.rust.RustMouseFlags.REPORTING) != 0,
+                "tmux client did not enable mouse reporting",
+            )
 
-            val wheel = TmuxWheelInput { bytes -> BossTermAccess.writeBytes(view.state, bytes) }
+            val wheel = TmuxWheelInput { bytes -> rust.write(bytes) }
             assertTrue(wheel.onScroll(-1f))
             Thread.sleep(200)
             assertTrue(TmuxAndy.isPaneInCopyMode(taskId), "wheel-up should enter tmux copy mode")
@@ -356,7 +357,7 @@ class TmuxAndyTest {
                 assertTrue(backend.isAlive, "tmux session should stay alive on cycle $it")
                 backend.reattachViewer()
                 assertTrue(backend.isViewerAlive, "viewer should be alive after reattach on cycle $it")
-                assertNotNull(backend.terminalView(), "view should exist after reattach on cycle $it")
+                assertNotNull(backend.rustTerminal(), "view should exist after reattach on cycle $it")
             }
             val snap = backend.bufferSnapshot()
             assertTrue(snap.contains("andy-reattach"), "expected tmux capture, got=${snap.take(200)}")

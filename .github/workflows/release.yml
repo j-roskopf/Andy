@@ -285,6 +285,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Build Linux packages
         run: >
           xvfb-run -a ./gradlew
@@ -366,6 +369,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install WiX Toolset
         shell: pwsh
@@ -480,6 +486,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Validate macOS signing secrets
         shell: bash

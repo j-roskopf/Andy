@@ -4,8 +4,6 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.TerminalAppearanceSnapshot
-import app.andy.terminal.AndyTerminalView
-import app.andy.terminal.BossTermBackend
 import app.andy.terminal.SCROLLBACK_SESSION_SEPARATOR
 import app.andy.terminal.combineCommittedAndDerivedScrollback
 import app.andy.terminal.TerminalLaunchRequest
@@ -28,18 +26,18 @@ import app.andy.terminal.atomicWriteText
 import app.andy.terminal.capScrollbackSize
 import app.andy.terminal.collapseRepeatedScrollbackLines
 import app.andy.terminal.compactRepeatedProviderStartupText
-import app.andy.terminal.createScrollbackReplayView
 import app.andy.terminal.formatLegacyScrollbackForReplay
 import app.andy.terminal.formatScrollbackForDisplay
 import app.andy.terminal.isScrollbackDisplayNoise
 import app.andy.terminal.looksLikeBrokenPlainScrollback
 import app.andy.terminal.looksLikeRawAnsiTee
 import app.andy.terminal.resolveScrollbackForReplay
+import app.andy.terminal.rust.RustScrollbackReplay
+import app.andy.terminal.rust.RustTerminalBackend
 import app.andy.terminal.scrollbackReplayColumns
 import app.andy.terminal.stripAnsi
 import app.andy.terminal.styledRowsFromAnsiText
 import app.andy.terminal.trimLegacyTmuxCopyModeOutput
-import app.andy.terminal.toTerminalView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -190,13 +188,11 @@ class AgentTerminalManager(
 
     fun get(taskId: String): Handle? = handles[taskId]
 
-    fun terminalView(taskId: String): AndyTerminalView? {
+    fun rustTerminal(taskId: String): RustTerminalBackend? {
         val handle = handles[taskId] ?: return null
-        val session = handle.session
-        if (session is TmuxAttachBackend && !session.isViewerAlive) return null
-        return when (session) {
-            is BossTermBackend -> session.toTerminalView()
-            is TmuxAttachBackend -> session.terminalView()
+        return when (val session = handle.session) {
+            is RustTerminalBackend -> session
+            is TmuxAttachBackend -> session.rustTerminal()?.takeIf { session.isViewerAlive }
             else -> null
         }
     }
@@ -512,9 +508,9 @@ class AgentTerminalManager(
      * Build a read-only BossTerm view that replays [scrollback.ansi] for viewing
      * finished chats. Caller owns dispose. Returns null when no history is available.
      */
-    fun openScrollbackReplay(taskId: String): AndyTerminalView? {
+    fun openScrollbackReplay(taskId: String): RustScrollbackReplay? {
         val text = scrollbackReplayText(taskId) ?: return null
-        return createScrollbackReplayView(
+        return RustScrollbackReplay.create(
             content = text,
             cols = scrollbackReplayColumns(text),
             appearance = terminalAppearance(),
@@ -526,7 +522,7 @@ class AgentTerminalManager(
         val appearance = terminalAppearance()
         handles.values.forEach { handle ->
             when (val session = handle.session) {
-                is BossTermBackend -> session.updateAppearance(appearance)
+                is RustTerminalBackend -> session.updateAppearance(appearance)
                 is TmuxAttachBackend -> session.updateAppearance(appearance)
             }
         }
@@ -535,7 +531,7 @@ class AgentTerminalManager(
     private fun bumpSessionsRevision() {
         _sessionsRevision.value = _sessionsRevision.value + 1
         _attachedTaskIds.value = handles.keys.filterTo(mutableSetOf()) { id ->
-            terminalView(id) != null
+            rustTerminal(id) != null
         }
         _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
     }
@@ -605,6 +601,14 @@ class AgentTerminalManager(
         argv: List<String>,
         env: Map<String, String>,
         onStatusSnapshot: (AgentStatusSnapshot) -> Unit = {},
+        /**
+         * True for a view-only reattach with no new turn (no argv prompt, nothing queued
+         * to type). Such a launch never calls [AgentStatusTracker.markUserWorking] to arm
+         * the tracker, so premature-idle suppression — meant to ride out a fresh launch's
+         * boot splash before its first turn starts — would otherwise withhold Done forever
+         * once the CLI settles back at its resumed, genuinely idle prompt.
+         */
+        quietResume: Boolean = false,
     ): Handle = attachLock(task.id).withLock {
         withContext(Dispatchers.IO) {
             stop(task.id)
@@ -631,6 +635,11 @@ class AgentTerminalManager(
             )
 
             val resolvedMode = resolveMode()
+            // Seed the PTY at the last size any terminal in this app run actually
+            // negotiated (see RustTerminalBackend.lastKnownGridSize) rather than a fixed
+            // guess — a CLI that dumps its whole history the instant it starts (a quiet
+            // resume) never gets a chance to redraw at the correct size otherwise.
+            val (seedCols, seedRows) = RustTerminalBackend.lastKnownGridSize(agentCli = true)
             val session = when (resolvedMode) {
                 AgentTerminalMode.TmuxHeadless -> {
                     TerminalSessions.create(
@@ -639,6 +648,8 @@ class AgentTerminalManager(
                             argv = argv,
                             cwd = cwdPath,
                             env = launchEnv,
+                            cols = seedCols,
+                            rows = seedRows,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.TmuxAgent,
                             killTmuxOnClose = true,
@@ -652,6 +663,8 @@ class AgentTerminalManager(
                             argv = argv,
                             cwd = cwdPath,
                             env = launchEnv,
+                            cols = seedCols,
+                            rows = seedRows,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.TmuxAttach,
                             killTmuxOnClose = true,
@@ -665,6 +678,8 @@ class AgentTerminalManager(
                             argv = argv,
                             cwd = cwdPath,
                             env = launchEnv,
+                            cols = seedCols,
+                            rows = seedRows,
                             appearance = terminalAppearance(),
                             mode = TerminalMode.DirectPty,
                             agentCli = true,
@@ -673,13 +688,15 @@ class AgentTerminalManager(
                 }
             }
 
-            val view = when (session) {
-                is BossTermBackend -> session.toTerminalView()
-                is TmuxAttachBackend -> session.terminalView()
-                else -> null
+            // Rust DirectPty is ready once start() returns — ultra-fast stubs
+            // (`/usr/bin/true`) can already be exited by here, so do not require isAlive.
+            val viewReady = when (session) {
+                is RustTerminalBackend -> session.pid != null || session.exitCode.value != null
+                is TmuxAttachBackend -> session.hasLiveViewer()
+                else -> false
             }
             if (resolvedMode == AgentTerminalMode.TmuxWithAttach || resolvedMode == AgentTerminalMode.DirectPty) {
-                check(view != null) {
+                check(viewReady) {
                     "terminal view missing after start (backend=${session::class.simpleName}, mode=$resolvedMode)"
                 }
             }
@@ -692,6 +709,13 @@ class AgentTerminalManager(
             )
             val foreground = AtomicBoolean(true)
             bindSessionForeground(session, foreground)
+            // View-only reattach: seed Done so collectors never see a fake Working→Done
+            // (that transition dings the finish notification when the idle prompt scrapes in).
+            val seededStatus = if (quietResume) {
+                AgentStatusSnapshot(AgentStatus.Done, confident = true)
+            } else {
+                null
+            }
             val tracker = AgentStatusTracker(
                 scope = scope,
                 taskId = task.id,
@@ -699,8 +723,9 @@ class AgentTerminalManager(
                 artifactDir = artifactDir,
                 session = session,
                 onSnapshot = onStatusSnapshot,
+                initialSnapshot = seededStatus,
                 foreground = foreground,
-                suppressPrematureIdle = true,
+                suppressPrematureIdle = !quietResume,
             )
             artifacts.start()
             tracker.start()
@@ -737,13 +762,15 @@ class AgentTerminalManager(
                     onStatusSnapshot(snapshot)
                 }
             }
-            // Andy launches with a prompt (argv-embedded or typed). Arm the turn so
-            // suppressPrematureIdle cannot trap providers whose working chrome Andy
-            // does not yet recognize (notably OpenCode) at permanent Working.
-            if (task.prompt.isNotBlank() || argvHasEmbeddedPrompt(argv)) {
-                tracker.markUserWorking()
-            } else {
-                onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
+            // Arm only when THIS launch carries a new user turn (argv prompt). Typing via
+            // writeAfterStart/submitText arms separately — do not treat the original Andy
+            // task prompt alone as a new turn (quiet --resume / External open).
+            // Quiet reattach must not publish Working: the resumed TUI settles at an idle
+            // prompt, scrape goes Done, and attention would ding as if the turn just finished.
+            when {
+                argvHasEmbeddedPrompt(argv) -> tracker.markUserWorking()
+                quietResume -> Unit
+                else -> onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
             }
             handle
         }
@@ -824,7 +851,7 @@ class AgentTerminalManager(
                 if (!TmuxAndy.hasSession(taskId)) return@withLock null
                 val attachSnap = stripAnsi(session.bufferSnapshot().trim())
                 if (TmuxAndy.paneContentLooksLikeFailedAttach(attachSnap)) return@withLock null
-                check(session.terminalView() != null) {
+                check(session.hasLiveViewer()) {
                     "terminal view missing after tmux attach"
                 }
                 // Prefer the dir the live session already used, then the task cwd, then scratch.
@@ -1239,7 +1266,9 @@ class AgentTerminalManager(
         cursor: ScrollbackAnsiCursor? = null,
     ): app.andy.terminal.ScrollbackAnsiSnapshot? =
         when (session) {
-            is BossTermBackend -> session.scrollbackAnsiSnapshot(cursor)
+            is RustTerminalBackend -> session.scrollbackAnsiSnapshot(cursor)
+            // Tmux history is captured via capture-pane; attached-client tees include
+            // copy-mode noise and must not be persisted as the transcript source.
             else -> null
         }
 
@@ -1271,14 +1300,14 @@ class AgentTerminalManager(
         historyLinesOverride: Int? = null,
     ): Unit = synchronized(handle.scrollbackLock) {
         val captureRows = if (handle.foreground.get()) {
-            BossTermBackend.SCROLLBACK_CAPTURE_ROWS
+            RustTerminalBackend.SCROLLBACK_CAPTURE_ROWS
         } else {
-            BossTermBackend.SCROLLBACK_BACKGROUND_CAPTURE_ROWS
+            RustTerminalBackend.SCROLLBACK_BACKGROUND_CAPTURE_ROWS
         }
         val snapshot = when (val session = handle.session) {
             is TmuxAttachBackend, is TmuxAgentBackend ->
                 captureTmuxRows(handle.taskId, historyLinesOverride ?: captureRows)
-            is BossTermBackend ->
+            is RustTerminalBackend ->
                 replayCapture(handle, session.scrollbackAnsiSnapshot())
             else -> captureTmuxRows(handle.taskId, captureRows)
         }
@@ -1316,9 +1345,9 @@ class AgentTerminalManager(
     private fun bindSessionForeground(session: TerminalSession, foreground: AtomicBoolean) {
         when (session) {
             // Reaches the inner viewer too: TmuxAttachBackend hands its own flag down to
-            // whichever BossTermBackend is currently attached.
+            // whichever emulator is currently attached.
             is TmuxAttachBackend -> session.foreground = foreground
-            is BossTermBackend -> session.foregroundProvider = { foreground.get() }
+            is RustTerminalBackend -> session.foregroundProvider = { foreground.get() }
             else -> Unit
         }
     }
@@ -1387,7 +1416,7 @@ class AgentTerminalManager(
         private const val EXIT_CODE_GRACE_MS = 8_000L
 
         /** Returned when a session ends without ever reporting a status. */
-        const val UNKNOWN_EXIT_CODE = BossTermBackend.CLOSED_EXIT_CODE
+        const val UNKNOWN_EXIT_CODE = RustTerminalBackend.CLOSED_EXIT_CODE
         internal const val SUBMIT_KEY_GAP_MS = 80L
 
         fun defaultMode(): AgentTerminalMode =

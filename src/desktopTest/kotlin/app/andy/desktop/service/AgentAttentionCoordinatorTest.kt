@@ -192,6 +192,36 @@ class AgentAttentionCoordinatorTest {
         assertEquals("Original task prompt", fixture.notifications.events.first().title)
     }
 
+    @Test
+    fun stayingDoneAcrossQuietReattachDoesNotDing() {
+        // Quiet reattach used to publish Working then scrape back to Done, which dinged.
+        // Staying Done (the fixed path) must not notify.
+        val fixture = Fixture(
+            initialWorkspace = WorkspaceState(agentNotificationTiming = AgentNotificationTiming.Always),
+        )
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+
+        assertEquals(emptyList(), fixture.notifications.events)
+        assertEquals(emptyList(), fixture.sounds.played)
+    }
+
+    @Test
+    fun workingThenDoneAfterPriorDoneStillDingsForARealFollowUp() {
+        // A genuine new turn after an earlier Done must still notify once the follow-up finishes.
+        val fixture = Fixture(
+            initialWorkspace = WorkspaceState(agentNotificationTiming = AgentNotificationTiming.Always),
+        )
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+        AgentNotificationDedup.clearForTests()
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Working)))
+        fixture.coordinator.onTasksChanged(listOf(task(AgentStatus.Done, confident = true)))
+
+        assertEquals(listOf("Done"), fixture.notifications.events.map { it.kind.name })
+        assertEquals(listOf("chime"), fixture.sounds.played)
+    }
+
     private class Fixture(
         initialWorkspace: WorkspaceState = WorkspaceState(),
         foreground: Boolean = false,

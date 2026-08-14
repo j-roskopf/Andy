@@ -259,7 +259,15 @@ class AcpSession(
                 toolCall: com.agentclientprotocol.model.SessionUpdate.ToolCallUpdate,
                 permissions: List<com.agentclientprotocol.model.PermissionOption>,
                 _meta: JsonElement?,
-            ) = bridge.request(toolCall, permissions, _meta)
+            ): com.agentclientprotocol.model.RequestPermissionResponse {
+                // Permission RPCs often carry the only useful title (path / command). Session
+                // tool notifications for Edit/Terminal are frequently bare verbs with empty args —
+                // project this update into the transcript before auto-allow or prompting.
+                if (!suppressHistoryReplay) {
+                    mapEvent(toolCall)?.let(onEvent)
+                }
+                return bridge.request(toolCall, permissions, _meta)
+            }
 
             override suspend fun notify(notification: com.agentclientprotocol.model.SessionUpdate, _meta: JsonElement?) {
                 if (suppressHistoryReplay) return

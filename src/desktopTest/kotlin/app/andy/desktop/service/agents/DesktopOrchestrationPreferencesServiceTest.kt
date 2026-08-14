@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.AgentAutonomy
 import app.andy.model.OrchestrationPreferences
 import app.andy.model.OrchestrationProviderRole
 import java.io.File
@@ -39,6 +40,8 @@ class DesktopOrchestrationPreferencesServiceTest {
             val saved = OrchestrationPreferences.Defaults
                 .withAgent(OrchestrationProviderRole.Impl, AgentKind.ClaudeCode)
                 .withAgent(OrchestrationProviderRole.Audit, AgentKind.Cursor)
+                .withModel(OrchestrationProviderRole.Impl, "sonnet")
+                .withAutonomy(OrchestrationProviderRole.Impl, AgentAutonomy.Full)
                 .withPreferenceNotes(listOf("Prefer Claude for UI copy.", "  ", "Codex for mechanical work."))
             service.save(saved)
             assertTrue(file.isFile)
@@ -46,6 +49,8 @@ class DesktopOrchestrationPreferencesServiceTest {
             assertEquals(AgentKind.ClaudeCode, loaded.agentFor(OrchestrationProviderRole.Impl))
             assertEquals(AgentKind.Cursor, loaded.agentFor(OrchestrationProviderRole.Audit))
             assertEquals(AgentKind.ClaudeCode, loaded.agentFor(OrchestrationProviderRole.Ui))
+            assertEquals("sonnet", loaded.settingsFor(OrchestrationProviderRole.Impl).model)
+            assertEquals(AgentAutonomy.Full, loaded.autonomyFor(OrchestrationProviderRole.Impl))
             assertEquals(
                 listOf("Prefer Claude for UI copy.", "Codex for mechanical work."),
                 loaded.preferences,
