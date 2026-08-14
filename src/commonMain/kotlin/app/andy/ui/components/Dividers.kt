@@ -35,7 +35,12 @@ internal fun AndyHorizontalDivider(
 }
 
 @Composable
-internal fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
+internal fun PaneDivider(
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit = {},
+    /** When false, keeps the drag hit target but skips the hairline (e.g. rail already draws a border). */
+    drawLine: Boolean = true,
+) {
     val latestOnDrag by rememberUpdatedState(onDrag)
     val latestOnDragEnd by rememberUpdatedState(onDragEnd)
     val density = LocalDensity.current.density
@@ -51,13 +56,15 @@ internal fun PaneDivider(onDrag: (Float) -> Unit, onDragEnd: () -> Unit = {}) {
                 ) { _, drag -> latestOnDrag(drag.x / density) }
             },
     ) {
-        Box(
-            Modifier
-                .align(Alignment.Center)
-                .width(AndyStroke.Hairline)
-                .fillMaxHeight()
-                .background(PaneDividerTint),
-        )
+        if (drawLine) {
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .width(AndyStroke.Hairline)
+                    .fillMaxHeight()
+                    .background(PaneDividerTint),
+            )
+        }
     }
 }
 

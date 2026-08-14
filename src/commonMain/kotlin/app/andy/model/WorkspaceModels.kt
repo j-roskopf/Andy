@@ -86,6 +86,8 @@ data class WorkspaceState(
     val workspaceSidebarExpanded: Boolean = true,
     val workspaceStatusExpanded: Boolean = false,
     val projectsIntroductionCompleted: Boolean = false,
+    val projectListPaneVisible: Boolean = true,
+    val projectListPaneWidth: Float = 300f,
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 320f,
     val appsListPaneWidth: Float = 520f,

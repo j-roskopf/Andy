@@ -429,6 +429,50 @@ class AgentTranscriptTest {
         assertEquals("edited 2 files", headline)
     }
 
+    /**
+     * cursor-agent titles a shell call with the command and reports every kind as Other, so this
+     * group used to be headlined "read 1 file" — the eight commands went unmentioned.
+     */
+    @Test
+    fun compactToolActivityHeadlineCountsCommandsTitledWithTheirCommand() {
+        val events = listOf(
+            AgentEvent.ToolCall(
+                atMillis = 1,
+                toolName = "Read",
+                summary = "440\t                        when (active?.kind) {",
+                detail = "- **file path:** src/commonMain/kotlin/app/andy/ui/shell/ShellDocks.kt\n" +
+                    "- **offset:** 440\n- **limit:** 220\n```\n440\twhen (active?.kind) {\n```",
+                kind = AgentToolKind.Other,
+                locations = listOf("src/commonMain/kotlin/app/andy/ui/shell/ShellDocks.kt"),
+            ),
+        ) + (2..9).map { index ->
+            AgentEvent.ToolCall(
+                atMillis = index.toLong(),
+                toolName = "grep -rl \"CloseTab\" src | head -30",
+                summary = "ShellDocks.kt",
+                detail = "- **command:** grep -rl \"CloseTab\" src | head -30\n```console\nShellDocks.kt\n```",
+                kind = AgentToolKind.Other,
+            )
+        }
+
+        assertEquals("read 1 file, ran 8 commands", compactToolActivityHeadline(events))
+    }
+
+    @Test
+    fun compactToolActivityHeadlineNamesSearchesAndCountsWhatItCannotName() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "grep", summary = "PointerButton", kind = AgentToolKind.Search),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Find", summary = "*.kt", kind = AgentToolKind.Search),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Read File", summary = "ShellDocks.kt", kind = AgentToolKind.Read),
+            AgentEvent.ToolCall(atMillis = 4, toolName = "Andy MCP · tap", summary = "x=10, y=20"),
+        )
+
+        assertEquals(
+            "read 1 file, searched 2 times, 1 other tool call",
+            compactToolActivityHeadline(events),
+        )
+    }
+
     @Test
     fun compactToolActivityHeadlineUsesActionPhrasesForSparseSingleCalls() {
         assertEquals(

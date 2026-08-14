@@ -331,8 +331,14 @@ internal fun AndyShell(
                     proxyRunning = proxyRunning,
                     rightPaneOpen = state.docks.right.visible,
                     bottomPaneOpen = state.docks.bottom.visible,
+                    projectPaneOpen = state.workspaceState.projectListPaneVisible,
                     dockLandingFor = state.docks.landingFor,
                     onPlacementIconClick = state::onPlacementIconClick,
+                    onProjectPaneClick = {
+                        state.updateWorkspace {
+                            it.copy(projectListPaneVisible = !it.projectListPaneVisible)
+                        }
+                    },
                     onDismissDockLanding = state::dismissDockLanding,
                     onOpenDockKind = state::openDockKind,
                     onMenuExpandedChange = state::updateChromeMenuExpanded,
@@ -630,9 +636,11 @@ internal fun AndyShell(
                         logcatState = state.logcatState,
                         onSelectTab = { state.selectDockTab(DockPlacement.Right, it) },
                         onCloseTab = { state.closeDockTab(DockPlacement.Right, it) },
+                        onRenameTab = { tabId, title -> state.renameDockTab(DockPlacement.Right, tabId, title) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Right, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Right) },
                         modifier = Modifier.width(rightDockPaneWidth.dp).fillMaxHeight(),
+                        terminalThemeId = state.workspaceState.terminalThemeId,
                     )
                 }
                 }
@@ -657,9 +665,11 @@ internal fun AndyShell(
                         logcatState = state.logcatState,
                         onSelectTab = { state.selectDockTab(DockPlacement.Bottom, it) },
                         onCloseTab = { state.closeDockTab(DockPlacement.Bottom, it) },
+                        onRenameTab = { tabId, title -> state.renameDockTab(DockPlacement.Bottom, tabId, title) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Bottom) },
                         modifier = Modifier.fillMaxWidth().height(bottomDockPaneHeight.dp),
+                        terminalThemeId = state.workspaceState.terminalThemeId,
                     )
                 }
                 }

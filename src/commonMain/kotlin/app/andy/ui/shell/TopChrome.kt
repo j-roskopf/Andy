@@ -92,8 +92,10 @@ internal fun TopChrome(
     onProxyClick: () -> Unit = {},
     rightPaneOpen: Boolean = false,
     bottomPaneOpen: Boolean = false,
+    projectPaneOpen: Boolean = true,
     dockLandingFor: DockPlacement? = null,
     onPlacementIconClick: (DockPlacement) -> Unit = {},
+    onProjectPaneClick: () -> Unit = {},
     onDismissDockLanding: () -> Unit = {},
     onOpenDockKind: (DockPlacement, DockTabKind) -> Unit = { _, _ -> },
     onMenuExpandedChange: (Boolean) -> Unit = {},
@@ -146,6 +148,12 @@ internal fun TopChrome(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (destination == AndyDestination.Actions) {
+                    ProjectPaneToggle(
+                        selected = projectPaneOpen,
+                        onClick = onProjectPaneClick,
+                    )
+                }
                 PanePlacementToggle(
                     placement = DockPlacement.Bottom,
                     selected = bottomPaneOpen,

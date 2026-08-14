@@ -13,6 +13,55 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun infersKindFromRawAndRenderedArguments() {
+        assertEquals(
+            AgentToolKind.Execute,
+            AcpToolCallPresentation.inferKindFromArguments("""{"command":"./gradlew desktopTest"}"""),
+        )
+        assertEquals(
+            AgentToolKind.Execute,
+            AcpToolCallPresentation.inferKindFromArguments(
+                "- **command:** grep -rl \"CloseTab\" src\n```console\nShellDocks.kt\n```",
+            ),
+        )
+        assertEquals(
+            AgentToolKind.Read,
+            AcpToolCallPresentation.inferKindFromArguments(
+                "- **file path:** src/Main.kt\n- **offset:** 440\n- **limit:** 220",
+            ),
+        )
+        assertEquals(
+            AgentToolKind.Edit,
+            AcpToolCallPresentation.inferKindFromArguments(
+                "- **file path:** src/Main.kt\n- **old string:** before\n- **new string:** after",
+            ),
+        )
+        assertEquals(
+            AgentToolKind.Search,
+            AcpToolCallPresentation.inferKindFromArguments("""{"pattern":"PointerButton","glob":"*.kt"}"""),
+        )
+        assertEquals(
+            AgentToolKind.Edit,
+            AcpToolCallPresentation.inferKindFromArguments(
+                "src/Main.kt\n--- old\nprintln(\"old\")\n+++ new\nprintln(\"new\")\n",
+            ),
+        )
+        assertEquals(null, AcpToolCallPresentation.inferKindFromArguments("""{"x":666,"y":1837}"""))
+        assertEquals(null, AcpToolCallPresentation.inferKindFromArguments(""))
+    }
+
+    /** A read whose file body mentions `"command":` is still a read. */
+    @Test
+    fun kindInferenceIgnoresContentBelowTheArguments() {
+        assertEquals(
+            AgentToolKind.Read,
+            AcpToolCallPresentation.inferKindFromArguments(
+                "- **file path:** src/Main.kt\n```\nval json = \"\"\"{\"command\":\"ls\"}\"\"\"\n```",
+            ),
+        )
+    }
+
+    @Test
     fun resolvesGenericTitleFromRawInput() {
         assertEquals(
             "Andy MCP · tap",

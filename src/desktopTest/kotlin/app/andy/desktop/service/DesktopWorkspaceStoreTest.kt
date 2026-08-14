@@ -101,6 +101,8 @@ class DesktopWorkspaceStoreTest {
                 tracingPresetsPaneWidth = 360f,
                 tracingLibraryPaneHeight = 300f,
                 workspaceStatusExpanded = true,
+                projectListPaneVisible = false,
+                projectListPaneWidth = 418f,
                 performanceTab = "Tracing",
                 filesTab = "Database",
                 lastActionProjectId = "garden",
@@ -114,6 +116,8 @@ class DesktopWorkspaceStoreTest {
         assertEquals(360f, tracing.tracingPresetsPaneWidth)
         assertEquals(300f, tracing.tracingLibraryPaneHeight)
         assertEquals(true, tracing.workspaceStatusExpanded)
+        assertEquals(false, tracing.projectListPaneVisible)
+        assertEquals(418f, tracing.projectListPaneWidth)
         assertEquals("Tracing", tracing.performanceTab)
         assertEquals("Database", tracing.filesTab)
         assertEquals("garden", tracing.lastActionProjectId)
