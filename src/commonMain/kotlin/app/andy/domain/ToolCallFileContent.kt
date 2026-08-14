@@ -74,8 +74,16 @@ private val AmbiguousNewTextArgumentKeys = listOf("new", "after", "content", "co
  */
 fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolCallFileContent? {
     val trimmed = text.trim()
-    if (!trimmed.startsWith("{")) return null
-    val obj = runCatching { toolArgumentJson.parseToJsonElement(trimmed) }.getOrNull() as? JsonObject ?: return null
+    val separatorIndex = trimmed.indexOf(AcpToolCallPresentation.DetailSeparator)
+    val arguments = if (separatorIndex >= 0) trimmed.substring(0, separatorIndex) else trimmed
+    val extraDetail = if (separatorIndex >= 0) {
+        trimmed.substring(separatorIndex + AcpToolCallPresentation.DetailSeparator.length)
+            .takeIf { it.isNotBlank() }
+    } else {
+        null
+    }
+    if (!arguments.startsWith("{")) return null
+    val obj = runCatching { toolArgumentJson.parseToJsonElement(arguments) }.getOrNull() as? JsonObject ?: return null
     val path = PathArgumentKeys.firstNotNullOfOrNull { obj.stringValue(it) }
         ?.takeIf { looksLikeStructuredFilePath(it) }
         ?: return null
@@ -85,7 +93,7 @@ fun parseToolCallFileArguments(text: String, kind: AgentToolKind? = null): ToolC
     val oldText = oldKeys.firstNotNullOfOrNull { obj.stringValue(it) }
     val newText = newKeys.firstNotNullOfOrNull { obj.stringValue(it) }
     if (oldText == null && newText == null) return null
-    return ToolCallFileContent(path = path, oldText = oldText, newText = newText)
+    return ToolCallFileContent(path = path, oldText = oldText, newText = newText, extraDetail = extraDetail)
 }
 
 private fun JsonObject.stringValue(key: String): String? =
@@ -167,6 +175,7 @@ fun diffTextLines(path: String, oldText: String?, newText: String?): AgentFileDi
 }
 
 private fun String.normalizedLines(): List<String> {
+    if (isEmpty()) return emptyList()
     val rows = lines()
     return if (endsWith("\n") && rows.lastOrNull() == "") rows.dropLast(1) else rows
 }

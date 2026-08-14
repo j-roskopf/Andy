@@ -312,6 +312,32 @@ class AcpToolCallPresentationTest {
     }
 
     @Test
+    fun mergeKeepsEditArgumentsParseableWhenOutputArrives() {
+        val arguments = """{"file_path":"README.md","old_string":"old","new_string":"new"}"""
+        val pending = AgentEvent.ToolCall(
+            atMillis = 1,
+            toolName = "Edit File",
+            summary = "README.md",
+            detail = arguments,
+            toolCallId = "edit-arguments",
+            kind = AgentToolKind.Edit,
+            state = AgentToolState.Pending,
+        )
+        val completed = pending.copy(
+            atMillis = 2,
+            detail = "warning: formatter skipped generated file",
+            state = AgentToolState.Completed,
+        )
+
+        val merged = AcpToolCallPresentation.mergeToolCalls(pending, completed)
+
+        assertEquals(
+            "$arguments${AcpToolCallPresentation.DetailSeparator}warning: formatter skipped generated file",
+            merged.detail,
+        )
+    }
+
+    @Test
     fun mergePrefersActionPathOverSparseEditLabel() {
         val first = AgentEvent.ToolCall(
             atMillis = 1,

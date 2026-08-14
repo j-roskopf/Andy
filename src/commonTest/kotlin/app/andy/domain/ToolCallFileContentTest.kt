@@ -103,6 +103,29 @@ class ToolCallFileContentTest {
     }
 
     @Test
+    fun structuredEditArgumentsKeepOutputAfterTheJson() {
+        val arguments = """{"file_path":"README.md","old_string":"old","new_string":"new"}"""
+        val parsed = parseToolCallFileArguments(
+            "$arguments${AcpToolCallPresentation.DetailSeparator}warning: generated file skipped",
+            AgentToolKind.Edit,
+        )
+
+        assertEquals("README.md", parsed?.path)
+        assertEquals("old", parsed?.oldText)
+        assertEquals("new", parsed?.newText)
+        assertEquals("warning: generated file skipped", parsed?.extraDetail)
+    }
+
+    @Test
+    fun emptyOldSnapshotProducesANewFileDiff() {
+        val diff = diffTextLines("new.txt", "", "one\ntwo")
+
+        assertTrue(diff.isNewFile)
+        assertEquals(0, diff.deletions)
+        assertEquals(2, diff.additions)
+    }
+
+    @Test
     fun parseToolCallFileArgumentsIgnoresUnrelatedJson() {
         assertNull(parseToolCallFileArguments("""{"totalMatches":45,"truncated":false}"""))
         assertNull(parseToolCallFileArguments("""{"path":"src/Main.kt"}"""))

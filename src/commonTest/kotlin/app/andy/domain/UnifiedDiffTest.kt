@@ -84,6 +84,40 @@ class UnifiedDiffTest {
     }
 
     @Test
+    fun detectUnifiedDiffDoesNotCountAddedSourceAsAFileHeader() {
+        val text = """
+            --- /dev/null
+            +++ b/operators.txt
+            @@ -0,0 +1 @@
+            +++ value
+        """.trimIndent()
+
+        val diff = detectUnifiedDiff(text)
+
+        assertEquals("operators.txt", diff?.path)
+        assertEquals(listOf("++ value"), diff?.lines?.map { it.text })
+        assertTrue(diff?.isNewFile == true)
+    }
+
+    @Test
+    fun detectUnifiedDiffDeclinesHeaderOnlyMultiFilePatches() {
+        val text = """
+            --- a/first.txt
+            +++ b/first.txt
+            @@ -1 +1 @@
+            -old
+            +new
+            --- a/second.txt
+            +++ b/second.txt
+            @@ -1 +1 @@
+            -old
+            +new
+        """.trimIndent()
+
+        assertEquals(null, detectUnifiedDiff(text))
+    }
+
+    @Test
     fun diffForNewFileMarksEveryLineAsAddition() {
         val diff = diffForNewFile("new.kt", "one\ntwo\n")
         assertTrue(diff.isNewFile)

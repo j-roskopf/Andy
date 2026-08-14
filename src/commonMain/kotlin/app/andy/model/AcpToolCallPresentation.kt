@@ -365,9 +365,13 @@ object AcpToolCallPresentation {
             a.contains(b) -> a
             isRenderedFileDiff(b) -> b
             isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
+            isJsonObject(a) -> "$a$DetailSeparator$b"
             else -> "$a\n$b"
         }
     }
+
+    private fun isJsonObject(text: String): Boolean =
+        text.startsWith("{") && runCatching { json.parseToJsonElement(text) is JsonObject }.getOrDefault(false)
 
     /** ToolCallContent.Diff's stable text shape; it must remain at byte zero for domain parsing. */
     private fun isRenderedFileDiff(text: String): Boolean =

@@ -176,6 +176,7 @@ object AcpEventMapper {
             ?.takeIf {
                 content.isEmpty() &&
                     rawOutput.isNullOrBlank() &&
+                    (kind == ToolKind.EDIT || kind == ToolKind.DELETE || kind == ToolKind.MOVE) &&
                     !AcpToolCallPresentation.isMinimalOutput(it)
             }
             ?: presented.detail

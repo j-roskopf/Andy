@@ -34,11 +34,46 @@ fun detectUnifiedDiff(text: String): AgentFileDiff? {
     // numbers at each later hunk and can let a binary entry hide earlier textual changes.
     val fileCount = text.lineSequence().count { it.startsWith("diff --git ") }
         .takeIf { it > 0 }
-        ?: text.lineSequence().count { it.startsWith("+++ ") }
+        ?: countHeaderPairsOutsideHunks(text)
     if (fileCount != 1) return null
     val path = unifiedDiffPath(text) ?: "diff"
     return runCatching { parseUnifiedDiff(text, path) }.getOrNull()
         ?.takeIf { it.isBinary || it.lines.isNotEmpty() }
+}
+
+private fun countHeaderPairsOutsideHunks(text: String): Int {
+    var count = 0
+    var awaitingNewHeader = false
+    var oldLinesRemaining = 0
+    var newLinesRemaining = 0
+    text.lineSequence().forEach { line ->
+        HunkHeader.find(line)?.let { hunk ->
+            oldLinesRemaining = hunk.groupValues[2].toIntOrNull() ?: 1
+            newLinesRemaining = hunk.groupValues[4].toIntOrNull() ?: 1
+            awaitingNewHeader = false
+            return@forEach
+        }
+        if (oldLinesRemaining > 0 || newLinesRemaining > 0) {
+            when (line.firstOrNull()) {
+                ' ' -> {
+                    oldLinesRemaining = (oldLinesRemaining - 1).coerceAtLeast(0)
+                    newLinesRemaining = (newLinesRemaining - 1).coerceAtLeast(0)
+                }
+                '-' -> oldLinesRemaining = (oldLinesRemaining - 1).coerceAtLeast(0)
+                '+' -> newLinesRemaining = (newLinesRemaining - 1).coerceAtLeast(0)
+            }
+            return@forEach
+        }
+        when {
+            line.startsWith("--- ") -> awaitingNewHeader = true
+            awaitingNewHeader && line.startsWith("+++ ") -> {
+                count += 1
+                awaitingNewHeader = false
+            }
+            line.isNotBlank() -> awaitingNewHeader = false
+        }
+    }
+    return count
 }
 
 /** Parses a unified diff into numbered add/delete/context lines for inline review. */
@@ -58,9 +93,9 @@ fun parseUnifiedDiff(text: String, path: String): AgentFileDiff {
             raw.startsWith("diff ") || raw.startsWith("index ") || raw.startsWith("similarity ") -> Unit
             raw.startsWith("new file mode") -> isNewFile = true
             raw.startsWith("deleted file mode") -> Unit
-            raw.startsWith("--- /dev/null") -> isNewFile = true
-            raw.startsWith("--- ") -> Unit
-            raw.startsWith("+++ ") -> Unit
+            !inHunk && raw.startsWith("--- /dev/null") -> isNewFile = true
+            !inHunk && raw.startsWith("--- ") -> Unit
+            !inHunk && raw.startsWith("+++ ") -> Unit
             raw.startsWith("\\ No newline") -> Unit
             else -> {
                 val hunk = HunkHeader.find(raw)
