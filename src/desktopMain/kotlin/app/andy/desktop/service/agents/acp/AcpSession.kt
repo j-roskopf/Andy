@@ -211,7 +211,9 @@ class AcpSession(
                     is Event.PromptResponseEvent -> {
                         stopReason = event.response.stopReason.name.lowercase()
                         lastStopReason = stopReason
-                        onStatus(AcpStatusModel.fromStopReason(stopReason))
+                        // Do not publish Done here. The run service decides after it inspects
+                        // the transcript for a real RetriableError stall — otherwise a mention
+                        // or a dropped stream both ding as a finished turn before retry.
                     }
                 }
             }

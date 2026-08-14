@@ -2564,7 +2564,8 @@ class DesktopAgentRunService(
                 else -> outcome.error ?: "ACP prompt failed"
             },
             resumable = acpManager.isAlive(taskId) && (recovered || resumableAfterStall),
-            statusConfident = true,
+            // A stall is not a finished turn. Confident Done/Error is what dings.
+            statusConfident = !stillStalled,
             stopReason = outcome.stopReason,
         )
         return recovered || resumableAfterStall

@@ -93,7 +93,7 @@ import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.isRetriableConnectionStallMessage
-import app.andy.model.shouldShowConnectionStallBanner
+import app.andy.model.stripTrailingConnectionStallError
 import app.andy.model.stripDecisionCheckpointMarkup
 import app.andy.model.AgentSkill
 import app.andy.model.coalesceAcpTranscriptEvents
@@ -542,10 +542,20 @@ private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleI
  */
 internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> {
     val coalesced = coalesceAcpTranscriptEvents(events)
-    val displayable = coalesced.filterNot { event ->
-        event is AgentEvent.AvailableCommands ||
-            event is AgentEvent.Raw ||
-            event.isHiddenConnectionStallMessage()
+    val displayable = coalesced.mapNotNull { event ->
+        when {
+            event is AgentEvent.AvailableCommands || event is AgentEvent.Raw -> null
+            event is AgentEvent.AssistantText -> {
+                val stripped = event.text.stripTrailingConnectionStallError()
+                when {
+                    stripped.isBlank() -> null
+                    stripped == event.text -> event
+                    else -> event.copy(text = stripped)
+                }
+            }
+            event.isHiddenConnectionStallMessage() -> null
+            else -> event
+        }
     }
     return displayable.filterIndexed { index, event ->
         val completion = displayable.getOrNull(index + 1) as? AgentEvent.TaskResult
@@ -634,7 +644,9 @@ private fun TranscriptEvent(
     when (event) {
         is AgentEvent.SessionStarted -> Unit
         is AgentEvent.AssistantText -> {
-            val visibleText = stripDecisionCheckpointMarkup(event.text)
+            val visibleText = stripDecisionCheckpointMarkup(
+                event.text.stripTrailingConnectionStallError(),
+            )
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
             AgentResponse {
                 ChatMarkdown(visibleText, lineHeight = 21.sp)

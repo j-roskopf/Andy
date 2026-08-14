@@ -12,23 +12,49 @@ const val CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS = 1_000L
 /** Follow-up Andy sends when the user accepts a plan-mode turn and asks to implement. */
 const val IMPLEMENT_PLAN_PROMPT = "Implement the plan."
 
-private val RETRIABLE_CONNECTION_ERROR_PATTERNS = listOf(
-    Regex("""(?i)(?:error:\s*)?(?:retriableerror:\s*)?connection\s+stalled(?:\s+repeatedly)?"""),
-    Regex(
-        """(?i)(?:error:\s*)?(?:retriableerror:\s*)?(?:\[canceled\]\s*)?http/2\s+stream\s+closed""",
-    ),
+/**
+ * Cursor (and some other ACP adapters) surface a transport drop as a standalone
+ * `RetriableError` assistant/error line — not as an ACP stop reason. `cancelled` is also
+ * used for user stop, so text matching is the only reliable signal.
+ *
+ * Match a whole line with the `RetriableError:` prefix. Substring mentions, source quotes,
+ * and stream chunks like `" stalled"` must not count.
+ */
+private val RETRIABLE_STALL_LINE = Regex(
+    """(?i)^(?:error:\s*)?retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?)\s*$""",
 )
 
-/** True when [text] is a Cursor/provider transport failure surfaced in chat output. */
-fun CharSequence.isRetriableConnectionStallMessage(): Boolean =
-    RETRIABLE_CONNECTION_ERROR_PATTERNS.any { it.containsMatchIn(this) }
+private fun CharSequence.nonEmptyLines(): List<String> =
+    lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+
+/** True when [text] is only a provider stall error (blank lines allowed). */
+fun CharSequence.isRetriableConnectionStallMessage(): Boolean {
+    val lines = nonEmptyLines()
+    return lines.isNotEmpty() && lines.all { RETRIABLE_STALL_LINE.matches(it) }
+}
+
+/** True when the last non-empty line is a provider stall error. */
+fun CharSequence.hasRetriableConnectionStallError(): Boolean {
+    val last = nonEmptyLines().lastOrNull() ?: return false
+    return RETRIABLE_STALL_LINE.matches(last)
+}
+
+/** Drops a trailing stall error so partial output before the drop stays visible. */
+fun CharSequence.stripTrailingConnectionStallError(): String {
+    val lines = toString().split('\n')
+    val last = lines.indexOfLast { it.trim().isNotEmpty() }
+    if (last < 0 || !RETRIABLE_STALL_LINE.matches(lines[last].trim())) return toString()
+    var end = last
+    while (end > 0 && lines[end - 1].isBlank()) end--
+    return lines.take(end).joinToString("\n").trimEnd()
+}
 
 fun List<AgentEvent>.hasRetriableConnectionStall(): Boolean =
-    latestTurnEvents().any { event ->
+    coalesceAcpTranscriptEvents(latestTurnEvents()).any { event ->
         when (event) {
-            is AgentEvent.AssistantText -> event.text.isRetriableConnectionStallMessage()
-            is AgentEvent.TaskError -> event.message.isRetriableConnectionStallMessage()
-            is AgentEvent.ToolResult -> event.isError && event.detail.isRetriableConnectionStallMessage()
+            is AgentEvent.AssistantText -> event.text.hasRetriableConnectionStallError()
+            is AgentEvent.TaskError -> event.message.hasRetriableConnectionStallError()
+            is AgentEvent.ToolResult -> event.isError && event.detail.hasRetriableConnectionStallError()
             else -> false
         }
     }
