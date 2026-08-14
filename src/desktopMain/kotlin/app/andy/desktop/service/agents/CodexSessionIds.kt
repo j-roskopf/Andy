@@ -23,28 +23,18 @@ internal object CodexSessionIds {
         return File(home, ".codex")
     }
 
+    /**
+     * Only trusts a stored [AgentTask.vendorSessionId], and only once its
+     * rollout file is confirmed to actually contain this task's prompt.
+     * Scanning all rollouts for a prompt-text match is deliberately not done
+     * here — two chats can share a prefix, and a fuzzy match would silently
+     * resume the wrong thread. A missing or unverifiable id means
+     * capture-at-launch failed — a separate bug to fix, not something to
+     * guess around.
+     */
     fun resolveForTask(task: AgentTask, home: File = File(System.getProperty("user.home"))): String? {
-        findByPrompt(task.prompt, task.cwd, home)?.let { return it }
         val stored = task.vendorSessionId?.takeIf { it.isNotBlank() } ?: return null
         return stored.takeIf { sessionContainsPrompt(it, task.prompt, task.cwd, home) }
-    }
-
-    fun findByPrompt(prompt: String, cwd: String?, home: File = File(System.getProperty("user.home"))): String? {
-        val needle = VendorSessionMatching.firstLine(prompt) ?: return null
-        scanRolloutFiles(cwd, home = home)
-            .forEach { (file, sessionId) ->
-                if (rolloutContainsPrompt(file, needle)) return sessionId
-            }
-        val index = File(codexHome(home), "session_index.jsonl")
-        if (index.isFile) {
-            index.readLines().asReversed().forEach { line ->
-                val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: return@forEach
-                val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@forEach
-                val name = obj["thread_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (VendorSessionMatching.promptMatches(name, needle)) return id
-            }
-        }
-        return null
     }
 
     fun sessionContainsPrompt(

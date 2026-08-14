@@ -116,6 +116,56 @@ class McpChatStartAutonomyInheritanceTest {
     }
 
     @Test
+    fun chatStartInheritsProjectAndDirectoryFromCallerWhenOmitted() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Full) { fake, socket ->
+            fake.seedParent(
+                id = "parent-1",
+                autonomy = AgentAutonomy.Full,
+                projectId = "andy-project",
+                cwd = "/tmp/andy-project/.andy-worktrees/parent",
+                originDir = "/tmp/andy-project",
+            )
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("continue in context"),
+                    "agent" to JsonPrimitive("Codex"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                ),
+            )
+            assertFalse(isError, text)
+            assertEquals("andy-project", fake.startCalls.single().draft.projectId)
+            assertEquals("/tmp/andy-project/.andy-worktrees/parent", fake.startCalls.single().draft.directory)
+        }
+    }
+
+    @Test
+    fun worktreeChildInheritsRepositoryRootForCreation() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Full) { fake, socket ->
+            fake.seedParent(
+                id = "parent-1",
+                autonomy = AgentAutonomy.Full,
+                projectId = "andy-project",
+                cwd = "/tmp/andy-project/.andy-worktrees/parent",
+                originDir = "/tmp/andy-project",
+            )
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("continue in a child worktree"),
+                    "agent" to JsonPrimitive("Codex"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                    "useWorktree" to JsonPrimitive(true),
+                ),
+            )
+            assertFalse(isError, text)
+            assertEquals("/tmp/andy-project", fake.startCalls.single().draft.directory)
+        }
+    }
+
+    @Test
     fun chatStartDefaultsToStandardWithoutCaller() = runBlocking {
         withHarness(parentAutonomy = AgentAutonomy.Full, seedParent = false) { fake, socket ->
             val (isError, text) = callTool(
@@ -249,8 +299,14 @@ private class FakeAutonomyAgentRunService : AgentRunService by UnavailableAgentR
     override val tasks: StateFlow<List<AgentTask>> = _tasks
     val startCalls = mutableListOf<StartCall>()
 
-    fun seedParent(id: String, autonomy: AgentAutonomy) {
-        _tasks.value = _tasks.value + AgentTask(
+    fun seedParent(
+        id: String,
+        autonomy: AgentAutonomy,
+        projectId: String? = null,
+        cwd: String? = null,
+        originDir: String? = null,
+    ) {
+        _tasks.value = _tasks.value.filterNot { it.id == id } + AgentTask(
             id = id,
             title = "parent",
             prompt = "loop",
@@ -258,6 +314,9 @@ private class FakeAutonomyAgentRunService : AgentRunService by UnavailableAgentR
             status = AgentStatus.Working,
             createdAtMillis = 1,
             autonomy = autonomy,
+            projectId = projectId,
+            cwd = cwd,
+            originDir = originDir,
             attachAndyMcp = true,
         )
     }

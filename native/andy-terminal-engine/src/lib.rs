@@ -13,6 +13,7 @@ mod engine;
 mod ffi_jni;
 mod ffi_uniffi;
 
+pub use color::ColorPalette;
 pub use engine::{
     CellAttrFlags, CellSnapshot, CursorSnapshot, EngineSize, GridSnapshot, TerminalEngine,
 };

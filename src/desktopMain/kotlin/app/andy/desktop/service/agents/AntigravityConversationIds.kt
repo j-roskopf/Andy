@@ -18,67 +18,48 @@ import java.io.File
 internal object AntigravityConversationIds {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun cliRoot(): File =
-        File(System.getProperty("user.home"), ".gemini/antigravity-cli")
+    private fun cliRoot(home: File): File =
+        File(home, ".gemini/antigravity-cli")
 
-    fun lastForWorkspace(cwd: String?): String? {
+    fun lastForWorkspace(cwd: String?, home: File = File(System.getProperty("user.home"))): String? {
         val workspace = normalizeWorkspace(cwd) ?: return null
-        val map = readLastConversations()
+        val map = readLastConversations(home)
         return map[workspace]
             ?: map[File(workspace).canonicalPath]
             ?: map[File(workspace).absolutePath]
     }
 
     /**
-     * Best-effort match: newest history entry whose display text matches [prompt]
-     * (prefix) in the same workspace.
-     */
-    fun findByPrompt(prompt: String, cwd: String?): String? {
-        val needle = firstLine(prompt) ?: return null
-        val workspace = normalizeWorkspace(cwd)
-        val history = File(cliRoot(), "history.jsonl")
-        if (!history.isFile) return null
-        return history.readLines()
-            .asReversed()
-            .firstNotNullOfOrNull { line ->
-                val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
-                    ?: return@firstNotNullOfOrNull null
-                val display = obj["display"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                if (display.isEmpty() || !promptMatches(display, needle)) return@firstNotNullOfOrNull null
-                val entryWorkspace = obj["workspace"]?.jsonPrimitive?.contentOrNull?.let(::normalizeWorkspace)
-                if (workspace != null && entryWorkspace != null && workspace != entryWorkspace) {
-                    return@firstNotNullOfOrNull null
-                }
-                obj["conversationId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            }
-    }
-
-    /**
      * Resolve a resume target for [task].
      *
-     * Prefer a history match on the original Andy prompt. A stored
-     * [AgentTask.vendorSessionId] is only trusted when the conversation's
-     * transcript actually contains that prompt — otherwise a raced capture can
-     * stamp the previous workspace conversation and resume the wrong thread.
+     * Only trusts a stored [AgentTask.vendorSessionId], and only once the
+     * conversation's transcript is confirmed to actually contain this task's
+     * prompt. Matching across `agy`'s history by prompt text is deliberately
+     * not done here: two chats can share a prefix (e.g. both starting
+     * "hello"), and a fuzzy match would silently resume the wrong thread. A
+     * missing or unverifiable id means capture-at-launch failed — that is a
+     * separate bug to fix, not something to guess around.
      */
-    fun resolveForTask(task: AgentTask): String? {
-        val byPrompt = findByPrompt(task.prompt, task.cwd)
-        if (byPrompt != null) return byPrompt
+    fun resolveForTask(task: AgentTask, home: File = File(System.getProperty("user.home"))): String? {
         val stored = task.vendorSessionId?.takeIf { it.isNotBlank() } ?: return null
-        return stored.takeIf { conversationContainsPrompt(it, task.prompt) }
+        return stored.takeIf { conversationContainsPrompt(it, task.prompt, home) }
     }
 
-    fun conversationContainsPrompt(conversationId: String, prompt: String): Boolean {
+    fun conversationContainsPrompt(
+        conversationId: String,
+        prompt: String,
+        home: File = File(System.getProperty("user.home")),
+    ): Boolean {
         val needle = firstLine(prompt) ?: return false
         val transcript = File(
-            cliRoot(),
+            cliRoot(home),
             "brain/$conversationId/.system_generated/logs/transcript.jsonl",
         )
         if (transcript.isFile) {
             return runCatching { transcript.readText().contains(needle, ignoreCase = true) }.getOrDefault(false)
         }
         // Fall back to history rows tagged with this conversation id.
-        val history = File(cliRoot(), "history.jsonl")
+        val history = File(cliRoot(home), "history.jsonl")
         if (!history.isFile) return false
         return history.readLines().any { line ->
             val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: return@any false
@@ -90,22 +71,26 @@ internal object AntigravityConversationIds {
     }
 
     /**
-     * Poll until agy records a conversation that belongs to [launchedPrompt],
-     * never returning [before] (the previous workspace conversation).
+     * Poll until agy records a conversation created by this launch, never
+     * returning [before] (the previous workspace conversation). Bounded by
+     * recency ([startedAtMillis]) and, when [launchedPrompt] is given, by
+     * confirming the one time-bound candidate's own transcript actually
+     * contains it — never by searching prior history for a text match.
      */
     fun awaitNewConversationId(
         cwd: String?,
         before: String?,
         launchedPrompt: String?,
         startedAtMillis: Long,
+        home: File = File(System.getProperty("user.home")),
         attempts: Int = 60,
         delayMs: Long = 250,
     ): String? {
         repeat(attempts) {
-            resolveAfterLaunch(cwd, before, launchedPrompt, startedAtMillis)?.let { return it }
+            resolveAfterLaunch(cwd, before, launchedPrompt, startedAtMillis, home)?.let { return it }
             Thread.sleep(delayMs)
         }
-        return resolveAfterLaunch(cwd, before, launchedPrompt, startedAtMillis)
+        return resolveAfterLaunch(cwd, before, launchedPrompt, startedAtMillis, home)
     }
 
     private fun resolveAfterLaunch(
@@ -113,17 +98,16 @@ internal object AntigravityConversationIds {
         before: String?,
         launchedPrompt: String?,
         startedAtMillis: Long,
+        home: File,
     ): String? {
-        launchedPrompt?.let { prompt ->
-            findByPrompt(prompt, cwd)?.takeIf { it != before }?.let { return it }
-        }
-        lastForWorkspace(cwd)?.takeIf { it.isNotBlank() && it != before }?.let { return it }
-        newestConversationCreatedAfter(startedAtMillis)?.takeIf { it != before }?.let { return it }
-        return null
+        lastForWorkspace(cwd, home)?.takeIf { it.isNotBlank() && it != before }?.let { return it }
+        val newest = newestConversationCreatedAfter(startedAtMillis, home)?.takeIf { it != before } ?: return null
+        if (launchedPrompt != null && !conversationContainsPrompt(newest, launchedPrompt, home)) return null
+        return newest
     }
 
-    private fun newestConversationCreatedAfter(startedAtMillis: Long): String? {
-        val dir = File(cliRoot(), "conversations")
+    private fun newestConversationCreatedAfter(startedAtMillis: Long, home: File): String? {
+        val dir = File(cliRoot(home), "conversations")
         if (!dir.isDirectory) return null
         return dir.listFiles()
             ?.filter { it.isFile && it.name.endsWith(".db") && !it.name.contains("-wal") && !it.name.contains("-shm") }
@@ -133,8 +117,8 @@ internal object AntigravityConversationIds {
             ?.removeSuffix(".db")
     }
 
-    private fun readLastConversations(): Map<String, String> {
-        val file = File(cliRoot(), "cache/last_conversations.json")
+    private fun readLastConversations(home: File): Map<String, String> {
+        val file = File(cliRoot(home), "cache/last_conversations.json")
         if (!file.isFile) return emptyMap()
         val root = runCatching { json.parseToJsonElement(file.readText()) }.getOrNull() as? JsonObject
             ?: return emptyMap()

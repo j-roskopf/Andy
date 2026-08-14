@@ -67,6 +67,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install Linux desktop dependencies
         if: matrix.os == 'linux'
         run: |
@@ -123,6 +126,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Verify macOS desktop screenshots
         run: ./gradlew verifyRoborazziDesktop --tests 'app.andy.AndyDesktopScreenshotTest'
 
@@ -165,6 +171,9 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Rust (andy-terminal-engine)
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux desktop dependencies
         if: matrix.os == 'linux'

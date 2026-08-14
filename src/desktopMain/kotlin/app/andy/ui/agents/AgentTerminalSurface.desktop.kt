@@ -1,6 +1,5 @@
 package app.andy.ui.agents
 
-import ai.rever.bossterm.compose.EmbeddableTerminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -22,12 +21,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,15 +30,13 @@ import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.model.WorkspaceState
+import app.andy.model.panelBackgroundArgb
 import app.andy.model.toTerminalAppearance
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
-import app.andy.terminal.AndyTerminalView
-import app.andy.terminal.BossTermAccess
-import app.andy.terminal.TmuxWheelInput
-import app.andy.terminal.disposeScrollbackReplayView
-import app.andy.terminal.kickScrollbackReplayPaint
-import app.andy.terminal.panelBackgroundArgb
+import app.andy.terminal.rust.RustScrollbackReplay
+import app.andy.terminal.rust.RustTerminalBackend
+import app.andy.terminal.rust.RustTerminalCanvas
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.MonoFont
@@ -56,7 +49,11 @@ import kotlinx.coroutines.withContext
 private val NoSessionsRevision = MutableStateFlow(0L)
 private val NoWorkspace = MutableStateFlow(WorkspaceState())
 
-@OptIn(ExperimentalComposeUiApi::class)
+// A maximized/ultrawide chat pane otherwise hands the CLI a huge line length, which it
+// happily fills edge to edge — dense, hard-to-read text at an otherwise normal font size.
+// Cap at a classic terminal width instead of stretching to the full pane.
+private const val AGENT_TERMINAL_MAX_COLS = 120
+
 @Composable
 actual fun AgentTerminalSurface(
     services: AndyServices,
@@ -83,49 +80,63 @@ actual fun AgentTerminalSurface(
     val sessionsRevision by revisionFlow.collectAsState()
     val effectiveSessionActive = sessionActive
 
-    var liveTerminal by remember(taskId) { mutableStateOf<AndyTerminalView?>(null) }
-    var historyTerminal by remember(taskId) { mutableStateOf<AndyTerminalView?>(null) }
-    var historyReplayReady by remember(taskId) { mutableStateOf(false) }
+    var liveRust by remember(taskId) { mutableStateOf<RustTerminalBackend?>(null) }
+    var historyReplay by remember(taskId) { mutableStateOf<RustScrollbackReplay?>(null) }
+    // One reattach attempt per task view: a resumable session gets one shot at reconnecting
+    // to the live provider CLI before falling back to the read-only transcript.
+    var reattachAttempted by remember(taskId) { mutableStateOf(false) }
+    var reconnecting by remember(taskId) { mutableStateOf(false) }
     val releaseViewer = remember(agentRuns) { agentRuns?.let { runs -> runs::releaseTerminalViewer } }
 
     LaunchedEffect(taskId, effectiveSessionActive, sessionsRevision) {
         if (!effectiveSessionActive) return@LaunchedEffect
-        liveTerminal = agentRuns?.terminalView(taskId)
+        liveRust = agentRuns?.rustTerminal(taskId)
     }
 
     LaunchedEffect(taskId, effectiveSessionActive) {
         fun clearHistory() {
-            historyTerminal?.let(::disposeScrollbackReplayView)
-            historyTerminal = null
+            historyReplay?.close()
+            historyReplay = null
         }
 
         suspend fun openHistoryIfAvailable() {
-            if (historyTerminal != null) return
+            if (historyReplay != null) return
             if (agentRuns?.hasScrollback(taskId) != true) return
-            // Replay init waits briefly for the BossTerm tab and resizes before feeding;
-            // keep that off Main so the UI thread is not parked on Thread.sleep.
-            var created: AndyTerminalView? = null
+            var created: RustScrollbackReplay? = null
             try {
                 val replay = withContext(Dispatchers.Default) {
                     agentRuns.openScrollbackReplay(taskId).also { created = it }
                 }
-                historyTerminal = replay
+                historyReplay = replay
             } catch (e: kotlinx.coroutines.CancellationException) {
-                created?.let(::disposeScrollbackReplayView)
+                created?.close()
                 throw e
             }
         }
 
         if (!effectiveSessionActive) {
-            liveTerminal = null
+            liveRust = null
             releaseViewer?.invoke(taskId)
+            if (!reattachAttempted && agentRuns?.canReattachSession(taskId) == true) {
+                reattachAttempted = true
+                reconnecting = true
+                runCatching { agentRuns.reattachSession(taskId) }
+                // Don't show the (possibly stale/duplicated) transcript while we try to
+                // reconnect. If the session flips live, effectiveSessionActive recomposes
+                // true and the branch below takes over; if the attempt fails, the task
+                // rolls back to inactive and this effect re-runs with reattachAttempted
+                // already true, falling through to the transcript below.
+                return@LaunchedEffect
+            }
+            reconnecting = false
             openHistoryIfAvailable()
             return@LaunchedEffect
         }
+        reconnecting = false
 
         fun adoptLiveIfPresent(): Boolean {
-            liveTerminal = agentRuns?.terminalView(taskId)
-            if (liveTerminal == null) return false
+            liveRust = agentRuns?.rustTerminal(taskId)
+            if (liveRust == null) return false
             clearHistory()
             return true
         }
@@ -135,14 +146,9 @@ actual fun AgentTerminalSurface(
         runCatching { agentRuns?.attachTerminalIfNeeded(taskId) }
         if (adoptLiveIfPresent()) return@LaunchedEffect
 
-        // Resuming a live CLI should not flash read-only scrollback while the viewer attaches.
-        if (!effectiveSessionActive) {
-            openHistoryIfAvailable()
-        }
-
         var attempts = 0
         val maxAttempts = if (agentRuns?.isTerminalLive(taskId) == true) 400 else 60
-        while (liveTerminal == null && attempts < maxAttempts) {
+        while (liveRust == null && attempts < maxAttempts) {
             delay(100)
             if (attempts % 5 == 0) {
                 runCatching { agentRuns?.attachTerminalIfNeeded(taskId) }
@@ -161,55 +167,18 @@ actual fun AgentTerminalSurface(
         }
     }
 
-    LaunchedEffect(historyTerminal?.state) {
-        val history = historyTerminal ?: run {
-            historyReplayReady = false
-            return@LaunchedEffect
-        }
-        if (history.isScrollbackReplayReady()) {
-            historyReplayReady = true
-            return@LaunchedEffect
-        }
-        historyReplayReady = false
-        repeat(200) {
-            kickScrollbackReplayPaint(history)
-            if (history.isScrollbackReplayReady()) {
-                historyReplayReady = true
-                return@LaunchedEffect
-            }
-            delay(50)
-        }
-        historyReplayReady = history.isScrollbackReplayReady()
-    }
-
-    val historyToDispose = rememberUpdatedState(historyTerminal)
+    val historyToDispose = rememberUpdatedState(historyReplay)
     val releaseViewerOnDispose = rememberUpdatedState(releaseViewer)
     DisposableEffect(taskId) {
         onDispose {
-            historyToDispose.value?.let(::disposeScrollbackReplayView)
+            historyToDispose.value?.close()
             releaseViewerOnDispose.value?.invoke(taskId)
         }
     }
-    val displayTerminal = liveTerminal ?: historyTerminal?.takeIf { historyReplayReady }
-    val historyReplayLoading = historyTerminal != null && liveTerminal == null && !historyReplayReady
-    val acceptsLiveDrops = effectiveSessionActive && liveTerminal != null
-    val tmuxWheelInput = remember(displayTerminal?.state, displayTerminal?.tmuxScrollback) {
-        displayTerminal?.takeIf { it.tmuxScrollback }?.let { view ->
-            TmuxWheelInput { bytes -> BossTermAccess.writeBytes(view.state, bytes) }
-        }
-    }
+    val historyReplayLoading = historyReplay == null && !effectiveSessionActive && !reconnecting &&
+        agentRuns?.hasScrollback(taskId) == true && liveRust == null
+    val acceptsLiveDrops = effectiveSessionActive && liveRust != null
     var imageDragActive by remember(taskId) { mutableStateOf(false) }
-
-    // History feeds before EmbeddableTerminal mounts; without an ungated redraw after layout
-    // ProperTerminal can keep the blank first committed bitmap until the window is resized.
-    LaunchedEffect(historyTerminal?.state, liveTerminal?.state, historyReplayReady) {
-        val history = historyTerminal ?: return@LaunchedEffect
-        if (liveTerminal != null || !historyReplayReady) return@LaunchedEffect
-        repeat(8) {
-            kickScrollbackReplayPaint(history)
-            delay(100)
-        }
-    }
 
     LaunchedEffect(taskId, effectiveSessionActive) {
         if (!effectiveSessionActive) imageDragActive = false
@@ -250,56 +219,66 @@ actual fun AgentTerminalSurface(
         Box(
             Modifier
                 .fillMaxSize()
-                .then(dropModifier)
-                .onPointerEvent(PointerEventType.Scroll, pass = PointerEventPass.Initial) { event ->
-                    val wheel = tmuxWheelInput ?: return@onPointerEvent
-                    val change = event.changes.firstOrNull() ?: return@onPointerEvent
-                    if (wheel.onScroll(change.scrollDelta.y)) change.consume()
-                },
+                .then(dropModifier),
         ) {
-            val view = displayTerminal
-            if (view != null) {
-                key(taskId, view.state) {
-                    EmbeddableTerminal(
-                        state = view.state,
-                        settingsOverride = view.settingsOverride,
-                        command = view.command,
-                        workingDirectory = view.workingDirectory,
-                        environment = view.environment,
-                        platformServices = view.platformServices,
-                        autoFocus = acceptsLiveDrops,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+            val rust = liveRust
+            val history = historyReplay
+            when {
+                rust != null -> {
+                    key(taskId, "rust-live") {
+                        RustTerminalCanvas(
+                            backend = rust,
+                            appearance = appearance,
+                            autoFocus = acceptsLiveDrops,
+                            maxCols = AGENT_TERMINAL_MAX_COLS,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
-            } else {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(24.dp),
-                ) {
-                    Text(
-                        when {
-                            historyReplayLoading -> "Loading chat history…"
-                            effectiveSessionActive -> "Waiting for terminal…"
-                            else -> "Terminal session ended"
-                        },
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 13.sp,
-                    )
-                    Text(
-                        when {
-                            imageDragActive -> "release to stage image for your next message"
-                            historyReplayLoading -> "Restoring the saved transcript for this chat"
-                            effectiveSessionActive -> "Connecting to the live provider CLI for this chat"
-                            else -> "Send a follow-up below to reopen the interactive CLI"
-                        },
-                        color = if (imageDragActive) Cyan else TextSecondary.copy(alpha = 0.72f),
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                    )
+                history != null -> {
+                    key(taskId, "rust-history") {
+                        RustTerminalCanvas(
+                            backend = history,
+                            appearance = appearance,
+                            autoFocus = false,
+                            readOnly = true,
+                            maxCols = AGENT_TERMINAL_MAX_COLS,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                else -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp),
+                    ) {
+                        Text(
+                            when {
+                                reconnecting -> "Reconnecting…"
+                                historyReplayLoading -> "Loading chat history…"
+                                effectiveSessionActive -> "Waiting for terminal…"
+                                else -> "Terminal session ended"
+                            },
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 13.sp,
+                        )
+                        Text(
+                            when {
+                                imageDragActive -> "release to stage image for your next message"
+                                reconnecting -> "Resuming the provider CLI session for this chat"
+                                historyReplayLoading -> "Restoring the saved transcript for this chat"
+                                effectiveSessionActive -> "Connecting to the live provider CLI for this chat"
+                                else -> "Send a follow-up below to reopen the interactive CLI"
+                            },
+                            color = if (imageDragActive) Cyan else TextSecondary.copy(alpha = 0.72f),
+                            fontFamily = MonoFont,
+                            fontSize = 11.sp,
+                        )
+                    }
                 }
             }
             if (imageDragActive && acceptsLiveDrops) {

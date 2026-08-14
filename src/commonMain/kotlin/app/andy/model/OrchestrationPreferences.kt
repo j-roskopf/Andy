@@ -19,8 +19,25 @@ enum class OrchestrationProviderRole(
  * Skills read this file directly; the Settings UI loads and saves the same path.
  */
 @Serializable
+data class OrchestrationRoleSettings(
+    /** Null keeps the selected provider's default model. */
+    val model: String? = null,
+    /** Null keeps the parent task's permission dial (or Standard for a root task). */
+    val autonomy: String? = null,
+) {
+    fun normalized(): OrchestrationRoleSettings = copy(
+        model = model?.trim()?.takeIf { it.isNotEmpty() },
+        autonomy = autonomy
+            ?.trim()
+            ?.let { value -> AgentAutonomy.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }?.name },
+    )
+}
+
+@Serializable
 data class OrchestrationPreferences(
     val providers: Map<String, String> = emptyMap(),
+    /** Optional model/permission overrides keyed by role, e.g. `impl` or `audit`. */
+    val settings: Map<String, OrchestrationRoleSettings> = emptyMap(),
     val preferences: List<String> = emptyList(),
 ) {
     fun agentFor(role: OrchestrationProviderRole): AgentKind {
@@ -37,6 +54,34 @@ data class OrchestrationPreferences(
         )
     }
 
+    fun settingsFor(role: OrchestrationProviderRole): OrchestrationRoleSettings =
+        settings[role.key]?.normalized() ?: OrchestrationRoleSettings()
+
+    fun autonomyFor(role: OrchestrationProviderRole): AgentAutonomy? =
+        settingsFor(role).autonomy?.let { value ->
+            AgentAutonomy.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
+        }
+
+    fun withSettings(
+        role: OrchestrationProviderRole,
+        roleSettings: OrchestrationRoleSettings,
+    ): OrchestrationPreferences {
+        val normalized = roleSettings.normalized()
+        val next = settings.toMutableMap()
+        if (normalized.model == null && normalized.autonomy == null) {
+            next.remove(role.key)
+        } else {
+            next[role.key] = normalized
+        }
+        return copy(settings = next)
+    }
+
+    fun withModel(role: OrchestrationProviderRole, model: String?): OrchestrationPreferences =
+        withSettings(role, settingsFor(role).copy(model = model))
+
+    fun withAutonomy(role: OrchestrationProviderRole, autonomy: AgentAutonomy?): OrchestrationPreferences =
+        withSettings(role, settingsFor(role).copy(autonomy = autonomy?.name))
+
     fun withPreferenceNotes(notes: List<String>): OrchestrationPreferences =
         copy(preferences = notes.map { it.trim() }.filter { it.isNotEmpty() })
 
@@ -47,6 +92,9 @@ data class OrchestrationPreferences(
         }
         return copy(
             providers = providers,
+            settings = settings
+                .filterKeys { key -> OrchestrationProviderRole.entries.any { it.key == key } }
+                .mapValues { (_, value) -> value.normalized() },
             preferences = preferences.map { it.trim() }.filter { it.isNotEmpty() },
         )
     }

@@ -5,12 +5,10 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * Locates and loads the Phase-0 `andy_terminal_engine` cdylib.
+ * Locates and loads the `andy_terminal_engine` cdylib for the host OS/arch.
  *
  * Packaging mirrors the existing andy-mirror / andy-notifications JNI pattern:
  * platform slice under resources → copy to `~/.andy/...` → `System.load`.
- *
- * Not wired into the production BossTerm path.
  */
 internal object RustTerminalNative {
     private val loadResult: Result<File> by lazy(::loadLibrary)
@@ -23,16 +21,16 @@ internal object RustTerminalNative {
 
     private fun loadLibrary(): Result<File> = runCatching {
         val resourcePath = resourcePath()
-            ?: error("No andy-terminal-engine dylib is packaged for this platform")
+            ?: error("No andy-terminal-engine native library is packaged for this platform")
         val target = File(System.getProperty("user.home"), ".andy/terminal-engine/$resourcePath")
         target.parentFile.mkdirs()
 
         val override = System.getProperty("andy.terminal.engine.dylib")
+            ?: System.getProperty("andy.terminal.engine.native")
         if (!override.isNullOrBlank()) {
             val file = File(override)
-            check(file.isFile) { "andy.terminal.engine.dylib does not exist: $override" }
+            check(file.isFile) { "andy.terminal.engine.native does not exist: $override" }
             System.load(file.absolutePath)
-            // UniFFI's generated Kotlin looks up the same library via JNA.
             System.setProperty(
                 "uniffi.component.andy_terminal_engine.libraryOverride",
                 file.absolutePath,
@@ -42,7 +40,7 @@ internal object RustTerminalNative {
 
         javaClass.classLoader.getResourceAsStream(resourcePath)?.use {
             Files.copy(it, target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } ?: error("Missing packaged andy-terminal-engine dylib: $resourcePath")
+        } ?: error("Missing packaged andy-terminal-engine library: $resourcePath")
         System.load(target.absolutePath)
         System.setProperty(
             "uniffi.component.andy_terminal_engine.libraryOverride",
@@ -56,11 +54,30 @@ internal object RustTerminalNative {
         osArch: String = System.getProperty("os.arch"),
     ): String? {
         val os = osName.lowercase()
-        if (!os.contains("mac") && !os.contains("darwin")) return null
-        return when (osArch.lowercase()) {
-            "aarch64", "arm64" -> "andy-terminal-engine/macos-arm64/libandy_terminal_engine.dylib"
-            "x86_64", "amd64" -> "andy-terminal-engine/macos-x86_64/libandy_terminal_engine.dylib"
-            else -> null
+        val arch = osArch.lowercase()
+        val slice = when {
+            os.contains("mac") || os.contains("darwin") -> when (arch) {
+                "aarch64", "arm64" -> "macos-arm64"
+                "x86_64", "amd64" -> "macos-x86_64"
+                else -> return null
+            }
+            os.contains("linux") -> when (arch) {
+                "aarch64", "arm64" -> "linux-arm64"
+                "x86_64", "amd64" -> "linux-x86_64"
+                else -> return null
+            }
+            os.contains("windows") -> when (arch) {
+                "x86_64", "amd64" -> "windows-x86_64"
+                "aarch64", "arm64" -> "windows-arm64"
+                else -> return null
+            }
+            else -> return null
         }
+        val fileName = when {
+            slice.startsWith("windows") -> "andy_terminal_engine.dll"
+            slice.startsWith("linux") -> "libandy_terminal_engine.so"
+            else -> "libandy_terminal_engine.dylib"
+        }
+        return "andy-terminal-engine/$slice/$fileName"
     }
 }

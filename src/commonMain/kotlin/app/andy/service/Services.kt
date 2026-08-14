@@ -427,6 +427,8 @@ interface AgentRunService {
     fun setQuotaAccess(agent: AgentKind, enabled: Boolean)
     /** Last-used launch settings for each provider, used to prefill the new-task composer. */
     val providerDefaults: StateFlow<Map<AgentKind, AgentProviderDefaults>>
+    /** Sets the default transport lane for newly-created chats with [agent]. */
+    fun setProviderLane(agent: AgentKind, lane: app.andy.model.AgentLaneKind) = Unit
     /** Provider used most recently for a chat, used as the next composer selection. */
     val lastUsedAgent: StateFlow<AgentKind?>
     /**

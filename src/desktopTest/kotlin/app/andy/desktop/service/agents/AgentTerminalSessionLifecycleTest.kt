@@ -111,7 +111,7 @@ class AgentTerminalSessionLifecycleTest {
             assertNotNull(reattached)
             assertTrue(TmuxAndy.hasSession(taskId), "reattach must not kill tmux")
             assertTrue(manager.isInteractive(taskId))
-            assertNotNull(manager.terminalView(taskId))
+            assertNotNull(manager.rustTerminal(taskId))
 
             // Simulate switching chats several times: release viewer, then reopen.
             repeat(4) {
@@ -121,7 +121,7 @@ class AgentTerminalSessionLifecycleTest {
                 val again = manager.attachExisting(taskId, cwd = dir.absolutePath)
                 assertNotNull(again, "reattach should succeed on switch $it")
                 assertSame(reattached, again, "handle should be reused on switch $it")
-                assertNotNull(manager.terminalView(taskId), "widget should mount on switch $it")
+                assertNotNull(manager.rustTerminal(taskId), "widget should mount on switch $it")
             }
         } finally {
             runCatching { TmuxAndy.killSession(taskId) }

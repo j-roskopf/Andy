@@ -1023,7 +1023,7 @@ internal fun AgentTaskDetail(
                                 }
                             }
                             ComposerChip(
-                                text = if (copiedHint) "Opened" else "Terminal",
+                                text = if (copiedHint) "Opened" else "External",
                                 selected = false,
                                 showChevron = false,
                                 onClick = {

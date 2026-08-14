@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSkill
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
@@ -97,6 +98,23 @@ class McpAgentEvidenceHandoffTest {
                 fakeAgentRuns.tasks.value.single().attachAndyMcp,
                 "created task must retain attachAndyMcp for MCP attach on launch",
             )
+        }
+    }
+
+    @Test
+    fun chatStartForwardsExplicitLaneThroughDaemonClient() = runBlocking {
+        withMcpHarness { fakeAgentRuns, client, _ ->
+            client.createAndStart(
+                AgentTaskDraft(
+                    title = "terminal handoff seed",
+                    prompt = "continue this in the terminal",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    lane = AgentLaneKind.Terminal,
+                ),
+            )
+            withTimeout(10_000) { while (fakeAgentRuns.startCalls.isEmpty()) delay(25) }
+            assertEquals(AgentLaneKind.Terminal, fakeAgentRuns.startCalls.single().draft.lane)
         }
     }
 

@@ -125,6 +125,50 @@ class AcpLaneTest {
     }
 
     @Test
+    fun mapperSplitsEditActionTitlesAndKeepsPendingEnrichment() {
+        val pending = AcpEventMapper.map(
+            SessionUpdate.ToolCall(
+                toolCallId = com.agentclientprotocol.model.ToolCallId("edit-1"),
+                title = "Edit",
+                kind = ToolKind.EDIT,
+                status = ToolCallStatus.PENDING,
+                content = emptyList(),
+                locations = emptyList(),
+                rawInput = buildJsonObject {},
+                rawOutput = null,
+            ),
+            atMillis = 1,
+        ) as AgentEvent.ToolCall
+        assertEquals("Edit", pending.toolName)
+        assertEquals("", pending.summary)
+
+        val enriched = AcpEventMapper.reduce(
+            listOf(pending),
+            AcpEventMapper.map(
+                SessionUpdate.ToolCallUpdate(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-1"),
+                    title = "Edit src/commonMain/kotlin/app/andy/ui/settings/SettingsScreen.kt",
+                    kind = ToolKind.EDIT,
+                    status = ToolCallStatus.PENDING,
+                    content = null,
+                    locations = listOf(
+                        com.agentclientprotocol.model.ToolCallLocation(
+                            "src/commonMain/kotlin/app/andy/ui/settings/SettingsScreen.kt",
+                        ),
+                    ),
+                    rawInput = null,
+                    rawOutput = null,
+                ),
+                atMillis = 2,
+            ) as AgentEvent.ToolCall,
+        ).single() as AgentEvent.ToolCall
+
+        assertEquals("Edit", enriched.toolName)
+        assertEquals("SettingsScreen.kt", enriched.summary)
+        assertEquals(AgentToolState.Pending, enriched.state)
+    }
+
+    @Test
     fun mapperPreservesAssistantTextAndToolState() {
         val assistant = AcpEventMapper.map(
             SessionUpdate.AgentMessageChunk(ContentBlock.Text("hello")),
@@ -242,8 +286,26 @@ class AcpLaneTest {
         assertEquals(
             AcpReplayFilterResult.Ignore,
             filterAcpProviderHistoryReplay(
-                existing + AgentEvent.ToolCall(atMillis = 6, toolName = "read", summary = "x", toolCallId = "call-1"),
-                AgentEvent.ToolCall(atMillis = 7, toolName = "read", summary = "done", toolCallId = "call-1"),
+                existing,
+                AgentEvent.UserMessage(atMillis = 6, text = "first question"),
+                StringBuilder(),
+            ),
+            "echoed user turns already in Andy's transcript must not duplicate",
+        )
+        assertEquals(
+            AcpReplayFilterResult.Accept(),
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.UserMessage(atMillis = 7, text = "typed in the terminal"),
+                StringBuilder(),
+            ),
+            "new terminal user turns should appear in Compose after switching back",
+        )
+        assertEquals(
+            AcpReplayFilterResult.Ignore,
+            filterAcpProviderHistoryReplay(
+                existing + AgentEvent.ToolCall(atMillis = 8, toolName = "read", summary = "x", toolCallId = "call-1"),
+                AgentEvent.ToolCall(atMillis = 9, toolName = "read", summary = "done", toolCallId = "call-1"),
                 StringBuilder(),
             ),
         )

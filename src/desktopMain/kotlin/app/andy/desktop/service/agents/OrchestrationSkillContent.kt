@@ -85,6 +85,21 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     Weave any `preferences` strings into spawned agent prompts contextually.
 
+    Optional per-role launch settings live in the `settings` map. For example:
+
+    ```json
+    "settings": {
+      "impl": {"model": "gpt-5.6-sol", "autonomy": "Full"},
+      "audit": {"model": "sonnet", "autonomy": "ReadOnly"}
+    }
+    ```
+
+    Pass a configured `model` to `chat.start`. Pass `autonomy` only when that role
+    has an explicit value; when it is unset, omit it so Andy inherits the parent
+    task's permission dial. Andy also inherits the caller's `projectId` and working
+    directory when those `chat.start` fields are omitted, so child chats stay under
+    the project that launched the orchestration.
+
     ## No-edits suffix
 
     For any agent that should only analyze, not change anything, append to its
@@ -132,6 +147,11 @@ internal val ANDY_HANDOFF_SKILL: String =
        `chat.start` param.
     3. **Task description** — anything else the user said.
 
+    Use the `impl` role's `settings` entry for the worker (or `ui` for a styling-only
+    handoff) unless the user explicitly chose another provider. Pass its configured
+    model and autonomy when present; otherwise omit autonomy to inherit the current
+    task's permission dial.
+
     ## The handoff prompt
 
     The receiving agent has zero context. Include:
@@ -177,7 +197,8 @@ internal val ANDY_HANDOFF_SKILL: String =
          unless the handoff is investigate-only — then `autonomy: "ReadOnly"` +
          no-edits suffix
        - `useWorktree: true` when worktree isolation was requested
-       - `directory` / `projectId` from the current task context when available
+       - `directory` / `projectId` from the current task context when available;
+         Andy also fills these from the caller when they are omitted
        - `existingWorktreePath` only when reusing a known worktree
     3. Tell the user the new task id and how to follow along:
        `andy chat status <id>`, or open it in Andy. There is no finish callback —
@@ -226,17 +247,20 @@ internal val ANDY_LOOP_SKILL: String =
     2. Track iteration count and elapsed time yourself in your own scratch notes
        (there's no persisted loop state — if your session ends, the loop ends).
 
-    3. Resolve worker/verifier providers from `~/.andy/orchestration-preferences.json`
-       (`impl` for worker, `audit` or a contrasting family for verifier) unless the
-       user named them. Confirm readiness via `chat.composer_options`.
+    3. Resolve worker/verifier providers and their optional `settings` entries from
+       `~/.andy/orchestration-preferences.json` (`impl` for worker, `audit` or a
+       contrasting family for verifier) unless the user named them. Confirm readiness
+       via `chat.composer_options`.
 
     ## Each iteration
 
     1. Start the worker (`chat.start` first iteration, `chat.resume` after) with a
        concrete, self-contained instruction for this iteration. Do **not** pass
        `autonomy: "ReadOnly"` or `autonomy: "Standard"` for the worker — omit
-       `autonomy` so Andy inherits this loop task's dial (Full stays Full). Only
-       override when the user asked for a tighter worker.
+       `autonomy` so Andy inherits this loop task's dial (Full stays Full), unless the
+       `impl` role has an explicit configured autonomy. Pass the configured `impl`
+       model when present. Only override the configured role when the user asked for
+       a different worker.
     2. Wait (poll `chat.status`, see andy-orchestration).
     3. Verify: run the shell check yourself and/or spawn/resume a verifier agent
        with `autonomy: "ReadOnly"` and the no-edits suffix, asking it to cite the
@@ -254,7 +278,8 @@ internal val ANDY_LOOP_SKILL: String =
 
     **Verifier** — checks facts, doesn't suggest fixes, cites commands/outputs/file
     evidence, specific about what "done" means. Always `autonomy: "ReadOnly"` +
-    no-edits suffix.
+    no-edits suffix, even if the configured audit role uses a different permission.
+    Pass the configured audit model when present.
     """.trimIndent() + "\n"
 
 internal val ANDY_ADVISOR_SKILL: String =
@@ -292,7 +317,9 @@ internal val ANDY_ADVISOR_SKILL: String =
        - "Is this even right" → `research`
     3. **Contrast helps.** If your own provider matches what preferences would pick,
        swap to a different family on purpose — fresh perspective is the point.
-    4. Confirm readiness via `chat.composer_options` before launching.
+    4. Use the selected role's `settings` entry for its configured model. Keep the
+       advisor `autonomy` at `ReadOnly` regardless of that setting.
+    5. Confirm readiness via `chat.composer_options` before launching.
 
     ## The briefing
 
@@ -390,6 +417,9 @@ internal val ANDY_COMMITTEE_SKILL: String =
     - one contrasting high-reasoning provider (`audit` or `impl`, different family)
 
     Override only when the user explicitly asks for different members.
+
+    Pass each selected role's configured model from the `settings` map. Committee
+    members remain `autonomy: "ReadOnly"` regardless of configured permissions.
 
     ## Hard rules
 

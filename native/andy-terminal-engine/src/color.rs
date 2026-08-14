@@ -2,68 +2,82 @@
 
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
 
-/// One Dark–ish defaults used until Andy pushes a live theme palette over JNI.
-const DEFAULT_FG: u32 = 0xFF_AB_B2_BF;
-const DEFAULT_BG: u32 = 0xFF_28_2C_34;
+/// Mutable theme palette pushed from Andy Settings (BossTerm Theme ARGB values).
+#[derive(Debug, Clone)]
+pub struct ColorPalette {
+    pub foreground: u32,
+    pub background: u32,
+    pub cursor: u32,
+    pub ansi16: [u32; 16],
+}
 
-const ANSI16: [u32; 16] = [
-    0xFF_28_2C_34, // black / bg
-    0xFF_E0_6C_75, // red
-    0xFF_98_C3_79, // green
-    0xFF_E5_C0_7B, // yellow
-    0xFF_61_AF_EF, // blue
-    0xFF_C6_78_DD, // magenta
-    0xFF_56_B6_C2, // cyan
-    0xFF_AB_B2_BF, // white
-    0xFF_5C_63_70, // bright black
-    0xFF_E0_6C_75, // bright red
-    0xFF_98_C3_79, // bright green
-    0xFF_E5_C0_7B, // bright yellow
-    0xFF_61_AF_EF, // bright blue
-    0xFF_C6_78_DD, // bright magenta
-    0xFF_56_B6_C2, // bright cyan
-    0xFF_FF_FF_FF, // bright white
-];
-
-pub fn color_to_argb(color: Color) -> u32 {
-    match color {
-        Color::Named(named) => named_to_argb(named),
-        Color::Spec(rgb) => rgb_to_argb(rgb),
-        Color::Indexed(idx) => indexed_to_argb(idx),
+impl Default for ColorPalette {
+    fn default() -> Self {
+        Self {
+            foreground: 0xFF_AB_B2_BF,
+            background: 0xFF_28_2C_34,
+            cursor: 0xFF_AB_B2_BF,
+            ansi16: [
+                0xFF_28_2C_34, // black
+                0xFF_E0_6C_75, // red
+                0xFF_98_C3_79, // green
+                0xFF_E5_C0_7B, // yellow
+                0xFF_61_AF_EF, // blue
+                0xFF_C6_78_DD, // magenta
+                0xFF_56_B6_C2, // cyan
+                0xFF_AB_B2_BF, // white
+                0xFF_5C_63_70, // bright black
+                0xFF_E0_6C_75, // bright red
+                0xFF_98_C3_79, // bright green
+                0xFF_E5_C0_7B, // bright yellow
+                0xFF_61_AF_EF, // bright blue
+                0xFF_C6_78_DD, // bright magenta
+                0xFF_56_B6_C2, // bright cyan
+                0xFF_FF_FF_FF, // bright white
+            ],
+        }
     }
 }
 
-fn named_to_argb(named: NamedColor) -> u32 {
+pub fn color_to_argb(color: Color, palette: &ColorPalette) -> u32 {
+    match color {
+        Color::Named(named) => named_to_argb(named, palette),
+        Color::Spec(rgb) => rgb_to_argb(rgb),
+        Color::Indexed(idx) => indexed_to_argb(idx, palette),
+    }
+}
+
+fn named_to_argb(named: NamedColor, palette: &ColorPalette) -> u32 {
     match named {
-        NamedColor::Black => ANSI16[0],
-        NamedColor::Red => ANSI16[1],
-        NamedColor::Green => ANSI16[2],
-        NamedColor::Yellow => ANSI16[3],
-        NamedColor::Blue => ANSI16[4],
-        NamedColor::Magenta => ANSI16[5],
-        NamedColor::Cyan => ANSI16[6],
-        NamedColor::White => ANSI16[7],
-        NamedColor::BrightBlack => ANSI16[8],
-        NamedColor::BrightRed => ANSI16[9],
-        NamedColor::BrightGreen => ANSI16[10],
-        NamedColor::BrightYellow => ANSI16[11],
-        NamedColor::BrightBlue => ANSI16[12],
-        NamedColor::BrightMagenta => ANSI16[13],
-        NamedColor::BrightCyan => ANSI16[14],
-        NamedColor::BrightWhite => ANSI16[15],
+        NamedColor::Black => palette.ansi16[0],
+        NamedColor::Red => palette.ansi16[1],
+        NamedColor::Green => palette.ansi16[2],
+        NamedColor::Yellow => palette.ansi16[3],
+        NamedColor::Blue => palette.ansi16[4],
+        NamedColor::Magenta => palette.ansi16[5],
+        NamedColor::Cyan => palette.ansi16[6],
+        NamedColor::White => palette.ansi16[7],
+        NamedColor::BrightBlack => palette.ansi16[8],
+        NamedColor::BrightRed => palette.ansi16[9],
+        NamedColor::BrightGreen => palette.ansi16[10],
+        NamedColor::BrightYellow => palette.ansi16[11],
+        NamedColor::BrightBlue => palette.ansi16[12],
+        NamedColor::BrightMagenta => palette.ansi16[13],
+        NamedColor::BrightCyan => palette.ansi16[14],
+        NamedColor::BrightWhite => palette.ansi16[15],
         NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => {
-            DEFAULT_FG
+            palette.foreground
         }
-        NamedColor::Background => DEFAULT_BG,
-        NamedColor::Cursor => DEFAULT_FG,
-        NamedColor::DimBlack => ANSI16[0],
-        NamedColor::DimRed => ANSI16[1],
-        NamedColor::DimGreen => ANSI16[2],
-        NamedColor::DimYellow => ANSI16[3],
-        NamedColor::DimBlue => ANSI16[4],
-        NamedColor::DimMagenta => ANSI16[5],
-        NamedColor::DimCyan => ANSI16[6],
-        NamedColor::DimWhite => ANSI16[7],
+        NamedColor::Background => palette.background,
+        NamedColor::Cursor => palette.cursor,
+        NamedColor::DimBlack => palette.ansi16[0],
+        NamedColor::DimRed => palette.ansi16[1],
+        NamedColor::DimGreen => palette.ansi16[2],
+        NamedColor::DimYellow => palette.ansi16[3],
+        NamedColor::DimBlue => palette.ansi16[4],
+        NamedColor::DimMagenta => palette.ansi16[5],
+        NamedColor::DimCyan => palette.ansi16[6],
+        NamedColor::DimWhite => palette.ansi16[7],
     }
 }
 
@@ -71,9 +85,9 @@ fn rgb_to_argb(rgb: Rgb) -> u32 {
     0xFF00_0000 | ((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | (rgb.b as u32)
 }
 
-fn indexed_to_argb(idx: u8) -> u32 {
+fn indexed_to_argb(idx: u8, palette: &ColorPalette) -> u32 {
     match idx {
-        0..=15 => ANSI16[idx as usize],
+        0..=15 => palette.ansi16[idx as usize],
         16..=231 => {
             let n = idx - 16;
             let r = n / 36;
@@ -95,3 +109,10 @@ pub const ATTR_UNDERLINE: u8 = 4;
 pub const ATTR_INVERSE: u8 = 8;
 pub const ATTR_DIM: u8 = 16;
 pub const ATTR_STRIKE: u8 = 32;
+
+/// Mouse reporting capability flags returned to Kotlin.
+pub const MOUSE_FLAG_REPORTING: u32 = 1;
+pub const MOUSE_FLAG_SGR: u32 = 2;
+pub const MOUSE_FLAG_MOTION: u32 = 4;
+pub const MOUSE_FLAG_DRAG: u32 = 8;
+pub const MOUSE_FLAG_ALT_SCROLL: u32 = 16;

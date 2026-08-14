@@ -1,8 +1,8 @@
 package app.andy.model
 
 /**
- * Built-in terminal color themes. Ids match BossTerm theme strings
- * (`one-dark`, `nord`, …); Campbell/Everforest map to the closest built-in.
+ * Built-in terminal color themes. Ids are stable workspace keys
+ * (`one-dark`, `nord`, …); full ANSI palettes live in [TerminalPalette].
  */
 enum class TerminalThemePreset(val id: String, val label: String) {
     Campbell("campbell", "Campbell"),
@@ -51,7 +51,7 @@ enum class TerminalFontFamily(val id: String, val label: String, val awtName: St
     }
 }
 
-/** Snapshot of terminal appearance prefs used when constructing a BossTerm embed. */
+/** Snapshot of terminal appearance prefs used when constructing an embedded terminal. */
 data class TerminalAppearanceSnapshot(
     val ketraThemeId: String = TerminalThemePreset.Default.id,
     val fontFamily: TerminalFontFamily = TerminalFontFamily.Default,

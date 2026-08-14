@@ -1,16 +1,6 @@
 package app.andy.terminal
 
-import ai.rever.bossterm.compose.daemon.HeadlessTerminalDisplay
-import ai.rever.bossterm.core.util.TermSize
-import ai.rever.bossterm.terminal.ArrayTerminalDataStream
-import ai.rever.bossterm.terminal.RequestOrigin
-import ai.rever.bossterm.terminal.TerminalColor
-import ai.rever.bossterm.terminal.TextStyle
-import ai.rever.bossterm.terminal.emulator.BossEmulator
-import ai.rever.bossterm.terminal.model.BossTerminal
-import ai.rever.bossterm.terminal.model.StyleState
-import ai.rever.bossterm.terminal.model.TerminalLine
-import ai.rever.bossterm.terminal.model.TerminalTextBuffer
+import app.andy.terminal.rust.RustScrollbackCapture
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicLong
@@ -586,12 +576,12 @@ internal fun replayCaptureReadableLines(
 ): List<String> {
     val seen = LinkedHashSet<String>()
     val captured = mutableListOf<String>()
-    BossTermScrollbackReplay(cols, rows).use { replay ->
+    RustScrollbackCapture(cols, rows).use { replay ->
         var offset = 0
         while (offset < content.length) {
             val end = minOf(offset + chunkSize, content.length)
             replay.feed(content.substring(offset, end))
-            for (line in replay.readableLines()) {
+            for (line in replay.styledRows().map { it.plain }) {
                 val key = line.trim()
                 if (key.isEmpty() || key in seen) continue
                 seen += key
@@ -604,7 +594,7 @@ internal fun replayCaptureReadableLines(
 }
 
 /**
- * Feed the complete raw PTY tee through a fresh BossTerm emulator, sampling styled rows
+ * Feed the complete raw PTY tee through a fresh Rust emulator, sampling styled rows
  * at terminal-aware boundaries. Agent CLIs redraw on the alt screen, which has no native
  * scrollback — the raw tee is the source of truth.
  */
@@ -632,7 +622,7 @@ internal fun replayCaptureStyledRows(
 }
 
 /**
- * Incrementally reconstructs styled history from a raw PTY stream via BossTerm.
+ * Incrementally reconstructs styled history from a raw PTY stream via the Rust engine.
  */
 class ScrollbackReplayCapture(
     cols: Int = REPLAY_COLUMNS,
@@ -641,7 +631,7 @@ class ScrollbackReplayCapture(
 ) : AutoCloseable {
     private var currentColumns = cols.coerceAtLeast(1)
     private var currentRows = rows.coerceAtLeast(1)
-    private var replay = BossTermScrollbackReplay(currentColumns, currentRows)
+    private var replay = RustScrollbackCapture(currentColumns, currentRows)
     private var captured = ScrollbackAccumulator()
     private var lastOffset = 0L
     private var lastEpoch = 0L
@@ -709,7 +699,7 @@ class ScrollbackReplayCapture(
         runCatching { replay.close() }
         currentColumns = columns.coerceAtLeast(1)
         currentRows = rows.coerceAtLeast(1)
-        replay = BossTermScrollbackReplay(currentColumns, currentRows)
+        replay = RustScrollbackCapture(currentColumns, currentRows)
         captured = ScrollbackAccumulator()
         lastEpoch = epoch
         lastOffset = offset
@@ -718,142 +708,6 @@ class ScrollbackReplayCapture(
     override fun close() {
         runCatching { replay.close() }
     }
-}
-
-/** Headless BossTerm emulator used only for raw-tee → transcript derivation. */
-internal class BossTermScrollbackReplay(
-    cols: Int,
-    rows: Int,
-) : AutoCloseable {
-    private var columns = cols.coerceAtLeast(1)
-    private var rowCount = rows.coerceAtLeast(1)
-    private val styleState = StyleState()
-    private var textBuffer = TerminalTextBuffer(columns, rowCount, styleState, BossTermBackend.DEFAULT_MAX_HISTORY)
-    private val display = HeadlessTerminalDisplay(columns, rowCount)
-    private var terminal = BossTerminal(display, textBuffer, styleState)
-
-    fun feed(chunk: String) {
-        if (chunk.isEmpty()) return
-        val stream = ArrayTerminalDataStream(chunk.toCharArray())
-        val emulator = BossEmulator(stream, terminal, allowKittyFileTransfers = false)
-        while (emulator.hasNext()) {
-            emulator.next()
-        }
-    }
-
-    fun resize(cols: Int, rows: Int) {
-        columns = cols.coerceAtLeast(1)
-        rowCount = rows.coerceAtLeast(1)
-        runCatching {
-            terminal.resize(TermSize(columns, rowCount), RequestOrigin.User)
-        }
-    }
-
-    fun readableLines(): List<String> = styledRows().map { it.plain }
-
-    fun styledRows(maxRows: Int = 0): List<StyledTerminalRow> {
-        val snapshot = textBuffer.createSnapshot()
-        val height = snapshot.height
-        if (height <= 0) return emptyList()
-        // Capture/merge samples must be the visible screen only. Including history lines
-        // re-emits already-scrolled rows on every sample and duplicates pages of history.
-        if (maxRows > 0) {
-            val wanted = minOf(maxRows, height)
-            val start = height - wanted
-            val rows = ArrayList<StyledTerminalRow>(wanted)
-            var row = start
-            while (row < height) {
-                rows += styledRowFromTerminalLine(snapshot.getLine(row))
-                row++
-            }
-            return rows
-        }
-        val total = snapshot.historyLinesCount + height
-        val rows = ArrayList<StyledTerminalRow>(total)
-        var row = -snapshot.historyLinesCount
-        while (row < height) {
-            rows += styledRowFromTerminalLine(snapshot.getLine(row))
-            row++
-        }
-        return rows
-    }
-
-    override fun close() {
-        runCatching { terminal.disconnected() }
-    }
-}
-
-/**
- * Export one emulator line as plain text (for merge/alignment) plus SGR-styled ANSI
- * (for durable `scrollback.ansi` and BossTerm history replay).
- */
-internal fun styledRowFromTerminalLine(line: TerminalLine): StyledTerminalRow {
-    val plainFull = line.text
-    val plain = plainFull.trimEnd()
-    if (plain.isEmpty()) return StyledTerminalRow("", "")
-
-    val ansi = StringBuilder(plain.length + 16)
-    var emitted = 0
-    var lastStyle: TextStyle? = null
-    for (entry in line.entries) {
-        if (entry == null) continue
-        if (emitted >= plain.length) break
-        val text = entry.text.toString()
-        if (text.isEmpty()) continue
-        val remaining = plain.length - emitted
-        val piece = if (text.length <= remaining) text else text.substring(0, remaining)
-        val style = entry.style
-        if (style != lastStyle) {
-            ansi.append(textStyleToSgr(style))
-            lastStyle = style
-        }
-        ansi.append(piece)
-        emitted += piece.length
-    }
-    if (lastStyle != null) ansi.append("\u001b[0m")
-    return StyledTerminalRow(plain = plain, ansi = ansi.toString())
-}
-
-/** CSI SGR for a BossTerm [TextStyle], always starting from a reset for stable row splicing. */
-internal fun textStyleToSgr(style: TextStyle): String {
-    if (style == TextStyle.EMPTY) return "\u001b[0m"
-    val codes = mutableListOf("0")
-    if (style.hasOption(TextStyle.Option.BOLD)) codes += "1"
-    if (style.hasOption(TextStyle.Option.DIM)) codes += "2"
-    if (style.hasOption(TextStyle.Option.ITALIC)) codes += "3"
-    if (style.hasOption(TextStyle.Option.UNDERLINED)) codes += "4"
-    if (style.hasOption(TextStyle.Option.INVERSE)) codes += "7"
-    if (style.hasOption(TextStyle.Option.HIDDEN)) codes += "8"
-    appendTerminalColorSgr(codes, style.foreground, foreground = true)
-    appendTerminalColorSgr(codes, style.background, foreground = false)
-    return "\u001b[${codes.joinToString(";")}m"
-}
-
-private fun appendTerminalColorSgr(
-    codes: MutableList<String>,
-    color: TerminalColor?,
-    foreground: Boolean,
-) {
-    if (color == null) return
-    if (color.isIndexed) {
-        val index = color.colorIndex
-        when (index) {
-            in 0..7 -> codes += ((if (foreground) 30 else 40) + index).toString()
-            in 8..15 -> codes += ((if (foreground) 90 else 100) + (index - 8)).toString()
-            else -> {
-                codes += if (foreground) "38" else "48"
-                codes += "5"
-                codes += index.toString()
-            }
-        }
-        return
-    }
-    val rgb = runCatching { color.toColor() }.getOrNull() ?: return
-    codes += if (foreground) "38" else "48"
-    codes += "2"
-    codes += rgb.red.toString()
-    codes += rgb.green.toString()
-    codes += rgb.blue.toString()
 }
 
 /**

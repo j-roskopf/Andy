@@ -14,12 +14,11 @@ class RustTerminalEngine(
     private var columns: Int = columns.coerceAtLeast(1)
     private var rows: Int = rows.coerceAtLeast(1)
 
-    // Reused snapshot buffers to avoid per-frame allocation churn.
     private var chars = CharArray(this.columns * this.rows)
     private var fgArgb = IntArray(this.columns * this.rows)
     private var bgArgb = IntArray(this.columns * this.rows)
     private var attrs = ByteArray(this.columns * this.rows)
-    private val meta = IntArray(6)
+    private val meta = IntArray(8)
 
     init {
         check(handle != 0L) { "nativeCreate returned null handle" }
@@ -42,6 +41,12 @@ class RustTerminalEngine(
         ensureBuffers(cols * r)
     }
 
+    fun setPalette(paletteArgb: IntArray) {
+        checkOpen()
+        require(paletteArgb.size >= 19) { "palette must be [fg,bg,cursor,ansi0..15]" }
+        check(nativeSetPalette(handle, paletteArgb) == 0) { "nativeSetPalette failed" }
+    }
+
     fun isAltScreen(): Boolean {
         checkOpen()
         return nativeIsAltScreen(handle)
@@ -57,12 +62,31 @@ class RustTerminalEngine(
         nativeStopSync(handle)
     }
 
+    fun scrollDisplay(delta: Int) {
+        checkOpen()
+        nativeScrollDisplay(handle, delta)
+    }
+
+    fun scrollToBottom() {
+        checkOpen()
+        nativeScrollToBottom(handle)
+    }
+
+    fun mouseFlags(): Int {
+        checkOpen()
+        return nativeMouseFlags(handle)
+    }
+
+    fun displayOffset(): Int {
+        checkOpen()
+        return nativeDisplayOffset(handle)
+    }
+
     fun viewportText(): String {
         checkOpen()
         return nativeViewportText(handle)
     }
 
-    /** Row-major grid characters, length = rows * columns. */
     fun gridChars(): String {
         checkOpen()
         return nativeGridChars(handle)
@@ -87,10 +111,6 @@ class RustTerminalEngine(
         return nativeCellBold(handle, row, col)
     }
 
-    /**
-     * Copy the current viewport into reused arrays.
-     * Safe to call from the UI thread; native side holds a brief engine lock.
-     */
     fun fillFrame(into: RustTerminalFrame): Boolean {
         checkOpen()
         ensureBuffers(columns * rows)
@@ -102,6 +122,8 @@ class RustTerminalEngine(
         into.cursorCol = meta[3]
         into.altScreen = meta[4] != 0
         into.syncBufferedBytes = meta[5]
+        into.displayOffset = meta[6]
+        into.historySize = meta[7]
         into.chars = chars
         into.fgArgb = fgArgb
         into.bgArgb = bgArgb
@@ -138,9 +160,14 @@ class RustTerminalEngine(
         @JvmStatic external fun nativeDestroy(handle: Long)
         @JvmStatic external fun nativeAdvance(handle: Long, bytes: ByteArray)
         @JvmStatic external fun nativeResize(handle: Long, columns: Int, rows: Int)
+        @JvmStatic external fun nativeSetPalette(handle: Long, palette: IntArray): Int
         @JvmStatic external fun nativeIsAltScreen(handle: Long): Boolean
         @JvmStatic external fun nativeSyncBufferedBytes(handle: Long): Int
         @JvmStatic external fun nativeStopSync(handle: Long)
+        @JvmStatic external fun nativeScrollDisplay(handle: Long, delta: Int)
+        @JvmStatic external fun nativeScrollToBottom(handle: Long)
+        @JvmStatic external fun nativeMouseFlags(handle: Long): Int
+        @JvmStatic external fun nativeDisplayOffset(handle: Long): Int
         @JvmStatic external fun nativeViewportText(handle: Long): String
         @JvmStatic external fun nativeGridChars(handle: Long): String
         @JvmStatic external fun nativeCursorRow(handle: Long): Int
@@ -167,6 +194,8 @@ class RustTerminalFrame {
     var cursorCol: Int = 0
     var altScreen: Boolean = false
     var syncBufferedBytes: Int = 0
+    var displayOffset: Int = 0
+    var historySize: Int = 0
     var chars: CharArray = CharArray(0)
     var fgArgb: IntArray = IntArray(0)
     var bgArgb: IntArray = IntArray(0)
@@ -179,6 +208,8 @@ class RustTerminalFrame {
         cursorCol = other.cursorCol
         altScreen = other.altScreen
         syncBufferedBytes = other.syncBufferedBytes
+        displayOffset = other.displayOffset
+        historySize = other.historySize
         val n = columns * rows
         if (chars.size < n) {
             chars = CharArray(n)
@@ -193,6 +224,12 @@ class RustTerminalFrame {
             System.arraycopy(other.attrs, 0, attrs, 0, n)
         }
     }
+
+    fun cellChar(row: Int, col: Int): Char {
+        if (row !in 0 until rows || col !in 0 until columns) return ' '
+        val idx = row * columns + col
+        return if (idx in chars.indices) chars[idx] else ' '
+    }
 }
 
 object RustTerminalAttrs {
@@ -202,4 +239,12 @@ object RustTerminalAttrs {
     const val INVERSE: Int = 8
     const val DIM: Int = 16
     const val STRIKE: Int = 32
+}
+
+object RustMouseFlags {
+    const val REPORTING: Int = 1
+    const val SGR: Int = 2
+    const val MOTION: Int = 4
+    const val DRAG: Int = 8
+    const val ALT_SCROLL: Int = 16
 }

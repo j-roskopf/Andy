@@ -19,6 +19,14 @@ internal fun filterAcpProviderHistoryReplay(
     event: AgentEvent,
     scratch: StringBuilder,
 ): AcpReplayFilterResult = when (event) {
+    is AgentEvent.UserMessage -> {
+        val text = event.text.trim()
+        if (text.isNotEmpty() && existing.any { (it as? AgentEvent.UserMessage)?.text?.trim() == text }) {
+            AcpReplayFilterResult.Ignore
+        } else {
+            AcpReplayFilterResult.Accept()
+        }
+    }
     is AgentEvent.AssistantText -> streamReplayFilterResult(
         priorTexts = existingAssistantTexts(existing),
         text = event.text,

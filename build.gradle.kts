@@ -134,9 +134,6 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("net.peanuuutz.tomlkt:tomlkt:0.4.0")
                 implementation("com.fifesoft:rsyntaxtextarea:3.6.0")
-                // Compose-native terminal (replaces KetraTerm Swing embed).
-                implementation("com.risaboss:bossterm-compose:1.2.143")
-                implementation("com.risaboss:bossterm-core:1.2.143")
                 // Explicit pin so macOS release notarization can locate pty4j-*.jar.
                 implementation("org.jetbrains.pty4j:pty4j:0.13.12")
                 implementation("com.google.zxing:core:3.5.3")
@@ -265,14 +262,53 @@ val verifyScrcpyServer by tasks.registering {
 }
 
 val andyTerminalEngineCrate = layout.projectDirectory.dir("native/andy-terminal-engine")
-val andyTerminalEngineCargoDylib =
-    andyTerminalEngineCrate.file("target/release/libandy_terminal_engine.dylib")
 val andyTerminalEngineUniffiOut =
     layout.buildDirectory.dir("generated/andy-terminal-engine/uniffi")
 
+fun andyTerminalEngineHostSlice(): Pair<String, String> {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = System.getProperty("os.arch").lowercase()
+    return when {
+        os.contains("mac") || os.contains("darwin") -> {
+            val slice = when (arch) {
+                "aarch64", "arm64" -> "macos-arm64"
+                "x86_64", "amd64" -> "macos-x86_64"
+                else -> error("Unsupported macOS arch for andy-terminal-engine: $arch")
+            }
+            slice to "libandy_terminal_engine.dylib"
+        }
+        os.contains("linux") -> {
+            val slice = when (arch) {
+                "aarch64", "arm64" -> "linux-arm64"
+                "x86_64", "amd64" -> "linux-x86_64"
+                else -> error("Unsupported Linux arch for andy-terminal-engine: $arch")
+            }
+            slice to "libandy_terminal_engine.so"
+        }
+        os.contains("windows") -> {
+            val slice = when (arch) {
+                "aarch64", "arm64" -> "windows-arm64"
+                "x86_64", "amd64" -> "windows-x86_64"
+                else -> error("Unsupported Windows arch for andy-terminal-engine: $arch")
+            }
+            slice to "andy_terminal_engine.dll"
+        }
+        else -> error("Unsupported OS for andy-terminal-engine: $os")
+    }
+}
+
+fun andyTerminalEngineCargoArtifactName(): String {
+    val os = System.getProperty("os.name").lowercase()
+    return when {
+        os.contains("windows") -> "andy_terminal_engine.dll"
+        os.contains("linux") -> "libandy_terminal_engine.so"
+        else -> "libandy_terminal_engine.dylib"
+    }
+}
+
 val buildAndyTerminalEngineNative by tasks.registering(Exec::class) {
     group = "build"
-    description = "Builds the Phase-0 alacritty_terminal JNI/UniFFI cdylib via cargo."
+    description = "Builds the alacritty_terminal JNI/UniFFI native library via cargo for the host OS."
     workingDir = andyTerminalEngineCrate.asFile
     inputs.files(
         andyTerminalEngineCrate.file("Cargo.toml"),
@@ -280,24 +316,16 @@ val buildAndyTerminalEngineNative by tasks.registering(Exec::class) {
         andyTerminalEngineCrate.file("uniffi-bindgen.rs"),
     )
     inputs.dir(andyTerminalEngineCrate.dir("src"))
-    outputs.file(andyTerminalEngineCargoDylib)
-    onlyIf {
-        System.getProperty("os.name").lowercase().contains("mac")
-    }
+    val (slice, fileName) = andyTerminalEngineHostSlice()
+    val staged = layout.buildDirectory.file("native/andy-terminal-engine/$slice/$fileName")
+    outputs.file(staged)
     commandLine("cargo", "build", "--release", "--features", "uniffi-cli")
     doLast {
-        val arch = System.getProperty("os.arch").lowercase()
-        val slice = when (arch) {
-            "aarch64", "arm64" -> "macos-arm64"
-            "x86_64", "amd64" -> "macos-x86_64"
-            else -> error("Unsupported macOS arch for andy-terminal-engine: $arch")
-        }
-        val staged = layout.buildDirectory
-            .file("native/andy-terminal-engine/$slice/libandy_terminal_engine.dylib")
-            .get()
-            .asFile
-        staged.parentFile.mkdirs()
-        andyTerminalEngineCargoDylib.asFile.copyTo(staged, overwrite = true)
+        val cargoOut = andyTerminalEngineCrate.file("target/release/${andyTerminalEngineCargoArtifactName()}").asFile
+        check(cargoOut.isFile) { "cargo did not produce ${cargoOut.absolutePath}" }
+        val dest = staged.get().asFile
+        dest.parentFile.mkdirs()
+        cargoOut.copyTo(dest, overwrite = true)
     }
 }
 
@@ -306,10 +334,12 @@ val generateAndyTerminalEngineUniffi by tasks.registering(Exec::class) {
     description = "Generates UniFFI Kotlin bindings for the terminal-engine FFI probe."
     dependsOn(buildAndyTerminalEngineNative)
     workingDir = andyTerminalEngineCrate.asFile
-    inputs.file(andyTerminalEngineCargoDylib)
+    val cargoLib = andyTerminalEngineCrate.file("target/release/${andyTerminalEngineCargoArtifactName()}")
+    inputs.file(cargoLib)
     outputs.dir(andyTerminalEngineUniffiOut)
+    // UniFFI probe is exercised on macOS CI/desktopTestMacOs.
     onlyIf {
-        System.getProperty("os.name").lowercase().contains("mac")
+        System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }
     }
     doFirst {
         andyTerminalEngineUniffiOut.get().asFile.mkdirs()
@@ -325,7 +355,7 @@ val generateAndyTerminalEngineUniffi by tasks.registering(Exec::class) {
         "--",
         "generate",
         "--library",
-        andyTerminalEngineCargoDylib.asFile.absolutePath,
+        cargoLib.asFile.absolutePath,
         "--language",
         "kotlin",
         "--out-dir",
@@ -335,8 +365,7 @@ val generateAndyTerminalEngineUniffi by tasks.registering(Exec::class) {
 }
 
 tasks.named("compileTestKotlinDesktop") {
-    // UniFFI-generated Kotlin is only compiled into desktopTest on macOS hosts.
-    if (System.getProperty("os.name").lowercase().contains("mac")) {
+    if (System.getProperty("os.name").lowercase().let { it.contains("mac") || it.contains("darwin") }) {
         dependsOn(generateAndyTerminalEngineUniffi)
     }
 }
@@ -365,7 +394,11 @@ tasks.named<Copy>("desktopProcessResources") {
         into("andy-voice")
     }
     from(layout.buildDirectory.dir("native/andy-terminal-engine")) {
-        include("**/libandy_terminal_engine.dylib")
+        include(
+            "**/libandy_terminal_engine.dylib",
+            "**/libandy_terminal_engine.so",
+            "**/andy_terminal_engine.dll",
+        )
         into("andy-terminal-engine")
     }
 }
@@ -676,14 +709,6 @@ compose.desktop {
         jvmArgs += "--add-opens=java.desktop/sun.lwawt=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED"
-        // Opt-in Rust VT engine for Actions DirectPty: -Pandy.terminal.engine=rust
-        // (or export ANDY_TERMINAL_ENGINE=rust). Default remains BossTerm.
-        val rustTerminalEngine = providers.gradleProperty("andy.terminal.engine")
-            .orElse(providers.environmentVariable("ANDY_TERMINAL_ENGINE"))
-            .orNull
-        if (!rustTerminalEngine.isNullOrBlank()) {
-            jvmArgs += "-Dandy.terminal.engine=$rustTerminalEngine"
-        }
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

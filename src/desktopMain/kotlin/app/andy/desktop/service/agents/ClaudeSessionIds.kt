@@ -29,44 +29,18 @@ internal object ClaudeSessionIds {
         return dir.takeIf { it.isDirectory }
     }
 
+    /**
+     * Only trusts a stored [AgentTask.vendorSessionId], and only once its
+     * session file is confirmed to actually contain this task's prompt.
+     * Scanning all sessions in the project dir for a prompt-text match is
+     * deliberately not done here — two chats can share a prefix, and a fuzzy
+     * match would silently resume the wrong thread. A missing or unverifiable
+     * id means capture-at-launch failed — a separate bug to fix, not
+     * something to guess around.
+     */
     fun resolveForTask(task: AgentTask, home: File = File(System.getProperty("user.home"))): String? {
-        findByPrompt(task.prompt, task.cwd, home)?.let { return it }
         val stored = task.vendorSessionId?.takeIf { it.isNotBlank() } ?: return null
         return stored.takeIf { sessionContainsPrompt(it, task.prompt, task.cwd, home) }
-    }
-
-    fun findByPrompt(prompt: String, cwd: String?, home: File = File(System.getProperty("user.home"))): String? {
-        val needle = VendorSessionMatching.firstLine(prompt) ?: return null
-        val workspace = VendorSessionMatching.normalizeWorkspace(cwd)
-        projectDir(cwd, home)?.listFiles().orEmpty()
-            .asSequence()
-            .filter { it.isFile && it.extension == "jsonl" }
-            .sortedByDescending { it.lastModified() }
-            .forEach { file ->
-                val sessionId = file.nameWithoutExtension
-                if (!SessionIdRegex.matches(sessionId)) return@forEach
-                val head = runCatching { file.readText().take(16_000) }.getOrNull().orEmpty()
-                if (head.isNotEmpty() && VendorSessionMatching.textContainsPrompt(head, prompt)) {
-                    return sessionId
-                }
-            }
-        // Fall back to live session registry (pid -> sessionId).
-        val sessionsDir = File(claudeHome(home), "sessions")
-        sessionsDir.listFiles().orEmpty()
-            .asSequence()
-            .filter { it.isFile && it.extension == "json" }
-            .sortedByDescending { it.lastModified() }
-            .forEach { file ->
-                val obj = runCatching { json.parseToJsonElement(file.readText()).jsonObject }.getOrNull()
-                    ?: return@forEach
-                val sessionId = obj["sessionId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-                    ?: return@forEach
-                val sessionCwd = obj["cwd"]?.jsonPrimitive?.contentOrNull
-                if (workspace != null && !VendorSessionMatching.cwdMatches(sessionCwd, cwd)) return@forEach
-                val name = obj["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (VendorSessionMatching.promptMatches(name, needle)) return sessionId
-            }
-        return null
     }
 
     fun sessionContainsPrompt(

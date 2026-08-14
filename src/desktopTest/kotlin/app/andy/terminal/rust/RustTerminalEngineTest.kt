@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  */
 class RustTerminalEngineTest {
     @Test
-    fun mapsSupportedMacArchitecturesToPackagedDylib() {
+    fun mapsSupportedArchitecturesToPackagedNatives() {
         assertEquals(
             "andy-terminal-engine/macos-arm64/libandy_terminal_engine.dylib",
             RustTerminalNative.resourcePath("Mac OS X", "aarch64"),
@@ -20,7 +20,19 @@ class RustTerminalEngineTest {
             "andy-terminal-engine/macos-x86_64/libandy_terminal_engine.dylib",
             RustTerminalNative.resourcePath("Darwin", "x86_64"),
         )
-        assertEquals(null, RustTerminalNative.resourcePath("Windows 11", "amd64"))
+        assertEquals(
+            "andy-terminal-engine/linux-x86_64/libandy_terminal_engine.so",
+            RustTerminalNative.resourcePath("Linux", "amd64"),
+        )
+        assertEquals(
+            "andy-terminal-engine/linux-arm64/libandy_terminal_engine.so",
+            RustTerminalNative.resourcePath("Linux", "aarch64"),
+        )
+        assertEquals(
+            "andy-terminal-engine/windows-x86_64/andy_terminal_engine.dll",
+            RustTerminalNative.resourcePath("Windows 11", "amd64"),
+        )
+        assertEquals(null, RustTerminalNative.resourcePath("Solaris", "amd64"))
     }
 
     @Test
@@ -94,6 +106,39 @@ class RustTerminalEngineTest {
             assertEquals('i', frame.chars[1])
             assertTrue(frame.attrs[0].toInt() and RustTerminalAttrs.BOLD != 0)
             assertEquals(0xFFE06C75.toInt(), frame.fgArgb[0])
+        }
+    }
+
+    @Test
+    fun paletteAndScrollbackRoundTripAcrossJni() {
+        if (!isMacArm64()) return
+        RustTerminalEngine(columns = 20, rows = 3).use { engine ->
+            val palette = IntArray(19) { 0xFF112233.toInt() }
+            palette[0] = 0xFFEEEEEE.toInt()
+            palette[1] = 0xFF101010.toInt()
+            palette[3] = 0xFFFF0000.toInt() // ansi0 / black slot used as NamedColor::Black
+            engine.setPalette(palette)
+            engine.advance("\u001B[30mZ\u001B[0m")
+            // Fill history then scroll up.
+            engine.advance("\n1\n2\n3\n4\n5")
+            engine.scrollDisplay(2)
+            assertTrue(engine.displayOffset() >= 1)
+            val frame = RustTerminalFrame()
+            assertTrue(engine.fillFrame(frame))
+            assertEquals(engine.displayOffset(), frame.displayOffset)
+            engine.scrollToBottom()
+            assertEquals(0, engine.displayOffset())
+        }
+    }
+
+    @Test
+    fun mouseFlagsExposeSgrReportingAcrossJni() {
+        if (!isMacArm64()) return
+        RustTerminalEngine(columns = 20, rows = 3).use { engine ->
+            engine.advance("\u001B[?1000h\u001B[?1006h")
+            val flags = engine.mouseFlags()
+            assertTrue(flags and RustMouseFlags.REPORTING != 0)
+            assertTrue(flags and RustMouseFlags.SGR != 0)
         }
     }
 

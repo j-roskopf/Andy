@@ -201,7 +201,7 @@ class DesktopAgentTaskStore(
 
 @Serializable
 internal data class AgentsFileDto(
-    val version: Int = 4,
+    val version: Int = 5,
     val maxConcurrent: Int = 8,
     val binaries: Map<String, String> = emptyMap(),
     val providerDefaults: List<AgentProviderDefaultsDto> = emptyList(),
@@ -233,6 +233,7 @@ internal data class AgentProviderDefaultsDto(
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
+    val lane: String = "",
 )
 
 @Serializable
@@ -282,6 +283,8 @@ internal data class AgentTaskDto(
     val acpSessionId: String = "",
     val stopReason: String = "",
     val lane: String = AgentLaneKind.Terminal.name,
+    /** Newer stores make the persisted lane authoritative; old stores still use artifact migration. */
+    val laneExplicit: Boolean = false,
     val createdAtMillis: Long,
     val startedAtMillis: Long = 0,
     val finishedAtMillis: Long = 0,
@@ -568,6 +571,7 @@ internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDe
         useWorktree = useWorktree,
         attachAndyMcp = attachAndyMcp,
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
+        lane = AgentLaneKind.entries.firstOrNull { it.name == lane },
     )
 }
 
@@ -656,12 +660,14 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         vendorSessionId = vendorSessionId.takeIf { it.isNotBlank() },
         acpSessionId = acpSessionId.takeIf { it.isNotBlank() },
         stopReason = stopReason.takeIf { it.isNotBlank() },
-        lane = inferAgentLaneFromArtifacts(
-            taskId = id,
-            declaredLane = AgentLaneKind.entries.firstOrNull { it.name == lane },
-            agent = agentKind,
-            agentsDir = scrollbackFile(id).parentFile?.parentFile ?: defaultAndyAgentArtifactsDir(),
-        ),
+        lane = AgentLaneKind.entries.firstOrNull { it.name == lane }
+            ?.takeIf { laneExplicit }
+            ?: inferAgentLaneFromArtifacts(
+                taskId = id,
+                declaredLane = AgentLaneKind.entries.firstOrNull { it.name == lane },
+                agent = agentKind,
+                agentsDir = scrollbackFile(id).parentFile?.parentFile ?: defaultAndyAgentArtifactsDir(),
+            ),
         createdAtMillis = createdAtMillis,
         startedAtMillis = startedAtMillis.takeIf { it > 0 },
         finishedAtMillis = finishedAtMillis.takeIf { it > 0 },
@@ -701,6 +707,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             useWorktree = defaults.useWorktree,
             attachAndyMcp = defaults.attachAndyMcp,
             maxBudgetUsd = defaults.maxBudgetUsd ?: 0.0,
+            lane = defaults.lane?.name.orEmpty(),
         )
     },
     quotaAccess = AgentQuotaAccessDto(
@@ -765,6 +772,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             acpSessionId = task.acpSessionId.orEmpty(),
             stopReason = task.stopReason.orEmpty(),
             lane = task.lane.name,
+            laneExplicit = true,
             createdAtMillis = task.createdAtMillis,
             startedAtMillis = task.startedAtMillis ?: 0,
             finishedAtMillis = task.finishedAtMillis ?: 0,
