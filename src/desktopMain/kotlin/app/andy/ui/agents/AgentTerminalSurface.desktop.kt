@@ -49,11 +49,6 @@ import kotlinx.coroutines.withContext
 private val NoSessionsRevision = MutableStateFlow(0L)
 private val NoWorkspace = MutableStateFlow(WorkspaceState())
 
-// A maximized/ultrawide chat pane otherwise hands the CLI a huge line length, which it
-// happily fills edge to edge — dense, hard-to-read text at an otherwise normal font size.
-// Cap at a classic terminal width instead of stretching to the full pane.
-private const val AGENT_TERMINAL_MAX_COLS = 120
-
 @Composable
 actual fun AgentTerminalSurface(
     services: AndyServices,
@@ -230,7 +225,6 @@ actual fun AgentTerminalSurface(
                             backend = rust,
                             appearance = appearance,
                             autoFocus = acceptsLiveDrops,
-                            maxCols = AGENT_TERMINAL_MAX_COLS,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -242,7 +236,6 @@ actual fun AgentTerminalSurface(
                             appearance = appearance,
                             autoFocus = false,
                             readOnly = true,
-                            maxCols = AGENT_TERMINAL_MAX_COLS,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
