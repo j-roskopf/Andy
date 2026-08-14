@@ -258,11 +258,17 @@ class NestedWorktreeServiceTest {
             val parentPath = assertNotNull(parent.worktreePath)
             // Remove the on-disk worktree while leaving the Andy task record (and branch) intact.
             // Linux CI occasionally leaves residue after `git worktree remove --force` ("Directory not
-            // empty" or a surviving directory); force-delete + prune keeps the setup deterministic.
+            // empty" or a surviving directory); retry force-delete + prune until gone.
+            val dead = File(parentPath)
             runCatching { git(harness.repo, "worktree", "remove", "--force", parentPath) }
-            File(parentPath).deleteRecursively()
-            git(harness.repo, "worktree", "prune")
-            assertFalse(File(parentPath).exists())
+            for (attempt in 0 until 8) {
+                if (!dead.exists()) break
+                dead.walkBottomUp().forEach { runCatching { it.setWritable(true); it.delete() } }
+                dead.deleteRecursively()
+                runCatching { git(harness.repo, "worktree", "prune") }
+                if (dead.exists() && attempt < 7) Thread.sleep(50L * (attempt + 1))
+            }
+            assertFalse(dead.exists(), "worktree dir still present after remove/prune: $parentPath")
             assertTrue(harness.service.tasks.value.any { it.id == parent.id && it.branchName != null })
 
             val options = harness.service.worktreeBaseOptions(harness.repo.absolutePath)
