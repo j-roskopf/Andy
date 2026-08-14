@@ -365,10 +365,18 @@ object AcpToolCallPresentation {
             b.contains(a) -> b
             a.contains(b) -> a
             isRenderedFileDiff(b) -> detailExtra(a)?.let { "$b$DetailSeparator$it" } ?: b
-            isRenderedFileDiff(a) -> "$a$DetailSeparator$b"
+            isRenderedFileDiff(a) -> appendExtraDetail(a, b)
             isJsonObject(a) -> "$a$DetailSeparator$b"
             else -> "$a\n$b"
         }
+    }
+
+    private fun appendExtraDetail(detail: String, output: String): String {
+        val separatorIndex = detail.indexOf(DetailSeparator)
+        if (separatorIndex < 0) return "$detail$DetailSeparator$output"
+        val primary = detail.substring(0, separatorIndex)
+        val extra = detail.substring(separatorIndex + DetailSeparator.length)
+        return "$primary$DetailSeparator$extra\n$output"
     }
 
     private fun detailExtra(text: String): String? {
