@@ -3,15 +3,21 @@ package app.andy.desktop.service
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ProjectAction
+import app.andy.terminal.TerminalLaunchRequest
+import app.andy.terminal.TerminalSessions
+import app.andy.terminal.rust.RustTerminalBackend
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -104,5 +110,88 @@ class DesktopActionRunServiceTest {
             while (!service.bufferSnapshot(runId).contains(text)) delay(25)
         }
         assertTrue(service.bufferSnapshot(runId).contains(text))
+    }
+
+    @Test
+    fun stoppingWhileSpawningNeverPublishesTheBackendOrRunsTheCommand() = runBlocking {
+        val spawnGate = CountDownLatch(1)
+        val spawned = AtomicReference<RustTerminalBackend?>()
+        val service = gatedService(spawnGate, spawned)
+        val project = ActionProject(
+            id = "project",
+            name = "Project",
+            contextDir = createTempDirectory("andy-stop-while-spawning").toString(),
+        )
+        val runId = service.run(
+            project,
+            ProjectAction(id = "run", name = "Run", command = "echo must-not-run"),
+        )
+
+        service.stop(runId)
+        // stop() ran while the PTY was still spawning: the run must settle Stopped and
+        // must never transition to Running or register a live backend afterwards.
+        assertEquals(
+            ActionRunStatus.Stopped,
+            service.running.value.firstOrNull { it.runId == runId }?.status,
+        )
+        spawnGate.countDown()
+
+        awaitBackendClosed(spawned)
+        assertEquals(ActionRunStatus.Stopped, service.running.value.single().status)
+        assertNull(service.rustTerminal(runId))
+        assertTrue(service.bufferSnapshot(runId).isEmpty())
+    }
+
+    @Test
+    fun clearingWhileSpawningNeverPublishesTheBackend() = runBlocking {
+        val spawnGate = CountDownLatch(1)
+        val spawned = AtomicReference<RustTerminalBackend?>()
+        val service = gatedService(spawnGate, spawned)
+        val project = ActionProject(
+            id = "project",
+            name = "Project",
+            contextDir = createTempDirectory("andy-clear-while-spawning").toString(),
+        )
+        val runId = service.run(
+            project,
+            ProjectAction(id = "run", name = "Run", command = "echo must-not-run"),
+        )
+
+        service.clear(runId)
+        // clear() ran while the PTY was still spawning: the run must be gone and no
+        // live backend may appear in its place once the spawn finishes.
+        assertEquals(emptyList(), service.running.value)
+        spawnGate.countDown()
+
+        awaitBackendClosed(spawned)
+        assertEquals(emptyList(), service.running.value)
+        assertNull(service.rustTerminal(runId))
+    }
+
+    private fun gatedService(
+        spawnGate: CountDownLatch,
+        spawned: AtomicReference<RustTerminalBackend?>,
+    ): DesktopActionRunService = DesktopActionRunService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        spawnSession = { runId, argv, cwd, env ->
+            spawnGate.await()
+            val backend = TerminalSessions.create(
+                TerminalLaunchRequest(
+                    sessionId = runId,
+                    argv = argv,
+                    cwd = cwd,
+                    env = env,
+                ),
+            ) as RustTerminalBackend
+            spawned.set(backend)
+            backend
+        },
+    )
+
+    private suspend fun awaitBackendClosed(spawned: AtomicReference<RustTerminalBackend?>) {
+        withTimeout(5_000) {
+            while (spawned.get()?.exitCode?.value == null) delay(25)
+        }
+        assertTrue(spawned.get()?.exitCode?.value != null)
     }
 }

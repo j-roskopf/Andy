@@ -22,9 +22,26 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+/** Creates (and starts) a run's PTY backend. Injectable so tests can gate spawn timing. */
+internal typealias SpawnSession =
+    (runId: String, argv: List<String>, cwd: String, env: Map<String, String>) -> RustTerminalBackend
+
 class DesktopActionRunService(
     private val scope: CoroutineScope,
     private val terminalAppearance: () -> TerminalAppearanceSnapshot = { TerminalAppearanceSnapshot() },
+    internal val spawnSession: SpawnSession = { runId, argv, cwd, env ->
+        val session = TerminalSessions.create(
+            TerminalLaunchRequest(
+                sessionId = runId,
+                argv = argv,
+                cwd = cwd,
+                env = env,
+                appearance = terminalAppearance(),
+            ),
+        )
+        session as? RustTerminalBackend
+            ?: error("terminal view missing after start: ${session::class.simpleName}")
+    },
 ) : ActionRunService {
     private data class RunHandle(
         val session: TerminalSession?,
@@ -33,6 +50,11 @@ class DesktopActionRunService(
 
     private val nextRun = AtomicInteger(1)
     private val handles = ConcurrentHashMap<String, RunHandle>()
+
+    // Serializes the spawn handshake (status check + handle registration) against stop()/clear(),
+    // so a run cancelled while its PTY is still spawning never publishes a live backend afterwards.
+    private val lifecycleLock = Any()
+
     private val _running = MutableStateFlow<List<RunningAction>>(emptyList())
     override val running: StateFlow<List<RunningAction>> = _running
 
@@ -88,37 +110,33 @@ class DesktopActionRunService(
                 val environment = buildTerminalLaunchEnvironment(
                     project.env + action.env,
                 )
-                val session = TerminalSessions.create(
-                    TerminalLaunchRequest(
-                        sessionId = runId,
-                        argv = command,
-                        cwd = cwd,
-                        env = environment,
-                        appearance = terminalAppearance(),
-                    ),
-                )
-                session as? RustTerminalBackend
-                    ?: error("terminal view missing after start: ${session::class.simpleName}")
+                spawnSession(runId, command, cwd, environment)
             }.fold(
                 onSuccess = { rustTerminal ->
-                    val stillStarting = _running.value
-                        .firstOrNull { it.runId == runId }
-                        ?.status == ActionRunStatus.Starting
-                    if (!stillStarting) {
+                    val registered = synchronized(lifecycleLock) {
+                        val stillStarting = _running.value
+                            .firstOrNull { it.runId == runId }
+                            ?.status == ActionRunStatus.Starting
+                        if (!stillStarting) {
+                            false
+                        } else {
+                            handles[runId] = RunHandle(rustTerminal, rustTerminal)
+                            _running.update { runs ->
+                                runs.map { run ->
+                                    if (run.runId == runId && run.status == ActionRunStatus.Starting) {
+                                        run.copy(status = ActionRunStatus.Running)
+                                    } else {
+                                        run
+                                    }
+                                }
+                            }
+                            true
+                        }
+                    }
+                    if (!registered) {
                         // Tab was closed/stopped while the PTY was still spawning; don't orphan it.
                         runCatching { rustTerminal.close() }
                         return@launch
-                    }
-                    val handle = RunHandle(rustTerminal, rustTerminal)
-                    handles[runId] = handle
-                    _running.update { runs ->
-                        runs.map { run ->
-                            if (run.runId == runId && run.status == ActionRunStatus.Starting) {
-                                run.copy(status = ActionRunStatus.Running)
-                            } else {
-                                run
-                            }
-                        }
                     }
                     initialCommand?.let { command ->
                         runCatching { rustTerminal.writeText("$command\r") }
@@ -134,7 +152,13 @@ class DesktopActionRunService(
                 },
                 onFailure = {
                     markComplete(runId, ActionRunStatus.Failed, null)
-                    handles[runId] = RunHandle(null, null)
+                    synchronized(lifecycleLock) {
+                        // Publish a tombstone only if the run wasn't already cleared, so a
+                        // cancelled run doesn't leak a stale map entry.
+                        if (_running.value.any { it.runId == runId }) {
+                            handles[runId] = RunHandle(null, null)
+                        }
+                    }
                 },
             )
         }
@@ -142,25 +166,32 @@ class DesktopActionRunService(
     }
 
     override fun stop(runId: String) {
-        val handle = handles[runId]
-        if (handle == null) {
-            // PTY may still be spawning; marking it Stopped now makes start() close it
-            // instead of registering a handle once the spawn finishes.
-            markComplete(runId, ActionRunStatus.Stopped, null)
-            return
+        val handle = synchronized(lifecycleLock) {
+            val handle = handles[runId]
+            if (handle == null) {
+                // PTY may still be spawning; marking it Stopped now makes start() close it
+                // instead of registering a handle once the spawn finishes.
+                markComplete(runId, ActionRunStatus.Stopped, null)
+            }
+            handle
         }
-        scope.launch(Dispatchers.IO) {
-            runCatching { handle.session?.close() }
-            markComplete(runId, ActionRunStatus.Stopped, null)
+        if (handle != null) {
+            scope.launch(Dispatchers.IO) {
+                runCatching { handle.session?.close() }
+                markComplete(runId, ActionRunStatus.Stopped, null)
+            }
         }
     }
 
     override fun clear(runId: String) {
-        val handle = handles.remove(runId)
+        val handle = synchronized(lifecycleLock) {
+            val handle = handles.remove(runId)
+            _running.update { runs -> runs.filterNot { it.runId == runId } }
+            handle
+        }
         scope.launch(Dispatchers.IO) {
             runCatching { handle?.session?.close() }
         }
-        _running.update { runs -> runs.filterNot { it.runId == runId } }
     }
 
     internal fun rustTerminal(runId: String): RustTerminalBackend? = handles[runId]?.rustTerminal
