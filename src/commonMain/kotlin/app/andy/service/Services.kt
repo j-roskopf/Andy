@@ -604,19 +604,21 @@ interface ProjectWorkflowService {
 enum class KanbanLaneDirection { Left, Right }
 
 interface KanbanService {
-    val board: StateFlow<KanbanBoard>
+    val boards: StateFlow<Map<String, KanbanBoard>>
 
-    fun addLane(name: String)
-    fun renameLane(laneId: String, name: String)
+    fun addLane(projectId: String, name: String)
+    fun renameLane(projectId: String, laneId: String, name: String)
     /** Deletes the lane and all its cards. Caller (UI) must confirm first. No-ops if this is the last lane. */
-    fun deleteLane(laneId: String)
-    fun moveLane(laneId: String, direction: KanbanLaneDirection)
+    fun deleteLane(projectId: String, laneId: String)
+    fun moveLane(projectId: String, laneId: String, direction: KanbanLaneDirection)
 
-    fun addCard(laneId: String, title: String, description: String, tags: List<String>)
-    fun updateCard(cardId: String, title: String, description: String, tags: List<String>)
-    fun deleteCard(cardId: String)
+    fun addCard(projectId: String, laneId: String, title: String, description: String, tags: List<String>)
+    fun updateCard(projectId: String, cardId: String, title: String, description: String, tags: List<String>)
+    fun deleteCard(projectId: String, cardId: String)
     /** Moves [cardId] to [toLaneId] at position [toIndex] (0-based, post-removal index in the target lane). */
-    fun moveCard(cardId: String, toLaneId: String, toIndex: Int)
+    fun moveCard(projectId: String, cardId: String, toLaneId: String, toIndex: Int)
+    fun linkChat(projectId: String, cardId: String, chatTaskId: String)
+    fun deleteBoard(projectId: String)
 }
 
 data class CommandResult(

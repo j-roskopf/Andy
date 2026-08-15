@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentReasoningEffort
@@ -17,6 +18,7 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.ContextualActionKind
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import app.andy.model.ProjectAgentProfile
@@ -128,6 +130,10 @@ class DesktopAgentTaskStoreTest {
             workflowStage = ProjectWorkflowStage.Build,
             workflowAttempt = 2,
             completedResultText = "implemented the frozen plan",
+            provenance = AgentContextualProvenance(
+                sourceKind = ContextualActionKind.Kanban,
+                kanbanCardId = "card-1",
+            ),
         )
         store.save(AgentStoreState(tasks = listOf(task), binaryOverrides = mapOf("codex" to "/bin/codex"), maxConcurrent = 4))
         val loaded = store.load()

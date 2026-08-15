@@ -138,6 +138,7 @@ fun Server.registerAgentProjectTools(
             crashId = field("crashId"),
             hierarchyNodeId = field("hierarchyNodeId"),
             packageName = field("packageName"),
+            kanbanCardId = field("kanbanCardId"),
         )
     }
 
@@ -472,7 +473,7 @@ fun Server.registerAgentProjectTools(
                 put(
                     "description",
                     "Where this contextual action originated: {sourceKind, investigationId?, eventId?, " +
-                        "playbackMillis?, networkExchangeId?, crashId?, hierarchyNodeId?, packageName?}",
+                        "playbackMillis?, networkExchangeId?, crashId?, hierarchyNodeId?, packageName?, kanbanCardId?}",
                 )
             },
         ),

@@ -15,6 +15,8 @@ import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
@@ -156,11 +158,21 @@ internal fun AgentTaskComposerPane(
     /** False while this pane is retained but not visible (e.g. under [RetainedDestination]). */
     dictationActive: Boolean = true,
     starterPrompts: List<AgentStarterPrompt> = emptyList(),
+    initialPrompt: String? = null,
+    wrapComposerControls: Boolean = false,
 ) {
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
     val scope = rememberCoroutineScope()
     var showOptions by remember(projectContext?.id) { mutableStateOf(false) }
+    LaunchedEffect(projectContext?.id, initialPrompt) {
+        if (form.state.promptValue.text.isBlank() && !initialPrompt.isNullOrBlank()) {
+            form.state.promptValue = TextFieldValue(
+                initialPrompt,
+                TextRange(initialPrompt.length),
+            )
+        }
+    }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (showOptions) {
             AgentTaskComposerFields(
@@ -241,6 +253,7 @@ internal fun AgentTaskComposerPane(
             form = form,
             showOptions = showOptions,
             onShowOptionsChange = { showOptions = it },
+            wrapComposerControls = wrapComposerControls,
             onCancel = onCancel,
             voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
             dictationActive = dictationActive,
@@ -697,6 +710,7 @@ private fun AgentChatComposer(
     form: AgentTaskComposerForm,
     showOptions: Boolean,
     onShowOptionsChange: (Boolean) -> Unit,
+    wrapComposerControls: Boolean,
     onCancel: (() -> Unit)?,
     voiceShortcut: KeyCombo?,
     dictationActive: Boolean,
@@ -887,13 +901,7 @@ private fun AgentChatComposer(
             }
         }
 
-        ComposerToolbarRow(
-            leading = {
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+        val leadingControls: @Composable () -> Unit = {
                     Box {
                         ComposerChip(
                             text = state.agent.label,
@@ -1062,17 +1070,48 @@ private fun AgentChatComposer(
                             onClick = cancel,
                         )
                     }
-                }
-            },
-            trailing = {
+        }
+        val trailingControls: @Composable () -> Unit = {
                 AgentQuotaMenu(services = form.services, agent = state.agent)
                 ChatImageAttachButton(
                     onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
                 )
                 ChatVoiceDictationButton(controller = voiceController)
                 ChatSendButton(onClick = onSubmit, enabled = canSubmit)
-            },
-        )
+        }
+        if (wrapComposerControls) {
+            Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                ) {
+                    leadingControls()
+                }
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                ) {
+                    trailingControls()
+                }
+            }
+        } else {
+            ComposerToolbarRow(
+                leading = {
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        leadingControls()
+                    }
+                },
+                trailing = { trailingControls() },
+            )
+        }
         voiceError?.let { err ->
             Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
         }

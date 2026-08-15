@@ -105,7 +105,6 @@ import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.service.UnavailableKanbanService
 import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
@@ -164,6 +163,7 @@ internal fun actionIconMarker(icon: String): String = when (icon.trim().lowercas
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
 private data class ProjectChatLists(val active: List<AgentTask>, val archived: List<AgentTask>)
+private data class SpecEditorSeed(val title: String, val brief: String)
 
 private val ProjectChatSort =
     compareByDescending<AgentTask> { it.createdAtMillis }
@@ -171,6 +171,7 @@ private val ProjectChatSort =
 private enum class ProjectCanvas(val label: String) {
     Chat("Chat"),
     Tasks("Tasks"),
+    Kanban("Kanban"),
     Runbook("Runbook"),
     Scratchpad("Scratchpad"),
     Worktrees("Worktrees"),
@@ -235,6 +236,7 @@ private fun ProjectCockpit(
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var specEditorOpen by remember { mutableStateOf(false) }
+    var specEditorSeed by remember { mutableStateOf<SpecEditorSeed?>(null) }
     var editingSpec by remember { mutableStateOf<ProjectTask?>(null) }
     var buildEditor by remember { mutableStateOf<BuildEditorSeed?>(null) }
     var profilesOpen by remember { mutableStateOf(false) }
@@ -611,6 +613,9 @@ private fun ProjectCockpit(
                                             workspaceState = workspaceState,
                                             modifier = Modifier.fillMaxSize(),
                                             dictationActive = active && chatActive,
+                                            onOpenKanbanCard = {
+                                                canvas = ProjectCanvas.Kanban
+                                            },
                                         )
                                     }
                                 }
@@ -628,6 +633,7 @@ private fun ProjectCockpit(
                                         onNewSpec = {
                                             ensureWorkflowProjectLoaded()
                                             editingSpec = null
+                                            specEditorSeed = null
                                             specEditorOpen = true
                                         },
                                         onNewBuild = {
@@ -656,6 +662,7 @@ private fun ProjectCockpit(
                                             ensureWorkflowProjectLoaded()
                                             if (task.kind == ProjectTaskKind.Spec) {
                                                 editingSpec = task
+                                                specEditorSeed = null
                                                 specEditorOpen = true
                                             } else {
                                                 buildEditor = BuildEditorSeed(buildTaskId = task.linkedBuildTaskId ?: task.id)
@@ -672,6 +679,27 @@ private fun ProjectCockpit(
                                         modifier = Modifier.weight(1f).fillMaxHeight(),
                                     )
                                 }
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Kanban) {
+                                KanbanBoardScreen(
+                                    services = services,
+                                    project = current,
+                                    onCreateSpec = { card ->
+                                        ensureWorkflowProjectLoaded()
+                                        editingSpec = null
+                                        specEditorSeed = SpecEditorSeed(
+                                            title = card.title,
+                                            brief = card.description.ifBlank { card.title },
+                                        )
+                                        specEditorOpen = true
+                                        canvas = ProjectCanvas.Tasks
+                                    },
+                                    onOpenChat = { chatTaskId ->
+                                        selectedTaskId = chatTaskId
+                                        canvas = ProjectCanvas.Chat
+                                        services.agentRuns.setChatViewing(chatTaskId, viewing = true)
+                                    },
+                                )
                             }
                             RetainedDestination(active = canvas == ProjectCanvas.Runbook) {
                                 ProjectRunbook(
@@ -730,6 +758,7 @@ private fun ProjectCockpit(
                         val sessions = agentTasks.filter { it.projectId == project.id }
                         scope.launch {
                             services.projectWorkflows.deleteProject(project.id)
+                            services.kanban.deleteBoard(project.id)
                             sessions.forEach { task ->
                                 runCatching {
                                     services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
@@ -759,10 +788,24 @@ private fun ProjectCockpit(
     }
     editingAction?.let { edit -> ActionDialog(config.projects, edit.projectId, edit.action, { editingAction = null }) { projectId, action -> editingAction = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == projectId) project.copy(actions = project.actions.filterNot { it.id == action.id } + action) else project })) } }
     if (specEditorOpen && project != null && effectiveProjectWorkflow != null) {
-        SpecTaskDialog(services, project, effectiveProjectWorkflow, editingSpec, agentCliStatuses, onDismiss = { specEditorOpen = false }) { id ->
-            specEditorOpen = false
-            selectedWorkflowTaskId = id
-        }
+        SpecTaskDialog(
+            services = services,
+            project = project,
+            workflow = effectiveProjectWorkflow,
+            existing = editingSpec,
+            cliStatuses = agentCliStatuses,
+            prefilledTitle = specEditorSeed?.title.orEmpty(),
+            prefilledBrief = specEditorSeed?.brief.orEmpty(),
+            onDismiss = {
+                specEditorOpen = false
+                specEditorSeed = null
+            },
+            onSaved = { id ->
+                specEditorOpen = false
+                specEditorSeed = null
+                selectedWorkflowTaskId = id
+            },
+        )
     }
     buildEditor?.let { seed ->
         if (project != null && effectiveProjectWorkflow != null) {
@@ -814,63 +857,24 @@ internal fun ActionsScreen(
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
     } else {
-        var pageTab by remember { mutableStateOf(ProjectsPageTab.Projects) }
-        var showAddLaneDialog by remember { mutableStateOf(false) }
-        val kanbanAvailable = services.kanban !is UnavailableKanbanService
-        if (showAddLaneDialog) {
-            KanbanAddLaneDialog(
-                onDismiss = { showAddLaneDialog = false },
-                onConfirm = { name ->
-                    services.kanban.addLane(name)
-                    showAddLaneDialog = false
-                },
-            )
-        }
-        Column(Modifier.fillMaxSize()) {
-            TabBar(
-                tabs = ProjectsPageTab.entries,
-                selected = pageTab,
-                onSelect = { pageTab = it },
-                label = { it.label },
-                trailing = if (kanbanAvailable) {
-                    {
-                        val kanbanVisible = pageTab == ProjectsPageTab.Kanban
-                        KanbanAddLaneAction(
-                            onClick = { if (kanbanVisible) showAddLaneDialog = true },
-                            modifier = Modifier.alpha(if (kanbanVisible) 1f else 0f),
-                        )
-                    }
-                } else {
-                    null
-                },
-            )
-            Box(Modifier.weight(1f).fillMaxWidth().padding(top = AndySpace.Space2)) {
-                // Keep both page tabs mounted so project chat drafts survive Projects ↔ Kanban.
-                RetainedDestination(active = pageTab == ProjectsPageTab.Projects) {
-                    ProjectCockpit(
-                        services = services,
-                        config = config,
-                        onConfigChange = onConfigChange,
-                        agentTasks = agentTasks,
-                        preferredProjectId = preferredProjectId,
-                        onPreferredProjectChange = onPreferredProjectChange,
-                        workspaceReady = workspaceReady,
-                        initialWorkflowTaskId = initialWorkflowTaskId,
-                        initialCanvasLabel = initialCanvasLabel,
-                        requestedAgentTaskId = requestedAgentTaskId,
-                        requestedProjectId = requestedProjectId,
-                        onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
-                        onNotifyTerminalRun = onNotifyTerminalRun,
-                        active = active && pageTab == ProjectsPageTab.Projects,
-                        workspaceState = workspaceState,
-                        onUpdateWorkspace = onUpdateWorkspace,
-                    )
-                }
-                RetainedDestination(active = pageTab == ProjectsPageTab.Kanban) {
-                    KanbanBoardScreen(services = services)
-                }
-            }
-        }
+        ProjectCockpit(
+            services = services,
+            config = config,
+            onConfigChange = onConfigChange,
+            agentTasks = agentTasks,
+            preferredProjectId = preferredProjectId,
+            onPreferredProjectChange = onPreferredProjectChange,
+            workspaceReady = workspaceReady,
+            initialWorkflowTaskId = initialWorkflowTaskId,
+            initialCanvasLabel = initialCanvasLabel,
+            requestedAgentTaskId = requestedAgentTaskId,
+            requestedProjectId = requestedProjectId,
+            onRequestedAgentTaskConsumed = onRequestedAgentTaskConsumed,
+            onNotifyTerminalRun = onNotifyTerminalRun,
+            active = active,
+            workspaceState = workspaceState,
+            onUpdateWorkspace = onUpdateWorkspace,
+        )
     }
 }
 

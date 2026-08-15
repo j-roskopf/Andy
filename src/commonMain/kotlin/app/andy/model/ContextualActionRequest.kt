@@ -47,6 +47,7 @@ fun ContextualActionKind.attachesAndyMcpByDefault(): Boolean = when (this) {
     -> true
     ContextualActionKind.ExplainMoment,
     ContextualActionKind.InvestigateSelection,
+    ContextualActionKind.Kanban,
     -> false
 }
 

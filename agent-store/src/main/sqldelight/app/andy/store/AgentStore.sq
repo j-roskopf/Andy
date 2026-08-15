@@ -36,7 +36,7 @@ CREATE TABLE quota_access (
 );
 
 CREATE TABLE kanban_board (
-  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  project_id TEXT NOT NULL PRIMARY KEY,
   updated_at_millis INTEGER NOT NULL,
   payload TEXT NOT NULL
 );
@@ -104,8 +104,15 @@ VALUES (1, ?, ?, ?);
 countTasks:
 SELECT COUNT(*) FROM agent_task;
 
-selectKanbanBoard:
-SELECT payload FROM kanban_board WHERE id = 1;
+selectAllKanbanBoards:
+SELECT project_id, updated_at_millis, payload FROM kanban_board;
 
 upsertKanbanBoard:
-INSERT OR REPLACE INTO kanban_board(id, updated_at_millis, payload) VALUES (1, ?, ?);
+INSERT OR REPLACE INTO kanban_board(project_id, updated_at_millis, payload)
+VALUES (?, ?, ?);
+
+deleteKanbanBoard:
+DELETE FROM kanban_board WHERE project_id = ?;
+
+deleteAllKanbanBoards:
+DELETE FROM kanban_board;

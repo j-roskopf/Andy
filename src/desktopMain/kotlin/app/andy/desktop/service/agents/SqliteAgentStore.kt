@@ -60,16 +60,23 @@ internal class SqliteAgentStore(
         )
     }
 
-    fun loadKanbanBoard(): KanbanBoard? =
-        db.agentStoreQueries.selectKanbanBoard().executeAsOneOrNull()?.let { row ->
-            runCatching { json.decodeFromString(KanbanBoard.serializer(), row) }.getOrNull()
-        }
+    fun loadAllKanbanBoards(): Map<String, KanbanBoard> =
+        db.agentStoreQueries.selectAllKanbanBoards().executeAsList().mapNotNull { row ->
+            runCatching { json.decodeFromString(KanbanBoard.serializer(), row.payload) }
+                .getOrNull()
+                ?.let { row.project_id to it }
+        }.toMap()
 
-    fun saveKanbanBoard(board: KanbanBoard) {
+    fun saveKanbanBoard(projectId: String, board: KanbanBoard) {
         db.agentStoreQueries.upsertKanbanBoard(
+            project_id = projectId,
             updated_at_millis = System.currentTimeMillis(),
             payload = json.encodeToString(KanbanBoard.serializer(), board),
         )
+    }
+
+    fun deleteKanbanBoard(projectId: String) {
+        db.agentStoreQueries.deleteKanbanBoard(project_id = projectId)
     }
 
     fun save(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
