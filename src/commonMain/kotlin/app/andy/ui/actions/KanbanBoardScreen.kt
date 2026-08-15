@@ -73,6 +73,7 @@ import app.andy.model.KanbanLane
 import app.andy.model.ActionProject
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentContextualProvenance
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.ContextualActionKind
 import app.andy.service.AndyServices
@@ -1145,7 +1146,7 @@ private fun KanbanAssignDialog(
     onAssigned: (chatTaskId: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val initialPrompt = card.description.ifBlank { card.title }
+    val initialPrompt = defaultKanbanAssignPrompt(card.title, card.description)
     AndyAlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Panel,
@@ -1191,8 +1192,18 @@ private fun KanbanAssignDialog(
     )
 }
 
+internal fun defaultKanbanAssignPrompt(title: String, description: String): String {
+    val trimmedTitle = title.trim()
+    val trimmedDescription = description.trim()
+    return when {
+        trimmedDescription.isBlank() -> trimmedTitle
+        trimmedTitle.isBlank() || trimmedDescription.startsWith(trimmedTitle) -> trimmedDescription
+        else -> "$trimmedTitle\n\n$trimmedDescription"
+    }
+}
+
 internal fun canReassignKanbanCard(activeChat: AgentTask?): Boolean =
-    activeChat != null && !activeChat.isActive
+    activeChat?.status == AgentStatus.Done || activeChat?.status == AgentStatus.Error
 
 private fun resolveDropTarget(
     pointer: Offset,
