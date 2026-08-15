@@ -28,7 +28,7 @@ class DesktopActionRunServiceTest {
 
         try {
             assertEquals("Terminal", service.running.value.single().actionName)
-            assertNotNull(service.rustTerminal(runId))
+            awaitRustTerminal(service, runId)
             service.writeToTerminal(runId, "echo ready\r")
             awaitTerminalText(service, runId, "ready")
         } finally {
@@ -50,7 +50,7 @@ class DesktopActionRunServiceTest {
         )
 
         try {
-            assertNotNull(service.rustTerminal(runId))
+            awaitRustTerminal(service, runId)
             awaitTerminalText(service, runId, "initial")
             assertEquals(ActionRunStatus.Running, service.running.value.single().status)
 
@@ -85,11 +85,18 @@ class DesktopActionRunServiceTest {
             val secondRunId = service.run(project, action)
             assertTrue(firstRunId != secondRunId)
             assertEquals(listOf(secondRunId), service.running.value.map { it.runId })
-            assertNotNull(service.rustTerminal(secondRunId))
+            awaitRustTerminal(service, secondRunId)
             awaitTerminalText(service, secondRunId, "first")
         } finally {
             service.running.value.forEach { service.stop(it.runId) }
         }
+    }
+
+    private suspend fun awaitRustTerminal(service: DesktopActionRunService, runId: String) {
+        withTimeout(5_000) {
+            while (service.rustTerminal(runId) == null) delay(25)
+        }
+        assertNotNull(service.rustTerminal(runId))
     }
 
     private suspend fun awaitTerminalText(service: DesktopActionRunService, runId: String, text: String) {

@@ -35,7 +35,7 @@ data class ActionsConfig(
     val projects: List<ActionProject> = emptyList(),
 )
 
-enum class ActionRunStatus { Running, Exited, Failed, Stopped }
+enum class ActionRunStatus { Starting, Running, Exited, Failed, Stopped }
 
 data class RunningAction(
     val runId: String,

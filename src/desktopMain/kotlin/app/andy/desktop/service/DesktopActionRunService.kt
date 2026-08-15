@@ -75,37 +75,54 @@ class DesktopActionRunService(
             icon = action.icon,
             command = action.command,
             cwd = cwd,
-            status = ActionRunStatus.Running,
+            status = ActionRunStatus.Starting,
             startedAtMillis = System.currentTimeMillis(),
         )
         _running.update { it + snapshot }
 
-        runCatching {
-            val command = persistentShellCommand()
-            val environment = buildTerminalLaunchEnvironment(
-                project.env + action.env,
-            )
-            val session = TerminalSessions.create(
-                TerminalLaunchRequest(
-                    sessionId = runId,
-                    argv = command,
-                    cwd = cwd,
-                    env = environment,
-                    appearance = terminalAppearance(),
-                ),
-            )
-            session as? RustTerminalBackend
-                ?: error("terminal view missing after start: ${session::class.simpleName}")
-        }.fold(
-            onSuccess = { rustTerminal ->
-                val handle = RunHandle(rustTerminal, rustTerminal)
-                handles[runId] = handle
-                initialCommand?.let { command ->
-                    scope.launch(Dispatchers.IO) {
+        // PTY spawn does synchronous shell/native-library work (login shell capture, native
+        // lib load), so it runs off the UI thread and the dock tab appears before it finishes.
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val command = persistentShellCommand()
+                val environment = buildTerminalLaunchEnvironment(
+                    project.env + action.env,
+                )
+                val session = TerminalSessions.create(
+                    TerminalLaunchRequest(
+                        sessionId = runId,
+                        argv = command,
+                        cwd = cwd,
+                        env = environment,
+                        appearance = terminalAppearance(),
+                    ),
+                )
+                session as? RustTerminalBackend
+                    ?: error("terminal view missing after start: ${session::class.simpleName}")
+            }.fold(
+                onSuccess = { rustTerminal ->
+                    val stillStarting = _running.value
+                        .firstOrNull { it.runId == runId }
+                        ?.status == ActionRunStatus.Starting
+                    if (!stillStarting) {
+                        // Tab was closed/stopped while the PTY was still spawning; don't orphan it.
+                        runCatching { rustTerminal.close() }
+                        return@launch
+                    }
+                    val handle = RunHandle(rustTerminal, rustTerminal)
+                    handles[runId] = handle
+                    _running.update { runs ->
+                        runs.map { run ->
+                            if (run.runId == runId && run.status == ActionRunStatus.Starting) {
+                                run.copy(status = ActionRunStatus.Running)
+                            } else {
+                                run
+                            }
+                        }
+                    }
+                    initialCommand?.let { command ->
                         runCatching { rustTerminal.writeText("$command\r") }
                     }
-                }
-                scope.launch(Dispatchers.IO) {
                     val exitCode = runCatching {
                         rustTerminal.exitCode.first { it != null }
                     }.getOrNull() ?: -1
@@ -114,18 +131,24 @@ class DesktopActionRunService(
                         if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed,
                         exitCode,
                     )
-                }
-            },
-            onFailure = {
-                markComplete(runId, ActionRunStatus.Failed, null)
-                handles[runId] = RunHandle(null, null)
-            },
-        )
+                },
+                onFailure = {
+                    markComplete(runId, ActionRunStatus.Failed, null)
+                    handles[runId] = RunHandle(null, null)
+                },
+            )
+        }
         return runId
     }
 
     override fun stop(runId: String) {
-        val handle = handles[runId] ?: return
+        val handle = handles[runId]
+        if (handle == null) {
+            // PTY may still be spawning; marking it Stopped now makes start() close it
+            // instead of registering a handle once the spawn finishes.
+            markComplete(runId, ActionRunStatus.Stopped, null)
+            return
+        }
         scope.launch(Dispatchers.IO) {
             runCatching { handle.session?.close() }
             markComplete(runId, ActionRunStatus.Stopped, null)
@@ -164,9 +187,10 @@ class DesktopActionRunService(
     }
 
     private fun markComplete(runId: String, status: ActionRunStatus, exitCode: Int?) {
+        val active = setOf(ActionRunStatus.Starting, ActionRunStatus.Running)
         _running.update { runs ->
             runs.map { run ->
-                if (run.runId == runId && run.status == ActionRunStatus.Running) {
+                if (run.runId == runId && run.status in active) {
                     run.copy(status = status, exitCode = exitCode)
                 } else {
                     run
