@@ -76,9 +76,13 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 
 /** Where an auxiliary surface docks relative to the main workspace. */
 internal enum class DockPlacement { Right, Bottom }
+
+/** Breathing room under dock content so the card's rounded bottom never clips it. */
+private val DockContentCornerInset = AndySpace.Space2
 private enum class PaneToggleEdge { Left, Right, Bottom }
 
 /** Kind of surface shown inside a dock tab. */
@@ -460,16 +464,24 @@ internal fun ShellDockDrawer(
     val terminalBackground = remember(terminalThemeId) {
         Color(TerminalThemePreset.fromId(terminalThemeId).palette().background)
     }
-    // Pad the tab strip only. Content is flush to the card bottom so the right/bottom
-    // dock shares a baseline with the project composer (PanelCard's default 20dp bottom
-    // padding was leaving a visible shelf under Live).
+    // Live has no theme of its own to borrow, so the strip drops to the canvas the dock sits
+    // on — the pane then reads as the device surface floating on the shell, not as chrome.
+    val liveHeader = active?.kind == DockTabKind.Live
+    val headerBackground = when {
+        terminalHeader -> terminalBackground
+        liveHeader -> AndyColors.ContentBg
+        else -> AndyColors.SurfaceRaised
+    }
+    // Pad the tab strip only; the content below manages its own insets so Live/Terminal can
+    // bleed to the card's side edges (PanelCard's default 20dp padding was leaving a visible
+    // shelf under Live).
     PanelCard(
         modifier.graphicsLayer {
             alpha = 0.72f + reveal.value * 0.28f
             if (placement == DockPlacement.Right) translationX = (1f - reveal.value) * 28f
             else translationY = (1f - reveal.value) * 28f
         },
-        background = if (terminalHeader) terminalBackground else AndyColors.SurfaceRaised,
+        background = headerBackground,
         borderColor = Color.Transparent,
         contentPadding = PaddingValues(0.dp),
         verticalArrangement = Arrangement.Top,
@@ -491,7 +503,7 @@ internal fun ShellDockDrawer(
                         DockChromeButton(
                             glyph = "+",
                             label = "Add pane tab",
-                            onTerminalSurface = terminalHeader,
+                            onBleedSurface = terminalHeader || liveHeader,
                             onClick = {
                                 if (!addMenuExpanded) {
                                     HeavyweightOverlayRegistry.push()
@@ -511,7 +523,7 @@ internal fun ShellDockDrawer(
                     DockChromeButton(
                         glyph = "×",
                         label = if (placement == DockPlacement.Right) "Close right pane" else "Close bottom pane",
-                        onTerminalSurface = terminalHeader,
+                        onBleedSurface = terminalHeader || liveHeader,
                         onClick = onClose,
                     )
                 }
@@ -583,10 +595,18 @@ internal fun ShellDockDrawer(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                // Terminal owns its theme color, so carry it under the corner inset too —
+                // otherwise the strip below the last text row exposes the chrome surface.
+                .then(
+                    if (active?.kind == DockTabKind.Terminal) Modifier.background(terminalBackground)
+                    else Modifier,
+                )
                 .padding(
                     start = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     end = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     top = if (edgeToEdge) 0.dp else AndySpace.Space4,
+                    // Keeps the last row clear of the card's rounded bottom corners.
+                    bottom = DockContentCornerInset,
                 ),
         ) {
             when (active?.kind) {
@@ -642,12 +662,18 @@ private fun DockChromeButton(
     glyph: String,
     label: String,
     onClick: () -> Unit,
-    onTerminalSurface: Boolean = false,
+    onBleedSurface: Boolean = false,
 ) {
-    // Over a terminal-tinted header the neutral chrome fill would read as a patch of a
-    // different theme, so lift the button off the terminal color instead of replacing it.
-    val fill = if (onTerminalSurface) Color.White.copy(alpha = 0.06f) else AndyColors.Neutral850
-    val stroke = if (onTerminalSurface) Color.White.copy(alpha = 0.12f) else Border
+    // On a header that has taken on the terminal theme or the shell canvas, the neutral chrome
+    // fill either reads as a patch of a different theme or vanishes into the background, so lift
+    // the button off whatever it sits on instead of replacing the color.
+    val lifted = onBleedSurface && !AndyColors.isLight
+    val fill = when {
+        lifted -> Color.White.copy(alpha = 0.06f)
+        onBleedSurface -> AndyColors.SurfaceRaised
+        else -> AndyColors.Neutral850
+    }
+    val stroke = if (lifted) Color.White.copy(alpha = 0.12f) else Border
     Box(
         Modifier
             .size(28.dp)
@@ -679,6 +705,7 @@ private fun dockTerminalTabLabel(
 }
 
 private fun dockActionStatusColor(status: ActionRunStatus?): Color = when (status) {
+    ActionRunStatus.Starting -> Yellow
     ActionRunStatus.Running -> Green
     ActionRunStatus.Exited -> Cyan
     ActionRunStatus.Failed -> Red

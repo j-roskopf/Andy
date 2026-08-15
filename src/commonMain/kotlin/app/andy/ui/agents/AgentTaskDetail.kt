@@ -122,6 +122,7 @@ import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
+import app.andy.ui.components.PaneDivider
 import app.andy.ui.shell.LocalOpenInvestigation
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.FieldChromeStyle
@@ -191,6 +192,7 @@ internal fun AgentTaskDetail(
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
     var toolDiffPane by remember(task.id) { mutableStateOf<AgentFileDiff?>(null) }
     var filePreviewPane by remember(task.id) { mutableStateOf<FileLinkPreviewState?>(null) }
+    var toolSidePaneWidth by remember(task.id) { mutableStateOf(420f) }
     val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
         listOfNotNull(task.worktreePath, task.cwd, task.originDir).distinct()
     }
@@ -567,7 +569,7 @@ internal fun AgentTaskDetail(
                 val pendingPermissionId = task.userInputRequest
                     ?.takeIf { it.origin == AgentUserInputOrigin.AcpPermission }
                     ?.id
-                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxSize()) {
                     AgentTranscript(
                         events = transcriptEvents,
                         isActive = task.isActive,
@@ -615,13 +617,20 @@ internal fun AgentTaskDetail(
                         currentTaskId = task.id,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
+                    if (filePreviewPane != null || toolDiffPane != null) {
+                        PaneDivider(
+                            onDrag = { dragX ->
+                                toolSidePaneWidth = (toolSidePaneWidth - dragX).coerceIn(280f, 900f)
+                            },
+                        )
+                    }
                     filePreviewPane?.let { preview ->
                         FileLinkPreviewPane(
                             state = preview,
                             onTextChange = { _, text -> filePreviewPane = filePreviewPane?.copy(draft = text) },
                             onSave = ::saveFilePreview,
                             onClose = { filePreviewPane = null },
-                            modifier = Modifier.width(420.dp).fillMaxHeight(),
+                            modifier = Modifier.width(toolSidePaneWidth.dp).fillMaxHeight(),
                         )
                     } ?: toolDiffPane?.let { diff ->
                         AgentToolDiffSidePane(
@@ -629,7 +638,7 @@ internal fun AgentTaskDetail(
                             viewMode = diffViewMode,
                             onViewModeChange = { diffViewMode = it },
                             onClose = { toolDiffPane = null },
-                            modifier = Modifier.width(420.dp).fillMaxHeight(),
+                            modifier = Modifier.width(toolSidePaneWidth.dp).fillMaxHeight(),
                         )
                     }
                 }
