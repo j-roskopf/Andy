@@ -1670,6 +1670,7 @@ private fun ToolCallDiff(diff: AgentFileDiff, modifier: Modifier = Modifier) {
         onViewModeChange = { viewMode = it },
         onCollapse = {},
         showCollapseControl = false,
+        showPath = false,
         maxHeight = 220.dp,
         modifier = modifier.fillMaxWidth(),
     )

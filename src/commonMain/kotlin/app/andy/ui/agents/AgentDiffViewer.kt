@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -108,6 +109,7 @@ internal fun AgentFileDiffViewer(
     onViewModeChange: (DiffViewMode) -> Unit,
     onCollapse: () -> Unit,
     showCollapseControl: Boolean = true,
+    showPath: Boolean = true,
     maxHeight: androidx.compose.ui.unit.Dp? = 420.dp,
     modifier: Modifier = Modifier,
 ) {
@@ -134,16 +136,20 @@ internal fun AgentFileDiffViewer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                diff.path,
-                color = TextPrimary,
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            if (showPath) {
+                Text(
+                    diff.path,
+                    color = TextPrimary,
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
             FilterPill("unified", viewMode == DiffViewMode.Unified, Cyan) {
                 onViewModeChange(DiffViewMode.Unified)
             }

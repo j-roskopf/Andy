@@ -37,9 +37,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyShape
@@ -168,7 +170,7 @@ internal fun TabBarItem(
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     var editing by remember { mutableStateOf(false) }
-    var draft by remember(label) { mutableStateOf(label) }
+    var draft by remember(label) { mutableStateOf(TextFieldValue(label)) }
     var editorHadFocus by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val textColor = when {
@@ -178,9 +180,9 @@ internal fun TabBarItem(
     }
     fun finishEditing() {
         if (!editing) return
-        val updated = draft.trim()
+        val updated = draft.text.trim()
         if (updated.isNotEmpty() && updated != label) onRename?.invoke(updated)
-        draft = updated.ifEmpty { label }
+        draft = TextFieldValue(updated.ifEmpty { label })
         editing = false
         editorHadFocus = false
     }
@@ -196,7 +198,7 @@ internal fun TabBarItem(
                 onClick = onClick,
                 onLongClick = onRename?.let {
                     {
-                        draft = label
+                        draft = TextFieldValue(text = label, selection = TextRange(label.length))
                         editing = true
                     }
                 },
