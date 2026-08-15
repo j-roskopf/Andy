@@ -22,22 +22,22 @@ class DesktopKanbanService(
     private val store: DesktopAgentTaskStore,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : KanbanService {
-    private val _board = MutableStateFlow(store.loadKanbanBoard() ?: KanbanBoard())
-    override val board: StateFlow<KanbanBoard> = _board.asStateFlow()
+    private val _boards = MutableStateFlow(store.loadAllKanbanBoards())
+    override val boards: StateFlow<Map<String, KanbanBoard>> = _boards.asStateFlow()
     private val saveMutex = Mutex()
 
-    override fun addLane(name: String) {
+    override fun addLane(projectId: String, name: String) {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return
-        mutate { current ->
+        mutate(projectId) { current ->
             current.copy(lanes = current.lanes + KanbanLane(id = nextId("lane", current), name = trimmed))
         }
     }
 
-    override fun renameLane(laneId: String, name: String) {
+    override fun renameLane(projectId: String, laneId: String, name: String) {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return
-        mutate { current ->
+        mutate(projectId) { current ->
             current.copy(
                 lanes = current.lanes.map { lane ->
                     if (lane.id == laneId) lane.copy(name = trimmed) else lane
@@ -46,15 +46,15 @@ class DesktopKanbanService(
         }
     }
 
-    override fun deleteLane(laneId: String) {
-        mutate { current ->
+    override fun deleteLane(projectId: String, laneId: String) {
+        mutate(projectId) { current ->
             if (current.lanes.size <= 1) return@mutate current
             current.copy(lanes = current.lanes.filterNot { it.id == laneId })
         }
     }
 
-    override fun moveLane(laneId: String, direction: KanbanLaneDirection) {
-        mutate { current ->
+    override fun moveLane(projectId: String, laneId: String, direction: KanbanLaneDirection) {
+        mutate(projectId) { current ->
             val index = current.lanes.indexOfFirst { it.id == laneId }
             if (index < 0) return@mutate current
             val target = when (direction) {
@@ -69,11 +69,11 @@ class DesktopKanbanService(
         }
     }
 
-    override fun addCard(laneId: String, title: String, description: String, tags: List<String>) {
+    override fun addCard(projectId: String, laneId: String, title: String, description: String, tags: List<String>) {
         val trimmedTitle = title.trim()
         if (trimmedTitle.isBlank()) return
         val now = currentTimeMillis()
-        mutate { current ->
+        mutate(projectId) { current ->
             current.copy(
                 lanes = current.lanes.map { lane ->
                     if (lane.id != laneId) lane else {
@@ -93,11 +93,11 @@ class DesktopKanbanService(
         }
     }
 
-    override fun updateCard(cardId: String, title: String, description: String, tags: List<String>) {
+    override fun updateCard(projectId: String, cardId: String, title: String, description: String, tags: List<String>) {
         val trimmedTitle = title.trim()
         if (trimmedTitle.isBlank()) return
         val now = currentTimeMillis()
-        mutate { current ->
+        mutate(projectId) { current ->
             current.copy(
                 lanes = current.lanes.map { lane ->
                     lane.copy(
@@ -117,8 +117,8 @@ class DesktopKanbanService(
         }
     }
 
-    override fun deleteCard(cardId: String) {
-        mutate { current ->
+    override fun deleteCard(projectId: String, cardId: String) {
+        mutate(projectId) { current ->
             current.copy(
                 lanes = current.lanes.map { lane ->
                     lane.copy(cards = lane.cards.filterNot { it.id == cardId })
@@ -127,8 +127,8 @@ class DesktopKanbanService(
         }
     }
 
-    override fun moveCard(cardId: String, toLaneId: String, toIndex: Int) {
-        mutate { current ->
+    override fun moveCard(projectId: String, cardId: String, toLaneId: String, toIndex: Int) {
+        mutate(projectId) { current ->
             val card = current.lanes.flatMap { it.cards }.firstOrNull { it.id == cardId } ?: return@mutate current
             val lanesWithoutCard = current.lanes.map { lane ->
                 lane.copy(cards = lane.cards.filterNot { it.id == cardId })
@@ -147,23 +147,60 @@ class DesktopKanbanService(
         }
     }
 
-    private fun mutate(transform: (KanbanBoard) -> KanbanBoard) {
-        val updated = transform(_board.value)
-        if (updated == _board.value) return
-        _board.value = updated
+    override fun linkChat(projectId: String, cardId: String, chatTaskId: String) {
+        mutate(projectId) { current ->
+            current.copy(
+                lanes = current.lanes.map { lane ->
+                    lane.copy(
+                        cards = lane.cards.map { card ->
+                            if (card.id != cardId) {
+                                card
+                            } else {
+                                card.copy(
+                                    linkedChatTaskIds = card.linkedChatTaskIds + chatTaskId,
+                                    activeChatTaskId = chatTaskId,
+                                    updatedAtMillis = currentTimeMillis(),
+                                )
+                            }
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    override fun deleteBoard(projectId: String) {
+        _boards.value = _boards.value - projectId
+        scope.launch {
+            saveMutex.withLock {
+                store.deleteKanbanBoard(projectId)
+            }
+        }
+    }
+
+    private fun mutate(projectId: String, transform: (KanbanBoard) -> KanbanBoard) {
+        val current = _boards.value[projectId] ?: KanbanBoard()
+        val updated = transform(current)
+        if (updated == current) return
+        _boards.value = _boards.value + (projectId to updated)
         // Persist the latest board under a mutex. Saving the mutate-time snapshot can
         // reorder and let an older write clobber a newer one under test/CI load.
         scope.launch {
             saveMutex.withLock {
-                store.saveKanbanBoard(_board.value)
+                store.saveKanbanBoard(projectId, _boards.value[projectId] ?: return@withLock)
             }
         }
     }
 
     /** Wait for queued persists and write the latest in-memory board (tests / harness). */
-    suspend fun flushPersist() {
+    suspend fun flushPersist(projectId: String) {
         saveMutex.withLock {
-            store.saveKanbanBoard(_board.value)
+            val board = _boards.value[projectId]
+            if (board == null) {
+                store.deleteKanbanBoard(projectId)
+            } else {
+                store.saveKanbanBoard(projectId, board)
+            }
         }
     }
 

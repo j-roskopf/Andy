@@ -22,6 +22,10 @@ data class KanbanCard(
     val tags: List<String> = emptyList(),
     val createdAtMillis: Long,
     val updatedAtMillis: Long,
+    /** All chats ever assigned to this card, oldest first. Never pruned. */
+    val linkedChatTaskIds: List<String> = emptyList(),
+    /** The chat currently representing this card's work. */
+    val activeChatTaskId: String? = null,
 )
 
 fun defaultKanbanLanes(): List<KanbanLane> = listOf(

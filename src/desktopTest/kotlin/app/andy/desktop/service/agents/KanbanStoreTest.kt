@@ -8,7 +8,7 @@ import java.io.File
 import java.util.Properties
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class KanbanStoreTest {
     @Test
@@ -33,12 +33,12 @@ class KanbanStoreTest {
                 )
             }
             val store = DesktopAgentTaskStore(dbFile)
-            assertNull(store.loadKanbanBoard())
+            assertTrue(store.loadAllKanbanBoards().isEmpty())
             val board = KanbanBoard(
                 lanes = listOf(KanbanLane(id = "todo", name = "To-Do")),
             )
-            store.saveKanbanBoard(board)
-            assertEquals(board, store.loadKanbanBoard())
+            store.saveKanbanBoard("project-1", board)
+            assertEquals(board, store.loadAllKanbanBoards()["project-1"])
         } finally {
             dir.deleteRecursively()
         }
@@ -85,22 +85,62 @@ class KanbanStoreTest {
                     ),
                 ),
             )
-            store.saveKanbanBoard(board)
-            assertEquals(board, store.loadKanbanBoard())
+            store.saveKanbanBoard("project-1", board)
+            assertEquals(board, store.loadAllKanbanBoards()["project-1"])
         } finally {
             dir.deleteRecursively()
         }
     }
 
     @Test
-    fun returnsNullWhenNoBoardSaved() {
+    fun returnsEmptyMapWhenNoBoardSaved() {
         val dir = File.createTempFile("andy-kanban-empty", null).also {
             it.delete()
             it.mkdirs()
         }
         try {
             val store = DesktopAgentTaskStore(File(dir, "agents.db"))
-            assertNull(store.loadKanbanBoard())
+            assertTrue(store.loadAllKanbanBoards().isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun dropsLegacySingletonBoardAndCreatesProjectKeyedTable() {
+        val dir = File.createTempFile("andy-kanban-legacy", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            val dbFile = File(dir, "agents.db")
+            JdbcSqliteDriver("jdbc:sqlite:${dbFile.absolutePath}", Properties()).use { driver ->
+                driver.execute(
+                    null,
+                    """
+                    CREATE TABLE kanban_board (
+                      id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+                      updated_at_millis INTEGER NOT NULL,
+                      payload TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                    0,
+                )
+                driver.execute(
+                    null,
+                    "INSERT INTO kanban_board(id, updated_at_millis, payload) VALUES (1, 1, '{}')",
+                    0,
+                )
+            }
+
+            val store = DesktopAgentTaskStore(dbFile)
+            assertTrue(store.loadAllKanbanBoards().isEmpty())
+            store.saveKanbanBoard("project-1", KanbanBoard())
+            assertTrue("project-1" in store.loadAllKanbanBoards())
+            assertTrue(
+                "project-1" in DesktopAgentTaskStore(dbFile).loadAllKanbanBoards(),
+                "reopening an already-migrated database must not drop project boards",
+            )
         } finally {
             dir.deleteRecursively()
         }

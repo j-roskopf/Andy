@@ -10,6 +10,7 @@ enum class ContextualActionKind {
     ExplainNode,
     ExplainMoment,
     InvestigateSelection,
+    Kanban,
 }
 
 /**
@@ -89,6 +90,7 @@ data class AgentContextualProvenance(
     val crashId: String? = null,
     val hierarchyNodeId: String? = null,
     val packageName: String? = null,
+    val kanbanCardId: String? = null,
 )
 
 /** Request to preview evidence for a caller-supplied question, without writing any files. */

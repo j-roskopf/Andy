@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,12 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.KanbanBoard
 import app.andy.model.KanbanCard
 import app.andy.model.KanbanLane
+import app.andy.model.ActionProject
+import app.andy.model.AgentCliStatus
+import app.andy.model.AgentContextualProvenance
+import app.andy.model.AgentStatus
+import app.andy.model.AgentTask
+import app.andy.model.ContextualActionKind
 import app.andy.service.AndyServices
 import app.andy.service.KanbanLaneDirection
 import app.andy.service.UnavailableKanbanService
@@ -79,6 +86,9 @@ import app.andy.ui.components.LabeledField
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.agents.AgentPillIcon
+import app.andy.ui.agents.AgentTaskComposerPane
+import app.andy.ui.agents.agentStatusColor
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
@@ -94,12 +104,8 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 import kotlin.math.abs
-
-internal enum class ProjectsPageTab(val label: String) {
-    Projects("Projects"),
-    Kanban("Kanban"),
-}
 
 private const val LaneWidthDp = 280
 private val GrabOffset = Offset(24f, 16f)
@@ -118,7 +124,12 @@ internal data class KanbanDropTarget(
 )
 
 @Composable
-internal fun KanbanBoardScreen(services: AndyServices) {
+internal fun KanbanBoardScreen(
+    services: AndyServices,
+    project: ActionProject,
+    onOpenChat: (String) -> Unit,
+    onCreateSpec: (KanbanCard) -> Unit,
+) {
     if (services.kanban is UnavailableKanbanService) {
         EmptyState(
             "Kanban isn't available while Andy is connected to a running andyd. " +
@@ -128,7 +139,10 @@ internal fun KanbanBoardScreen(services: AndyServices) {
         return
     }
 
-    val board by services.kanban.board.collectAsState()
+    val boards by services.kanban.boards.collectAsState()
+    val board = boards[project.id] ?: KanbanBoard()
+    val agentTasks by services.agentRuns.tasks.collectAsState()
+    val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
     var dragState by remember { mutableStateOf<KanbanDragState?>(null) }
     var laneBounds by remember { mutableStateOf<Map<String, Rect>>(emptyMap()) }
     val cardBounds = remember { mutableStateMapOf<String, Rect>() }
@@ -136,6 +150,8 @@ internal fun KanbanBoardScreen(services: AndyServices) {
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     var laneNameDialog by remember { mutableStateOf<LaneNameDialogState?>(null) }
     var cardDialog by remember { mutableStateOf<CardDialogState?>(null) }
+    var assignCard by remember { mutableStateOf<KanbanCard?>(null) }
+    var showAddLaneDialog by remember { mutableStateOf(false) }
 
     val dropTarget = dragState?.let { drag ->
         resolveDropTarget(
@@ -165,31 +181,69 @@ internal fun KanbanBoardScreen(services: AndyServices) {
             confirmLabel = "Save",
             onDismiss = { laneNameDialog = null },
             onConfirm = { name ->
-                services.kanban.renameLane(dialog.laneId, name)
+                services.kanban.renameLane(project.id, dialog.laneId, name)
                 laneNameDialog = null
             },
         )
     }
 
+    if (showAddLaneDialog) {
+        KanbanAddLaneDialog(
+            onDismiss = { showAddLaneDialog = false },
+            onConfirm = { name ->
+                services.kanban.addLane(project.id, name)
+                showAddLaneDialog = false
+            },
+        )
+    }
+
+    assignCard?.let { card ->
+        KanbanAssignDialog(
+            services = services,
+            project = project,
+            card = card,
+            cliStatuses = cliStatuses,
+            onDismiss = { assignCard = null },
+            onAssigned = { chatTaskId ->
+                assignCard = null
+                cardDialog = null
+                onOpenChat(chatTaskId)
+            },
+        )
+    }
+
     cardDialog?.let { dialog ->
+        val editedCard = (dialog as? CardDialogState.Edit)?.card
+        val activeChat = editedCard?.activeChatTaskId?.let { id -> agentTasks.firstOrNull { it.id == id } }
+        val linkedChats = editedCard?.linkedChatTaskIds.orEmpty()
+            .filterNot { it == editedCard?.activeChatTaskId }
+            .mapNotNull { id -> agentTasks.firstOrNull { it.id == id } }
         KanbanCardDialog(
             state = dialog,
+            activeChat = activeChat,
+            linkedChats = linkedChats,
             onDismiss = { cardDialog = null },
             onSave = { title, description, tags ->
                 when (dialog) {
-                    is CardDialogState.Create -> services.kanban.addCard(dialog.laneId, title, description, tags)
-                    is CardDialogState.Edit -> services.kanban.updateCard(dialog.card.id, title, description, tags)
+                    is CardDialogState.Create -> services.kanban.addCard(project.id, dialog.laneId, title, description, tags)
+                    is CardDialogState.Edit -> services.kanban.updateCard(project.id, dialog.card.id, title, description, tags)
                 }
                 cardDialog = null
             },
             onDelete = if (dialog is CardDialogState.Edit) {
                 {
-                    services.kanban.deleteCard(dialog.card.id)
+                    services.kanban.deleteCard(project.id, dialog.card.id)
                     cardDialog = null
                 }
             } else {
                 null
             },
+            onAssign = { editedCard?.let { assignCard = it } },
+            onCreateSpec = {
+                cardDialog = null
+                editedCard?.let(onCreateSpec)
+            },
+            onOpenChat = onOpenChat,
         )
     }
 
@@ -198,7 +252,10 @@ internal fun KanbanBoardScreen(services: AndyServices) {
             .fillMaxSize()
             .padding(horizontal = AndySpace.Space4),
     ) {
-        KanbanBoardHeader(board = board)
+        KanbanBoardHeader(
+            board = board,
+            onAddLane = { showAddLaneDialog = true },
+        )
         Box(
             Modifier
                 .weight(1f)
@@ -216,6 +273,7 @@ internal fun KanbanBoardScreen(services: AndyServices) {
                     KanbanLaneColumn(
                         lane = lane,
                         cards = lane.cards,
+                        agentTasks = agentTasks,
                         laneIndex = laneIndex,
                         laneCount = board.lanes.size,
                         dragState = dragState,
@@ -225,21 +283,24 @@ internal fun KanbanBoardScreen(services: AndyServices) {
                             if (rect == null) cardBounds.remove(cardId) else cardBounds[cardId] = rect
                         },
                         onCardClick = { card -> cardDialog = CardDialogState.Edit(card) },
+                        onAssignCard = { card -> assignCard = card },
+                        onCreateSpecCard = onCreateSpec,
+                        onOpenChat = onOpenChat,
                         onAddCard = { cardDialog = CardDialogState.Create(lane.id) },
                         onRenameLane = { laneNameDialog = LaneNameDialogState(lane.id, lane.name) },
                         onDeleteLane = {
                             if (lane.cards.isEmpty()) {
-                                services.kanban.deleteLane(lane.id)
+                                services.kanban.deleteLane(project.id, lane.id)
                             } else {
                                 pendingConfirmation = PendingConfirmation(
                                     title = "Delete lane?",
                                     message = "Delete '${lane.name}' and its ${lane.cards.size} card(s)? This can't be undone.",
                                     confirmLabel = "Delete",
-                                ) { services.kanban.deleteLane(lane.id) }
+                                ) { services.kanban.deleteLane(project.id, lane.id) }
                             }
                         },
-                        onMoveLaneLeft = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Left) },
-                        onMoveLaneRight = { services.kanban.moveLane(lane.id, KanbanLaneDirection.Right) },
+                        onMoveLaneLeft = { services.kanban.moveLane(project.id, lane.id, KanbanLaneDirection.Left) },
+                        onMoveLaneRight = { services.kanban.moveLane(project.id, lane.id, KanbanLaneDirection.Right) },
                         onDragStart = { card, cardSize, pointerInBoard ->
                             dragState = KanbanDragState(
                                 cardId = card.id,
@@ -263,7 +324,7 @@ internal fun KanbanBoardScreen(services: AndyServices) {
                                 cardBounds = cardBounds,
                             )
                             if (target != null) {
-                                services.kanban.moveCard(drag.cardId, target.laneId, target.index)
+                                services.kanban.moveCard(project.id, drag.cardId, target.laneId, target.index)
                             }
                             dragState = null
                         },
@@ -294,7 +355,10 @@ internal fun KanbanBoardScreen(services: AndyServices) {
 }
 
 @Composable
-private fun KanbanBoardHeader(board: KanbanBoard) {
+private fun KanbanBoardHeader(
+    board: KanbanBoard,
+    onAddLane: () -> Unit,
+) {
     val totalCards = board.lanes.sumOf { it.cards.size }
     val completedCards = board.lanes
         .filter { lane -> isCompletedLane(lane) }
@@ -331,6 +395,7 @@ private fun KanbanBoardHeader(board: KanbanBoard) {
             KanbanSummaryMetric("cards", totalCards, TextPrimary)
             KanbanSummaryMetric("active", activeCards, Cyan)
             KanbanSummaryMetric("done", completedCards, Green)
+            KanbanAddLaneAction(onClick = onAddLane)
         }
 
         Box(
@@ -393,6 +458,7 @@ private val UNFINISHED_LANE_LABEL =
 private fun KanbanLaneColumn(
     lane: KanbanLane,
     cards: List<KanbanCard>,
+    agentTasks: List<AgentTask>,
     laneIndex: Int,
     laneCount: Int,
     dragState: KanbanDragState?,
@@ -400,6 +466,9 @@ private fun KanbanLaneColumn(
     onLaneBounds: (Rect) -> Unit,
     onCardBounds: (String, Rect?) -> Unit,
     onCardClick: (KanbanCard) -> Unit,
+    onAssignCard: (KanbanCard) -> Unit,
+    onCreateSpecCard: (KanbanCard) -> Unit,
+    onOpenChat: (String) -> Unit,
     onAddCard: () -> Unit,
     onRenameLane: () -> Unit,
     onDeleteLane: () -> Unit,
@@ -515,7 +584,11 @@ private fun KanbanLaneColumn(
                 val isDragging = dragState?.cardId == card.id
                 KanbanCardView(
                     card = card,
+                    activeChat = card.activeChatTaskId?.let { id -> agentTasks.firstOrNull { it.id == id } },
                     onClick = { if (!isDragging) onCardClick(card) },
+                    onAssign = { onAssignCard(card) },
+                    onCreateSpec = { onCreateSpecCard(card) },
+                    onOpenChat = onOpenChat,
                     modifier = Modifier
                         .alpha(if (isDragging) 0.3f else 1f)
                         .onGloballyPositioned { coordinates ->
@@ -687,8 +760,12 @@ private fun KanbanInsertionIndicator() {
 @Composable
 private fun KanbanCardView(
     card: KanbanCard,
+    activeChat: AgentTask? = null,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onAssign: () -> Unit = {},
+    onCreateSpec: () -> Unit = {},
+    onOpenChat: (String) -> Unit = {},
 ) {
     val interactionSource = remember(card.id) { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -757,6 +834,50 @@ private fun KanbanCardView(
                 }
             }
         }
+        if (activeChat == null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+                modifier = Modifier.align(Alignment.Start),
+            ) {
+                KanbanTextAction(label = "+ Assign", onClick = onAssign)
+                KanbanTextAction(label = "+ Create spec", onClick = onCreateSpec)
+            }
+        } else {
+            KanbanChatLinkRow(
+                chat = activeChat,
+                onOpenChat = onOpenChat,
+                onReassign = onAssign.takeIf { canReassignKanbanCard(activeChat) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun KanbanChatLinkRow(
+    chat: AgentTask,
+    onOpenChat: (String) -> Unit,
+    onReassign: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        AgentPillIcon(chat.agent, Modifier.size(14.dp))
+        Box(
+            Modifier
+                .size(6.dp)
+                .background(agentStatusColor(chat.status), RoundedCornerShape(AndyRadius.Pill)),
+        )
+        Text(
+            chat.status?.name ?: "Queued",
+            color = TextSecondary,
+            fontFamily = MonoFont,
+            fontSize = 10.sp,
+        )
+        KanbanTextAction("Open chat", { onOpenChat(chat.id) })
+        onReassign?.let { KanbanTextAction("Reassign", it) }
     }
 }
 
@@ -827,9 +948,14 @@ private fun LaneNameDialog(
 @Composable
 private fun KanbanCardDialog(
     state: CardDialogState,
+    activeChat: AgentTask?,
+    linkedChats: List<AgentTask>,
     onDismiss: () -> Unit,
     onSave: (title: String, description: String, tags: List<String>) -> Unit,
     onDelete: (() -> Unit)?,
+    onAssign: () -> Unit,
+    onCreateSpec: () -> Unit,
+    onOpenChat: (String) -> Unit,
 ) {
     val initial = when (state) {
         is CardDialogState.Create -> Triple("", "", emptyList<String>())
@@ -839,6 +965,7 @@ private fun KanbanCardDialog(
     var description by remember(state) { mutableStateOf(initial.second) }
     var tags by remember(state) { mutableStateOf(initial.third) }
     var tagInput by remember(state) { mutableStateOf("") }
+    var historyExpanded by remember(state) { mutableStateOf(false) }
 
     fun commitTagInput() {
         val candidate = tagInput.trim()
@@ -925,6 +1052,65 @@ private fun KanbanCardDialog(
                         }
                     }
                 }
+                if (state is CardDialogState.Edit) {
+                    Column(
+                        Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    ) {
+                        Text(
+                            "Agent",
+                            color = AndyColors.TextTertiary,
+                            fontFamily = DisplayFont,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 11.sp,
+                        )
+                        if (activeChat == null) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                                OutlinedButton(onClick = onAssign) { Text("Assign to agent") }
+                                OutlinedButton(onClick = onCreateSpec) { Text("Create spec") }
+                            }
+                        } else {
+                            KanbanChatLinkRow(
+                                chat = activeChat,
+                                onOpenChat = onOpenChat,
+                                onReassign = onAssign.takeIf { canReassignKanbanCard(activeChat) },
+                            )
+                        }
+                        if (linkedChats.isNotEmpty()) {
+                            KanbanTextAction(
+                                label = "${if (historyExpanded) "Hide" else "Show"} history (${linkedChats.size})",
+                                onClick = { historyExpanded = !historyExpanded },
+                                modifier = Modifier.align(Alignment.Start),
+                            )
+                            if (historyExpanded) {
+                                Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                                    linkedChats.forEach { chat ->
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                                        ) {
+                                            AgentPillIcon(chat.agent, Modifier.size(14.dp))
+                                            Text(
+                                                chat.title,
+                                                color = TextSecondary,
+                                                fontFamily = DisplayFont,
+                                                fontSize = 11.sp,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            KanbanTextAction(
+                                                label = "Open",
+                                                onClick = { onOpenChat(chat.id) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -949,6 +1135,75 @@ private fun KanbanCardDialog(
         },
     )
 }
+
+@Composable
+private fun KanbanAssignDialog(
+    services: AndyServices,
+    project: ActionProject,
+    card: KanbanCard,
+    cliStatuses: List<AgentCliStatus>,
+    onDismiss: () -> Unit,
+    onAssigned: (chatTaskId: String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val initialPrompt = defaultKanbanAssignPrompt(card.title, card.description)
+    AndyAlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = {
+            Text(
+                "Assign \"${card.title}\"",
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            Box(Modifier.width(760.dp).height(600.dp)) {
+                AgentTaskComposerPane(
+                    services = services,
+                    cliStatuses = cliStatuses,
+                    projectContext = project,
+                    initialPrompt = initialPrompt,
+                    wrapComposerControls = true,
+                    onSubmit = { draft ->
+                        scope.launch {
+                            val task = services.agentRuns.createAndStart(
+                                draft.copy(
+                                    title = card.title,
+                                    prompt = draft.prompt.ifBlank { initialPrompt },
+                                    provenance = AgentContextualProvenance(
+                                        sourceKind = ContextualActionKind.Kanban,
+                                        kanbanCardId = card.id,
+                                    ),
+                                ),
+                            )
+                            services.kanban.linkChat(project.id, card.id, task.id)
+                            onAssigned(task.id)
+                        }
+                    },
+                    onCancel = onDismiss,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+internal fun defaultKanbanAssignPrompt(title: String, description: String): String {
+    val trimmedTitle = title.trim()
+    val trimmedDescription = description.trim()
+    return when {
+        trimmedDescription.isBlank() -> trimmedTitle
+        trimmedTitle.isBlank() || trimmedDescription.startsWith(trimmedTitle) -> trimmedDescription
+        else -> "$trimmedTitle\n\n$trimmedDescription"
+    }
+}
+
+internal fun canReassignKanbanCard(activeChat: AgentTask?): Boolean =
+    activeChat?.status == AgentStatus.Done || activeChat?.status == AgentStatus.Error
 
 private fun resolveDropTarget(
     pointer: Offset,

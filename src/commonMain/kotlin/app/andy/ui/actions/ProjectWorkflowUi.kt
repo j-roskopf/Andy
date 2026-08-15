@@ -924,14 +924,16 @@ internal fun SpecTaskDialog(
     workflow: ProjectWorkflowState,
     existing: ProjectTask?,
     cliStatuses: List<AgentCliStatus>,
+    prefilledTitle: String = "",
+    prefilledBrief: String = "",
     onDismiss: () -> Unit,
     onSaved: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val providerModels by services.agentRuns.providerModels.collectAsState()
     val initialProfile = existing?.profile ?: workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()
-    var title by remember(existing?.id) { mutableStateOf(existing?.title.orEmpty()) }
-    var brief by remember(existing?.id) { mutableStateOf(existing?.instructions.orEmpty()) }
+    var title by remember(existing?.id, prefilledTitle) { mutableStateOf(existing?.title ?: prefilledTitle) }
+    var brief by remember(existing?.id, prefilledBrief) { mutableStateOf(existing?.instructions ?: prefilledBrief) }
     var imagePaths by remember(existing?.id) { mutableStateOf(existing?.imagePaths.orEmpty()) }
     var imageDragActive by remember(existing?.id) { mutableStateOf(false) }
     var profile by remember(existing?.id) { mutableStateOf(initialProfile) }

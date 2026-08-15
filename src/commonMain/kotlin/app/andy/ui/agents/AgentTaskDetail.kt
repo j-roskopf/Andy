@@ -153,6 +153,7 @@ internal fun AgentTaskDetail(
     services: AndyServices,
     task: AgentTask,
     onDelete: (AgentTask) -> Unit,
+    onOpenKanbanCard: ((String) -> Unit)? = null,
     showHeader: Boolean = true,
     /**
      * When false, omit delete/details from the in-pane header (e.g. project tab-row chrome
@@ -539,6 +540,29 @@ internal fun AgentTaskDetail(
                     modifier = Modifier.height(28.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                 ) { Text("open investigation", fontSize = 10.sp) }
+            }
+        }
+        provenance?.kanbanCardId?.let { cardId ->
+            val openKanbanCard = onOpenKanbanCard ?: return@let
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "started from a kanban card",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                OutlinedButton(
+                    onClick = { openKanbanCard(cardId) },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("open kanban", fontSize = 10.sp) }
             }
         }
         task.userInputRequest?.let { request ->

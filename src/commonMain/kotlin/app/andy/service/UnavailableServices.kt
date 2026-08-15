@@ -374,16 +374,18 @@ object UnavailableProjectWorkflowService : ProjectWorkflowService {
 }
 
 object UnavailableKanbanService : KanbanService {
-    override val board = MutableStateFlow(KanbanBoard())
+    override val boards = MutableStateFlow<Map<String, KanbanBoard>>(emptyMap())
 
-    override fun addLane(name: String) = Unit
-    override fun renameLane(laneId: String, name: String) = Unit
-    override fun deleteLane(laneId: String) = Unit
-    override fun moveLane(laneId: String, direction: KanbanLaneDirection) = Unit
-    override fun addCard(laneId: String, title: String, description: String, tags: List<String>) = Unit
-    override fun updateCard(cardId: String, title: String, description: String, tags: List<String>) = Unit
-    override fun deleteCard(cardId: String) = Unit
-    override fun moveCard(cardId: String, toLaneId: String, toIndex: Int) = Unit
+    override fun addLane(projectId: String, name: String) = Unit
+    override fun renameLane(projectId: String, laneId: String, name: String) = Unit
+    override fun deleteLane(projectId: String, laneId: String) = Unit
+    override fun moveLane(projectId: String, laneId: String, direction: KanbanLaneDirection) = Unit
+    override fun addCard(projectId: String, laneId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun updateCard(projectId: String, cardId: String, title: String, description: String, tags: List<String>) = Unit
+    override fun deleteCard(projectId: String, cardId: String) = Unit
+    override fun moveCard(projectId: String, cardId: String, toLaneId: String, toIndex: Int) = Unit
+    override fun linkChat(projectId: String, cardId: String, chatTaskId: String) = Unit
+    override fun deleteBoard(projectId: String) = Unit
 }
 
 object UnavailableDhuService : DhuService {

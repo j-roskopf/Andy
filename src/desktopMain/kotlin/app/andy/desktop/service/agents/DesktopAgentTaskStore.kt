@@ -148,12 +148,14 @@ class DesktopAgentTaskStore(
         sqlite.save(state, allowEmptyTaskList)
     }
 
-    fun loadKanbanBoard(): KanbanBoard? = sqlite.loadKanbanBoard()
+    fun loadAllKanbanBoards(): Map<String, KanbanBoard> = sqlite.loadAllKanbanBoards()
 
-    fun saveKanbanBoard(board: KanbanBoard) {
+    fun saveKanbanBoard(projectId: String, board: KanbanBoard) {
         databaseFile.parentFile?.mkdirs()
-        sqlite.saveKanbanBoard(board)
+        sqlite.saveKanbanBoard(projectId, board)
     }
+
+    fun deleteKanbanBoard(projectId: String) = sqlite.deleteKanbanBoard(projectId)
 
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
         taskDir(taskId).deleteRecursively()
@@ -319,6 +321,7 @@ internal data class AgentContextualProvenanceDto(
     val crashId: String = "",
     val hierarchyNodeId: String = "",
     val packageName: String = "",
+    val kanbanCardId: String = "",
 )
 
 private fun AgentContextualProvenanceDto.toModel(): AgentContextualProvenance? {
@@ -332,6 +335,7 @@ private fun AgentContextualProvenanceDto.toModel(): AgentContextualProvenance? {
         crashId = crashId.takeIf { it.isNotBlank() },
         hierarchyNodeId = hierarchyNodeId.takeIf { it.isNotBlank() },
         packageName = packageName.takeIf { it.isNotBlank() },
+        kanbanCardId = kanbanCardId.takeIf { it.isNotBlank() },
     )
 }
 
@@ -344,6 +348,7 @@ private fun AgentContextualProvenance.toDto(): AgentContextualProvenanceDto = Ag
     crashId = crashId.orEmpty(),
     hierarchyNodeId = hierarchyNodeId.orEmpty(),
     packageName = packageName.orEmpty(),
+    kanbanCardId = kanbanCardId.orEmpty(),
 )
 
 @Serializable

@@ -406,6 +406,7 @@ class McpAgentRunClient(
         crashId?.let { put("crashId", it) }
         hierarchyNodeId?.let { put("hierarchyNodeId", it) }
         packageName?.let { put("packageName", it) }
+        kanbanCardId?.let { put("kanbanCardId", it) }
     }
 
     private fun JsonObject.string(key: String): String? =
