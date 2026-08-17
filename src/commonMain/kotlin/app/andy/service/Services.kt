@@ -533,6 +533,14 @@ interface AgentRunService {
      */
     fun events(taskId: String): StateFlow<List<AgentEvent>>
     fun interactiveResumeCommand(taskId: String): String?
+    /**
+     * Provider label when this exact conversation can continue in its desktop app.
+     * Null means the provider has no supported same-session desktop handoff.
+     */
+    fun providerAppContinuationLabel(taskId: String): String? = null
+    /** Opens this exact conversation in the provider's desktop app. */
+    suspend fun openInProviderApp(taskId: String): CommandResult =
+        CommandResult.failure("This provider does not support desktop continuation")
     /** @deprecated Prefer the embedded terminal pane; retained as a copy/paste escape hatch. */
     suspend fun openInTerminal(taskId: String): CommandResult
     suspend fun openSkill(path: String): CommandResult
@@ -916,6 +924,7 @@ data class AndyServices(
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val runtimeBundle: RuntimeBundleService = UnavailableRuntimeBundleService,
+    val cliUpdates: CliUpdateCheckService = UnavailableCliUpdateCheckService,
     val mcp: McpServerService,
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,

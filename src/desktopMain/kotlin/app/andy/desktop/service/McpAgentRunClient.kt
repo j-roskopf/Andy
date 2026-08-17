@@ -8,6 +8,7 @@ import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.desktop.service.agents.discoverKnownAgentSkillNames
+import app.andy.desktop.service.agents.providerDesktopContinuation
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
@@ -53,6 +54,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -962,6 +964,29 @@ class McpAgentRunClient(
     override fun interactiveResumeCommand(taskId: String): String? =
         "tmux -L andy attach -t ${TmuxAndy.sessionName(taskId)}"
 
+    override fun providerAppContinuationLabel(taskId: String): String? {
+        val task = _tasks.value.firstOrNull { it.id == taskId } ?: return null
+        return task.providerDesktopContinuation(isMacOs())?.providerLabel
+    }
+
+    override suspend fun openInProviderApp(taskId: String): CommandResult = withContext(Dispatchers.IO) {
+        val task = _tasks.value.firstOrNull { it.id == taskId }
+            ?: return@withContext CommandResult.failure("task not found")
+        val continuation = task.providerDesktopContinuation(isMacOs())
+            ?: return@withContext CommandResult.failure("${task.agent.label} does not support direct desktop continuation")
+        runCatching {
+            val process = ProcessBuilder("open", continuation.uri)
+                .redirectErrorStream(true)
+                .start()
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                return@runCatching CommandResult.failure("Timed out opening Codex")
+            }
+            if (process.exitValue() == 0) CommandResult.success("opened Codex")
+            else CommandResult.failure(process.inputStream.bufferedReader().readText().trim())
+        }.getOrElse { CommandResult.failure(it.message ?: "failed to open Codex") }
+    }
+
     override suspend fun openInTerminal(taskId: String): CommandResult = withContext(Dispatchers.IO) {
         val cmd = interactiveResumeCommand(taskId) ?: return@withContext CommandResult.failure("missing task")
         runCatching {
@@ -969,6 +994,9 @@ class McpAgentRunClient(
             CommandResult.success("attached")
         }.getOrElse { CommandResult.failure(it.message ?: "failed") }
     }
+
+    private fun isMacOs(): Boolean =
+        System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
 
     override suspend fun openSkill(path: String): CommandResult = CommandResult.failure("not available in client mode")
     override suspend fun worktreeDiffSummary(taskId: String): String? = null

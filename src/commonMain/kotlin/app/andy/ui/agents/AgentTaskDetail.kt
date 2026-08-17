@@ -197,7 +197,6 @@ internal fun AgentTaskDetail(
     val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
         listOfNotNull(task.worktreePath, task.cwd, task.originDir).distinct()
     }
-    var copiedHint by remember(task.id) { mutableStateOf(false) }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
     var voiceError by remember(task.id) { mutableStateOf<String?>(null) }
@@ -244,6 +243,9 @@ internal fun AgentTaskDetail(
     val supportsResume = true
     val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
+    val contextStatus = remember(task.id, transcriptEvents, task.contextTokens, task.inputTokens, task.contextWindowTokens) {
+        agentContextWindowStatus(task, transcriptEvents)
+    }
     val knownAgentTasks by services.agentRuns.tasks.collectAsState()
     val acpSessionLive = services.agentRuns.isLaneLive(task.id)
     val acpTask = task.lane == AgentLaneKind.Acp
@@ -1055,18 +1057,27 @@ internal fun AgentTaskDetail(
                                     }
                                 }
                             }
-                            ComposerChip(
-                                text = if (copiedHint) "Opened" else "External",
-                                selected = false,
-                                showChevron = false,
-                                onClick = {
-                                    services.agentRuns.interactiveResumeCommand(task.id)?.let {
-                                        copyText(it)
-                                        copiedHint = true
-                                    }
-                                    scope.launch { services.agentRuns.openInTerminal(task.id) }
-                                },
-                            )
+                            val providerApp = services.agentRuns.providerAppContinuationLabel(task.id)
+                            if (providerApp != null) {
+                                ComposerChip(
+                                    text = "Continue in $providerApp",
+                                    selected = false,
+                                    showChevron = false,
+                                    onClick = {
+                                        scope.launch { services.agentRuns.openInProviderApp(task.id) }
+                                    },
+                                )
+                            } else {
+                                ComposerChip(
+                                    text = "Terminal",
+                                    selected = false,
+                                    showChevron = false,
+                                    onClick = {
+                                        services.agentRuns.interactiveResumeCommand(task.id)?.let(copyText)
+                                        scope.launch { services.agentRuns.openInTerminal(task.id) }
+                                    },
+                                )
+                            }
                         }
                     },
                     trailing = {
@@ -1077,6 +1088,7 @@ internal fun AgentTaskDetail(
                         )
                         if (task.userInputRequest == null) {
                             ChatVoiceDictationButton(controller = voiceController)
+                            AgentContextUsageIndicator(contextStatus)
                             ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
                         }
                     },
@@ -1542,7 +1554,7 @@ internal fun agentContextWindowLabel(task: AgentTask): String {
     }
 }
 
-private fun formatCompactTokenCount(value: Long): String = when {
+internal fun formatCompactTokenCount(value: Long): String = when {
     value >= 1_000_000 -> "${value / 1_000_000}.${(value % 1_000_000) / 100_000}M"
     value >= 1_000 -> "${value / 1_000}.${(value % 1_000) / 100}k"
     else -> value.toString()

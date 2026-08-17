@@ -25,14 +25,16 @@ interface VoiceSetupService {
 }
 
 /**
- * Desktop push-to-talk dictation. Web returns [UnavailableVoiceDictationService].
+ * Desktop click-to-toggle dictation. Web returns [UnavailableVoiceDictationService].
  *
  * [startRecording] begins capture; [finishRecording] stops, transcribes, and returns
- * inserted text (or null when the press was too short / silent / failed softly).
+ * inserted text (or null when the capture was too short / silent / failed softly).
  */
 interface VoiceDictationService {
     val setup: VoiceSetupService
     val isReady: Boolean
+    /** Live 0f..1f capture amplitude while recording; 0f when idle. Drives the waveform UI. */
+    val audioLevel: StateFlow<Float>
     suspend fun startRecording(): Boolean
     /** Stops recording and returns transcribed text, or null for short/empty/cancelled. */
     suspend fun finishRecording(): String?
@@ -56,6 +58,7 @@ object UnavailableVoiceSetupService : VoiceSetupService {
 object UnavailableVoiceDictationService : VoiceDictationService {
     override val setup: VoiceSetupService = UnavailableVoiceSetupService
     override val isReady: Boolean = false
+    override val audioLevel = MutableStateFlow(0f)
     override suspend fun startRecording(): Boolean = false
     override suspend fun finishRecording(): String? = null
     override fun cancelRecording() = Unit

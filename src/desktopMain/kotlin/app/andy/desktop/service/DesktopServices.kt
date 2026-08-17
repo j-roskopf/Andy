@@ -37,6 +37,7 @@ import app.andy.desktop.service.webchat.toNetworkAccessBindConfig
 import app.andy.model.AgentKind
 import app.andy.model.toTerminalAppearance
 import app.andy.desktop.updates.DesktopAppUpdateService
+import app.andy.desktop.updates.DesktopCliUpdateCheckService
 import app.andy.desktop.updates.DesktopRuntimeBundleService
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
@@ -237,6 +238,11 @@ fun createDaemonRuntime(
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         runtimeBundle = DesktopRuntimeBundleService(),
+        cliUpdates = DesktopCliUpdateCheckService(
+            agentRuns = agentRuns,
+            actionRuns = actionRuns,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        ),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
@@ -495,6 +501,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,
+        cliUpdates = DesktopCliUpdateCheckService(
+            agentRuns = remoteAgents,
+            actionRuns = actionRuns,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        ),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
@@ -687,6 +698,11 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,
+        cliUpdates = DesktopCliUpdateCheckService(
+            agentRuns = agentRuns,
+            actionRuns = actionRuns,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        ),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,

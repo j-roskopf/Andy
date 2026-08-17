@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -572,7 +573,13 @@ private fun KanbanLaneColumn(
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        ) {
             val insertionIndex = if (isDropTarget) dropTarget.index else null
             if (cards.isEmpty() && insertionIndex == 0) {
                 KanbanInsertionIndicator()
@@ -630,13 +637,12 @@ private fun KanbanLaneColumn(
             if (insertionIndex == cards.size) {
                 KanbanInsertionIndicator()
             }
+            KanbanTextAction(
+                label = "+ Add card",
+                onClick = onAddCard,
+                modifier = Modifier.align(Alignment.Start),
+            )
         }
-
-        KanbanTextAction(
-            label = "+ Add card",
-            onClick = onAddCard,
-            modifier = Modifier.align(Alignment.Start),
-        )
     }
 }
 
