@@ -347,8 +347,20 @@ private fun ProjectCockpit(
     LaunchedEffect(searchExpanded) {
         if (searchExpanded) searchFocusRequester.requestFocus()
     }
-    LaunchedEffect(active) {
-        if (active) services.cliUpdates.checkForUpdates()
+    // cliStatuses load asynchronously after Actions can already be active; include them so
+    // the first non-empty discovery (and later version changes) re-trigger the check.
+    val cliUpdateProbeKey = remember(agentCliStatuses) {
+        agentCliStatuses
+            .asSequence()
+            .filter { it.available }
+            .map { "${it.kind.name}:${it.version.orEmpty()}" }
+            .sorted()
+            .joinToString("|")
+    }
+    LaunchedEffect(active, cliUpdateProbeKey) {
+        if (active && cliUpdateProbeKey.isNotEmpty()) {
+            services.cliUpdates.checkForUpdates()
+        }
     }
 
     val searchActive = query.isNotBlank()

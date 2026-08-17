@@ -18,8 +18,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
@@ -38,6 +42,10 @@ class DesktopCliUpdateCheckService(
     private val scope: CoroutineScope,
     private val userAgent: String = "Andy CLI update check",
     private val checkIntervalMillis: Long = 6 * 60 * 60 * 1000L,
+    private val dismissalsFile: File = File(
+        System.getProperty("user.home"),
+        ".andy/cli-update-dismissals.json",
+    ),
 ) : CliUpdateCheckService {
 
     private val cliStatuses: StateFlow<List<AgentCliStatus>> get() = agentRuns.cliStatuses
@@ -48,7 +56,8 @@ class DesktopCliUpdateCheckService(
     private val mutableUpdating = MutableStateFlow<Set<AgentKind>>(emptySet())
     override val updating: StateFlow<Set<AgentKind>> = mutableUpdating.asStateFlow()
 
-    private val dismissed = mutableSetOf<String>()
+    private val dismissalsJson = Json { ignoreUnknownKeys = true }
+    private val dismissed = loadDismissals().toMutableSet()
     private val latestCache = mutableMapOf<AgentKind, Pair<String, Long>>()
 
     override suspend fun checkForUpdates() = withContext(Dispatchers.IO) {
@@ -83,12 +92,24 @@ class DesktopCliUpdateCheckService(
 
     override fun dismiss(kind: AgentKind, latestVersion: String) {
         dismissed += dismissalKey(kind, latestVersion)
-        mutableOutdated.value = mutableOutdated.value.filterNot { it.kind == kind && it.latestVersion == latestVersion }
+        persistDismissals()
+        mutableOutdated.update { current ->
+            current.filterNot { it.kind == kind && it.latestVersion == latestVersion }
+        }
     }
 
     override fun startUpdate(item: CliUpdateInfo): String? {
-        if (item.kind in mutableUpdating.value) return null
         val homeDir = System.getProperty("user.home") ?: return null
+        var claimed = false
+        mutableUpdating.update { current ->
+            if (item.kind in current) {
+                current
+            } else {
+                claimed = true
+                current + item.kind
+            }
+        }
+        if (!claimed) return null
         val project = ActionProject(id = "cli-update", name = item.kind.label, contextDir = homeDir)
         val action = ProjectAction(
             id = "cli-update-${item.kind.name}",
@@ -96,7 +117,6 @@ class DesktopCliUpdateCheckService(
             command = "${shellQuote(item.binaryPath)} ${updateSubcommand(item.kind)}",
         )
         val runId = actionRuns.run(project, action)
-        mutableUpdating.value += item.kind
         scope.launch { pollUntilUpdated(item, runId) }
         return runId
     }
@@ -120,7 +140,7 @@ class DesktopCliUpdateCheckService(
                 if (runStatus != ActionRunStatus.Starting && runStatus != ActionRunStatus.Running) return
             }
         } finally {
-            mutableUpdating.value -= item.kind
+            mutableUpdating.update { it - item.kind }
         }
     }
 
@@ -130,6 +150,22 @@ class DesktopCliUpdateCheckService(
     }
 
     private fun dismissalKey(kind: AgentKind, latestVersion: String) = "${kind.name}:$latestVersion"
+
+    private fun loadDismissals(): Set<String> {
+        if (!dismissalsFile.isFile) return emptySet()
+        val text = runCatching { dismissalsFile.readText() }.getOrNull()?.trim().orEmpty()
+        if (text.isEmpty()) return emptySet()
+        return runCatching {
+            dismissalsJson.decodeFromString<List<String>>(text).toSet()
+        }.getOrElse { emptySet() }
+    }
+
+    private fun persistDismissals() {
+        runCatching {
+            dismissalsFile.parentFile?.mkdirs()
+            dismissalsFile.writeText(dismissalsJson.encodeToString(dismissed.sorted()) + "\n")
+        }
+    }
 
     private fun fetchLatestNpmVersion(packageName: String): String? = runCatching {
         val encoded = URLEncoder.encode(packageName, "UTF-8")
