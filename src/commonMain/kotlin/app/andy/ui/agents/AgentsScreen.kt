@@ -26,15 +26,12 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.WorkspaceState
-import app.andy.model.modelConfigurationLabel
 import app.andy.service.AndyServices
-import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
@@ -53,7 +50,6 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Cyan
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -73,7 +69,6 @@ private fun AgentCommandCenter(
     var activeOnly by remember { mutableStateOf(false) }
     var showArchived by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
-    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     // Keep the open chat mounted while Agents is retained-but-inactive. Forcing composing
     // tore down AgentTerminalSurface, released the tmux viewer, and caused a multi-flash
@@ -89,7 +84,6 @@ private fun AgentCommandCenter(
             onRequestedTaskConsumed()
         }
     }
-    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
     fun requestDelete(task: AgentTask, force: Boolean = false) {
         if (force) {
@@ -197,7 +191,6 @@ private fun AgentCommandCenter(
                         AgentInboxRow(
                             task = task,
                             selected = !composing && task.id == selected?.id,
-                            nowMillis = nowMillis,
                             onClick = {
                                 selectedTaskId = task.id
                                 composing = false
@@ -283,7 +276,6 @@ internal fun AgentsScreen(
 private fun AgentInboxRow(
     task: AgentTask,
     selected: Boolean,
-    nowMillis: Long,
     onClick: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
@@ -291,40 +283,16 @@ private fun AgentInboxRow(
     onDelete: (AgentTask) -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val elapsedEnd = rememberElapsedEndMillis(
-        taskId = task.id,
-        finishedAtMillis = task.finishedAtMillis,
-        task = task,
-    )
-    val meta = buildList {
-        add(task.agent.label)
-        add(task.modelConfigurationLabel())
-        formatElapsed(task.startedAtMillis, elapsedEnd, nowMillis)?.let { add(it) }
-        formatCost(task.totalCostUsd)?.let { add(it) }
-    }.joinToString(" · ")
     Box {
         ChatSessionSidebarRow(
             task = task,
             selected = selected,
-            nowMillis = nowMillis,
             onClick = onClick,
-            subtitle = meta,
             trailing = when {
                 task.status == AgentStatus.Blocked -> {
                     { StatusTag("blocked", Red) }
                 }
-                else -> {
-                    {
-                        Text(
-                            agentStatusLabel(task),
-                            color = agentStatusColor(task).copy(alpha = 0.85f),
-                            fontFamily = MonoFont,
-                            fontSize = 9.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                else -> null
             },
             modifier = Modifier.pointerInput(task.id) {
                 awaitPointerEventScope {

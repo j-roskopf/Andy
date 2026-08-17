@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
@@ -73,6 +74,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -84,13 +86,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.project_new_chat
-import app.andy.ui.components.TabBar
+import app.andy.ui.components.TabBarItem
+import app.andy.ui.components.TabBarRow
 import app.andy.ui.components.AndyAlertDialog
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
+import app.andy.model.AgentLaneKind
+import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.ConfigSource
 import app.andy.model.ProjectAction
@@ -105,7 +110,6 @@ import app.andy.model.WorkspaceState
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.currentTimeMillis
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
@@ -118,12 +122,14 @@ import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceRail
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
-import app.andy.model.AgentStatus
 import app.andy.ui.agents.AgentHeaderAction
 import app.andy.ui.agents.AgentStarterPrompt
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatSessionSidebarRow
+import app.andy.ui.agents.agentStatusColor
+import app.andy.ui.agents.agentStatusLabel
+import app.andy.ui.agents.isChatTerminalInteractive
 import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
@@ -144,7 +150,6 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -217,11 +222,13 @@ private fun ProjectCockpit(
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val copyText = rememberCopyText()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
+    val outdatedCliUpdates by services.cliUpdates.outdated.collectAsState()
+    val updatingCliKinds by services.cliUpdates.updating.collectAsState()
     val workflowProjects by services.projectWorkflows.projects.collectAsState()
     var selectedProjectId by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by remember { mutableStateOf<String?>(null) }
-    var chatDetailsExpanded by remember { mutableStateOf(false) }
     var selectedWorkflowTaskId by remember { mutableStateOf<String?>(null) }
     var initialWorkflowSelectionApplied by remember { mutableStateOf(false) }
     var canvas by remember {
@@ -241,7 +248,6 @@ private fun ProjectCockpit(
     var buildEditor by remember { mutableStateOf<BuildEditorSeed?>(null) }
     var profilesOpen by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
-    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     var expandedProjectSessionsId by remember { mutableStateOf<String?>(null) }
@@ -337,10 +343,24 @@ private fun ProjectCockpit(
             initialWorkflowSelectionApplied = true
         }
     }
-    LaunchedEffect(Unit) { while (true) { delay(1_000); nowMillis = currentTimeMillis() } }
 
     LaunchedEffect(searchExpanded) {
         if (searchExpanded) searchFocusRequester.requestFocus()
+    }
+    // cliStatuses load asynchronously after Actions can already be active; include them so
+    // the first non-empty discovery (and later version changes) re-trigger the check.
+    val cliUpdateProbeKey = remember(agentCliStatuses) {
+        agentCliStatuses
+            .asSequence()
+            .filter { it.available }
+            .map { "${it.kind.name}:${it.version.orEmpty()}" }
+            .sorted()
+            .joinToString("|")
+    }
+    LaunchedEffect(active, cliUpdateProbeKey) {
+        if (active && cliUpdateProbeKey.isNotEmpty()) {
+            services.cliUpdates.checkForUpdates()
+        }
     }
 
     val searchActive = query.isNotBlank()
@@ -387,9 +407,6 @@ private fun ProjectCockpit(
     }.orEmpty()
     val selectedProjectTask = project?.let { item ->
         agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
-    }
-    LaunchedEffect(selectedProjectTask?.id) {
-        chatDetailsExpanded = false
     }
     // Open chats stay read — including while a live run is on screen.
     // Only while Projects is the active destination: RetainedDestination keeps this
@@ -453,7 +470,6 @@ private fun ProjectCockpit(
                             ProjectSessionGroup(
                                 project = item,
                                 selected = item.id == selectedProjectId,
-                                nowMillis = nowMillis,
                                 hasUnread = item.id in unreadProjectIds,
                                 chatCount = chatLists.active.size,
                                 sessions = when {
@@ -546,6 +562,9 @@ private fun ProjectCockpit(
                         ProjectChatToolbar(
                             project = current,
                             canvas = canvas,
+                            tasksNeedAttention = projectTasks.any { task ->
+                                task.workflowTaskId != null && task.status == AgentStatus.Blocked
+                            },
                             onCanvasChange = {
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
@@ -565,10 +584,44 @@ private fun ProjectCockpit(
                                             AgentHeaderAction("delete", TextSecondary) {
                                                 requestDeleteChat(selected)
                                             }
+                                            AgentHeaderAction("copy prompt", TextSecondary) {
+                                                copyText(selected.prompt)
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            tabTrailing = {
+                                val selected = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }
+                                val interactiveTerminalIds by
+                                    services.agentRuns.interactiveTerminalTaskIds.collectAsState()
+                                if (selected != null) {
+                                    val sessionLive = if (selected.lane == AgentLaneKind.Acp) {
+                                        selected.isActive || services.agentRuns.isLaneLive(selected.id)
+                                    } else {
+                                        isChatTerminalInteractive(
+                                            selected,
+                                            selected.id in interactiveTerminalIds,
+                                        )
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        StatusTag(
+                                            agentStatusLabel(selected),
+                                            agentStatusColor(selected),
+                                        )
+                                        if (sessionLive) {
                                             AgentHeaderAction(
-                                                label = if (chatDetailsExpanded) "hide details" else "details",
+                                                label = if (selected.status == AgentStatus.Blocked) {
+                                                    "cancel"
+                                                } else {
+                                                    "stop"
+                                                },
+                                                color = Rust,
                                             ) {
-                                                chatDetailsExpanded = !chatDetailsExpanded
+                                                services.agentRuns.stop(selected.id)
                                             }
                                         }
                                     }
@@ -606,9 +659,7 @@ private fun ProjectCockpit(
                                             services,
                                             selected,
                                             onDelete = ::requestDeleteChat,
-                                            showDeleteDetailsActions = false,
-                                            detailsExpanded = chatDetailsExpanded,
-                                            onDetailsExpandedChange = { chatDetailsExpanded = it },
+                                            showHeader = false,
                                             transcriptScrollMemory = transcriptScrollMemory,
                                             workspaceState = workspaceState,
                                             modifier = Modifier.fillMaxSize(),
@@ -740,6 +791,17 @@ private fun ProjectCockpit(
                     }
                 }
             }
+        }
+        if (outdatedCliUpdates.isNotEmpty()) {
+            CliUpdateSnackbarStack(
+                items = outdatedCliUpdates,
+                updating = updatingCliKinds,
+                onUpdate = { item -> services.cliUpdates.startUpdate(item)?.let(onNotifyTerminalRun) },
+                onDismiss = { services.cliUpdates.dismiss(it.kind, it.latestVersion) },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = AndySpace.Space4),
+            )
         }
     }
     editingProject?.let { edit ->
@@ -1290,7 +1352,6 @@ private fun ProjectsSidebarFooter() {
 private fun ProjectSessionGroup(
     project: ActionProject,
     selected: Boolean,
-    nowMillis: Long,
     hasUnread: Boolean,
     chatCount: Int,
     sessions: List<AgentTask>,
@@ -1381,7 +1442,6 @@ private fun ProjectSessionGroup(
                     ProjectSessionRow(
                         task = task,
                         selected = task.id == selectedSessionId,
-                        nowMillis = nowMillis,
                         onOpen = { onOpenSession(task) },
                         onMarkUnread = { onMarkSessionUnread(task) },
                         onArchive = {
@@ -1424,7 +1484,6 @@ private fun ProjectSessionGroup(
 private fun ProjectSessionRow(
     task: AgentTask,
     selected: Boolean,
-    nowMillis: Long,
     onOpen: () -> Unit,
     onMarkUnread: () -> Unit,
     onArchive: () -> Unit,
@@ -1436,7 +1495,6 @@ private fun ProjectSessionRow(
         ChatSessionSidebarRow(
             task = task,
             selected = selected,
-            nowMillis = nowMillis,
             onClick = onOpen,
             modifier = Modifier
                 .fillMaxWidth()
@@ -1499,9 +1557,17 @@ private fun ProjectSessionRow(
 private fun ProjectChatToolbar(
     project: ActionProject,
     canvas: ProjectCanvas,
+    tasksNeedAttention: Boolean,
     onCanvasChange: (ProjectCanvas) -> Unit,
     chatActions: (@Composable () -> Unit)? = null,
+    tabTrailing: (@Composable () -> Unit)? = null,
 ) {
+    val uriHandler = LocalUriHandler.current
+    var githubUrl by remember(project.contextDir) { mutableStateOf<String?>(null) }
+    LaunchedEffect(project.contextDir) {
+        githubUrl = detectGithubRepositoryUrl(project.contextDir)
+    }
+
     Column(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
@@ -1553,11 +1619,64 @@ private fun ProjectChatToolbar(
             }
             chatActions?.invoke()
         }
-        TabBar(
-            tabs = ProjectCanvas.entries,
-            selected = canvas,
-            onSelect = onCanvasChange,
-            label = { it.label },
+        TabBarRow(
+            trailing = tabTrailing,
+        ) {
+            ProjectCanvas.entries.forEach { item ->
+                TabBarItem(
+                    label = item.label,
+                    selected = item == canvas,
+                    onClick = { onCanvasChange(item) },
+                    trailing = if (item == ProjectCanvas.Tasks && tasksNeedAttention) {
+                        {
+                            Box(
+                                Modifier
+                                    .size(6.dp)
+                                    .background(Red, CircleShape)
+                                    .semantics { contentDescription = "Task waiting for input" },
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+            githubUrl?.let { url ->
+                TabBarItem(
+                    label = "GitHub",
+                    selected = false,
+                    onClick = { uriHandler.openUri(url) },
+                    trailing = { ExternalLinkTabIcon() },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Trailing arrow for a tab that leaves the app. Drawn rather than typeset: an "↗" glyph
+ * resolves through font fallback, and a fallback with a taller line box grows the tab and
+ * lifts its label off the shared baseline of a bottom-aligned tab row.
+ */
+@Composable
+internal fun ExternalLinkTabIcon() {
+    Canvas(Modifier.size(9.dp)) {
+        val inset = size.minDimension * 0.1f
+        val left = inset
+        val right = size.width - inset
+        val top = inset
+        val bottom = size.height - inset
+        val stroke = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
+        drawPath(
+            Path().apply {
+                moveTo(left, bottom)
+                lineTo(right, top)
+                moveTo(left + (right - left) * 0.38f, top)
+                lineTo(right, top)
+                lineTo(right, bottom - (bottom - top) * 0.38f)
+            },
+            color = TextSecondary,
+            style = stroke,
         )
     }
 }

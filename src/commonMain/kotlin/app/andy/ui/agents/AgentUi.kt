@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -47,7 +46,6 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
-import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -199,91 +197,54 @@ internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
     )
 }
 
-internal fun sessionActivityMillis(task: AgentTask): Long =
-    task.finishedAtMillis ?: task.startedAtMillis ?: task.createdAtMillis
-
-internal fun formatSessionAge(timestampMillis: Long, nowMillis: Long): String {
-    val elapsedSec = ((nowMillis - timestampMillis).coerceAtLeast(0)) / 1000
-    return when {
-        elapsedSec < 60 -> "Now"
-        elapsedSec < 3600 -> "${elapsedSec / 60}m"
-        elapsedSec < 86400 -> "${elapsedSec / 3600}h"
-        else -> "${elapsedSec / 86400}d"
-    }
-}
-
 @Composable
 internal fun ChatSessionSidebarRow(
     task: AgentTask,
     selected: Boolean,
-    nowMillis: Long,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    subtitle: String = task.agent.label,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val working = isSessionWorking(task)
-    Column(
+    val prompt = remember(task.prompt, task.title) {
+        task.prompt.lineSequence().firstOrNull()?.trim().orEmpty()
+            .ifBlank { task.title }
+    }
+    Row(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(AndyRadius.Row))
             .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalArrangement = Arrangement.spacedBy(1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                task.title,
-                color = when {
-                    selected || task.unread -> TextPrimary
-                    else -> TextSecondary
-                },
-                fontFamily = DisplayFont,
-                fontWeight = when {
-                    task.unread && !selected -> FontWeight.Medium
-                    selected -> FontWeight.Medium
-                    else -> FontWeight.Normal
-                },
-                fontSize = 13.sp,
-                lineHeight = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            when {
-                working -> ProjectActivityIndicator(12.dp)
-                trailing != null -> trailing()
-                else -> Text(
-                    formatSessionAge(sessionActivityMillis(task), nowMillis),
-                    color = AndyColors.TextTertiary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                )
-            }
+        AgentPillIcon(task.agent, Modifier.size(14.dp))
+        Text(
+            prompt,
+            color = when {
+                selected || task.unread -> TextPrimary
+                else -> TextSecondary
+            },
+            fontFamily = DisplayFont,
+            fontWeight = when {
+                task.unread && !selected -> FontWeight.Medium
+                selected -> FontWeight.Medium
+                else -> FontWeight.Normal
+            },
+            fontSize = 13.sp,
+            lineHeight = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        when {
+            working -> ProjectActivityIndicator(12.dp)
+            trailing != null -> trailing()
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            AgentPillIcon(task.agent, Modifier.size(12.dp))
-            Text(
-                subtitle,
-                color = AndyColors.TextTertiary,
-                fontFamily = DisplayFont,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            if (task.unread && !selected) {
-                UnreadDot()
-            }
+        if (task.unread && !selected) {
+            UnreadDot()
         }
     }
 }

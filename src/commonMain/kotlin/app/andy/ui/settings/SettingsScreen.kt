@@ -1283,7 +1283,7 @@ private fun VoiceDictationPanel(
     PanelCard(Modifier.fillMaxWidth()) {
         SettingsSectionHeader(
             title = "Voice dictation",
-            description = "Push-to-talk mic in the new-task and follow-up composers. Downloads a local whisper.cpp binary and English model on first enable (~150 MB).",
+            description = "Click-to-toggle mic in the new-task and follow-up composers. Downloads a local whisper.cpp binary and English model on first enable (~150 MB).",
         )
         Row(
             Modifier.fillMaxWidth(),

@@ -1,25 +1,27 @@
 package app.andy.ui.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,7 +39,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -52,10 +53,12 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -86,8 +89,8 @@ internal object ActiveVoiceDictationShortcut {
 }
 
 /**
- * Hoisted push-to-talk state so both the mic button's press-hold gesture and an
- * external trigger (e.g. a keyboard shortcut) can drive the same recording session.
+ * Hoisted toggle-to-talk state so both the mic button and an external trigger
+ * (e.g. a keyboard shortcut) can drive the same recording session.
  *
  * [active] must be true only for the visible composer. Retained inactive destinations
  * stay composed, so they pass false to avoid stealing the global shortcut slot.
@@ -191,6 +194,11 @@ internal class VoiceDictationController(
     }
 }
 
+/** Button widths per state; recording widens into a pill to fit the live waveform + timer. */
+private val IdleWidth = 40.dp
+private val RecordingWidth = 128.dp
+private val TranscribingWidth = 116.dp
+
 @Composable
 internal fun ChatVoiceDictationButton(
     controller: VoiceDictationController,
@@ -203,9 +211,35 @@ internal fun ChatVoiceDictationButton(
     val recording = controller.recording
     val transcribing = controller.transcribing
     val interactive = !transcribing
+    val level by controller.voice.audioLevel.collectAsState()
+
+    var elapsedMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(recording) {
+        if (!recording) {
+            elapsedMs = 0L
+            return@LaunchedEffect
+        }
+        val startedAt = currentTimeMillis()
+        while (true) {
+            elapsedMs = currentTimeMillis() - startedAt
+            delay(100)
+        }
+    }
+
+    val targetWidth = when {
+        recording -> RecordingWidth
+        transcribing -> TranscribingWidth
+        else -> IdleWidth
+    }
+    val width by animateDpAsState(
+        targetValue = targetWidth,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow, dampingRatio = Spring.DampingRatioNoBouncy),
+        label = "voiceButtonWidth",
+    )
 
     Box(
         modifier = modifier
+            .width(width)
             .height(AndyLayout.ControlHeightMd)
             .clip(RoundedCornerShape(AndyRadius.Control))
             .border(1.dp, if (recording) Rust.copy(alpha = 0.6f) else Border, RoundedCornerShape(AndyRadius.Control))
@@ -213,27 +247,18 @@ internal fun ChatVoiceDictationButton(
             .alpha(if (interactive) 1f else 0.7f)
             .pointerInput(interactive) {
                 if (!interactive) return@pointerInput
-                detectTapGestures(
-                    onPress = {
-                        var started = false
-                        try {
-                            started = controller.beginRecording()
-                            if (!started) return@detectTapGestures
-                            try {
-                                awaitRelease()
-                            } finally {
-                                controller.endRecording()
-                            }
-                        } catch (_: Throwable) {
-                            if (started) controller.cancelRecording()
-                        }
-                    },
-                )
+                detectTapGestures(onTap = { controller.toggle() })
             }
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        VoiceDictationIndicator(recording = recording, transcribing = transcribing, ready = ready)
+        VoiceDictationIndicator(
+            recording = recording,
+            transcribing = transcribing,
+            ready = ready,
+            level = level,
+            elapsedMs = elapsedMs,
+        )
     }
 }
 
@@ -242,57 +267,98 @@ private fun VoiceDictationIndicator(
     recording: Boolean,
     transcribing: Boolean,
     ready: Boolean,
+    level: Float,
+    elapsedMs: Long,
 ) {
-    val iconSize = 15.dp
-    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-        if (recording) {
-            val transition = rememberInfiniteTransition(label = "voice-ping")
-            val pingScale by transition.animateFloat(
-                initialValue = 1f,
-                targetValue = 1.9f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1100, easing = LinearOutSlowInEasing),
-                    repeatMode = RepeatMode.Restart,
-                ),
-                label = "voice-ping-scale",
+    when {
+        recording -> Row(
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MicIcon(color = Rust, modifier = Modifier.size(13.dp))
+            VoiceWaveform(
+                level = level,
+                color = Rust,
+                modifier = Modifier.width(42.dp).height(22.dp),
             )
-            val pingAlpha by transition.animateFloat(
-                initialValue = 0.5f,
-                targetValue = 0f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1100, easing = LinearEasing),
-                    repeatMode = RepeatMode.Restart,
-                ),
-                label = "voice-ping-alpha",
-            )
-            Box(
-                Modifier
-                    .size(iconSize + 6.dp)
-                    .graphicsLayer { scaleX = pingScale; scaleY = pingScale; alpha = pingAlpha }
-                    .background(Rust, CircleShape),
-            )
-            Box(
-                Modifier
-                    .size(iconSize + 10.dp)
-                    .background(Rust.copy(alpha = 0.16f), CircleShape),
+            Text(
+                text = formatElapsed(elapsedMs),
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFont),
+                color = TextSecondary,
             )
         }
-        if (transcribing) {
+        transcribing -> Row(
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             CircularProgressIndicator(
-                modifier = Modifier.size(iconSize + 8.dp),
+                modifier = Modifier.size(13.dp),
                 strokeWidth = 1.5.dp,
                 color = TextPrimary,
             )
+            Text(
+                text = "Transcribing…",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextSecondary,
+            )
         }
-        MicIcon(
-            color = when {
-                transcribing -> TextPrimary.copy(alpha = 0.45f)
-                recording -> Rust
-                ready -> TextPrimary
-                else -> TextSecondary
-            },
-            modifier = Modifier.size(iconSize),
+        else -> MicIcon(
+            color = if (ready) TextPrimary else TextSecondary,
+            modifier = Modifier.size(15.dp),
         )
+    }
+}
+
+/** mm:ss elapsed, monospaced so the recording pill doesn't jitter width as digits change. */
+private fun formatElapsed(elapsedMs: Long): String {
+    val totalSeconds = elapsedMs / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
+}
+
+/**
+ * Live multi-bar level meter. Each bar chases the real mic [level] (0f..1f) with a slightly
+ * different animation duration so the bars ripple rather than moving in lockstep — the ripple
+ * timing is cosmetic, but the target height each bar chases is real captured amplitude.
+ */
+@Composable
+private fun VoiceWaveform(
+    level: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    barCount: Int = 5,
+) {
+    val minFraction = 0.1f
+    val bars = remember { List(barCount) { Animatable(minFraction) } }
+    LaunchedEffect(level) {
+        val center = (barCount - 1) / 2f
+        bars.forEachIndexed { index, bar ->
+            val centerWeight = 1f - kotlin.math.abs(index - center) * 0.2f
+            val target = (minFraction + level * 1.15f * centerWeight).coerceIn(minFraction, 1f)
+            launch {
+                // Springy rather than tweened so a loud syllable visibly snaps the bars up
+                // instead of just easing toward the target.
+                bar.animateTo(
+                    target,
+                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 500f - index * 30f),
+                )
+            }
+        }
+    }
+    Canvas(modifier) {
+        val barWidth = size.width / (barCount * 2f - 1f)
+        var x = 0f
+        bars.forEach { bar ->
+            val barHeight = size.height * bar.value
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(x, (size.height - barHeight) / 2f),
+                size = Size(barWidth, barHeight),
+                cornerRadius = CornerRadius(barWidth / 2f),
+            )
+            x += barWidth * 2f
+        }
     }
 }
 

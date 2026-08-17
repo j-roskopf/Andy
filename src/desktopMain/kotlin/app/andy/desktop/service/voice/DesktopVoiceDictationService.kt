@@ -30,6 +30,9 @@ class DesktopVoiceDictationService(
     override val isReady: Boolean
         get() = setup.state.value is VoiceSetupState.Ready
 
+    override val audioLevel: StateFlow<Float>
+        get() = recorder.level
+
     override suspend fun startRecording(): Boolean {
         _lastError.value = null
         if (!isReady) {

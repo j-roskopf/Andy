@@ -3094,6 +3094,32 @@ class DesktopAgentRunService(
         return changeDirectory + adapter.interactiveResumeCommand(binary, forResume)
     }
 
+    override fun providerAppContinuationLabel(taskId: String): String? {
+        val task = currentTask(taskId) ?: return null
+        return task.providerDesktopContinuation(isMacOs())?.providerLabel
+    }
+
+    override suspend fun openInProviderApp(taskId: String): CommandResult = withContext(Dispatchers.IO) {
+        val task = currentTask(taskId)
+            ?: return@withContext CommandResult.failure("task not found")
+        val continuation = task.providerDesktopContinuation(isMacOs())
+            ?: return@withContext CommandResult.failure("${task.agent.label} does not support direct desktop continuation")
+        runCatching {
+            val process = ProcessBuilder("open", continuation.uri)
+                .redirectErrorStream(true)
+                .start()
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                return@runCatching CommandResult.failure("Timed out opening Codex")
+            }
+            if (process.exitValue() == 0) {
+                CommandResult.success("opened Codex")
+            } else {
+                CommandResult.failure(process.inputStream.bufferedReader().readText().truncateForSummary())
+            }
+        }.getOrElse { CommandResult.failure(it.message ?: "failed to open Codex") }
+    }
+
     override suspend fun openInTerminal(taskId: String): CommandResult = withContext(Dispatchers.IO) {
         val command = interactiveResumeCommand(taskId)
             ?: return@withContext CommandResult.failure("task not found")
@@ -3116,6 +3142,9 @@ class DesktopAgentRunService(
             }
         }.getOrElse { CommandResult.failure(it.message ?: "failed to open Terminal") }
     }
+
+    private fun isMacOs(): Boolean =
+        System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
 
     override suspend fun openSkill(path: String): CommandResult = withContext(Dispatchers.IO) {
         val skillFile = File(path)

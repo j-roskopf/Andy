@@ -1,6 +1,9 @@
 package app.andy.desktop.service.voice
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -13,8 +16,11 @@ import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.Mixer
 import javax.sound.sampled.TargetDataLine
+import kotlin.math.pow
 
 interface VoiceRecorder {
+    /** Live 0f..1f capture amplitude, updated while recording; resets to 0f once stopped. */
+    val level: StateFlow<Float>
     suspend fun startRecording(): Boolean
     /** Stops capture; returns temp WAV or null when under [MIN_DURATION_MS]. */
     suspend fun stopRecording(): File?
@@ -51,6 +57,9 @@ class JavaxSoundVoiceRecorder(
     private val pcmBuffer = ByteArrayOutputStream()
     private val lock = Any()
 
+    private val _level = MutableStateFlow(0f)
+    override val level: StateFlow<Float> = _level.asStateFlow()
+
     /** Set when stop drops a silent clip so the dictation service can surface a mic-access hint. */
     @Volatile
     var lastStopWasSilent: Boolean = false
@@ -61,6 +70,7 @@ class JavaxSoundVoiceRecorder(
             if (line != null) return@withContext false
             pcmBuffer.reset()
             lastStopWasSilent = false
+            _level.value = 0f
 
             when (val permission = ensureMicPermission()) {
                 null -> Unit // non-macOS / bridge unavailable — fall through to Java Sound
@@ -116,8 +126,11 @@ class JavaxSoundVoiceRecorder(
             line = target
             startedAtMs = clock()
             captureThread = Thread({
-                val buf = ByteArray(4096)
+                // Smaller than the old 4096B buffer so the level meter updates ~15-20x/sec
+                // instead of ~8x/sec — UI-side animation smooths the rest.
+                val buf = ByteArray(2048)
                 var totalRead = 0
+                var smoothedLevel = 0f
                 while (true) {
                     val active = synchronized(lock) { line }
                     if (active == null) break
@@ -130,6 +143,15 @@ class JavaxSoundVoiceRecorder(
                     if (read > 0) {
                         totalRead += read
                         synchronized(lock) { pcmBuffer.write(buf, 0, read) }
+                        val linear = (rmsAmplitude(buf, read) / LEVEL_REFERENCE_AMPLITUDE).coerceIn(0f, 1f)
+                        // Ordinary speech RMS is a small fraction of the loudest a mic can capture;
+                        // this curve maps that low-mid range onto a much more visible chunk of
+                        // 0f..1f (linear, or even sqrt, left the meter only lightly twitching at
+                        // normal talking volume).
+                        val instant = linear.pow(LEVEL_CURVE_EXPONENT)
+                        val rate = if (instant > smoothedLevel) LEVEL_ATTACK else LEVEL_RELEASE
+                        smoothedLevel += (instant - smoothedLevel) * rate
+                        _level.value = smoothedLevel
                     } else if (read < 0) {
                         voiceDebugLog("captureThread: read returned $read (EOF) after $totalRead bytes")
                         break
@@ -159,6 +181,7 @@ class JavaxSoundVoiceRecorder(
             pcm = pcmBuffer.toByteArray()
             pcmBuffer.reset()
         }
+        _level.value = 0f
         val peak = peakAmplitude(pcm)
         voiceDebugLog(
             "stopRecording: elapsedMs=$elapsed bytes=${pcm.size} peakAmplitude=$peak " +
@@ -188,6 +211,7 @@ class JavaxSoundVoiceRecorder(
             captureThread?.join(500)
             captureThread = null
             pcmBuffer.reset()
+            _level.value = 0f
             voiceDebugLog("abandonRecording: capture line closed without WAV")
         }
     }
@@ -203,6 +227,27 @@ class JavaxSoundVoiceRecorder(
          */
         const val SILENCE_PEAK_THRESHOLD = 400
 
+        /**
+         * A moderately loud voice on a built-in mic; used to map the live level meter's raw RMS
+         * amplitude onto a 0f..1f range for the UI waveform before [LEVEL_CURVE_EXPONENT] is
+         * applied. Kept well below full-scale (32767) since normal talking volume RMS is nowhere
+         * near it.
+         */
+        private const val LEVEL_REFERENCE_AMPLITUDE = 1_600f
+
+        /**
+         * Exponent applied to the 0f..1f RMS ratio before display; less than 1 pushes low-mid
+         * amplitudes (ordinary talking) up toward the visible range instead of leaving them
+         * clustered near zero. Lower = more dramatic pulse for the same voice.
+         */
+        private const val LEVEL_CURVE_EXPONENT = 0.38f
+
+        /** Fraction of the gap to instant level closed per chunk while rising (fast attack). */
+        private const val LEVEL_ATTACK = 0.8f
+
+        /** Fraction of the gap to instant level closed per chunk while falling (slower decay). */
+        private const val LEVEL_RELEASE = 0.22f
+
         /** PCM is little-endian 16-bit signed mono; scan every sample for the peak magnitude. */
         internal fun peakAmplitude(pcm: ByteArray): Int {
             var peak = 0
@@ -214,6 +259,22 @@ class JavaxSoundVoiceRecorder(
                 i += 2
             }
             return peak
+        }
+
+        /** RMS magnitude of the first [length] bytes of little-endian 16-bit signed mono PCM. */
+        internal fun rmsAmplitude(pcm: ByteArray, length: Int): Float {
+            if (length < 2) return 0f
+            var sumSquares = 0.0
+            var samples = 0
+            var i = 0
+            while (i + 1 < length) {
+                val sample = ((pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xff)).toShort().toInt()
+                sumSquares += sample.toDouble() * sample.toDouble()
+                samples++
+                i += 2
+            }
+            if (samples == 0) return 0f
+            return kotlin.math.sqrt(sumSquares / samples).toFloat()
         }
     }
 }
