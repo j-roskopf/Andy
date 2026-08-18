@@ -133,7 +133,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -143,7 +142,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * forces a restart on every scroll frame — this counter catches that regression.
  */
 internal class TranscriptCompositionCounter {
-    val rootRestarts = AtomicInteger(0)
+    var rootRestarts = 0
 }
 
 internal val LocalTranscriptCompositionCounter = compositionLocalOf<TranscriptCompositionCounter?> { null }
@@ -219,7 +218,7 @@ internal fun AgentTranscript(
     modifier: Modifier = Modifier,
 ) {
     val compositionCounter = LocalTranscriptCompositionCounter.current
-    SideEffect { compositionCounter?.rootRestarts?.incrementAndGet() }
+    SideEffect { compositionCounter?.let { it.rootRestarts++ } }
     val scope = rememberCoroutineScope()
     val displayItems = remember(events, collapseActivityBetweenMessages) {
         transcriptDisplayItems(events, collapseActivityBetweenMessages)

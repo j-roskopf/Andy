@@ -59,7 +59,7 @@ class AgentTranscriptScrollPerfTest {
             }
             waitForIdle()
 
-            val afterMount = counter.rootRestarts.get()
+            val afterMount = counter.rootRestarts
             assertTrue(afterMount >= 1, "transcript should compose at least once")
 
             repeat(25) {
@@ -70,7 +70,7 @@ class AgentTranscriptScrollPerfTest {
                 waitForIdle()
             }
 
-            val delta = counter.rootRestarts.get() - afterMount
+            val delta = counter.rootRestarts - afterMount
             // Detach-from-bottom may restart once; scroll frames must not.
             assertTrue(
                 delta <= 3,
