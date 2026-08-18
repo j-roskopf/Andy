@@ -1,11 +1,5 @@
 package app.andy.ui.agents
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,7 +10,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,11 +20,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -45,7 +36,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -59,10 +49,11 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
@@ -91,22 +82,17 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
 import app.andy.model.WorktreeBaseOption
-import app.andy.model.ProjectAgentProfile
 import app.andy.model.WorkspaceState
 import app.andy.model.composerCommandName
 import app.andy.model.composerCommandToken
 import app.andy.model.defaultSandboxMode
-import app.andy.model.descriptionFor
 import app.andy.model.groupedByModelFamily
 import app.andy.model.HostSearchResult
 import app.andy.model.labelFor
 import app.andy.model.parseAgentGoalCommand
-import app.andy.model.sandboxControlLabel
 import app.andy.onImageFilesDropped
-import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.ui.components.Button
 import app.andy.ui.components.ChatComposerFrame
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.ChatSendButton
@@ -118,7 +104,6 @@ import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.ui.components.FilterPill
-import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
@@ -127,13 +112,10 @@ import app.andy.ui.components.attachChatImages
 import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
-import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -162,7 +144,6 @@ internal fun AgentTaskComposerPane(
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
     val scope = rememberCoroutineScope()
-    var showOptions by remember(projectContext?.id) { mutableStateOf(false) }
     LaunchedEffect(projectContext?.id, initialPrompt) {
         if (form.state.promptValue.text.isBlank() && !initialPrompt.isNullOrBlank()) {
             form.state.promptValue = TextFieldValue(
@@ -172,43 +153,31 @@ internal fun AgentTaskComposerPane(
         }
     }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (showOptions) {
-            AgentTaskComposerFields(
-                form = form,
-                showProjectHeader = projectContext != null,
-                showContextPicker = projectContext == null,
-                showAgentControls = false,
-                showModelControls = false,
-                showPrompt = false,
-                modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .then(
+                    if (projectContext != null) {
+                        Modifier.padding(horizontal = AndySpace.Space4)
+                    } else {
+                        Modifier
+                    },
+                ),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            AgentMark(form.state.agent)
+            Spacer(Modifier.height(16.dp))
+            Text(
+                projectContext?.let { "What do you want to work on in ${it.name}?" }
+                    ?: "What can I help you with?",
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center,
             )
-        } else {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .then(
-                        if (projectContext != null) {
-                            Modifier.padding(horizontal = AndySpace.Space4)
-                        } else {
-                            Modifier
-                        },
-                    ),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                AgentMark(form.state.agent)
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    projectContext?.let { "What do you want to work on in ${it.name}?" }
-                        ?: "What can I help you with?",
-                    color = TextPrimary,
-                    fontFamily = DisplayFont,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 18.sp,
-                    textAlign = TextAlign.Center,
-                )
-            }
         }
         AgentCliIssueNotices(
             statuses = cliStatuses,
@@ -217,8 +186,6 @@ internal fun AgentTaskComposerPane(
         )
         AgentChatComposer(
             form = form,
-            showOptions = showOptions,
-            onShowOptionsChange = { showOptions = it },
             wrapComposerControls = wrapComposerControls,
             onCancel = onCancel,
             voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
@@ -337,32 +304,6 @@ private class AgentTaskComposerFormState(
     }
 }
 
-private fun AgentTaskComposerFormState.providerProfile(): ProjectAgentProfile = ProjectAgentProfile(
-    agent = agent,
-    model = if (usesCustomModel) customModel else modelId,
-    reasoningEffort = reasoningEffort,
-    fastMode = fastMode,
-    localRuntime = localRuntime,
-)
-
-private fun AgentTaskComposerFormState.applyProviderProfile(
-    profile: ProjectAgentProfile,
-    discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap(),
-) {
-    providerChosenInComposer = true
-    agent = profile.agent
-    localRuntime = profile.localRuntime
-    val catalogModel = AgentModelCatalog.option(profile.agent, profile.model, discovered)
-    modelId = when {
-        profile.model == null -> null
-        catalogModel != null -> catalogModel.id
-        else -> CUSTOM_MODEL_ID
-    }
-    customModel = if (catalogModel == null) profile.model.orEmpty() else ""
-    reasoningEffort = profile.reasoningEffort
-    fastMode = profile.fastMode
-}
-
 @Composable
 private fun rememberAgentTaskComposerForm(
     services: AndyServices,
@@ -397,7 +338,6 @@ private fun rememberAgentTaskComposerForm(
     }
     val selectedOption = AgentPickerOption(state.agent, state.localRuntime.takeIf { state.agent.isLocalModelBackend })
     val selectedCliAvailable = selectedOption.comboReady(cliStatuses, localBackends)
-    val showModelSection = state.providerChosenInComposer && selectedCliAvailable
     val modelOptions = AgentModelCatalog.options(state.agent, providerModels)
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId, providerModels)
     val slashCommand = findComposerSlashCommand(state.prompt)
@@ -515,7 +455,6 @@ private fun rememberAgentTaskComposerForm(
         modelOptions = modelOptions,
         projectContext = projectContext,
         directory = directory,
-        showModelSection = showModelSection,
         selectedModel = selectedModel,
         availableSkills = availableSkills,
         availableCommands = availableCommands,
@@ -539,7 +478,6 @@ private class AgentTaskComposerForm(
     val modelOptions: List<AgentModelOption>,
     val projectContext: ActionProject?,
     val directory: String?,
-    val showModelSection: Boolean,
     val selectedModel: AgentModelOption?,
     val availableSkills: List<AgentSkill>,
     val availableCommands: List<AgentNativeSlashCommand>,
@@ -654,8 +592,6 @@ internal fun rememberComposerSlashHighlight(
 @Composable
 private fun AgentChatComposer(
     form: AgentTaskComposerForm,
-    showOptions: Boolean,
-    onShowOptionsChange: (Boolean) -> Unit,
     wrapComposerControls: Boolean,
     onCancel: (() -> Unit)?,
     voiceShortcut: KeyCombo?,
@@ -684,10 +620,24 @@ private fun AgentChatComposer(
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
     fun selectFileMention(result: HostSearchResult) = form.selectFileMention(result)
 
-    ChatComposerFrame(
-        modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
-        highlighted = state.imageDragActive,
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
+        if (state.directoryIsGitRepo) {
+            ComposerBranchWorktreeChip(
+                branch = state.currentBranch,
+                useWorktree = state.useWorktree,
+                onUseWorktreeChange = { state.useWorktree = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AndySpace.Space4),
+            )
+        }
+        ChatComposerFrame(
+            modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
+            highlighted = state.imageDragActive,
+        ) {
         Box(Modifier.fillMaxWidth()) {
             TextField(
                 state.promptValue,
@@ -1002,19 +952,6 @@ private fun AgentChatComposer(
                             AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
                         }
                     }
-                    if (state.directoryIsGitRepo) {
-                        ComposerBranchWorktreeChip(
-                            branch = state.currentBranch,
-                            useWorktree = state.useWorktree,
-                            onUseWorktreeChange = { state.useWorktree = it },
-                        )
-                    }
-                    ComposerChip(
-                        text = if (showOptions) "Hide options" else "Options",
-                        selected = showOptions,
-                        showChevron = false,
-                        onClick = { onShowOptionsChange(!showOptions) },
-                    )
                     onCancel?.let { cancel ->
                         ComposerChip(
                             text = "Cancel",
@@ -1068,291 +1005,6 @@ private fun AgentChatComposer(
         voiceError?.let { err ->
             Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
         }
-    }
-}
-
-@Composable
-private fun AgentTaskComposerFields(
-    form: AgentTaskComposerForm,
-    showProjectHeader: Boolean,
-    showContextPicker: Boolean,
-    showAgentControls: Boolean = true,
-    showModelControls: Boolean = true,
-    showPrompt: Boolean = true,
-    modifier: Modifier = Modifier,
-) {
-    val state = form.state
-    val scope = form.scope
-    val slashHighlight = rememberComposerSlashHighlight(form)
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (showProjectHeader && form.projectContext != null) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(form.projectContext.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(form.projectContext.contextDir, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-            }
-        }
-
-        if (showAgentControls) {
-            AgentProviderModelProfileControls(
-                profile = state.providerProfile(),
-                onChange = { state.applyProviderProfile(it, form.providerModels) },
-                cliStatuses = form.cliStatuses,
-                providerModels = form.providerModels,
-                localBackends = form.localBackends,
-                providerSelectionActive = state.providerChosenInComposer,
-                showModelControls = false,
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showModelControls && form.showModelSection,
-            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                AgentProviderModelProfileControls(
-                    profile = state.providerProfile(),
-                    onChange = { state.applyProviderProfile(it, form.providerModels) },
-                    cliStatuses = form.cliStatuses,
-                    providerModels = form.providerModels,
-                    localBackends = form.localBackends,
-                    showProviderControls = false,
-                    showVersion = true,
-                    showModelHelp = true,
-                )
-            }
-        }
-
-        if (showPrompt) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Prompt", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Box {
-                TextField(
-                    state.promptValue,
-                    {
-                        state.promptValue = it
-                        state.skillMenuDismissed = false
-                    },
-                    singleLine = false,
-                    minLines = if (showProjectHeader) 8 else 6,
-                    modifier = Modifier.fillMaxWidth()
-                        .heightIn(min = if (showProjectHeader) 180.dp else 140.dp)
-                        .onChatImagePaste(form.scope) { added ->
-                            state.imagePaths = attachChatImages(state.imagePaths, added)
-                        }
-                        .onImageFilesDropped(
-                            onFiles = { dropped -> state.imagePaths = attachChatImages(state.imagePaths, dropped) },
-                            onDragActiveChange = { active -> state.imageDragActive = active },
-                        )
-                        .border(
-                            if (state.imageDragActive) 2.dp else 1.dp,
-                            if (state.imageDragActive) Cyan else Border,
-                            RoundedCornerShape(AndyRadius.Control),
-                        )
-                        .background(
-                            if (state.imageDragActive) Cyan.copy(alpha = 0.12f) else AndyColors.Neutral900.copy(alpha = 0.2f),
-                            RoundedCornerShape(AndyRadius.Control),
-                        ),
-                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
-                    colors = fieldColors(),
-                    visualTransformation = slashHighlight,
-                    placeholder = {
-                        Text("type / for ${state.agent.label} commands or skills — attach, paste, or drag images", color = TextSecondary, fontFamily = MonoFont)
-                    },
-                )
-                DropdownMenu(
-                    expanded = form.slashCommand != null && !state.skillMenuDismissed,
-                    onDismissRequest = { state.skillMenuDismissed = true },
-                    modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
-                    properties = PopupProperties(focusable = false),
-                ) {
-                    Text(
-                        if (form.matchingCommands.isEmpty() && form.matchingSkills.isEmpty()) {
-                            "no ${state.agent.label} commands or skills matching /${form.slashCommand?.query.orEmpty()}"
-                        } else {
-                            "${state.agent.label} commands and skills matching /${form.slashCommand?.query.orEmpty()}"
-                        },
-                        color = TextSecondary,
-                        fontFamily = MonoFont,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                    )
-                    form.matchingCommands.forEach { command ->
-                        DropdownMenuItem(
-                            text = {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                    Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
-                                }
-                            },
-                            onClick = { form.selectCommand(command) },
-                        )
-                    }
-                    form.matchingSkills.forEach { skill ->
-                        DropdownMenuItem(
-                            text = {
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                    skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                        Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
-                                    }
-                                }
-                            },
-                            onClick = { form.selectSkill(skill) },
-                        )
-                    }
-                }
-            }
-            if (form.selectedSkills.isNotEmpty()) {
-                Text("selected skills", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    form.selectedSkills.forEach { skill ->
-                        FilterPill("/${skill.name} ×", true, Cyan) {
-                            state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
-                        }
-                    }
-                }
-            }
-        }
-        if (showPrompt && state.imageDragActive) {
-            Text("release to attach images", color = Cyan, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-        } else if (showPrompt && state.imagePaths.isEmpty()) {
-            Text("attach, paste, or drag image files onto the prompt", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-        } else if (showPrompt) {
-            Text("Attached images", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            ChatAttachedImages(
-                paths = state.imagePaths,
-                onRemove = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
-                maxWidth = 140.dp,
-                maxHeight = 100.dp,
-            )
-        }
-
-        if (showContextPicker) {
-            if (form.projectContext != null) {
-                Text("Project context", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                Text(form.projectContext.name, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp)
-                Text(form.projectContext.contextDir, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-            } else {
-                Text("Context (optional)", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterPill("Andy scratch", !state.usesCustomDirectory, Cyan) { state.usesCustomDirectory = false }
-                    FilterPill("custom dir", state.usesCustomDirectory, Cyan) {
-                        state.usesCustomDirectory = true
-                    }
-                }
-            }
-            if (form.projectContext == null && state.usesCustomDirectory) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextField(
-                        state.customDirectory,
-                        { state.customDirectory = it },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
-                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
-                        colors = fieldColors(),
-                        placeholder = { Text("directory the agent works in", color = TextSecondary, fontFamily = MonoFont) },
-                    )
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                pickDirectory(state.customDirectory.ifBlank { null })?.let { state.customDirectory = it }
-                            }
-                        },
-                        colors = primaryButtonColors(),
-                    ) { Text("browse") }
-                }
-            }
-        }
-
-        Text("Options", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            FilterPill("andy device tools (mcp)", state.attachMcp, Cyan) { state.attachMcp = !state.attachMcp }
-            FilterPill("confirm tool calls", state.confirmToolCalls, Rust) { state.confirmToolCalls = !state.confirmToolCalls }
-        }
-        if (state.useWorktree && state.availableBases.isNotEmpty()) {
-            Text("base on", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(
-                Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterPill(
-                    "origin (${state.currentBranch ?: "HEAD"})",
-                    state.baseWorktreeTaskId == null,
-                    Green,
-                ) { state.baseWorktreeTaskId = null }
-                state.availableBases.forEach { option ->
-                    FilterPill(
-                        "${option.title} (${option.branch})",
-                        state.baseWorktreeTaskId == option.taskId,
-                        Cyan,
-                    ) { state.baseWorktreeTaskId = option.taskId }
-                }
-            }
-        }
-
-        Text("Autonomy", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AgentAutonomy.entries.forEach { level ->
-                FilterPill(level.label, state.autonomy == level, Rust) { state.autonomy = level }
-            }
-        }
-        Text(
-            "standard may stop when the agent needs approval; use full for unattended runs in trusted or worktree dirs",
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-        )
-        FilterPill("plan mode", state.planMode, Green) { state.planMode = !state.planMode }
-        if (state.planMode) {
-            Text(
-                "Plan mode takes precedence: ${state.agent.label} analyzes and proposes changes without editing the workspace.",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-            )
-        }
-        if (state.agent == AgentKind.OpenClaw) {
-            Text("OpenClaw session", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterPill("new session", state.openClawNewSession, Cyan) { state.openClawNewSession = true }
-                FilterPill("main session", !state.openClawNewSession, Cyan) { state.openClawNewSession = false }
-            }
-            Text(
-                if (state.openClawNewSession) {
-                    "Each Andy chat gets its own OpenClaw session so prior conversations stay out of the way."
-                } else {
-                    "Reuse OpenClaw's shared main session, including history from earlier chats."
-                },
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 10.sp,
-            )
-        }
-        Text(
-            "${state.agent.runtimeKind(state.localRuntime).label} ${state.agent.runtimeKind(state.localRuntime).sandboxControlLabel()}",
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
-        )
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AgentSandboxMode.entries.forEach { mode ->
-                FilterPill(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), state.sandboxMode == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) {
-                    state.sandboxMode = mode
-                }
-            }
-        }
-        Text(
-            (state.sandboxMode ?: state.autonomy.defaultSandboxMode()).descriptionFor(state.agent.runtimeKind(state.localRuntime)),
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-        )
-        if (form.showModelSection && state.agent == AgentKind.ClaudeCode) {
-            LabeledField("Max budget USD (optional)", state.budgetText, { state.budgetText = it }, Modifier.fillMaxWidth(), placeholder = "e.g. 2.50")
         }
     }
 }
@@ -1366,14 +1018,12 @@ private fun ComposerBranchWorktreeChip(
 ) {
     val content = TextSecondary
     Row(
-        modifier
-            .height(AndyLayout.ControlHeightSm)
-            .background(AndyColors.Neutral800, RoundedCornerShape(AndyRadius.Pill))
-            .padding(horizontal = 10.dp),
+        modifier.height(AndyLayout.ControlHeightSm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
+            Modifier.weight(1f, fill = false),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -1389,6 +1039,9 @@ private fun ComposerBranchWorktreeChip(
                 fontWeight = FontWeight.Medium,
                 fontSize = 12.sp,
                 maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
         }
         Row(

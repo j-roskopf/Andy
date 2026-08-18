@@ -43,7 +43,8 @@ internal class MirrorWindowResizeWatch(
         settleJob?.cancel()
         settleJob = null
         onResizingChanged(false)
-        MirrorPresentationGuard.endWindowResize()
+        // Drop the guard without a post-fullscreen deferred refresh — hosts may already be gone.
+        MirrorPresentationGuard.endWindowResize(scheduleDeferredRefresh = false)
     }
 
     private fun onAwtEvent(event: AWTEvent, scope: CoroutineScope) {
