@@ -7,6 +7,7 @@ import app.andy.model.AgentLaneKind
 import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.parseLocalAgentRuntime
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
@@ -236,6 +237,7 @@ internal data class AgentProviderDefaultsDto(
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
     val lane: String = "",
+    val localRuntime: String = "",
 )
 
 @Serializable
@@ -244,6 +246,7 @@ internal data class AgentTaskDto(
     val title: String,
     val prompt: String,
     val agent: String,
+    val localRuntime: String = "",
     val projectId: String = "",
     val cwd: String = "",
     val originDir: String = "",
@@ -399,6 +402,7 @@ internal data class ProjectAgentProfileDto(
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double = 0.0,
+    val localRuntime: String = "",
 )
 
 @Serializable
@@ -577,6 +581,7 @@ internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDe
         attachAndyMcp = attachAndyMcp,
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
         lane = AgentLaneKind.entries.firstOrNull { it.name == lane },
+        localRuntime = parseLocalAgentRuntime(localRuntime),
     )
 }
 
@@ -611,6 +616,7 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         title = title,
         prompt = prompt,
         agent = agentKind,
+        localRuntime = parseLocalAgentRuntime(localRuntime),
         projectId = projectId.takeIf { it.isNotBlank() },
         cwd = cwd.takeIf { it.isNotBlank() },
         originDir = originDir.takeIf { it.isNotBlank() },
@@ -713,6 +719,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             attachAndyMcp = defaults.attachAndyMcp,
             maxBudgetUsd = defaults.maxBudgetUsd ?: 0.0,
             lane = defaults.lane?.name.orEmpty(),
+            localRuntime = defaults.localRuntime?.name.orEmpty(),
         )
     },
     quotaAccess = AgentQuotaAccessDto(
@@ -726,6 +733,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             title = task.title,
             prompt = task.prompt,
             agent = task.agent.name,
+            localRuntime = task.localRuntime?.name.orEmpty(),
             projectId = task.projectId.orEmpty(),
             cwd = task.cwd.orEmpty(),
             originDir = task.originDir.orEmpty(),
@@ -853,6 +861,7 @@ private fun ProjectAgentProfileDto.toModel(): ProjectAgentProfile = ProjectAgent
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
+    localRuntime = parseLocalAgentRuntime(localRuntime),
 )
 
 private fun ProjectTaskDto.toModel(): ProjectTask? {
@@ -975,6 +984,7 @@ private fun ProjectAgentProfile.toDto(): ProjectAgentProfileDto = ProjectAgentPr
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd ?: 0.0,
+    localRuntime = localRuntime?.name.orEmpty(),
 )
 
 private fun ProjectTask.toDto(): ProjectTaskDto = ProjectTaskDto(

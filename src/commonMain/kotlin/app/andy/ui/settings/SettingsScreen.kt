@@ -93,7 +93,10 @@ import app.andy.model.ProxyStartOptions
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
 import app.andy.model.acpSupported
+import app.andy.model.agentPickerOptions
 import app.andy.model.defaultLane
+import app.andy.model.hasVendorCli
+import app.andy.model.isLocalModelBackend
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AppUpdateService
@@ -220,6 +223,7 @@ internal fun SettingsScreen(
                     OrchestrationPreferencesPanel(services.orchestrationPreferences, providerModels)
                 }
                 AgentExecutionPreferencesPanel(services)
+                LocalModelsPanel(workspaceState, onUpdateWorkspace)
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
@@ -834,7 +838,13 @@ private fun OrchestrationPreferencesPanel(
             val modelOptions = AgentModelCatalog.options(agent, providerModels)
             val modelLabel = roleSettings.model?.let { model ->
                 AgentModelCatalog.option(agent, model, providerModels)?.label ?: model
-            } ?: "provider default"
+            } ?: if (agent.isLocalModelBackend) "choose a model" else "provider default"
+            val runtime = prefs.runtimeFor(role)
+            val pickerLabel = if (agent.isLocalModelBackend) {
+                "${agent.label} · ${(runtime ?: app.andy.model.LocalAgentRuntime.OpenCode).label}"
+            } else {
+                agent.label
+            }
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
@@ -848,7 +858,7 @@ private fun OrchestrationPreferencesPanel(
                 )
                 Box {
                     SettingsChoicePill(
-                        label = agent.label,
+                        label = pickerLabel,
                         selected = true,
                         contentDescription = "${role.label} provider",
                         onClick = { expandedMenu = role to OrchestrationMenu.Provider },
@@ -858,14 +868,20 @@ private fun OrchestrationPreferencesPanel(
                         onDismissRequest = { expandedMenu = null },
                         containerColor = AndyColors.Neutral750,
                     ) {
-                        AgentKind.entries.forEach { kind ->
+                        agentPickerOptions().forEach { option ->
                             DropdownMenuItem(
-                                text = { Text(kind.label, color = TextPrimary) },
+                                text = { Text(option.label, color = TextPrimary) },
                                 onClick = {
-                                    val next = prefs.withAgent(role, kind)
+                                    val next = prefs.withAgent(role, option.agent).withRuntime(role, option.localRuntime)
                                     val selectedModel = next.settingsFor(role).model
                                     persist(
-                                        if (selectedModel == null || AgentModelCatalog.option(kind, selectedModel, providerModels) != null) {
+                                        if (option.agent.isLocalModelBackend) {
+                                            if (selectedModel != null && AgentModelCatalog.option(option.agent, selectedModel, providerModels) != null) {
+                                                next
+                                            } else {
+                                                next.withModel(role, null)
+                                            }
+                                        } else if (selectedModel == null || AgentModelCatalog.option(option.agent, selectedModel, providerModels) != null) {
                                             next
                                         } else {
                                             next.withModel(role, null)
@@ -890,11 +906,12 @@ private fun OrchestrationPreferencesPanel(
                         containerColor = AndyColors.Neutral750,
                     ) {
                         DropdownMenuItem(
-                            text = { Text("provider default", color = TextPrimary) },
+                            text = { Text(if (agent.isLocalModelBackend) "choose a model" else "provider default", color = TextPrimary) },
                             onClick = {
                                 persist(prefs.withModel(role, null))
                                 expandedMenu = null
                             },
+                            enabled = !agent.isLocalModelBackend,
                         )
                         modelOptions.forEach { option ->
                             DropdownMenuItem(
@@ -975,7 +992,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
             title = "Chat interface",
             description = "Choose how new chats start for each provider. ACP is the default wherever the provider supports it.",
         )
-        AgentKind.entries.forEach { agent ->
+        AgentKind.entries.filter { it.hasVendorCli }.forEach { agent ->
             val selectedLane = providerDefaults[agent]?.lane ?: agent.defaultLane()
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1000,6 +1017,61 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
                     onClick = { services.agentRuns.setProviderLane(agent, AgentLaneKind.Terminal) },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun LocalModelsPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard(Modifier.fillMaxWidth()) {
+        SettingsSectionHeader(
+            title = "Local models",
+            description = "Ollama and LM Studio are OpenAI-compatible backends. Andy launches OpenCode, Pi, or Goose against these URLs — it does not start the servers.",
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Ollama", color = TextPrimary, fontSize = 13.sp)
+            Text("Base URL", color = TextSecondary, fontSize = 12.sp)
+            TextField(
+                workspace.ollamaBaseUrl,
+                { value -> update { it.copy(ollamaBaseUrl = value) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+                placeholder = { Text(app.andy.model.DefaultOllamaBaseUrl, color = TextSecondary) },
+            )
+            Text("Bearer token (optional)", color = TextSecondary, fontSize = 12.sp)
+            TextField(
+                workspace.ollamaBearerToken,
+                { value -> update { it.copy(ollamaBearerToken = value) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+            )
+            Text("LM Studio", color = TextPrimary, fontSize = 13.sp)
+            Text("Base URL", color = TextSecondary, fontSize = 12.sp)
+            TextField(
+                workspace.lmStudioBaseUrl,
+                { value -> update { it.copy(lmStudioBaseUrl = value) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+                placeholder = { Text(app.andy.model.DefaultLmStudioBaseUrl, color = TextSecondary) },
+            )
+            Text("Bearer token (optional)", color = TextSecondary, fontSize = 12.sp)
+            TextField(
+                workspace.lmStudioBearerToken,
+                { value -> update { it.copy(lmStudioBearerToken = value) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+            )
         }
     }
 }

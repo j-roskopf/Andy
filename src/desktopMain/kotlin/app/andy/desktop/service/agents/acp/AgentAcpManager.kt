@@ -14,6 +14,7 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.AgentUserInputOption
+import app.andy.model.runtimeKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -58,10 +59,10 @@ class AgentAcpManager(
             entries.remove(task.id, existing)
             existing.artifacts.close()
         }
-        val spec = AcpRegistry.spec(task.agent) ?: error("${task.agent.cliName} has no ACP launcher")
-        val binary = binaryFor(task.agent)
+        val spec = AcpRegistry.specFor(task) ?: error("${task.runtimeKind().cliName} has no ACP launcher")
+        val binary = binaryFor(task.runtimeKind())
         val (knownSkillNames, allowedSkillNames) = withContext(Dispatchers.IO) {
-            val allowed = discoverAgentSkills(task.agent, task.cwd)
+            val allowed = discoverAgentSkills(task.runtimeKind(), task.cwd)
                 .mapTo(linkedSetOf()) { it.name.normalizedAgentCommandName() }
             discoverKnownAgentSkillNames(task.cwd) to allowed
         }

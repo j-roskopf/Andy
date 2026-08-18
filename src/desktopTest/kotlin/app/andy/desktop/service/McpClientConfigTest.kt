@@ -110,4 +110,42 @@ class McpClientConfigTest {
         )
         assertTrue(snippet.contains("""http_headers = { Authorization = "Bearer tok" }"""))
     }
+
+    @Test
+    fun gooseYamlMergesStreamableHttpExtensionAndBearerHeaders() {
+        val merged = McpClientConfig.mergeGooseYaml(
+            """
+            GOOSE_PROVIDER: anthropic
+            extensions:
+              developer:
+                enabled: true
+                type: builtin
+            """.trimIndent(),
+            8565,
+            bearerToken = "secret-token",
+        )
+        assertTrue(merged.contains("GOOSE_PROVIDER: anthropic"))
+        assertTrue(merged.contains("type: builtin"))
+        assertTrue(merged.contains("  andy:"))
+        assertTrue(merged.contains("type: streamable_http"))
+        assertTrue(merged.contains("""uri: "http://127.0.0.1:8565/mcp-http""""))
+        assertTrue(merged.contains("""Authorization: "Bearer secret-token""""))
+        assertTrue(
+            McpClientConfig.getSnippet(McpClientConfig.ClientType.Goose, 8565, bearerToken = "secret-token")
+                .contains("""Authorization: "Bearer secret-token""""),
+        )
+
+        val replaced = McpClientConfig.mergeGooseYaml(merged, 9001)
+        assertEquals(1, Regex("""(?m)^  andy:""").findAll(replaced).count())
+        assertTrue(replaced.contains("""uri: "http://127.0.0.1:9001/mcp-http""""))
+        assertFalse(replaced.contains("8565"))
+    }
+
+    @Test
+    fun gooseConfigFilesIncludeUnixAndMacPaths() {
+        val files = app.andy.desktop.service.agents.gooseConfigFiles(File("/test/home"))
+            .map { it.invariantSeparatorsPath }
+        assertTrue(files.any { it.endsWith(".config/goose/config.yaml") })
+        assertTrue(files.any { it.endsWith("Library/Application Support/Block/goose/config.yaml") })
+    }
 }

@@ -160,6 +160,10 @@ class DesktopWorkspaceStore(
             } ?: AgentMessageDeliveryMode.Immediate,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             collapsedProjectChatIds = props.getProperty("collapsedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
+            ollamaBaseUrl = props.getProperty("ollamaBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().ollamaBaseUrl,
+            ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
+            lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
+            lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
         )
     }.also { mutableState.value = it }
 
@@ -278,6 +282,10 @@ class DesktopWorkspaceStore(
             setProperty("agentMessageDeliveryMode", state.agentMessageDeliveryMode.name)
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
             setProperty("collapsedProjectChatIds", state.collapsedProjectChatIds.joinToString("\n"))
+            setProperty("ollamaBaseUrl", state.ollamaBaseUrl)
+            setProperty("ollamaBearerToken", state.ollamaBearerToken)
+            setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
+            setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         mutableState.value = state

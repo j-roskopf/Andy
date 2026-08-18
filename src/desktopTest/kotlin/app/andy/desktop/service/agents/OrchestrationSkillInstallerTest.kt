@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.hasVendorCli
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,7 +16,7 @@ class OrchestrationSkillInstallerTest {
         }
         try {
             OrchestrationSkillInstaller.ensureInstalled(home)
-            AgentKind.entries.forEach { kind ->
+            AgentKind.entries.filter { it.hasVendorCli }.forEach { kind ->
                 val root = skillRootsFor(kind, workspace = null, home = home, codexHome = File(home, ".codex"))
                     .first()
                 OrchestrationSkillInstaller.skills.forEach { (name, content) ->

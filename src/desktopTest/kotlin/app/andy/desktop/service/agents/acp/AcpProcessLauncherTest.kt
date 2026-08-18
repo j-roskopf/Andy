@@ -144,6 +144,14 @@ class AcpProcessLauncherTest {
         assertEquals(nodeDir.path, pathValue(env))
     }
 
+    @Test
+    fun preflightDiscardsStdinSoAcpAdaptersThatIgnoreVersionCanExit() {
+        val os = System.getProperty("os.name").orEmpty()
+        if (os.startsWith("Windows", ignoreCase = true)) return
+        val builder = ProcessBuilder("true").discardAcpPreflightStdin()
+        assertEquals(File("/dev/null"), builder.redirectInput().file())
+    }
+
     private fun pathValue(env: Map<String, String>): String? =
         env.entries.firstOrNull { it.key.equals("PATH", ignoreCase = true) }?.value
 }

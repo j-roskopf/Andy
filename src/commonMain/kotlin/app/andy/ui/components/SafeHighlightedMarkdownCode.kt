@@ -64,13 +64,23 @@ internal fun SafeMarkdownHighlightedCodeFence(
     showHeader: Boolean,
 ) {
     MarkdownCodeFence(content, node, style) { code, language, codeStyle ->
-        SafeMarkdownHighlightedCode(
-            code = code,
-            language = language,
-            style = codeStyle,
-            highlightsBuilder = highlightsBuilder,
-            showHeader = showHeader,
-        )
+        if (isMermaidFenceLanguage(language)) {
+            MermaidFence(
+                code = code,
+                language = language,
+                style = codeStyle,
+                highlightsBuilder = highlightsBuilder,
+                showHeader = showHeader,
+            )
+        } else {
+            SafeMarkdownHighlightedCode(
+                code = code,
+                language = language,
+                style = codeStyle,
+                highlightsBuilder = highlightsBuilder,
+                showHeader = showHeader,
+            )
+        }
     }
 }
 
@@ -83,18 +93,28 @@ internal fun SafeMarkdownHighlightedCodeBlock(
     showHeader: Boolean,
 ) {
     MarkdownCodeBlock(content, node, style) { code, language, codeStyle ->
-        SafeMarkdownHighlightedCode(
-            code = code,
-            language = language,
-            style = codeStyle,
-            highlightsBuilder = highlightsBuilder,
-            showHeader = showHeader,
-        )
+        if (isMermaidFenceLanguage(language)) {
+            MermaidFence(
+                code = code,
+                language = language,
+                style = codeStyle,
+                highlightsBuilder = highlightsBuilder,
+                showHeader = showHeader,
+            )
+        } else {
+            SafeMarkdownHighlightedCode(
+                code = code,
+                language = language,
+                style = codeStyle,
+                highlightsBuilder = highlightsBuilder,
+                showHeader = showHeader,
+            )
+        }
     }
 }
 
 @Composable
-private fun SafeMarkdownHighlightedCode(
+internal fun SafeMarkdownHighlightedCode(
     code: String,
     language: String?,
     style: TextStyle,

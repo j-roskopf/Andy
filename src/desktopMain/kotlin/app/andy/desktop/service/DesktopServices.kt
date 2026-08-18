@@ -16,6 +16,7 @@ import app.andy.desktop.service.agents.OpenCodeAdapter
 import app.andy.desktop.service.agents.PiAdapter
 import app.andy.desktop.service.agents.HermesAdapter
 import app.andy.desktop.service.agents.OpenClawAdapter
+import app.andy.desktop.service.agents.GooseAdapter
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
@@ -191,6 +192,7 @@ fun createDaemonRuntime(
             AgentKind.Pi to PiAdapter(),
             AgentKind.Hermes to HermesAdapter(),
             AgentKind.OpenClaw to OpenClawAdapter(),
+            AgentKind.Goose to GooseAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,
@@ -453,6 +455,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
             AgentKind.Pi to PiAdapter(),
             AgentKind.Hermes to HermesAdapter(),
             AgentKind.OpenClaw to OpenClawAdapter(),
+            AgentKind.Goose to GooseAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,
@@ -641,6 +644,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
             AgentKind.Pi to PiAdapter(),
             AgentKind.Hermes to HermesAdapter(),
             AgentKind.OpenClaw to OpenClawAdapter(),
+            AgentKind.Goose to GooseAdapter(),
         ),
         worktrees = WorktreeManager(),
         mcp = mcp,

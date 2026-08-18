@@ -33,8 +33,11 @@ import app.andy.andy.generated.resources.agent_codex
 import app.andy.andy.generated.resources.agent_cursor
 import app.andy.andy.generated.resources.agent_opencode
 import app.andy.andy.generated.resources.agent_pi
+import app.andy.andy.generated.resources.agent_goose
 import app.andy.andy.generated.resources.agent_hermes
 import app.andy.andy.generated.resources.agent_openclaw
+import app.andy.andy.generated.resources.agent_ollama
+import app.andy.andy.generated.resources.agent_lmstudio
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
@@ -65,6 +68,9 @@ private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
     AgentKind.Pi -> Res.drawable.agent_pi
     AgentKind.Hermes -> Res.drawable.agent_hermes
     AgentKind.OpenClaw -> Res.drawable.agent_openclaw
+    AgentKind.Goose -> Res.drawable.agent_goose
+    AgentKind.Ollama -> Res.drawable.agent_ollama
+    AgentKind.LMStudio -> Res.drawable.agent_lmstudio
 }
 
 private val PiViolet = Color(0xFFA78BFA)
@@ -78,6 +84,9 @@ internal fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.Pi -> PiViolet
     AgentKind.Hermes -> Color(0xFF32C7B5)
     AgentKind.OpenClaw -> Color(0xFFCB3434)
+    AgentKind.Goose -> Color(0xFFE5E5E5)
+    AgentKind.Ollama -> Color(0xFF14B8A6)
+    AgentKind.LMStudio -> Color(0xFF818CF8)
 }
 
 internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {

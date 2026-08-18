@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
+import app.andy.model.runtimeKind
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.terminal.SCROLLBACK_SESSION_SEPARATOR
 import app.andy.terminal.combineCommittedAndDerivedScrollback
@@ -623,7 +624,7 @@ class AgentTerminalManager(
                     AgentScratchWorkspace.ensureClaudeTrust(cwd)
                 }
             }
-            installStatusSignals(task.agent, cwd, artifactDir)
+            installStatusSignals(task.runtimeKind(), cwd, artifactDir)
             // Drop leftover turn artifacts so a resumed run does not immediately re-publish
             // stale Done / re-open a answered question card.
             File(artifactDir, "status.json").delete()
@@ -719,7 +720,7 @@ class AgentTerminalManager(
             val tracker = AgentStatusTracker(
                 scope = scope,
                 taskId = task.id,
-                agent = task.agent,
+                agent = task.runtimeKind(),
                 artifactDir = artifactDir,
                 session = session,
                 onSnapshot = onStatusSnapshot,

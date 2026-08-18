@@ -30,8 +30,11 @@ class AcpProcessLauncher(
                 val prepared = prepareCommand(spec, binary, preflight = true)
                 val process = ProcessBuilder(prepared.command)
                     .redirectErrorStream(true)
+                    .discardAcpPreflightStdin()
                     .applyLaunchEnv(env, prepared.command, prepared.nodeBinary)
                     .start()
+                // If stdin stayed a pipe, adapters that ignore `--version` (pi-acp) wait forever.
+                runCatching { process.outputStream.close() }
                 val output = StringBuilder()
                 val reader = Thread {
                     runCatching { process.inputStream.bufferedReader().useLines { lines -> lines.forEach { output.appendLine(it) } } }
@@ -86,7 +89,7 @@ class AcpProcessLauncher(
             is AcpLaunchSpec.Npx -> {
                 val runtime = nodeLocator.locate() ?: throw IOException("Node.js/npx was not found")
                 val packageArgs = listOf("-y", "${spec.packageName}@${spec.version}") +
-                    if (preflight) listOf("--version") else emptyList()
+                    if (preflight) listOf("--version") else spec.extraArgs
                 PreparedAcpCommand(
                     command = acpNpxCommand(runtime, packageArgs),
                     nodeBinary = runtime.node,
@@ -99,6 +102,19 @@ private data class PreparedAcpCommand(
     val command: List<String>,
     val nodeBinary: String?,
 )
+
+/**
+ * ACP adapters speak JSON-RPC on stdin. `pi-acp` (and similar) ignore `--version`
+ * and hang on an open pipe — the previous preflight default — until we time out.
+ * Feed EOF from process start so a version probe can actually exit.
+ */
+internal fun ProcessBuilder.discardAcpPreflightStdin(): ProcessBuilder {
+    val os = System.getProperty("os.name").orEmpty()
+    if (!os.startsWith("Windows", ignoreCase = true)) {
+        redirectInput(File("/dev/null"))
+    }
+    return this
+}
 
 private fun ProcessBuilder.applyLaunchEnv(
     env: Map<String, String>,

@@ -9,6 +9,7 @@ import app.andy.model.parseOpenCodeModels
 import app.andy.model.parsePiModels
 import app.andy.model.parseHermesModels
 import app.andy.model.parseOpenClawModels
+import app.andy.model.parseGooseModels
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -29,7 +30,12 @@ internal class ProviderModelProbe {
         AgentKind.Hermes -> runModelsCommand(binary, listOf("models", "list", "--offline", "--json"))?.let(::parseHermesModels)?.takeIf { it.isNotEmpty() }
             ?: runModelsCommand(binary, listOf("models", "list", "--json"))?.let(::parseHermesModels)?.takeIf { it.isNotEmpty() }
         AgentKind.OpenClaw -> runModelsCommand(binary, listOf("models", "list", "--json"))?.let(::parseOpenClawModels)?.takeIf { it.isNotEmpty() }
-        AgentKind.ClaudeCode, AgentKind.Codex -> null
+        AgentKind.Goose -> gooseConfigFiles()
+            .asSequence()
+            .mapNotNull { file -> runCatching { file.readText() }.getOrNull()?.let(::parseGooseModels) }
+            .firstOrNull { it.isNotEmpty() }
+            ?: runModelsCommand(binary, listOf("info", "-v"))?.let(::parseGooseModels)?.takeIf { it.isNotEmpty() }
+        AgentKind.ClaudeCode, AgentKind.Codex, AgentKind.Ollama, AgentKind.LMStudio -> null
     }
 
     private fun runModelsCommand(binary: String, args: List<String>): String? = runCatching {
@@ -57,4 +63,13 @@ internal class ProviderModelProbe {
         if (process.exitValue() != 0) return null
         output.toString().takeIf { it.isNotBlank() }
     }.getOrNull()
+}
+
+internal fun gooseConfigFiles(home: File = File(System.getProperty("user.home"))): List<File> {
+    val xdg = System.getenv("XDG_CONFIG_HOME")?.takeIf { it.isNotBlank() }
+    return listOfNotNull(
+        xdg?.let { File(it, "goose/config.yaml") },
+        File(home, ".config/goose/config.yaml"),
+        File(home, "Library/Application Support/Block/goose/config.yaml"),
+    ).distinctBy { it.absolutePath }
 }

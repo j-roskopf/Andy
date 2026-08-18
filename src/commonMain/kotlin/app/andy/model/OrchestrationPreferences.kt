@@ -24,12 +24,15 @@ data class OrchestrationRoleSettings(
     val model: String? = null,
     /** Null keeps the parent task's permission dial (or Standard for a root task). */
     val autonomy: String? = null,
+    /** OpenCode / Pi / Goose when the role provider is Ollama or LM Studio. */
+    val runtime: String? = null,
 ) {
     fun normalized(): OrchestrationRoleSettings = copy(
         model = model?.trim()?.takeIf { it.isNotEmpty() },
         autonomy = autonomy
             ?.trim()
             ?.let { value -> AgentAutonomy.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }?.name },
+        runtime = parseLocalAgentRuntime(runtime)?.name,
     )
 }
 
@@ -68,7 +71,7 @@ data class OrchestrationPreferences(
     ): OrchestrationPreferences {
         val normalized = roleSettings.normalized()
         val next = settings.toMutableMap()
-        if (normalized.model == null && normalized.autonomy == null) {
+        if (normalized.model == null && normalized.autonomy == null && normalized.runtime == null) {
             next.remove(role.key)
         } else {
             next[role.key] = normalized
@@ -81,6 +84,12 @@ data class OrchestrationPreferences(
 
     fun withAutonomy(role: OrchestrationProviderRole, autonomy: AgentAutonomy?): OrchestrationPreferences =
         withSettings(role, settingsFor(role).copy(autonomy = autonomy?.name))
+
+    fun runtimeFor(role: OrchestrationProviderRole): LocalAgentRuntime? =
+        parseLocalAgentRuntime(settingsFor(role).runtime)
+
+    fun withRuntime(role: OrchestrationProviderRole, runtime: LocalAgentRuntime?): OrchestrationPreferences =
+        withSettings(role, settingsFor(role).copy(runtime = runtime?.name))
 
     fun withPreferenceNotes(notes: List<String>): OrchestrationPreferences =
         copy(preferences = notes.map { it.trim() }.filter { it.isNotEmpty() })

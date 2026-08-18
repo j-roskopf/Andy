@@ -47,7 +47,8 @@ fun installStatusSignals(
         AgentKind.Antigravity -> installAntigravityStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.OpenCode -> installOpenCodeStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Pi -> installPiStatusHooks(worktreeOrCwd, artifactDir)
-        AgentKind.Hermes, AgentKind.OpenClaw -> Unit
+        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Ollama, AgentKind.LMStudio -> Unit
     }
 }
 

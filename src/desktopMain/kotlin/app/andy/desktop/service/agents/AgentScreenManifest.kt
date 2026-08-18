@@ -227,6 +227,8 @@ internal fun screenManifestFor(agent: AgentKind): List<ScreenRule> = when (agent
     AgentKind.Pi -> PiScreenManifest
     AgentKind.Hermes -> HermesScreenManifest
     AgentKind.OpenClaw -> OpenClawScreenManifest
+    AgentKind.Goose -> GooseScreenManifest
+    AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
 }
 
 // region Ported Herdr manifests (+ Andy extras)
@@ -894,6 +896,50 @@ private val OpenClawScreenManifest: List<ScreenRule> = listOf(
     ScreenRule("prompt_idle", ScreenState.Idle, 50, ScreenRegion.BottomNonEmpty(5), ScreenGate(any = listOf(
         ScreenGate(lineRegex = listOf(Regex("""^\s*[❯›>]\s*$"""))), ScreenGate(contains = listOf("send a message")),
     )), visibleIdle = true),
+)
+
+private val GooseScreenManifest: List<ScreenRule> = listOf(
+    ScreenRule(
+        "approval_prompt",
+        ScreenState.Blocked,
+        300,
+        ScreenRegion.BottomNonEmpty(12),
+        ScreenGate(
+            any = listOf(
+                ScreenGate(contains = listOf("allow this")),
+                ScreenGate(contains = listOf("approve")),
+                ScreenGate(contains = listOf("permission")),
+            ),
+        ),
+        visibleBlocker = true,
+    ),
+    ScreenRule(
+        "working_feed",
+        ScreenState.Working,
+        100,
+        ScreenRegion.BottomNonEmpty(10),
+        ScreenGate(
+            any = listOf(
+                ScreenGate(contains = listOf("thinking")),
+                ScreenGate(contains = listOf("working")),
+                ScreenGate(contains = listOf("interrupt")),
+            ),
+        ),
+        visibleWorking = true,
+    ),
+    ScreenRule(
+        "prompt_idle",
+        ScreenState.Idle,
+        50,
+        ScreenRegion.BottomNonEmpty(5),
+        ScreenGate(
+            any = listOf(
+                ScreenGate(lineRegex = listOf(Regex("""^\s*[❯›>]\s*$"""))),
+                ScreenGate(contains = listOf("(o) more")),
+            ),
+        ),
+        visibleIdle = true,
+    ),
 )
 
 // endregion

@@ -686,7 +686,25 @@ internal object ScreenshotServices {
     }
 
     private object ScreenshotAgentRuns : AgentRunService {
-        private val task = AgentTask("task-1", "Tighten checkout validation", "Fix the empty postal code validation and add a regression test.", AgentKind.Codex, "garden", "/workspace/sample-app", "/workspace/sample-app", status = AgentStatus.Done, createdAtMillis = now - 40_000, startedAtMillis = now - 39_000, finishedAtMillis = now - 3_000, totalCostUsd = 0.18, inputTokens = 2_420, outputTokens = 860, contextTokens = 12_400, contextWindowTokens = 128_000, unread = true)
+        private val task = AgentTask(
+            id = "task-1",
+            title = "Tighten checkout validation",
+            prompt = "Fix the empty postal code validation and add a regression test.",
+            agent = AgentKind.Codex,
+            projectId = "garden",
+            cwd = "/workspace/sample-app",
+            originDir = "/workspace/sample-app",
+            status = AgentStatus.Done,
+            createdAtMillis = now - 40_000,
+            startedAtMillis = now - 39_000,
+            finishedAtMillis = now - 3_000,
+            totalCostUsd = 0.18,
+            inputTokens = 2_420,
+            outputTokens = 860,
+            contextTokens = 12_400,
+            contextWindowTokens = 128_000,
+            unread = true,
+        )
         override val tasks = MutableStateFlow(listOf(task))
         override val cliStatuses = MutableStateFlow(AgentKind.entries.map { AgentCliStatus(it, "/usr/local/bin/${it.cliName}", "1.0.0") })
         override val providerModels = MutableStateFlow(emptyMap<AgentKind, List<app.andy.model.AgentModelOption>>())
@@ -694,6 +712,9 @@ internal object ScreenshotServices {
         override val quotaAccess = MutableStateFlow(AgentQuotaAccess())
         override val providerDefaults = MutableStateFlow(mapOf(AgentKind.Codex to AgentProviderDefaults(model = "gpt-5.2-codex", reasoningEffort = AgentReasoningEffort.High)))
         override val lastUsedAgent = MutableStateFlow<AgentKind?>(AgentKind.Codex)
+        override val localModelBackends = MutableStateFlow(
+            mapOf(AgentKind.Ollama to true, AgentKind.LMStudio to true),
+        )
         override suspend fun refreshProviderQuotas() = Unit
         override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
         override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(listOf(AgentSkill("compose-expert", "Compose UI guidance", "/skills/compose-expert/SKILL.md")))

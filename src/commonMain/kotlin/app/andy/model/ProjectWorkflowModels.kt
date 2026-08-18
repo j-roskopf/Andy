@@ -55,6 +55,7 @@ data class ProjectAgentProfile(
     val useWorktree: Boolean = false,
     val attachAndyMcp: Boolean = false,
     val maxBudgetUsd: Double? = null,
+    val localRuntime: LocalAgentRuntime? = null,
 )
 
 /** Resolves the sandbox mode actually in effect, falling back to the autonomy dial's default. */
@@ -222,4 +223,5 @@ fun AgentProviderDefaults.toProjectProfile(agent: AgentKind): ProjectAgentProfil
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
+    localRuntime = localRuntime,
 )

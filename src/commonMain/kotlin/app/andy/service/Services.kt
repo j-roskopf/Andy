@@ -431,6 +431,7 @@ interface ActionRunService {
 
 /** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
 private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+private val NoLocalModelBackends: StateFlow<Map<AgentKind, Boolean>> = MutableStateFlow(emptyMap())
 
 interface AgentRunService {
     val tasks: StateFlow<List<AgentTask>>
@@ -453,6 +454,12 @@ interface AgentRunService {
     fun setProviderLane(agent: AgentKind, lane: app.andy.model.AgentLaneKind) = Unit
     /** Provider used most recently for a chat, used as the next composer selection. */
     val lastUsedAgent: StateFlow<AgentKind?>
+    /**
+     * Reachability of Andy Settings URLs for Ollama / LM Studio (`GET /v1/models`).
+     * Combo rows also require the selected runtime CLI.
+     */
+    val localModelBackends: StateFlow<Map<AgentKind, Boolean>>
+        get() = NoLocalModelBackends
     /**
      * Skills this provider will load for a task rooted at [directory]. The provider's
      * native global and workspace skill locations are discovered independently, so

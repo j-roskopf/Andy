@@ -2,7 +2,7 @@
 
 Andy’s center of gravity is a headless daemon that owns agent/project state.
 Terminal-lane agents (Antigravity, Hermes, OpenClaw, …) run in Andy-managed
-tmux sessions; ACP-lane agents (Claude Code, Codex, Cursor, OpenCode, Pi) use a
+tmux sessions; ACP-lane agents (Claude Code, Codex, Cursor, OpenCode, Pi, Goose) use a
 structured protocol subprocess and a JSONL transcript. The Compose GUI and the
 Rust CLI are equal clients over a Unix domain socket — `andy attach` routes to
 tmux or the native ACP viewer by lane.
@@ -218,7 +218,7 @@ andy attach <taskId>
 ```
 
 This opens the lane-appropriate viewer: the native ACP chat UI for Claude Code /
-Codex / Cursor / OpenCode / Pi, or a live tmux pane for Terminal-lane agents
+Codex / Cursor / OpenCode / Pi / Goose, or a live tmux pane for Terminal-lane agents
 (with quiet provider reattach when needed, same as GUI reattach). `andy tui`
 lists chats grouped by project — press **Enter** / **a** to attach without
 remembering a task id.
@@ -320,7 +320,7 @@ In addition to the existing device tools:
 
 ## Agent transport lanes
 
-Claude Code, Codex, Cursor, OpenCode, and Pi default to the ACP stdio lane. ACP
+Claude Code, Codex, Cursor, OpenCode, Pi, and Goose default to the ACP stdio lane. ACP
 sessions use the official Kotlin ACP client, persist structured JSONL transcripts
 under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep an ACP session id that
 Andy also mirrors into `vendorSessionId` when possible so **External** can open a

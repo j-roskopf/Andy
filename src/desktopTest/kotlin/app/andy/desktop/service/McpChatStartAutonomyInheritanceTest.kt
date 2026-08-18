@@ -43,6 +43,7 @@ import java.nio.channels.SocketChannel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class McpChatStartAutonomyInheritanceTest {
     @Test
@@ -75,6 +76,53 @@ class McpChatStartAutonomyInheritanceTest {
             )
             assertFalse(isError, text)
             assertEquals(AgentAutonomy.Full, fake.startCalls.single().draft.autonomy)
+        }
+    }
+
+    @Test
+    fun chatStartRequiresRuntimeAndModelForOllama() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Standard) { fake, socket ->
+            val (missingRuntime, runtimeText) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("use local llama"),
+                    "agent" to JsonPrimitive("Ollama"),
+                    "model" to JsonPrimitive("llama3.2"),
+                ),
+            )
+            assertTrue(missingRuntime, runtimeText)
+            assertTrue("runtime is required" in runtimeText, runtimeText)
+            assertTrue(fake.startCalls.isEmpty())
+
+            val (missingModel, modelText) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("use local llama"),
+                    "agent" to JsonPrimitive("Ollama"),
+                    "runtime" to JsonPrimitive("Goose"),
+                ),
+            )
+            assertTrue(missingModel, modelText)
+            assertTrue("model is required" in modelText, modelText)
+            assertTrue(fake.startCalls.isEmpty())
+
+            val (ok, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("use local llama"),
+                    "agent" to JsonPrimitive("Ollama"),
+                    "runtime" to JsonPrimitive("Goose"),
+                    "model" to JsonPrimitive("llama3.2"),
+                ),
+            )
+            assertFalse(ok, text)
+            val draft = fake.startCalls.single().draft
+            assertEquals(AgentKind.Ollama, draft.agent)
+            assertEquals(app.andy.model.LocalAgentRuntime.Goose, draft.localRuntime)
+            assertEquals("ollama/llama3.2", draft.model)
         }
     }
 

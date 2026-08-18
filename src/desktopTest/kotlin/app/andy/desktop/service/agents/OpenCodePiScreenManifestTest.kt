@@ -60,4 +60,27 @@ class OpenCodePiScreenManifestTest {
         )
         assertEquals(ScreenState.Idle, idle.state)
     }
+
+    @Test
+    fun gooseDetectsApprovalThinkingAndIdle() {
+        val blocked = evaluateScreenManifest(
+            AgentKind.Goose,
+            DetectionInput(screen = "Allow this tool call?\n(y) yes  (n) no\n"),
+        )
+        assertEquals(ScreenState.Blocked, blocked.state)
+        assertTrue(blocked.visibleBlocker)
+
+        val working = evaluateScreenManifest(
+            AgentKind.Goose,
+            DetectionInput(screen = "thinking...\nesc to interrupt\n"),
+        )
+        assertEquals(ScreenState.Working, working.state)
+
+        val idle = evaluateScreenManifest(
+            AgentKind.Goose,
+            DetectionInput(screen = "goose · anthropic/claude-sonnet-4-5\n(o) more\n>\n"),
+        )
+        assertEquals(ScreenState.Idle, idle.state)
+        assertTrue(idle.visibleIdle)
+    }
 }

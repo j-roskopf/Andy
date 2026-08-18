@@ -9,7 +9,11 @@ import app.andy.model.AgentLaneKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTaskDraft
 import app.andy.model.acpSupported
+import app.andy.model.isLocalModelBackend
+import app.andy.model.localModelLaunchError
 import app.andy.model.mergedComposerSlashCommands
+import app.andy.model.parseLocalAgentRuntime
+import app.andy.model.prefixedLocalModelId
 import app.andy.service.ActionConfigStore
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
@@ -147,7 +151,7 @@ internal fun Application.installWebChatRoutes(
                 if (!agent.acpSupported) {
                     return@get call.respondJsonError(
                         HttpStatusCode.BadRequest,
-                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi)",
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
                     )
                 }
                 agents.refreshSlashCommands(agent, directory)
@@ -307,7 +311,7 @@ internal fun Application.installWebChatRoutes(
                     .getOrElse {
                         return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                     }
-                for (field in listOf("prompt", "agent", "directory", "autonomy", "title", "projectId")) {
+                for (field in listOf("prompt", "agent", "directory", "autonomy", "title", "projectId", "model", "runtime")) {
                     val el = body[field] ?: continue
                     if (el.asJsonStringOrNull() == null && el !is JsonNull) {
                         return@post call.respondJsonError(
@@ -338,7 +342,7 @@ internal fun Application.installWebChatRoutes(
                 if (!agent.acpSupported) {
                     return@post call.respondJsonError(
                         HttpStatusCode.BadRequest,
-                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi)",
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
                     )
                 }
                 val autonomy = if (autonomyName.isBlank()) {
@@ -362,16 +366,24 @@ internal fun Application.installWebChatRoutes(
                             null
                         }
                     }?.takeIf { it.isNotBlank() }
-                val task = agents.createAndStart(
-                    AgentTaskDraft(
+                val runtime = parseLocalAgentRuntime(body.requiredString("runtime")?.trim())
+                val model = body.requiredString("model")?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
+                    if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
+                }
+                val draft = AgentTaskDraft(
                         title = title?.takeIf { it.isNotBlank() } ?: prompt.take(48),
                         prompt = prompt,
                         agent = agent,
+                        localRuntime = runtime,
                         projectId = projectId,
                         directory = resolvedDirectory,
                         autonomy = autonomy,
-                    ),
-                )
+                        model = model,
+                    )
+                draft.localModelLaunchError()?.let { message ->
+                    return@post call.respondJsonError(HttpStatusCode.BadRequest, message)
+                }
+                val task = agents.createAndStart(draft)
                 if (task.status == AgentStatus.Error) {
                     call.respondText(
                         buildJsonObject {

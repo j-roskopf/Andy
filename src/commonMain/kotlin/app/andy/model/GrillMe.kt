@@ -13,6 +13,8 @@ private fun AgentKind.grillMeSkillsAgent(): String = when (this) {
     AgentKind.Pi -> "pi"
     AgentKind.Hermes -> "hermes"
     AgentKind.OpenClaw -> "openclaw"
+    AgentKind.Goose -> "goose"
+    AgentKind.Ollama, AgentKind.LMStudio -> "opencode"
 }
 
 internal fun isGrillMeSkillName(name: String): Boolean =

@@ -76,6 +76,13 @@ import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
 import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
+import app.andy.model.AgentPickerOption
+import app.andy.model.LocalAgentRuntime
+import app.andy.model.agentPickerOptions
+import app.andy.model.comboReady
+import app.andy.model.isLocalModelBackend
+import app.andy.model.prefixedLocalModelId
+import app.andy.model.runtimeKind
 import app.andy.model.composerSkillsForSlashMenu
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.AgentProviderDefaults
@@ -269,6 +276,7 @@ private class AgentTaskComposerFormState(
     var imagePaths by mutableStateOf<List<String>>(emptyList())
     var imageDragActive by mutableStateOf(false)
     var agent by mutableStateOf(initialAgent)
+    var localRuntime by mutableStateOf<LocalAgentRuntime?>(null)
     var providerChosenInComposer by mutableStateOf(false)
     var customDirectory by mutableStateOf("")
     var usesCustomDirectory by mutableStateOf(false)
@@ -322,6 +330,10 @@ private class AgentTaskComposerFormState(
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
+        localRuntime = when {
+            !agent.isLocalModelBackend -> null
+            else -> localRuntime ?: defaults?.localRuntime ?: LocalAgentRuntime.OpenCode
+        }
     }
 }
 
@@ -330,6 +342,7 @@ private fun AgentTaskComposerFormState.providerProfile(): ProjectAgentProfile = 
     model = if (usesCustomModel) customModel else modelId,
     reasoningEffort = reasoningEffort,
     fastMode = fastMode,
+    localRuntime = localRuntime,
 )
 
 private fun AgentTaskComposerFormState.applyProviderProfile(
@@ -338,6 +351,7 @@ private fun AgentTaskComposerFormState.applyProviderProfile(
 ) {
     providerChosenInComposer = true
     agent = profile.agent
+    localRuntime = profile.localRuntime
     val catalogModel = AgentModelCatalog.option(profile.agent, profile.model, discovered)
     modelId = when {
         profile.model == null -> null
@@ -358,6 +372,7 @@ private fun rememberAgentTaskComposerForm(
     val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
     val providerModels by services.agentRuns.providerModels.collectAsState()
     val lastUsedAgent by services.agentRuns.lastUsedAgent.collectAsState()
+    val localBackends by services.agentRuns.localModelBackends.collectAsState()
     val scope = rememberCoroutineScope()
     val formsByProject = remember { mutableMapOf<String?, AgentTaskComposerFormState>() }
     val projectKey = projectContext?.id
@@ -367,19 +382,21 @@ private fun rememberAgentTaskComposerForm(
 
     val directory = projectContext?.contextDir
         ?: state.customDirectory.takeIf { state.usesCustomDirectory && it.isNotBlank() }
-    val availableSkills by remember(state.agent, directory) {
-        services.agentRuns.skills(state.agent, directory)
+    val runtimeKind = state.agent.runtimeKind(state.localRuntime)
+    val availableSkills by remember(runtimeKind, directory) {
+        services.agentRuns.skills(runtimeKind, directory)
     }.collectAsState()
-    val providerSlashCommands by remember(state.agent, directory) {
-        services.agentRuns.slashCommands(state.agent, directory)
+    val providerSlashCommands by remember(runtimeKind, directory) {
+        services.agentRuns.slashCommands(runtimeKind, directory)
     }.collectAsState()
-    val availableCommands = remember(state.agent, providerSlashCommands) {
-        mergedComposerSlashCommands(state.agent, providerSlashCommands)
+    val availableCommands = remember(runtimeKind, providerSlashCommands) {
+        mergedComposerSlashCommands(runtimeKind, providerSlashCommands)
     }
-    LaunchedEffect(state.agent, directory) {
-        services.agentRuns.refreshSlashCommands(state.agent, directory)
+    LaunchedEffect(runtimeKind, directory) {
+        services.agentRuns.refreshSlashCommands(runtimeKind, directory)
     }
-    val selectedCliAvailable = cliStatuses.any { it.kind == state.agent && it.ready }
+    val selectedOption = AgentPickerOption(state.agent, state.localRuntime.takeIf { state.agent.isLocalModelBackend })
+    val selectedCliAvailable = selectedOption.comboReady(cliStatuses, localBackends)
     val showModelSection = state.providerChosenInComposer && selectedCliAvailable
     val modelOptions = AgentModelCatalog.options(state.agent, providerModels)
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId, providerModels)
@@ -413,21 +430,33 @@ private fun rememberAgentTaskComposerForm(
         availableSkills.filter { skill -> state.prompt.referencesComposerSkill(skill) }
     }
     val validBudget = state.budgetText.toMaxBudgetUsd()
+    val localModelChosen = !state.agent.isLocalModelBackend ||
+        (state.localRuntime != null && (
+            (state.usesCustomModel && state.customModel.isNotBlank()) ||
+                (!state.usesCustomModel && !state.modelId.isNullOrBlank())
+            ))
     val canSubmit = (state.prompt.isNotBlank() || state.imagePaths.isNotEmpty()) &&
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         (state.budgetText.isBlank() || validBudget != null) &&
-        cliStatuses.any { it.kind == state.agent && it.ready }
+        selectedCliAvailable &&
+        localModelChosen
 
-    LaunchedEffect(lastUsedAgent, cliStatuses, projectKey) {
+    LaunchedEffect(lastUsedAgent, cliStatuses, localBackends, projectKey, providerDefaults) {
         if (!state.providerChosenInComposer) {
-            val preferred = lastUsedAgent?.takeIf { preferred ->
-                cliStatuses.any { it.kind == preferred && it.ready }
+            val preferred = lastUsedAgent
+            val preferredRuntime = preferred?.let { kind ->
+                providerDefaults[kind]?.localRuntime
+                    ?: LocalAgentRuntime.OpenCode.takeIf { kind.isLocalModelBackend }
             }
-            if (preferred != null) {
-                state.agent = preferred
+            val preferredOption = preferred?.let { AgentPickerOption(it, preferredRuntime) }
+            if (preferredOption != null && preferredOption.comboReady(cliStatuses, localBackends)) {
+                state.agent = preferredOption.agent
+                state.localRuntime = preferredOption.localRuntime
                 state.providerChosenInComposer = true
             } else {
-                state.agent = cliStatuses.firstOrNull { it.ready }?.kind ?: AgentKind.ClaudeCode
+                val fallback = agentPickerOptions().firstOrNull { it.comboReady(cliStatuses, localBackends) }
+                state.agent = fallback?.agent ?: AgentKind.ClaudeCode
+                state.localRuntime = fallback?.localRuntime
             }
         }
     }
@@ -481,6 +510,7 @@ private fun rememberAgentTaskComposerForm(
         state = state,
         services = services,
         cliStatuses = cliStatuses,
+        localBackends = localBackends,
         providerModels = providerModels,
         modelOptions = modelOptions,
         projectContext = projectContext,
@@ -504,6 +534,7 @@ private class AgentTaskComposerForm(
     val state: AgentTaskComposerFormState,
     val services: AndyServices,
     val cliStatuses: List<AgentCliStatus>,
+    val localBackends: Map<AgentKind, Boolean>,
     val providerModels: Map<AgentKind, List<AgentModelOption>>,
     val modelOptions: List<AgentModelOption>,
     val projectContext: ActionProject?,
@@ -529,6 +560,7 @@ private class AgentTaskComposerForm(
             title = "",
             prompt = goalCommand?.remainingPrompt?.ifBlank { goalCommand.goal.orEmpty() } ?: state.prompt.trim(),
             agent = state.agent,
+            localRuntime = state.localRuntime,
             projectId = projectContext?.id,
             directory = directory?.trim()?.takeIf { it.isNotBlank() },
             useWorktree = state.useWorktree,
@@ -538,7 +570,8 @@ private class AgentTaskComposerForm(
             sandboxMode = state.sandboxMode,
             planMode = state.planMode,
             confirmToolCalls = state.confirmToolCalls,
-            model = if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId,
+            model = (if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId)
+                ?.let { if (state.agent.isLocalModelBackend) prefixedLocalModelId(state.agent, it) else it },
             reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
             fastMode = if (state.usesCustomModel) false else state.fastMode,
             openClawNewSession = state.openClawNewSession,
@@ -817,7 +850,10 @@ private fun AgentChatComposer(
         val leadingControls: @Composable () -> Unit = {
                     Box {
                         ComposerChip(
-                            text = state.agent.label,
+                            text = AgentPickerOption(
+                                state.agent,
+                                state.localRuntime.takeIf { state.agent.isLocalModelBackend },
+                            ).label,
                             selected = true,
                             onClick = { agentMenuExpanded = true },
                             leadingContent = { AgentPillIcon(state.agent) },
@@ -827,23 +863,25 @@ private fun AgentChatComposer(
                             // unavailable provider should still be discoverable here.
                             // It remains disabled until its CLI is available, so a task
                             // cannot be launched with an unusable provider.
-                            AgentKind.entries.forEach { agent ->
-                                val status = form.cliStatuses.firstOrNull { it.kind == agent }
-                                val ready = status?.ready == true || form.cliStatuses.isEmpty()
+                            agentPickerOptions().forEach { option ->
+                                val ready = option.comboReady(form.cliStatuses, form.localBackends)
                                 DropdownMenuItem(
                                     text = {
                                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            AgentPillIcon(agent)
+                                            AgentPillIcon(option.agent)
                                             Text(
-                                                "${agent.label}${if (ready) "" else " · ${if (status?.issue != null) "needs repair" else "unavailable"}"}",
+                                                "${option.label}${if (ready) "" else " · ${if (!option.agent.isLocalModelBackend && form.cliStatuses.firstOrNull { it.kind == option.agent }?.issue != null) "needs repair" else "unavailable"}"}",
                                                 color = TextPrimary,
                                             )
                                         }
                                     },
                                     enabled = ready,
                                     onClick = {
+                                        val agentChanged = state.agent != option.agent
                                         state.providerChosenInComposer = true
-                                        state.agent = agent
+                                        state.agent = option.agent
+                                        state.localRuntime = option.localRuntime
+                                        if (agentChanged) state.defaultsSeededForAgent = null
                                         agentMenuExpanded = false
                                     },
                                 )
@@ -862,13 +900,15 @@ private fun AgentChatComposer(
                             onClick = { modelMenuExpanded = true },
                         )
                         DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
-                            DropdownMenuItem(
-                                text = { Text("provider default", color = TextPrimary) },
-                                onClick = {
-                                    state.modelId = null
-                                    modelMenuExpanded = false
-                                },
-                            )
+                            if (!state.agent.isLocalModelBackend) {
+                                DropdownMenuItem(
+                                    text = { Text("provider default", color = TextPrimary) },
+                                    onClick = {
+                                        state.modelId = null
+                                        modelMenuExpanded = false
+                                    },
+                                )
+                            }
                             if (state.agent == AgentKind.Cursor) {
                                 form.modelOptions.groupedByModelFamily().forEach { (family, options) ->
                                     DropdownMenuItem(
@@ -954,12 +994,12 @@ private fun AgentChatComposer(
                     Box {
                         val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
                         ComposerChip(
-                            text = sandbox.labelFor(state.agent),
+                            text = sandbox.labelFor(state.agent.runtimeKind(state.localRuntime)),
                             selected = true,
                             onClick = { sandboxMenuExpanded = true },
                         )
                         DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
-                            AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
+                            AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
                         }
                     }
                     if (state.directoryIsGitRepo) {
@@ -1058,6 +1098,7 @@ private fun AgentTaskComposerFields(
                 onChange = { state.applyProviderProfile(it, form.providerModels) },
                 cliStatuses = form.cliStatuses,
                 providerModels = form.providerModels,
+                localBackends = form.localBackends,
                 providerSelectionActive = state.providerChosenInComposer,
                 showModelControls = false,
             )
@@ -1074,6 +1115,7 @@ private fun AgentTaskComposerFields(
                     onChange = { state.applyProviderProfile(it, form.providerModels) },
                     cliStatuses = form.cliStatuses,
                     providerModels = form.providerModels,
+                    localBackends = form.localBackends,
                     showProviderControls = false,
                     showVersion = true,
                     showModelHelp = true,
@@ -1290,7 +1332,7 @@ private fun AgentTaskComposerFields(
             )
         }
         Text(
-            "${state.agent.label} ${state.agent.sandboxControlLabel()}",
+            "${state.agent.runtimeKind(state.localRuntime).label} ${state.agent.runtimeKind(state.localRuntime).sandboxControlLabel()}",
             color = TextSecondary,
             fontFamily = MonoFont,
             fontWeight = FontWeight.SemiBold,
@@ -1298,13 +1340,13 @@ private fun AgentTaskComposerFields(
         )
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AgentSandboxMode.entries.forEach { mode ->
-                FilterPill(mode.labelFor(state.agent), state.sandboxMode == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) {
+                FilterPill(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), state.sandboxMode == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) {
                     state.sandboxMode = mode
                 }
             }
         }
         Text(
-            (state.sandboxMode ?: state.autonomy.defaultSandboxMode()).descriptionFor(state.agent),
+            (state.sandboxMode ?: state.autonomy.defaultSandboxMode()).descriptionFor(state.agent.runtimeKind(state.localRuntime)),
             color = TextSecondary,
             fontFamily = MonoFont,
             fontSize = 10.sp,

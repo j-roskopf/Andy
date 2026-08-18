@@ -117,7 +117,7 @@ Track work on a drag-and-drop board from the Kanban tab under Projects. Andy sta
 
 ### Agents
 
-Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, or OpenClaw from Andy. Compose prompts with images and `/` skills, choose model, autonomy, and provider sandbox/approvals, optionally isolate the run in a git worktree, toggle plan mode, set a persistent `/goal` (Codex and Claude Code), and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript (thinking, tools, cost/tokens), review file diffs when the task finishes, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
+Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, or Goose from Andy. Compose prompts with images and `/` skills, choose model, autonomy, and provider sandbox/approvals, optionally isolate the run in a git worktree, toggle plan mode, set a persistent `/goal` (Codex and Claude Code), and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript (thinking, tools, cost/tokens), review file diffs when the task finishes, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
 
 ### Controls
 
@@ -153,7 +153,7 @@ An "Explain…" action sits beside a selected crash, network exchange, hierarchy
 
 ### Settings
 
-Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, VS Code, and Windsurf.
+Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf.
 
 ### Updates
 
@@ -341,7 +341,7 @@ Open a new terminal after install if `cargo` is still not found.
 - Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
   managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
   or the desktop app). Override with `ANDY_TMUX` if needed.
-- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), or OpenClaw (`openclaw`).
+- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`).
 
 ## Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>

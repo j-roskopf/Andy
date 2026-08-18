@@ -82,6 +82,7 @@ import app.andy.model.effectiveSandboxMode
 import app.andy.model.grillMeInstallCommand
 import app.andy.model.isGrillMeSkillName
 import app.andy.model.labelFor
+import app.andy.model.runtimeKind
 import app.andy.model.sandboxControlLabel
 import app.andy.formatDecimal
 import app.andy.service.AndyServices
@@ -931,6 +932,7 @@ internal fun SpecTaskDialog(
 ) {
     val scope = rememberCoroutineScope()
     val providerModels by services.agentRuns.providerModels.collectAsState()
+    val localBackends by services.agentRuns.localModelBackends.collectAsState()
     val initialProfile = existing?.profile ?: workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()
     var title by remember(existing?.id, prefilledTitle) { mutableStateOf(existing?.title ?: prefilledTitle) }
     var brief by remember(existing?.id, prefilledBrief) { mutableStateOf(existing?.instructions ?: prefilledBrief) }
@@ -938,7 +940,7 @@ internal fun SpecTaskDialog(
     var imageDragActive by remember(existing?.id) { mutableStateOf(false) }
     var profile by remember(existing?.id) { mutableStateOf(initialProfile) }
     var includeScratchpad by remember(existing?.id) { mutableStateOf(existing?.includeScratchpad ?: false) }
-    val installedSkills by services.agentRuns.skills(profile.agent, project.contextDir).collectAsState()
+    val installedSkills by services.agentRuns.skills(profile.runtimeKind(), project.contextDir).collectAsState()
     val hasPortableGrillSkills = installedSkills.any { isGrillMeSkillName(it.name) }
     var grillMe by remember(existing?.id) { mutableStateOf(existing?.grillMeEnabled == true) }
     AndyAlertDialog(
@@ -993,7 +995,7 @@ internal fun SpecTaskDialog(
                         onImagesAttached = { added -> imagePaths = attachChatImages(imagePaths, added) },
                     )
                 }
-                ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
+                ProjectAgentProfileEditor("SPEC PROFILE", profile, { profile = it }, cliStatuses, providerModels, ProjectTaskKind.Spec, localBackends)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterPill("Include scratchpad", includeScratchpad, Cyan) { includeScratchpad = !includeScratchpad }
@@ -1001,8 +1003,8 @@ internal fun SpecTaskDialog(
                     }
                     if (!hasPortableGrillSkills) {
                         GrillMeInstallHint(
-                            agent = profile.agent,
-                            onRefresh = { services.agentRuns.refreshSkills(profile.agent, project.contextDir) },
+                            agent = profile.runtimeKind(),
+                            onRefresh = { services.agentRuns.refreshSkills(profile.runtimeKind(), project.contextDir) },
                         )
                     }
                 }
@@ -1062,6 +1064,7 @@ internal fun BuildPairDialog(
 ) {
     val scope = rememberCoroutineScope()
     val providerModels by services.agentRuns.providerModels.collectAsState()
+    val localBackends by services.agentRuns.localModelBackends.collectAsState()
     val existing = seed.buildTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
     val linkedReview = existing?.linkedReviewTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
     val linkedVerify = existing?.linkedVerificationTaskId?.let { id -> workflow.tasks.firstOrNull { it.id == id } }
@@ -1157,13 +1160,13 @@ internal fun BuildPairDialog(
                 }
                 LabeledField("Build notes (optional)", buildNotes, { buildNotes = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 90.dp, testTag = "build-notes-field")
                 LabeledField("Reported-cost guardrail in USD (optional)", budgetText, { budgetText = it.filter { char -> char.isDigit() || char == '.' } }, Modifier.fillMaxWidth())
-                ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Build)
+                ProjectAgentProfileEditor("BUILD PROFILE", buildProfile, { buildProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Build, localBackends)
                 FilterPill("Build gets scratchpad snapshot", includeBuildScratchpad, Cyan) { includeBuildScratchpad = !includeBuildScratchpad }
                 FilterPill("Run review before verification", reviewEnabled, AndyColors.Blue) { reviewEnabled = !reviewEnabled }
                 AnimatedVisibility(reviewEnabled) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         LabeledField("Custom review instructions (optional)", reviewInstructions, { reviewInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 100.dp)
-                        ProjectAgentProfileEditor("REVIEW PROFILE · BUILD WORKSPACE INHERITED", reviewProfile, { reviewProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
+                        ProjectAgentProfileEditor("REVIEW PROFILE · BUILD WORKSPACE INHERITED", reviewProfile, { reviewProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Review, localBackends)
                         FilterPill("Reviewer gets scratchpad snapshot", includeReviewScratchpad, AndyColors.Blue) { includeReviewScratchpad = !includeReviewScratchpad }
                         FilterPill("Single review pass (no rebuild loop)", singleReviewPass, Rust) { singleReviewPass = !singleReviewPass }
                     }
@@ -1171,7 +1174,7 @@ internal fun BuildPairDialog(
                 LabeledField("Verification instructions (optional)", verificationInstructions, { verificationInstructions = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
                 AnimatedVisibility(verificationInstructions.isNotBlank()) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Verification)
+                        ProjectAgentProfileEditor("VERIFICATION PROFILE", verifyProfile, { verifyProfile = it }, cliStatuses, providerModels, ProjectTaskKind.Verification, localBackends)
                         FilterPill("Verifier gets scratchpad snapshot", includeVerifyScratchpad, Cyan) { includeVerifyScratchpad = !includeVerifyScratchpad }
                     }
                 }
@@ -1218,6 +1221,7 @@ internal fun ProjectProfilesDialog(
 ) {
     val scope = rememberCoroutineScope()
     val providerModels by services.agentRuns.providerModels.collectAsState()
+    val localBackends by services.agentRuns.localModelBackends.collectAsState()
     var spec by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Spec] ?: ProjectAgentProfile()) }
     var build by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Build] ?: ProjectAgentProfile()) }
     var review by remember(workflow.projectId) { mutableStateOf(workflow.profiles[ProjectTaskKind.Review] ?: ProjectAgentProfile()) }
@@ -1238,10 +1242,10 @@ internal fun ProjectProfilesDialog(
                     }
                 }
                 when (selectedRole) {
-                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN BY DEFAULT", spec, { spec = it }, cliStatuses, providerModels, ProjectTaskKind.Spec)
-                    ProjectTaskKind.Build -> ProjectAgentProfileEditor("BUILD", build, { build = it }, cliStatuses, providerModels, ProjectTaskKind.Build)
-                    ProjectTaskKind.Review -> ProjectAgentProfileEditor("REVIEW · BUILD WORKSPACE INHERITED", review, { review = it }, cliStatuses, providerModels, ProjectTaskKind.Review)
-                    ProjectTaskKind.Verification -> ProjectAgentProfileEditor("VERIFY · BUILD WORKSPACE INHERITED", verify, { verify = it }, cliStatuses, providerModels, ProjectTaskKind.Verification)
+                    ProjectTaskKind.Spec -> ProjectAgentProfileEditor("SPEC · PLAN BY DEFAULT", spec, { spec = it }, cliStatuses, providerModels, ProjectTaskKind.Spec, localBackends)
+                    ProjectTaskKind.Build -> ProjectAgentProfileEditor("BUILD", build, { build = it }, cliStatuses, providerModels, ProjectTaskKind.Build, localBackends)
+                    ProjectTaskKind.Review -> ProjectAgentProfileEditor("REVIEW · BUILD WORKSPACE INHERITED", review, { review = it }, cliStatuses, providerModels, ProjectTaskKind.Review, localBackends)
+                    ProjectTaskKind.Verification -> ProjectAgentProfileEditor("VERIFY · BUILD WORKSPACE INHERITED", verify, { verify = it }, cliStatuses, providerModels, ProjectTaskKind.Verification, localBackends)
                 }
             }
         },
@@ -1268,6 +1272,7 @@ internal fun ProjectAgentProfileEditor(
     cliStatuses: List<AgentCliStatus>,
     providerModels: Map<AgentKind, List<app.andy.model.AgentModelOption>>,
     role: ProjectTaskKind,
+    localBackends: Map<AgentKind, Boolean> = emptyMap(),
 ) {
     PanelCard(
         modifier = Modifier.fillMaxWidth(),
@@ -1281,6 +1286,7 @@ internal fun ProjectAgentProfileEditor(
             onChange = onChange,
             cliStatuses = cliStatuses,
             providerModels = providerModels,
+            localBackends = localBackends,
             showUnavailableAsPills = true,
             showProviderIcons = false,
             showModelControls = false,
@@ -1292,6 +1298,7 @@ internal fun ProjectAgentProfileEditor(
                 onChange = onChange,
                 cliStatuses = cliStatuses,
                 providerModels = providerModels,
+                localBackends = localBackends,
                 showProviderControls = false,
                 showUnavailableAsPills = true,
                 showProviderIcons = false,
@@ -1323,7 +1330,7 @@ internal fun ProjectAgentProfileEditor(
             ) {
                 AgentAutonomy.entries.forEach { autonomy -> FilterPill(autonomy.label, profile.autonomy == autonomy, Cyan) { onChange(profile.copy(autonomy = autonomy)) } }
                 AgentSandboxMode.entries.forEach { mode ->
-                    FilterPill(mode.labelFor(profile.agent), profile.effectiveSandboxMode() == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) { onChange(profile.copy(sandboxMode = mode)) }
+                    FilterPill(mode.labelFor(profile.runtimeKind()), profile.effectiveSandboxMode() == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) { onChange(profile.copy(sandboxMode = mode)) }
                 }
             }
             if (role == ProjectTaskKind.Spec) {
@@ -1348,7 +1355,7 @@ internal fun ProjectAgentProfileEditor(
                 }
             }
         }
-        Text("${profile.agent.sandboxControlLabel()}: ${profile.effectiveSandboxMode().labelFor(profile.agent)}", color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
+        Text("${profile.runtimeKind().sandboxControlLabel()}: ${profile.effectiveSandboxMode().labelFor(profile.runtimeKind())}", color = TextSecondary, fontFamily = MonoFont, fontSize = 9.sp)
     }
 }
 

@@ -138,4 +138,8 @@ data class WorkspaceState(
     val disabledDestinations: Set<String> = emptySet(),
     /** Project ids whose chat lists are collapsed in the Projects sidebar. */
     val collapsedProjectChatIds: Set<String> = emptySet(),
+    val ollamaBaseUrl: String = DefaultOllamaBaseUrl,
+    val ollamaBearerToken: String = "",
+    val lmStudioBaseUrl: String = DefaultLmStudioBaseUrl,
+    val lmStudioBearerToken: String = "",
 )
