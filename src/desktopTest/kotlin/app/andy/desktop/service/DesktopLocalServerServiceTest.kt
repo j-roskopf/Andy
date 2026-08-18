@@ -164,4 +164,46 @@ class DesktopLocalServerServiceTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun processInfoWalksGrandparentPids() = runBlocking {
+        val psPFlags = mutableListOf<String>()
+        val runner = CommandRunner { command, _ ->
+            when (command.firstOrNull()) {
+                "lsof" -> if (command.contains("cwd")) {
+                    CommandResult.success("p300\nn/tmp/app")
+                } else {
+                    CommandResult.success("p300\ncnode\nn127.0.0.1:5173")
+                }
+                "ps" -> {
+                    val pFlag = command.getOrNull(command.indexOf("-p") + 1).orEmpty()
+                    psPFlags += pFlag
+                    val wanted = pFlag.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+                    val rows = buildList {
+                        if ("300" in wanted) add("300 200 node /tmp/app/node_modules/vite/bin/vite.js --port 5173")
+                        if ("200" in wanted) add("200 100 npm run dev")
+                        if ("100" in wanted) add("100 1 bash -lc serve")
+                    }
+                    CommandResult.success(rows.joinToString("\n"))
+                }
+                else -> CommandResult.success("")
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val service = DesktopLocalServerService(
+            runner = runner,
+            agentRuns = UnavailableAgentRunService,
+            actionRuns = UnavailableActionRunService,
+            scope = scope,
+        )
+        try {
+            service.refresh()
+            assertTrue(psPFlags.any { "300" in it }, "listener pid must be queried")
+            assertTrue(psPFlags.any { "200" in it }, "immediate parent must be queried")
+            assertTrue(psPFlags.any { "100" in it }, "grandparent pid must be queried for lineage depth")
+        } finally {
+            service.dispose()
+            scope.cancel()
+        }
+    }
 }

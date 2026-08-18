@@ -303,9 +303,17 @@ internal class ShellState(
             DockTabKind.Logs -> docks = docks.update(placement) { it.withTab(DockTab.logs()) }
             DockTabKind.Terminal -> if (newTerminal) openNewTerminalTab(placement) else openOrFocusTerminal(placement)
             DockTabKind.Browser -> {
-                val tab = DockTab.browser(nextPaneId("browser"))
-                browserPanes = browserPanes + (tab.id to BrowserPaneState())
-                docks = docks.update(placement) { it.withTab(tab) }
+                val existing = docks.existingBrowserTab()?.let { (from, tabId) ->
+                    docks.pane(from).tabs.firstOrNull { it.id == tabId }
+                }
+                val tab = existing ?: DockTab.browser(nextPaneId("browser")).also { created ->
+                    browserPanes = browserPanes + (created.id to BrowserPaneState())
+                }
+                val discarded = (docks.right.tabs + docks.bottom.tabs)
+                    .filter { it.kind == DockTabKind.Browser && it.id != tab.id }
+                    .map { it.id }
+                discarded.forEach { closeBrowserPane(it) }
+                docks = docks.withBrowserExclusive(placement, tab)
             }
         }
     }

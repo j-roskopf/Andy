@@ -220,16 +220,20 @@ class DesktopLocalServerService(
                 byPid.putAll(LocalServerScan.parsePsProcessTable(plain.stdout))
             }
         }
-        // Also walk parents so lineage classification / ANDY_TASK_ID can climb.
-        val parents = byPid.values.map { it.ppid }.filter { it > 1 && it !in byPid }.distinct()
-        if (parents.isNotEmpty()) {
+        // Walk parents iteratively so lineage classification / ANDY_TASK_ID can climb
+        // past wrapper processes (shell -> npm -> node) up to ProcessLineageMaxDepth.
+        repeat(LocalServerScan.ProcessLineageMaxDepth) {
+            val parents = byPid.values.map { it.ppid }.filter { it > 1 && it !in byPid }.distinct()
+            if (parents.isEmpty()) return@repeat
             val parentPs = runner.run(
                 listOf("ps", "eww", "-ww", "-o", "pid=,ppid=,command=", "-p", parents.joinToString(",")),
                 timeoutSeconds = 8,
             )
+            val before = byPid.size
             if (parentPs.isSuccess || parentPs.stdout.isNotBlank()) {
                 byPid.putAll(LocalServerScan.parsePsProcessTable(parentPs.stdout))
             }
+            if (byPid.size == before) return@repeat
         }
         // Fallback: read /proc/<pid>/environ on Linux when ps eww omitted the env.
         for (pid in pids) {
@@ -260,7 +264,7 @@ class DesktopLocalServerService(
         all.addAll(pids)
         for (pid in pids) {
             var current = pid
-            repeat(4) {
+            repeat(LocalServerScan.ProcessLineageMaxDepth) {
                 val ppid = processInfo[current]?.ppid ?: return@repeat
                 if (ppid <= 1) return@repeat
                 all += ppid

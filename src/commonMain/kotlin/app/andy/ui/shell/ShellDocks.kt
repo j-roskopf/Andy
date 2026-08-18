@@ -111,7 +111,7 @@ internal data class DockTab(
         /** A top-level terminal workspace tab, seeded with a single-leaf [tree]. */
         fun terminalWorkspace(id: String, tree: TerminalPaneNode, focusedLeafId: String, title: String? = null): DockTab =
             DockTab(id = id, kind = DockTabKind.Terminal, title = title, terminalTree = tree, focusedTerminalLeafId = focusedLeafId)
-        /** A top-level Browser workspace tab — not a singleton, mirrors Terminal's independence. */
+        /** A Browser dock tab. WKWebView is process-wide, so the shell keeps at most one. */
         fun browser(id: String, title: String? = null): DockTab =
             DockTab(id = id, kind = DockTabKind.Browser, title = title)
     }
@@ -144,12 +144,11 @@ internal data class DockPane(
         get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.lastOrNull()
 
     fun withTab(tab: DockTab): DockPane {
-        // Live/Logs are singletons per pane; Terminal and Browser tabs are independent
-        // workspaces and are never deduped by kind — only an exact id match (reopening the
-        // same tab) merges.
+        // Live/Logs/Browser are singletons per pane (WKWebView is process-wide). Terminal
+        // workspaces are independent and merge only on an exact id match.
         val existing = when (tab.kind) {
-            DockTabKind.Live, DockTabKind.Logs -> tabs.firstOrNull { it.kind == tab.kind }
-            DockTabKind.Terminal, DockTabKind.Browser -> tabs.firstOrNull { it.id == tab.id }
+            DockTabKind.Live, DockTabKind.Logs, DockTabKind.Browser -> tabs.firstOrNull { it.kind == tab.kind }
+            DockTabKind.Terminal -> tabs.firstOrNull { it.id == tab.id }
         }
         return if (existing != null) {
             copy(visible = true, activeTabId = existing.id)
@@ -255,6 +254,22 @@ internal data class ShellDocks(
             DockPlacement.Right -> copy(right = next, landingFor = null)
             DockPlacement.Bottom -> copy(bottom = next, landingFor = null)
         }
+    }
+
+    /**
+     * WKWebView is a single process-wide overlay — keep at most one Browser tab across
+     * both panes, moving an existing tab if the user opens Browser on the other dock.
+     */
+    fun withBrowserExclusive(placement: DockPlacement, tab: DockTab): ShellDocks {
+        val existing = pane(placement).tabs.firstOrNull { it.kind == DockTabKind.Browser }
+            ?: pane(if (placement == DockPlacement.Right) DockPlacement.Bottom else DockPlacement.Right)
+                .tabs.firstOrNull { it.kind == DockTabKind.Browser }
+        val keep = existing ?: tab
+        val clearedOther = when (placement) {
+            DockPlacement.Right -> copy(bottom = bottom.withoutKind(DockTabKind.Browser))
+            DockPlacement.Bottom -> copy(right = right.withoutKind(DockTabKind.Browser))
+        }
+        return clearedOther.update(placement) { it.withTab(keep) }
     }
 
     /** Live is a single mirror session — keep at most one Live tab across both panes. */

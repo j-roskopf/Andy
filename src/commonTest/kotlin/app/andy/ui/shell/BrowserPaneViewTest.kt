@@ -16,4 +16,20 @@ class BrowserPaneViewTest {
         assertEquals("https://example.com", normalizeBrowserUrl("example.com"))
         assertEquals("https://example.com/path", normalizeBrowserUrl("https://example.com/path"))
     }
+
+    @Test
+    fun normalizeBrowserUrlPercentEncodesSearchQueries() {
+        assertEquals(
+            "https://www.google.com/search?q=cats+%26+dogs",
+            normalizeBrowserUrl("cats & dogs"),
+        )
+        assertEquals(
+            "https://www.google.com/search?q=100%25",
+            normalizeBrowserUrl("100%"),
+        )
+        assertEquals(
+            "https://www.google.com/search?q=caf%C3%A9",
+            normalizeBrowserUrl("café"),
+        )
+    }
 }

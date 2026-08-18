@@ -282,6 +282,26 @@ internal fun normalizeBrowserUrl(input: String): String {
     return when {
         isLocal -> "http://$trimmed"
         looksLikeUrl -> "https://$trimmed"
-        else -> "https://www.google.com/search?q=${trimmed.replace(" ", "+")}"
+        else -> "https://www.google.com/search?q=${encodeBrowserQuery(trimmed)}"
+    }
+}
+
+/** Percent-encodes address-bar search text so `&`, `#`, `%`, and non-ASCII stay in `q`. */
+internal fun encodeBrowserQuery(text: String): String {
+    val hex = "0123456789ABCDEF"
+    return buildString(text.length + 8) {
+        for (byte in text.encodeToByteArray()) {
+            val b = byte.toInt() and 0xFF
+            when {
+                b == 0x20 -> append('+')
+                b in 0x30..0x39 || b in 0x41..0x5A || b in 0x61..0x7A -> append(b.toChar())
+                b.toChar() in "-._~" -> append(b.toChar())
+                else -> {
+                    append('%')
+                    append(hex[b shr 4])
+                    append(hex[b and 0xF])
+                }
+            }
+        }
     }
 }

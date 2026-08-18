@@ -41,19 +41,19 @@ class ShellDocksTest {
     }
 
     @Test
-    fun browserTabsAreIndependentNotSingleton() {
+    fun browserTabIsSingletonPerPane() {
         val pane = DockPane()
             .withTab(DockTab.browser("browser-1"))
             .withTab(DockTab.browser("browser-2"))
-        assertEquals(2, pane.tabs.count { it.kind == DockTabKind.Browser })
-        assertEquals("browser-2", pane.activeTabId)
+        assertEquals(1, pane.tabs.count { it.kind == DockTabKind.Browser })
+        assertEquals("browser-1", pane.activeTabId)
     }
 
     @Test
     fun reopeningSameBrowserTabIdSelectsInPlace() {
         val pane = DockPane()
             .withTab(DockTab.browser("browser-1"))
-            .withTab(DockTab.browser("browser-2"))
+            .withTab(DockTab.logs())
             .withTab(DockTab.browser("browser-1"))
         assertEquals(2, pane.tabs.size)
         assertEquals("browser-1", pane.activeTabId)
@@ -75,6 +75,16 @@ class ShellDocksTest {
         assertTrue(docks.bottom.visible)
         assertTrue(docks.bottom.tabs.any { it.kind == DockTabKind.Live })
         assertFalse(docks.right.tabs.any { it.kind == DockTabKind.Live })
+    }
+
+    @Test
+    fun browserIsExclusiveAcrossPlacements() {
+        val docks = ShellDocks()
+            .withBrowserExclusive(DockPlacement.Right, DockTab.browser("browser-1"))
+            .withBrowserExclusive(DockPlacement.Bottom, DockTab.browser("browser-2"))
+        assertTrue(docks.bottom.tabs.any { it.id == "browser-1" && it.kind == DockTabKind.Browser })
+        assertFalse(docks.right.tabs.any { it.kind == DockTabKind.Browser })
+        assertEquals(1, (docks.right.tabs + docks.bottom.tabs).count { it.kind == DockTabKind.Browser })
     }
 
     @Test
@@ -180,11 +190,10 @@ class ShellDocksTest {
     fun existingBrowserTabPrefersNewestWhenActiveIsNotBrowser() {
         val docks = ShellDocks(
             right = DockPane()
-                .withTab(DockTab.browser("browser-old"))
-                .withTab(DockTab.browser("browser-new"))
+                .withTab(DockTab.browser("browser-only"))
                 .withTab(DockTab.logs()),
         )
-        assertEquals(DockPlacement.Right to "browser-new", docks.existingBrowserTab())
+        assertEquals(DockPlacement.Right to "browser-only", docks.existingBrowserTab())
     }
 
     @Test

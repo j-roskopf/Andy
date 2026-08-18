@@ -79,7 +79,7 @@ data class LocalServerOwnerIdentity(
  * Desktop feeds `lsof`/`ps` text; tests use fixtures.
  */
 object LocalServerScan {
-    private const val ProcessLineageMaxDepth = 4
+    internal const val ProcessLineageMaxDepth = 4
 
     private val ExcludedProcessPatterns = listOf(
         "airplayxpchelper",
