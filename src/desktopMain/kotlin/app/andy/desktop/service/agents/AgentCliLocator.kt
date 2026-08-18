@@ -1,7 +1,10 @@
 package app.andy.desktop.service.agents
 
+import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentKind
+import app.andy.model.gooseLooksConfigured
+import app.andy.model.hasVendorCli
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -13,7 +16,7 @@ import java.util.concurrent.TimeUnit
 class AgentCliLocator {
     fun locateAll(overrides: Map<String, String>): List<AgentCliStatus> {
         val fromShell by lazy { lookupViaLoginShell() }
-        return AgentKind.entries.map { kind ->
+        return AgentKind.entries.filter { it.hasVendorCli }.map { kind ->
             val discoveredBinary = overrides[kind.cliName]?.takeIf { File(it).canExecute() }
                 ?: fromShell[kind.cliName]
                 ?: probeKnownLocations(kind)
@@ -35,14 +38,27 @@ class AgentCliLocator {
         File(path).canonicalFile.path
     }.getOrDefault(path)
 
-    private fun diagnoseInstallation(kind: AgentKind, sourcePath: String, binaryPath: String?): app.andy.model.AgentCliIssue? {
+    private fun diagnoseInstallation(kind: AgentKind, sourcePath: String, binaryPath: String?): AgentCliIssue? {
+        if (kind == AgentKind.Goose) {
+            if (binaryPath == null || File(binaryPath).name != AgentKind.Goose.cliName) return null
+            val configured = gooseConfigFiles().any { file ->
+                file.isFile && runCatching { file.readText() }.getOrNull()?.let(::gooseLooksConfigured) == true
+            }
+            if (!configured) {
+                return AgentCliIssue(
+                    title = "Goose needs a provider",
+                    detail = "Run goose configure to pick a provider and model before starting a chat.",
+                )
+            }
+            return null
+        }
         if (kind != AgentKind.Codex || binaryPath == null) return null
         // A user may deliberately point Codex at a wrapper; only inspect the
         // packaged Codex executable whose code-mode helper contract is known.
         if (File(binaryPath).name != AgentKind.Codex.cliName) return null
         val bundledHost = File(File(binaryPath).parentFile, "codex-code-mode-host")
         if (!bundledHost.canExecute()) {
-            return app.andy.model.AgentCliIssue(
+            return AgentCliIssue(
                 title = "Codex installation needs repair",
                 detail = "Codex's code-mode helper is missing. Update or reinstall Codex before starting a chat.",
                 blocksTasks = true,
@@ -51,7 +67,7 @@ class AgentCliLocator {
 
         val sourceHost = File(File(sourcePath).parentFile, "codex-code-mode-host")
         if (sourcePath != binaryPath && !sourceHost.canExecute()) {
-            return app.andy.model.AgentCliIssue(
+            return AgentCliIssue(
                 title = "Codex Terminal link needs repair",
                 detail = "Andy will use Codex's bundled executable, but running codex in Terminal can still fail because its code-mode helper is not linked beside it.",
                 repairCommand = "ln -sf ${shellQuote(bundledHost.path)} ${shellQuote(sourceHost.path)}",
@@ -64,7 +80,7 @@ class AgentCliLocator {
         val osName = System.getProperty("os.name")?.lowercase().orEmpty()
         if (osName.contains("win")) return emptyMap()
         val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/sh"
-        val names = AgentKind.entries.joinToString(" ") { it.cliName }
+        val names = AgentKind.entries.filter { it.hasVendorCli }.joinToString(" ") { it.cliName }
         val script = "for c in $names; do printf '%s=%s\\n' \"\$c\" \"\$(command -v \"\$c\" || true)\"; done"
         val output = runCatching {
             // Merge stderr too: a noisy shell profile must not fill an unread pipe
@@ -105,6 +121,11 @@ class AgentCliLocator {
             )
             AgentKind.Hermes -> listOf("$home/.local/bin/hermes", "$home/.local/share/uv/tools/hermes/bin/hermes")
             AgentKind.OpenClaw -> listOf("$home/.local/bin/openclaw", "/opt/homebrew/bin/openclaw")
+            AgentKind.Goose -> listOf(
+                "$home/.local/bin/goose",
+                "$home/Library/Application Support/Block/goose/bin/goose",
+            )
+            AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
         }
         return (common + specific).firstOrNull { File(it).canExecute() }
     }

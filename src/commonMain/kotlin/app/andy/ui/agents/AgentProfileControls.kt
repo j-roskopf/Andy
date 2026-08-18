@@ -18,8 +18,13 @@ import app.andy.model.AgentCliStatus
 import app.andy.model.AgentKind
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentModelOption
+import app.andy.model.AgentPickerOption
 import app.andy.model.ProjectAgentProfile
+import app.andy.model.agentPickerOptions
+import app.andy.model.comboReady
 import app.andy.model.groupedByModelFamily
+import app.andy.model.isLocalModelBackend
+import app.andy.model.runtimeKind
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.theme.Cyan
@@ -34,6 +39,7 @@ internal fun AgentProviderModelProfileControls(
     onChange: (ProjectAgentProfile) -> Unit,
     cliStatuses: List<AgentCliStatus>,
     providerModels: Map<AgentKind, List<AgentModelOption>> = emptyMap(),
+    localBackends: Map<AgentKind, Boolean> = emptyMap(),
     providerSelectionActive: Boolean = true,
     showProviderControls: Boolean = true,
     showModelControls: Boolean = true,
@@ -52,20 +58,23 @@ internal fun AgentProviderModelProfileControls(
     if (showProviderControls) {
         Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
         ProfileOptionRow(wrapOptions) {
-            AgentKind.entries.forEach { agent ->
-                val status = cliStatuses.firstOrNull { it.kind == agent }
-                val ready = status?.ready == true || cliStatuses.isEmpty()
+            agentPickerOptions().forEach { option ->
+                val ready = option.comboReady(cliStatuses, localBackends)
+                val selected = ready && providerSelectionActive &&
+                    profile.agent == option.agent &&
+                    profile.localRuntime == option.localRuntime
                 if (ready || showUnavailableAsPills) {
                     FilterPill(
-                        text = "${agent.label}${if (ready) "" else " · unavailable"}",
-                        selected = ready && providerSelectionActive && profile.agent == agent,
-                        color = agentColor(agent),
+                        text = "${option.label}${if (ready) "" else " · unavailable"}",
+                        selected = selected,
+                        color = agentColor(option.agent),
                         enabled = ready,
-                        leadingContent = if (showProviderIcons) ({ AgentPillIcon(agent) }) else null,
+                        leadingContent = if (showProviderIcons) ({ AgentPillIcon(option.agent) }) else null,
                     ) {
                         onChange(
                             profile.copy(
-                                agent = agent,
+                                agent = option.agent,
+                                localRuntime = option.localRuntime,
                                 model = null,
                                 reasoningEffort = null,
                                 fastMode = false,
@@ -74,7 +83,7 @@ internal fun AgentProviderModelProfileControls(
                     }
                 } else {
                     Text(
-                        "${agent.label} — ${if (status?.issue != null) "needs repair" else "not found"}",
+                        "${option.label} — not found",
                         color = TextSecondary.copy(alpha = 0.6f),
                         fontFamily = MonoFont,
                         fontSize = 11.sp,
@@ -86,7 +95,7 @@ internal fun AgentProviderModelProfileControls(
 
     if (!showModelControls) return
     if (showVersion) {
-        cliStatuses.firstOrNull { it.kind == profile.agent }?.version?.let { version ->
+        cliStatuses.firstOrNull { it.kind == profile.runtimeKind() }?.version?.let { version ->
             Text(version, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         }
     }
@@ -96,8 +105,10 @@ internal fun AgentProviderModelProfileControls(
     if (groupedModels != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ProfileOptionRow(wrapOptions) {
-                FilterPill("provider default", profile.model == null, Cyan) {
-                    onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+                if (!profile.agent.isLocalModelBackend) {
+                    FilterPill("provider default", profile.model == null, Cyan) {
+                        onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+                    }
                 }
                 FilterPill("custom", customModel, Rust) {
                     onChange(profile.copy(model = profile.model.takeIf { customModel }.orEmpty(), reasoningEffort = null, fastMode = false))
@@ -122,8 +133,10 @@ internal fun AgentProviderModelProfileControls(
         }
     } else {
         ProfileOptionRow(wrapOptions) {
-            FilterPill("provider default", profile.model == null, Cyan) {
-                onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+            if (!profile.agent.isLocalModelBackend) {
+                FilterPill("provider default", profile.model == null, Cyan) {
+                    onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
+                }
             }
             modelOptions.forEach { option ->
                 FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
@@ -174,10 +187,11 @@ internal fun AgentProviderModelProfileControls(
         }
         if (showModelHelp) {
             Text(
-                when (profile.agent) {
+                when (profile.runtimeKind()) {
                     AgentKind.Cursor -> "Cursor receives the selected provider variant. Availability follows your Cursor account."
                     AgentKind.Antigravity -> "Antigravity receives its model slug plus effort as one variant from the live CLI model list."
                     AgentKind.OpenCode -> "OpenCode receives provider/model slugs (for example anthropic/claude-sonnet-5). Availability follows your configured providers."
+                    AgentKind.Goose -> "Goose receives provider/model slugs (for example anthropic/claude-sonnet-4-5). Availability follows goose configure."
                     AgentKind.Pi -> "Pi receives provider/model ids; thinking effort is passed via --thinking."
                     else -> "The selected model and reasoning level are passed directly to the ${profile.agent.label} CLI."
                 },

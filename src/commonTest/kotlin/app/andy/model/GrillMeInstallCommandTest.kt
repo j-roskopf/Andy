@@ -31,6 +31,10 @@ class GrillMeInstallCommandTest {
             "npx skills add mattpocock/skills --skill grill-me --skill grilling --global --agent pi",
             AgentKind.Pi.grillMeInstallCommand(),
         )
+        assertEquals(
+            "npx skills add mattpocock/skills --skill grill-me --skill grilling --global --agent goose",
+            AgentKind.Goose.grillMeInstallCommand(),
+        )
     }
 
     @Test

@@ -9,6 +9,7 @@ import app.andy.model.followUpCliPayload
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -672,5 +673,87 @@ class PiInteractiveAdapterTest {
         assertTrue("--session" in argv!!)
         assertTrue("pi-sess" in argv)
         assertEquals("continue", argv.last())
+    }
+}
+
+class GooseInteractiveAdapterTest {
+    private val adapter = GooseAdapter()
+
+    @Test
+    fun interactiveCommandNamesSessionAndEnablesDeveloper() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/goose",
+            task(AgentKind.Goose).copy(model = "anthropic/claude-sonnet-4-5"),
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
+        )
+        assertEquals("/bin/goose", argv.first())
+        assertTrue("session" in argv)
+        assertTrue("--name" in argv && "andy-task-abc123" in argv)
+        assertTrue("--provider" in argv && "anthropic" in argv)
+        assertTrue("--model" in argv && "claude-sonnet-4-5" in argv)
+        assertTrue("--with-builtin" in argv && "developer" in argv)
+        assertTrue("--with-streamable-http-extension" in argv)
+        assertEquals("http://127.0.0.1:8565/mcp-http", argv[argv.indexOf("--with-streamable-http-extension") + 1])
+        assertFalse(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun readOnlyMapsToChatModeEnv() {
+        val env = gooseLaunchEnvironment(task(AgentKind.Goose).copy(planMode = true))
+        assertEquals("chat", env["GOOSE_MODE"])
+        val auto = gooseLaunchEnvironment(
+            task(AgentKind.Goose, autonomy = AgentAutonomy.Full).copy(sandboxMode = AgentSandboxMode.None),
+        )
+        assertEquals("auto", auto["GOOSE_MODE"])
+        val approve = gooseLaunchEnvironment(task(AgentKind.Goose))
+        assertEquals("approve", approve["GOOSE_MODE"])
+        assertEquals("anthropic" to "claude-sonnet-4-5", gooseProviderAndModel(task(AgentKind.Goose).copy(model = "anthropic/claude-sonnet-4-5")))
+        val ollamaGoose = gooseLaunchEnvironment(
+            task(AgentKind.Ollama).copy(localRuntime = app.andy.model.LocalAgentRuntime.Goose, model = "llama3.2"),
+        )
+        assertEquals("ollama", ollamaGoose["GOOSE_PROVIDER"])
+        assertEquals("llama3.2", ollamaGoose["GOOSE_MODEL"])
+        val lmStudioSlashed = gooseLaunchEnvironment(
+            task(AgentKind.LMStudio).copy(
+                localRuntime = app.andy.model.LocalAgentRuntime.Goose,
+                model = "qwen/qwen3.8-27b",
+            ),
+        )
+        assertEquals("lmstudio", lmStudioSlashed["GOOSE_PROVIDER"])
+        assertEquals("qwen/qwen3.8-27b", lmStudioSlashed["GOOSE_MODEL"])
+        assertEquals(
+            "lmstudio" to "qwen/qwen3.8-27b",
+            gooseProviderAndModel(
+                task(AgentKind.LMStudio).copy(
+                    localRuntime = app.andy.model.LocalAgentRuntime.Goose,
+                    model = "lmstudio/qwen/qwen3.8-27b",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun resumeUsesNameWhenSessionIdIsAcpUuid() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/goose",
+            task(AgentKind.Goose, sessionId = "550e8400-e29b-41d4-a716-446655440000"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertTrue("--resume" in argv)
+        assertTrue("--name" in argv && "andy-task-abc123" in argv)
+        assertTrue("--session-id" !in argv)
+    }
+
+    @Test
+    fun resumeUsesCliSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/goose",
+            task(AgentKind.Goose, sessionId = "20250921_143022"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertTrue("--resume" in argv)
+        assertTrue("--session-id" in argv && "20250921_143022" in argv)
     }
 }

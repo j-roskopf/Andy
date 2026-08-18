@@ -4,10 +4,13 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentTask
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
+import app.andy.model.LocalAgentRuntime
 import app.andy.model.acpSupported
 import app.andy.model.defaultLane
+import app.andy.model.modelForCli
 import com.agentclientprotocol.model.ContentBlock
 import com.agentclientprotocol.model.PlanEntry
 import com.agentclientprotocol.model.PlanEntryPriority
@@ -66,17 +69,111 @@ class AcpLaneTest {
         assertEquals(AgentLaneKind.Acp, AgentKind.Cursor.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.OpenCode.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Pi.defaultLane())
+        assertEquals(AgentLaneKind.Acp, AgentKind.Goose.defaultLane())
         assertTrue(AgentKind.ClaudeCode.acpSupported)
         assertTrue(AgentKind.Codex.acpSupported)
         assertTrue(AgentKind.Cursor.acpSupported)
         assertTrue(AgentKind.OpenCode.acpSupported)
         assertTrue(AgentKind.Pi.acpSupported)
+        assertTrue(AgentKind.Goose.acpSupported)
         assertEquals(AgentLaneKind.Terminal, AgentKind.Antigravity.defaultLane())
         assertEquals(AgentLaneKind.Terminal, AgentKind.Hermes.defaultLane())
         assertEquals(AgentLaneKind.Terminal, AgentKind.OpenClaw.defaultLane())
         assertFalse(AgentKind.Antigravity.acpSupported)
         assertFalse(AgentKind.Hermes.acpSupported)
         assertFalse(AgentKind.OpenClaw.acpSupported)
+    }
+
+    @Test
+    fun gooseAcpLaunchSpecEnablesDeveloperBuiltin() {
+        val spec = AcpRegistry.spec(AgentKind.Goose)
+        assertIs<AcpLaunchSpec.Native>(spec)
+        assertEquals("goose", spec.command)
+        assertEquals(listOf("acp", "--with-builtin", "developer"), spec.args)
+    }
+
+    @Test
+    fun gooseAcpUsesUnprefixedLocalModelIds() {
+        assertEquals(
+            "muse-glimmer:30b-mlx",
+            acpSessionModelId(
+                AgentTask(
+                    id = "t1",
+                    title = "local",
+                    prompt = "hi",
+                    agent = AgentKind.Ollama,
+                    localRuntime = LocalAgentRuntime.Goose,
+                    model = "ollama/muse-glimmer:30b-mlx",
+                    createdAtMillis = 0,
+                ),
+            ),
+        )
+        assertEquals(
+            "qwen/qwen3.8-27b",
+            acpSessionModelId(
+                AgentTask(
+                    id = "t1",
+                    title = "local",
+                    prompt = "hi",
+                    agent = AgentKind.LMStudio,
+                    localRuntime = LocalAgentRuntime.Goose,
+                    model = "lmstudio/qwen/qwen3.8-27b",
+                    createdAtMillis = 0,
+                ),
+            ),
+        )
+        assertEquals(
+            "claude-sonnet-4-5",
+            acpSessionModelId(
+                AgentTask(
+                    id = "t1",
+                    title = "native",
+                    prompt = "hi",
+                    agent = AgentKind.Goose,
+                    model = "anthropic/claude-sonnet-4-5",
+                    createdAtMillis = 0,
+                ),
+            ),
+        )
+        val openCodeOllama = AgentTask(
+            id = "t1",
+            title = "local",
+            prompt = "hi",
+            agent = AgentKind.Ollama,
+            localRuntime = LocalAgentRuntime.OpenCode,
+            model = "muse-glimmer:30b-mlx",
+            createdAtMillis = 0,
+        )
+        assertEquals("ollama/muse-glimmer:30b-mlx", acpSessionModelId(openCodeOllama))
+        assertEquals("ollama/muse-glimmer:30b-mlx", openCodeOllama.modelForCli())
+    }
+
+    @Test
+    fun piAcpForwardsSelectedLmStudioModel() {
+        val spec = AcpRegistry.specFor(
+            app.andy.model.AgentTask(
+                id = "t1",
+                title = "local",
+                prompt = "hi",
+                agent = AgentKind.LMStudio,
+                localRuntime = app.andy.model.LocalAgentRuntime.Pi,
+                model = "qwen/qwen3.8-27b",
+                createdAtMillis = 0,
+            ),
+        )
+        assertIs<AcpLaunchSpec.Npx>(spec)
+        assertEquals("pi-acp", spec.packageName)
+        assertEquals(
+            listOf("--provider", "lmstudio", "--model", "lmstudio/qwen/qwen3.8-27b"),
+            spec.extraArgs,
+        )
+        assertEquals(emptyList(), piAcpModelArgs(app.andy.model.AgentTask(
+            id = "t1",
+            title = "g",
+            prompt = "hi",
+            agent = AgentKind.Goose,
+            createdAtMillis = 0,
+        )))
     }
 
     @Test

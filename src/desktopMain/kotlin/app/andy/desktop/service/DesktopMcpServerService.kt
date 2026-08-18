@@ -281,6 +281,7 @@ class DesktopMcpServerService(
             McpClientConfig.ClientType.Pi,
             McpClientConfig.ClientType.Hermes,
             McpClientConfig.ClientType.OpenClaw,
+            McpClientConfig.ClientType.Goose,
         )
     }
 

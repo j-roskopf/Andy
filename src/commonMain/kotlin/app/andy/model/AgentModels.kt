@@ -9,6 +9,9 @@ enum class AgentKind(val label: String, val cliName: String) {
     Pi("Pi", "pi"),
     Hermes("Hermes", "hermes"),
     OpenClaw("OpenClaw", "openclaw"),
+    Goose("Goose", "goose"),
+    Ollama("Ollama", "ollama"),
+    LMStudio("LM Studio", "lmstudio"),
 }
 
 /** The transport that owns a task's provider conversation. Persisted per task. */
@@ -25,6 +28,9 @@ val AgentKind.acpSupported: Boolean
         AgentKind.Cursor,
         AgentKind.OpenCode,
         AgentKind.Pi,
+        AgentKind.Goose,
+        AgentKind.Ollama,
+        AgentKind.LMStudio,
         -> true
         AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
@@ -62,7 +68,8 @@ fun AgentAutonomy.defaultSandboxMode(): AgentSandboxMode = when (this) {
 fun AgentKind.sandboxControlLabel(): String = when (this) {
     AgentKind.Codex, AgentKind.Cursor -> "sandbox"
     AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
-    AgentKind.Hermes, AgentKind.OpenClaw -> "approvals"
+    AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+    AgentKind.Ollama, AgentKind.LMStudio -> "approvals"
 }
 
 fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
@@ -102,6 +109,12 @@ fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.WorkspaceWrite -> "ask on tools"
         AgentSandboxMode.None -> "auto-approve where allowed"
     }
+    AgentKind.Goose -> when (this) {
+        AgentSandboxMode.ReadOnly -> "chat (no tools)"
+        AgentSandboxMode.WorkspaceWrite -> "approve tools"
+        AgentSandboxMode.None -> "auto"
+    }
+    AgentKind.Ollama, AgentKind.LMStudio -> labelFor(AgentKind.OpenCode)
 }
 
 fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
@@ -145,6 +158,13 @@ fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.WorkspaceWrite -> "OpenClaw keeps its native approval prompts."
         AgentSandboxMode.None -> "OpenClaw auto-approves where local mode allows; it does not silently bypass safeguards."
     }
+    AgentKind.Goose -> when (this) {
+        AgentSandboxMode.ReadOnly -> "Goose runs in chat mode: it can inspect and reply, but tools stay off."
+        AgentSandboxMode.WorkspaceWrite -> "Goose asks before running tools that change the workspace."
+        AgentSandboxMode.None -> "Goose auto-approves tool use (GOOSE_MODE=auto)."
+    }
+    AgentKind.Ollama, AgentKind.LMStudio ->
+        descriptionFor(AgentKind.OpenCode).replace("OpenCode", agent.label)
 }
 
 /**
@@ -294,6 +314,13 @@ object AgentModelCatalog {
             AgentModelOption("openai/gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
         )
+        AgentKind.Goose -> listOf(
+            AgentModelOption("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5", emptyList()),
+            AgentModelOption("anthropic/claude-opus-4-6", "Claude Opus 4.6", emptyList()),
+            AgentModelOption("openai/gpt-5.4", "GPT-5.4", emptyList()),
+            AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
+        )
+        AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
     }
 
     fun options(agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>>): List<AgentModelOption> =
@@ -420,6 +447,8 @@ data class AgentTask(
     val title: String,
     val prompt: String,
     val agent: AgentKind,
+    /** OpenCode / Pi / Goose when [agent] is Ollama or LM Studio. */
+    val localRuntime: LocalAgentRuntime? = null,
     val projectId: String? = null,
     /** Directory the agent process runs in (the worktree path when isolated), if it has project context. */
     val cwd: String? = null,
@@ -563,11 +592,13 @@ data class AgentQuotaAccess(
         AgentKind.Cursor -> cursorAccountAccess
         AgentKind.Antigravity -> antigravityAccountAccess
         // Multi-provider auth; no stable quota probe yet.
-        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> false
+        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Ollama, AgentKind.LMStudio -> false
     }
 
     fun withAccess(agent: AgentKind, enabled: Boolean): AgentQuotaAccess = when (agent) {
-        AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> this
+        AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Ollama, AgentKind.LMStudio -> this
         AgentKind.ClaudeCode -> copy(claudeAccountAccess = enabled)
         AgentKind.Cursor -> copy(cursorAccountAccess = enabled)
         AgentKind.Antigravity -> copy(antigravityAccountAccess = enabled)
@@ -630,6 +661,8 @@ data class AgentTaskDraft(
     val title: String,
     val prompt: String,
     val agent: AgentKind,
+    /** OpenCode / Pi / Goose when [agent] is Ollama or LM Studio. */
+    val localRuntime: LocalAgentRuntime? = null,
     val projectId: String?,
     val directory: String? = null,
     val useWorktree: Boolean = false,
@@ -715,6 +748,8 @@ data class AgentProviderDefaults(
     val maxBudgetUsd: Double? = null,
     /** Explicit provider preference; null keeps the provider's ACP-capable default. */
     val lane: AgentLaneKind? = null,
+    /** OpenCode / Pi / Goose when this defaults record is for Ollama or LM Studio. */
+    val localRuntime: LocalAgentRuntime? = null,
 )
 
 /** A locally installed agent skill that can be attached to a follow-up prompt. */
@@ -857,6 +892,7 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
+    localRuntime = localRuntime,
 )
 
 fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
@@ -871,6 +907,7 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
     maxBudgetUsd = maxBudgetUsd,
+    localRuntime = localRuntime,
 )
 
 /** Provider-specific model string passed by the adapter. */
@@ -907,6 +944,7 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
         // Pi requires provider/model (e.g. openai-codex/gpt-5.5). A bare provider
         // column from a bad --list-models parse must not be passed as --model.
         AgentKind.Pi -> selected.takeIf { '/' in it }
+        AgentKind.Ollama, AgentKind.LMStudio -> prefixedLocalModelId(agent, selected).takeIf { it.isNotBlank() }
         else -> selected
     }
 }
@@ -1105,7 +1143,7 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
         }
         // Claude Code reports its billed total; these providers currently report no token usage.
         AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
-        AgentKind.Hermes, AgentKind.OpenClaw -> null
+        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose, AgentKind.Ollama, AgentKind.LMStudio -> null
     } ?: return null
     return ((inputTokens ?: 0) * price.inputUsdPerMillion + (outputTokens ?: 0) * price.outputUsdPerMillion) / 1_000_000.0
 }

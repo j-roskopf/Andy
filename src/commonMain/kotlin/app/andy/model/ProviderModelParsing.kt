@@ -27,7 +27,7 @@ private val EffortTokenOrder = listOf(
 
 private val EffortTokenByLength = EffortTokenOrder.map { it.first }.sortedByDescending { it.length }
 
-private fun parseProviderJsonModels(output: String): List<Pair<String, String>> = runCatching {
+internal fun parseProviderJsonModels(output: String): List<Pair<String, String>> = runCatching {
     val root = Json.parseToJsonElement(output.trim())
     val values = when (root) {
         is JsonArray -> root
@@ -48,6 +48,49 @@ private fun parseProviderJsonModels(output: String): List<Pair<String, String>> 
 
 fun parseHermesModels(output: String): List<AgentModelOption> = groupProviderModelVariants(parseProviderJsonModels(output))
 fun parseOpenClawModels(output: String): List<AgentModelOption> = groupProviderModelVariants(parseProviderJsonModels(output))
+
+/**
+ * Goose has no `models list` command. Parse `~/.config/goose/config.yaml` or
+ * `goose info -v` for configured provider/model pairs.
+ */
+fun parseGooseModels(output: String): List<AgentModelOption> {
+    val text = output.replace("\r\n", "\n")
+    val slugs = linkedSetOf<String>()
+    val providerModels = Regex(
+        """(?m)^[ \t]{2}([A-Za-z0-9._-]+):(?:\n[ \t]{4}.+)*?\n[ \t]{4}model:[ \t]*["']?([A-Za-z0-9._/: +-]+)""",
+    )
+    providerModels.findAll(text).forEach { match ->
+        val provider = match.groupValues[1].trim()
+        val model = match.groupValues[2].trim().trim('"', '\'')
+        if (provider.isNotBlank() &&
+            model.isNotBlank() &&
+            provider !in setOf("mcp_servers", "extensions", "headers", "envs")
+        ) {
+            slugs += "$provider/$model"
+        }
+    }
+    val gooseProvider = yamlScalar(text, "GOOSE_PROVIDER") ?: yamlScalar(text, "active_provider")
+    val gooseModel = yamlScalar(text, "GOOSE_MODEL")
+    if (!gooseModel.isNullOrBlank()) {
+        slugs += if (!gooseProvider.isNullOrBlank() && '/' !in gooseModel) {
+            "$gooseProvider/$gooseModel"
+        } else {
+            gooseModel
+        }
+    }
+    return groupProviderModelVariants(slugs.map { it to humanizeProviderModel(it) })
+}
+
+/** True when Goose config names a provider Andy can launch with. */
+fun gooseLooksConfigured(configText: String): Boolean =
+    Regex("""(?m)^[ \t]*(GOOSE_PROVIDER|active_provider):[ \t]*["']?[A-Za-z0-9._-]+""")
+        .containsMatchIn(configText.replace("\r\n", "\n"))
+
+private fun yamlScalar(text: String, key: String): String? {
+    val match = Regex("""(?m)^[ \t]*${Regex.escape(key)}:[ \t]*["']?([A-Za-z0-9._/: +-]+)""").find(text)
+        ?: return null
+    return match.groupValues[1].trim().trim('"', '\'').takeIf { it.isNotBlank() }
+}
 
 internal data class ProviderModelVariant(
     val baseId: String,

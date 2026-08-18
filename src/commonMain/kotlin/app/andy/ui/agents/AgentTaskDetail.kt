@@ -95,6 +95,7 @@ import app.andy.model.ProjectWorkflowStage
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
+import app.andy.model.runtimeKind
 import app.andy.model.composerCommandToken
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
@@ -172,14 +173,15 @@ internal fun AgentTaskDetail(
     val scope = rememberCoroutineScope()
     val copyText = rememberCopyText()
     val skillDirectory = task.worktreePath ?: task.cwd
-    val availableSkills by remember(task.agent, skillDirectory) {
-        services.agentRuns.skills(task.agent, skillDirectory)
+    val runtimeKind = task.runtimeKind()
+    val availableSkills by remember(runtimeKind, skillDirectory) {
+        services.agentRuns.skills(runtimeKind, skillDirectory)
     }.collectAsState()
-    val providerSlashCommands by remember(task.agent, skillDirectory) {
-        services.agentRuns.slashCommands(task.agent, skillDirectory)
+    val providerSlashCommands by remember(runtimeKind, skillDirectory) {
+        services.agentRuns.slashCommands(runtimeKind, skillDirectory)
     }.collectAsState()
-    LaunchedEffect(task.agent, skillDirectory) {
-        services.agentRuns.refreshSlashCommands(task.agent, skillDirectory)
+    LaunchedEffect(runtimeKind, skillDirectory) {
+        services.agentRuns.refreshSlashCommands(runtimeKind, skillDirectory)
     }
     var followUpValue by remember(task.id) { mutableStateOf(TextFieldValue("")) }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
@@ -275,9 +277,9 @@ internal fun AgentTaskDetail(
             ?.commands
             .orEmpty()
     }
-    val availableCommands = remember(task.agent, providerSlashCommands, sessionCommands) {
+    val availableCommands = remember(runtimeKind, providerSlashCommands, sessionCommands) {
         mergedComposerSlashCommands(
-            agent = task.agent,
+            agent = runtimeKind,
             providerCommands = (providerSlashCommands + sessionCommands).distinctBy {
                 it.name.trim().trimStart('/', '$').lowercase()
             },
@@ -341,7 +343,7 @@ internal fun AgentTaskDetail(
         shouldShowConnectionStallBanner(transcriptEvents, task.isActive)
     }
     val slashHighlight = rememberComposerSlashHighlight(
-        agent = task.agent,
+        agent = runtimeKind,
         availableSkills = availableSkills,
         availableCommands = availableCommands,
     )

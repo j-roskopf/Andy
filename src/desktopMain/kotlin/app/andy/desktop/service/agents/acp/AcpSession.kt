@@ -6,9 +6,13 @@ import app.andy.desktop.service.agents.AgentStatusSnapshot
 import app.andy.desktop.service.agents.AndyMcpEndpoint
 import app.andy.desktop.service.agents.acpEndpointUrl
 import app.andy.desktop.service.agents.AgentWorkflowArtifacts
+import app.andy.desktop.service.agents.gooseProviderAndModel
 import app.andy.model.AgentEvent
+import app.andy.model.AgentKind
 import app.andy.model.AgentSessionMode
 import app.andy.model.AgentTask
+import app.andy.model.modelForCli
+import app.andy.model.runtimeKind
 import com.agentclientprotocol.client.Client
 import com.agentclientprotocol.client.ClientInfo
 import com.agentclientprotocol.client.ClientOperationsFactory
@@ -22,6 +26,9 @@ import com.agentclientprotocol.model.FileSystemCapability
 import com.agentclientprotocol.model.HttpHeader
 import com.agentclientprotocol.model.Implementation
 import com.agentclientprotocol.model.McpServer
+import com.agentclientprotocol.model.ModelId
+import com.agentclientprotocol.model.SessionConfigId
+import com.agentclientprotocol.model.SessionConfigOptionValue
 import com.agentclientprotocol.model.SessionId
 import com.agentclientprotocol.model.SessionUpdate
 import com.agentclientprotocol.protocol.Protocol
@@ -90,7 +97,7 @@ class AcpSession(
     suspend fun open() {
         val cwd = File(task.cwd ?: error("ACP requires a task working directory")).canonicalFile
         val launched = launcher.launch(
-            spec = AcpRegistry.spec(task.agent) ?: error("${task.agent.cliName} has no ACP launcher"),
+            spec = AcpRegistry.specFor(task) ?: error("${task.runtimeKind().cliName} has no ACP launcher"),
             binary = binary,
             cwd = cwd.path,
             env = environment,
@@ -162,12 +169,33 @@ class AcpSession(
         session = opened
         sessionId = opened.sessionId.toString()
         closed = false
+        applySelectedModel(opened)
         onEvent(AgentEvent.SessionStarted(System.currentTimeMillis(), sessionId, task.model))
         if (opened.modesSupported) {
             val modes = opened.availableModes.map { mode ->
                 AgentSessionMode(mode.id.toString(), mode.name, mode.description)
             }
             onEvent(AgentEvent.AvailableModes(System.currentTimeMillis(), modes, opened.currentMode.value.toString()))
+        }
+    }
+
+    /**
+     * OpenCode ACP ignores `--model` (the subcommand has no such flag) and otherwise
+     * falls through to Zen `big-pickle` unless config lists the selected model.
+     * Goose ACP has no `--provider`/`--model` flags either; env sets the provider,
+     * then this pin must use Goose's unprefixed model id (not Andy's `ollama/…` catalog).
+     */
+    private suspend fun applySelectedModel(opened: ClientSession) {
+        val selected = acpSessionModelId(task) ?: return
+        if (opened.configOptionsSupported) {
+            val ok = runCatching {
+                opened.setConfigOption(SessionConfigId("model"), SessionConfigOptionValue.StringValue(selected))
+            }.onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }.isSuccess
+            if (ok || !opened.modelsSupported) return
+        }
+        if (opened.modelsSupported) {
+            runCatching { opened.setModel(ModelId(selected)) }
+                .onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }
         }
     }
 
@@ -284,4 +312,10 @@ class AcpSession(
         allowedSkillNames = allowedSkillNames,
         terminalOutput = { terminalId -> terminalOps?.bufferedOutput(terminalId) },
     )
+}
+
+/** Model id passed to ACP `setConfigOption` / `setModel`. Goose wants the provider-native name. */
+internal fun acpSessionModelId(task: AgentTask): String? {
+    if (task.runtimeKind() == AgentKind.Goose) return gooseProviderAndModel(task).second
+    return task.modelForCli()?.trim()?.takeIf { it.isNotBlank() }
 }

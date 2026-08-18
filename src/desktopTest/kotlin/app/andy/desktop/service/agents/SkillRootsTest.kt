@@ -58,6 +58,22 @@ class SkillRootsTest {
     }
 
     @Test
+    fun gooseUsesNativeAndPortableSkillRoots() {
+        val home = File("/test/home")
+        val workspace = File("/test/workspace")
+        assertEquals(
+            listOf(
+                File(workspace, ".goose/skills"),
+                File(workspace, ".agents/skills"),
+                File(home, ".config/goose/skills"),
+                File(home, ".goose/skills"),
+                File(home, ".agents/skills"),
+            ),
+            skillRootsFor(AgentKind.Goose, workspace, home),
+        )
+    }
+
+    @Test
     fun piIncludesProjectAndGlobalRoots() {
         val home = File("/test/home")
         val workspace = File("/test/workspace")

@@ -14,6 +14,13 @@ import app.andy.model.defaultLane
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.LocalAgentRuntime
+import app.andy.model.hasVendorCli
+import app.andy.model.isLocalModelBackend
+import app.andy.model.localModelComboReady
+import app.andy.model.localModelLaunchError
+import app.andy.model.parseLocalAgentRuntime
+import app.andy.model.prefixedLocalModelId
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.ContextualActionKind
 import app.andy.model.ProjectSpecDraft
@@ -234,19 +241,44 @@ fun Server.registerAgentProjectTools(
         // Use cached CLI/model probes — do not refresh here (that blocks the CLI for seconds).
         val statuses = agentRuns.cliStatuses.value.associateBy { it.kind }
         val discovered = agentRuns.providerModels.value
+        val localBackends = agentRuns.localModelBackends.value
         val agents = buildJsonArray {
             AgentKind.entries.forEach { kind ->
                 val status = statuses[kind]
+                val reachable = if (kind.isLocalModelBackend) localBackends[kind] == true else status?.ready == true
                 add(
                     buildJsonObject {
                         put("id", kind.name)
                         put("label", kind.label)
                         put("cliName", kind.cliName)
-                        put("ready", status?.ready ?: false)
+                        put("ready", if (kind.isLocalModelBackend) {
+                            LocalAgentRuntime.entries.any { runtime ->
+                                localModelComboReady(reachable, statuses[runtime.agent])
+                            }
+                        } else {
+                            status?.ready ?: false
+                        })
                         put("acpReady", status?.acpReady ?: false)
                         put("available", status?.available ?: false)
                         put("version", status?.version.orEmpty())
                         put("issue", status?.issue?.title.orEmpty())
+                        if (kind.isLocalModelBackend) {
+                            put("reachable", reachable)
+                            put(
+                                "runtimes",
+                                buildJsonArray {
+                                    LocalAgentRuntime.entries.forEach { runtime ->
+                                        add(
+                                            buildJsonObject {
+                                                put("id", runtime.name)
+                                                put("label", runtime.label)
+                                                put("ready", localModelComboReady(reachable, statuses[runtime.agent]))
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        }
                     },
                 )
             }
@@ -257,12 +289,14 @@ fun Server.registerAgentProjectTools(
                 put(
                     kind.name,
                     buildJsonArray {
-                        add(
-                            buildJsonObject {
-                                put("id", "")
-                                put("label", "provider default")
-                            },
-                        )
+                        if (kind.hasVendorCli) {
+                            add(
+                                buildJsonObject {
+                                    put("id", "")
+                                    put("label", "provider default")
+                                },
+                            )
+                        }
                         options.forEach { opt ->
                             add(
                                 buildJsonObject {
@@ -398,7 +432,7 @@ fun Server.registerAgentProjectTools(
             },
             "agent" to buildJsonObject {
                 put("type", "string")
-                put("description", "ClaudeCode | Codex | Cursor | Antigravity")
+                put("description", "ClaudeCode | Codex | Cursor | Antigravity | OpenCode | Pi | Hermes | OpenClaw | Goose | Ollama | LMStudio")
             },
             "title" to buildJsonObject {
                 put("type", "string")
@@ -438,7 +472,11 @@ fun Server.registerAgentProjectTools(
             },
             "model" to buildJsonObject {
                 put("type", "string")
-                put("description", "Optional model id (empty = provider default)")
+                put("description", "Optional model id (empty = provider default). Required for Ollama and LM Studio.")
+            },
+            "runtime" to buildJsonObject {
+                put("type", "string")
+                put("description", "Required for Ollama and LM Studio: OpenCode | Pi | Goose")
             },
             "lane" to buildJsonObject {
                 put("type", "string")
@@ -496,7 +534,11 @@ fun Server.registerAgentProjectTools(
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                 ?: error("unknown autonomy: $name")
         } ?: parentTask?.autonomy ?: AgentAutonomy.Standard
-        val model = str(args, "model")?.takeIf { it.isNotBlank() }
+        val runtime = parseLocalAgentRuntime(str(args, "runtime"))
+            ?: parentTask?.takeIf { it.agent == agent }?.localRuntime
+        val model = str(args, "model")?.takeIf { it.isNotBlank() }?.let { raw ->
+            if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
+        }
         val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
         val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["useWorktree"]?.jsonPrimitive?.booleanOrNull
@@ -515,11 +557,11 @@ fun Server.registerAgentProjectTools(
             ?: args["attachAndyMcp"]?.jsonPrimitive?.booleanOrNull
             ?: false
         val imagePaths = parseImagePathsArg(args)
-        val task = agentRuns.createAndStart(
-            AgentTaskDraft(
+        val draft = AgentTaskDraft(
                 title = str(args, "title")?.takeIf { it.isNotBlank() } ?: prompt.take(48),
                 prompt = prompt,
                 agent = agent,
+                localRuntime = runtime,
                 projectId = projectId,
                 directory = directory,
                 useWorktree = useWorktree,
@@ -535,8 +577,9 @@ fun Server.registerAgentProjectTools(
                 imagePaths = imagePaths,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
-            ),
-        )
+            )
+        draft.localModelLaunchError()?.let { error(it) }
+        val task = agentRuns.createAndStart(draft)
         if (task.status == AgentStatus.Error) {
             CallToolResult(
                 content = listOf(

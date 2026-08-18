@@ -1,6 +1,7 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.service.agents.AndyPiExtensionInstaller
+import app.andy.desktop.service.agents.gooseConfigFiles
 import java.io.File
 import kotlinx.serialization.json.*
 
@@ -15,6 +16,7 @@ object McpClientConfig {
         Pi("Pi"),
         Hermes("Hermes"),
         OpenClaw("OpenClaw"),
+        Goose("Goose"),
         VSCode("VS Code"),
         Windsurf("Windsurf")
     }
@@ -76,6 +78,15 @@ object McpClientConfig {
                   andy:
                     url: "http://127.0.0.1:$port/mcp-http"$headersYaml
             """.trimIndent()
+            ClientType.Goose -> """
+                extensions:
+                  andy:
+                    enabled: true
+                    type: streamable_http
+                    name: andy
+                    uri: "http://127.0.0.1:$port/mcp-http"
+                    timeout: 300$headersYaml
+            """.trimIndent()
             ClientType.OpenClaw -> {
                 val headersObj = token?.let {
                     """, "headers": { "Authorization": "Bearer $it" }"""
@@ -127,6 +138,8 @@ object McpClientConfig {
             ClientType.Antigravity -> File(home, ".gemini/config/mcp_config.json")
             ClientType.OpenCode -> File(home, ".config/opencode/opencode.json")
             ClientType.Hermes -> File(home, ".hermes/config.yaml")
+            ClientType.Goose -> gooseConfigFiles(File(home)).firstOrNull { it.isFile }
+                ?: File(home, ".config/goose/config.yaml")
             ClientType.OpenClaw -> File(home, ".openclaw/openclaw.json")
             ClientType.ClaudeDesktop -> {
                 val osName = System.getProperty("os.name")?.lowercase().orEmpty()
@@ -173,6 +186,7 @@ object McpClientConfig {
                     ?: return false
                 ClientType.OpenClaw -> mergeOpenClawJson(currentContent, port, bearerToken)
                 ClientType.Hermes -> mergeHermesYaml(currentContent, port, bearerToken)
+                ClientType.Goose -> mergeGooseYaml(currentContent, port, bearerToken)
                 ClientType.Codex -> {
                     mergeToml(currentContent, port, bearerToken)
                 }
@@ -300,6 +314,41 @@ object McpClientConfig {
             }
             // Also consume continuation lines that are more indented under andy
             // (headers block uses 4–6 spaces). Stop at next top-level mcp server key.
+            lines.subList(andy, end).clear()
+        }
+        val insert = (andy ?: (root + 1)).coerceAtMost(lines.size)
+        lines.addAll(insert, block)
+        return lines.joinToString("\n").trimEnd() + "\n"
+    }
+
+    internal fun mergeGooseYaml(content: String, port: Int, bearerToken: String? = null): String {
+        val lines = content.lines().toMutableList()
+        val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() }
+        val block = buildList {
+            add("  andy:")
+            add("    enabled: true")
+            add("    type: streamable_http")
+            add("    name: andy")
+            add("    uri: \"http://127.0.0.1:$port/mcp-http\"")
+            add("    timeout: 300")
+            if (token != null) {
+                add("    headers:")
+                add("      Authorization: \"Bearer $token\"")
+            }
+        }
+        val root = lines.indexOfFirst { it.trim() == "extensions:" }
+        if (root < 0) {
+            if (lines.isNotEmpty() && lines.last().isNotBlank()) lines.add("")
+            lines.add("extensions:")
+            lines.addAll(block)
+            return lines.joinToString("\n").trimEnd() + "\n"
+        }
+        val andy = (root + 1 until lines.size).firstOrNull { lines[it].trim() == "andy:" && lines[it].startsWith("  ") }
+        if (andy != null) {
+            var end = andy + 1
+            while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) {
+                end++
+            }
             lines.subList(andy, end).clear()
         }
         val insert = (andy ?: (root + 1)).coerceAtMost(lines.size)

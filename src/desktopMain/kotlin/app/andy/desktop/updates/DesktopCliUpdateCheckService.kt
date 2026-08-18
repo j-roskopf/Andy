@@ -33,7 +33,7 @@ import java.time.Duration
 
 /**
  * Checks provider CLI versions against the npm registry. Only providers published to a
- * well-known npm package are checkable (Cursor, Antigravity, Pi, Hermes, OpenClaw have no
+ * well-known npm package are checkable (Cursor, Antigravity, Pi, Hermes, OpenClaw, Goose have no
  * public registry to compare against, so they're skipped rather than guessed at).
  */
 class DesktopCliUpdateCheckService(

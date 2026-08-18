@@ -33,7 +33,8 @@ internal class ProviderQuotaProbe {
         // Its opt-in is stored now; the probe intentionally waits for a stable versioned endpoint.
         AgentKind.Antigravity -> null
         // Multi-provider auth; no stable single-account probe yet.
-        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw -> null
+        AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Ollama, AgentKind.LMStudio -> null
     }
 
     fun clearAccountAccess(agent: AgentKind) {

@@ -18,6 +18,8 @@ import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.defaultLane
+import app.andy.model.hasVendorCli
+import app.andy.model.isLocalModelBackend
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentToolKind
@@ -150,6 +152,9 @@ class McpAgentRunClient(
 
     private val _lastUsedAgent = MutableStateFlow<AgentKind?>(null)
     override val lastUsedAgent: StateFlow<AgentKind?> = _lastUsedAgent.asStateFlow()
+
+    private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
+    override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends.asStateFlow()
 
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
@@ -453,8 +458,28 @@ class McpAgentRunClient(
         } else {
             withContext(Dispatchers.IO) { cliLocator.locateAll(emptyMap()).associateBy { it.kind } }
         }
-        _cliStatuses.value = AgentKind.entries.map { kind ->
+        _cliStatuses.value = AgentKind.entries.filter { it.hasVendorCli }.map { kind ->
             fromDaemon[kind] ?: statusForDaemonUnknownAgent(kind, localByKind[kind])
+        }
+        _localModelBackends.value = agents.mapNotNull { element ->
+            val obj = element.jsonObject
+            val kind = AgentKind.entries.firstOrNull { it.name == obj.string("id") } ?: return@mapNotNull null
+            if (!kind.isLocalModelBackend) return@mapNotNull null
+            val reachable = obj["reachable"]?.jsonPrimitive?.booleanOrNull
+                ?: obj["reachable"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                ?: false
+            kind to reachable
+        }.toMap()
+        root["models"]?.jsonObject?.let { models ->
+            _providerModels.value = models.mapNotNull { (name, element) ->
+                val kind = AgentKind.entries.firstOrNull { it.name == name } ?: return@mapNotNull null
+                val options = element.jsonArray.mapNotNull { item ->
+                    val obj = item.jsonObject
+                    val id = obj.string("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    AgentModelOption(id = id, label = obj.string("label") ?: id, efforts = emptyList())
+                }
+                kind to options
+            }.toMap()
         }
     }
 

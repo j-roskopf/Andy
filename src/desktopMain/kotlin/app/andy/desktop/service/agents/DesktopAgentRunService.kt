@@ -31,6 +31,11 @@ import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
 import app.andy.model.fallbackTitle
 import app.andy.model.AgentStatus
+import app.andy.model.hasVendorCli
+import app.andy.model.isLocalModelBackend
+import app.andy.model.localModelLaunchError
+import app.andy.model.prefixedLocalModelId
+import app.andy.model.runtimeKind
 import app.andy.model.AgentUserInputRequest
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ConfigSource
@@ -98,6 +103,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -188,6 +194,9 @@ class DesktopAgentRunService(
     private val _lastUsedAgent = MutableStateFlow<AgentKind?>(null)
     override val lastUsedAgent: StateFlow<AgentKind?> = _lastUsedAgent
 
+    private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
+    override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends
+
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects
 
@@ -259,6 +268,7 @@ class DesktopAgentRunService(
     private val quotaRefreshMutex = Mutex()
     private val quotaProbe = ProviderQuotaProbe()
     private val modelProbe = ProviderModelProbe()
+    private val localModelProbe = LocalModelProbe()
     private val slashCommandProbe = AcpSlashCommandProbe()
     private val ready = CompletableDeferred<Unit>()
     private var binaryOverrides: Map<String, String> = emptyMap()
@@ -294,6 +304,7 @@ class DesktopAgentRunService(
             ready.complete(Unit)
             refreshCliStatuses()
             refreshSlashCommandsForReadyProviders()
+            watchLocalModelSettings()
             if (enableProbes) {
                 refreshProviderQuotas()
                 while (isActive) {
@@ -520,7 +531,7 @@ class DesktopAgentRunService(
     }
 
     private fun refreshSlashCommandsForReadyProviders() {
-        AgentKind.entries.filter { it.acpSupported }.forEach { agent ->
+        AgentKind.entries.filter { it.acpSupported && it.hasVendorCli }.forEach { agent ->
             refreshSlashCommands(agent, directory = null)
         }
     }
@@ -638,7 +649,7 @@ class DesktopAgentRunService(
             persist()
             return
         }
-        val installedSkills = withContext(Dispatchers.IO) { discoverAgentSkills(spec.profile.agent, directory) }
+        val installedSkills = withContext(Dispatchers.IO) { discoverAgentSkills(spec.profile.runtimeKind(), directory) }
         val grillSkills = installedSkills.filter { isGrillMeSkillName(it.name) }
         val scratchpad = project.scratchpad.takeIf { spec.includeScratchpad && it.isNotBlank() }
         val attempt = spec.attempts.count { it.stage == ProjectWorkflowStage.Spec } + 1
@@ -1073,10 +1084,46 @@ class DesktopAgentRunService(
             existing + (draft.agent to defaults)
         }
         _lastUsedAgent.value = draft.agent
+        draft.localModelLaunchError()?.let { message ->
+            val now = System.currentTimeMillis()
+            val task = AgentTask(
+                id = taskId ?: newAgentTaskId(),
+                title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
+                prompt = draft.prompt,
+                agent = draft.agent,
+                localRuntime = draft.localRuntime,
+                projectId = draft.projectId,
+                cwd = draft.directory,
+                originDir = draft.directory,
+                attachAndyMcp = draft.attachAndyMcp,
+                autonomy = draft.autonomy,
+                sandboxMode = draft.sandboxMode,
+                planMode = draft.planMode,
+                confirmToolCalls = draft.confirmToolCalls,
+                model = draft.model,
+                reasoningEffort = draft.reasoningEffort,
+                fastMode = draft.fastMode,
+                openClawNewSession = draft.openClawNewSession,
+                imagePaths = draft.imagePaths,
+                skills = draft.skills,
+                goal = draft.goal,
+                maxBudgetUsd = draft.maxBudgetUsd,
+                contextBundleIds = draft.contextBundleIds,
+                provenance = draft.provenance,
+                status = AgentStatus.Error,
+                errorMessage = message,
+                lane = draft.lane ?: preferredLane(draft.runtimeKind()),
+                createdAtMillis = now,
+                finishedAtMillis = now,
+            )
+            upsertTask(task)
+            persist()
+            return task
+        }
         val discoveredSkillPaths = if (draft.skills.isEmpty()) {
             emptySet()
         } else {
-            withContext(Dispatchers.IO) { discoverAgentSkills(draft.agent, draft.existingWorktreePath ?: draft.directory) }
+            withContext(Dispatchers.IO) { discoverAgentSkills(draft.runtimeKind(), draft.existingWorktreePath ?: draft.directory) }
                 .mapTo(mutableSetOf()) { it.path }
         }
         val now = System.currentTimeMillis()
@@ -1099,6 +1146,7 @@ class DesktopAgentRunService(
                 title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
                 prompt = draft.prompt,
                 agent = draft.agent,
+                localRuntime = draft.localRuntime,
                 projectId = draft.projectId,
                 cwd = null,
                 originDir = draft.directory,
@@ -1127,7 +1175,7 @@ class DesktopAgentRunService(
                 status = AgentStatus.Error,
                 errorMessage = "existing worktree path is missing or not a directory",
                 vendorSessionId = null,
-                lane = draft.lane ?: preferredLane(draft.agent),
+                lane = draft.lane ?: preferredLane(draft.runtimeKind()),
                 createdAtMillis = now,
                 finishedAtMillis = now,
             )
@@ -1143,6 +1191,7 @@ class DesktopAgentRunService(
             title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
             prompt = draft.prompt,
             agent = draft.agent,
+            localRuntime = draft.localRuntime,
             projectId = draft.projectId,
             cwd = resolvedCwd,
             originDir = draft.directory,
@@ -1170,15 +1219,15 @@ class DesktopAgentRunService(
             provenance = draft.provenance,
             status = null,
             vendorSessionId = null,
-            lane = draft.lane ?: preferredLane(draft.agent),
+            lane = draft.lane ?: preferredLane(draft.runtimeKind()),
             createdAtMillis = now,
         )
 
-        val binary = binaryFor(task.agent)
+        val binary = binaryFor(task.runtimeKind())
         if (binary == null && task.lane == AgentLaneKind.Terminal) {
             task = task.copy(
                 status = AgentStatus.Error,
-                errorMessage = unavailableCliMessage(task.agent),
+                errorMessage = unavailableCliMessage(task.runtimeKind()),
                 finishedAtMillis = now,
             )
             upsertTask(task)
@@ -1250,7 +1299,7 @@ class DesktopAgentRunService(
             }
         }
 
-        val adapter = adapters.getValue(task.agent)
+        val adapter = adapters.getValue(task.runtimeKind())
         if (task.contextBundleIds.isNotEmpty()) {
             val evidenceSuffix = withContext(Dispatchers.IO) { materializeTaskEvidence(task.id, task.contextBundleIds) }
             if (evidenceSuffix.isNotBlank()) {
@@ -1308,7 +1357,7 @@ class DesktopAgentRunService(
 
         val skillDirectory = task.worktreePath ?: task.cwd
         val selectedSkills = skills.filter { skill ->
-            this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
+            this.skills(task.runtimeKind(), skillDirectory).value.any { it.path == skill.path }
         }
         if (task.lane == AgentLaneKind.Acp) {
             val acpFollowUp = task.followUpCliPayload(followUp, imagePaths, selectedSkills).prompt
@@ -1344,7 +1393,7 @@ class DesktopAgentRunService(
             return
         }
 
-        val adapter = adapters[existing.agent] ?: return
+        val adapter = adapters[existing.runtimeKind()] ?: return
 
         val followUpCli = task.followUpCliPayload(followUp, imagePaths, selectedSkills)
         val followUpForCli = followUpCli.prompt
@@ -1393,7 +1442,7 @@ class DesktopAgentRunService(
         }
         val resumeArgv = runCatching {
             adapter.buildInteractiveResumeCommand(
-                binaryFor(task.agent) ?: return,
+                binaryFor(task.runtimeKind()) ?: return,
                 taskForResume,
                 null,
                 followUpForCli,
@@ -1505,10 +1554,10 @@ class DesktopAgentRunService(
             terminals.stop(taskId)
         }
         val taskForResume = resumeTaskForReattach(task) ?: return
-        val adapter = adapters[task.agent] ?: return
+        val adapter = adapters[task.runtimeKind()] ?: return
         runCatching {
             adapter.buildInteractiveResumeCommand(
-                binaryFor(task.agent) ?: return,
+                binaryFor(task.runtimeKind()) ?: return,
                 taskForResume,
                 null,
                 followUp = null,
@@ -1557,8 +1606,8 @@ class DesktopAgentRunService(
 
     private fun resumeTaskForReattach(task: AgentTask): AgentTask? {
         val taskForResume = enrichTaskWithVendorSession(task) ?: return null
-        val adapter = adapters[taskForResume.agent] ?: return null
-        val binary = binaryFor(taskForResume.agent) ?: return null
+        val adapter = adapters[taskForResume.runtimeKind()] ?: return null
+        val binary = binaryFor(taskForResume.runtimeKind()) ?: return null
         return runCatching {
             adapter.buildInteractiveResumeCommand(
                 binary,
@@ -1658,7 +1707,7 @@ class DesktopAgentRunService(
         )
         upsertTask(next)
         scope.launch { persist() }
-        val adapter = adapters.getValue(task.agent)
+        val adapter = adapters.getValue(task.runtimeKind())
         val writeAfterStart = response.takeUnless { adapter.embedsResumePrompt }
         launchRun(next, writeAfterStart = writeAfterStart) { resumeAdapter, binary, mcpUrl ->
             resumeAdapter.buildInteractiveResumeCommand(
@@ -1699,7 +1748,7 @@ class DesktopAgentRunService(
         if (text.isBlank() && imagePaths.isEmpty()) return
         val skillDirectory = task.worktreePath ?: task.cwd
         val selectedSkills = skills.filter { skill ->
-            this.skills(task.agent, skillDirectory).value.any { it.path == skill.path }
+            this.skills(task.runtimeKind(), skillDirectory).value.any { it.path == skill.path }
         }
 
         if (!preferQueue) {
@@ -1955,10 +2004,10 @@ class DesktopAgentRunService(
             runAcpProcess(taskId, handle, writeAfterStart, onTerminalStarted, argvBuilder)
             return
         }
-        val adapter = adapters.getValue(task.agent)
-        val binary = binaryFor(task.agent)
+        val adapter = adapters.getValue(task.runtimeKind())
+        val binary = binaryFor(task.runtimeKind())
         if (binary == null) {
-            finishTask(taskId, AgentStatus.Error, exitCode = null, error = unavailableCliMessage(task.agent))
+            finishTask(taskId, AgentStatus.Error, exitCode = null, error = unavailableCliMessage(task.runtimeKind()))
             return
         }
 
@@ -1988,7 +2037,7 @@ class DesktopAgentRunService(
 
         val mcpUrl = if (taskForLaunch.attachAndyMcp) {
             runCatching {
-                prepareMcp(taskForLaunch.agent, taskForLaunch.id, taskForLaunch.cwd?.let(::File))
+                prepareMcp(taskForLaunch.runtimeKind(), taskForLaunch.id, taskForLaunch.cwd?.let(::File))
             }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to prepare Andy MCP: ${error.message}")
                 return
@@ -2023,10 +2072,10 @@ class DesktopAgentRunService(
             runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
         }.orEmpty()
         val env = buildAgentLaunchEnvironment(projectEnv) + buildMap {
-            if (mcpUrl != null && taskForLaunch.agent == AgentKind.Pi) {
+            if (mcpUrl != null && taskForLaunch.runtimeKind() == AgentKind.Pi) {
                 put(AndyPiExtensionInstaller.MCP_URL_ENV, mcpUrl)
             }
-        }
+        } + extraProviderLaunchEnv(taskForLaunch)
 
         if (quietResume) {
             // View-only reattach: stay Done. Publishing Working here made the idle prompt
@@ -2074,13 +2123,13 @@ class DesktopAgentRunService(
         } else {
             null
         }
-        val openCodeBeforeSessionId = if (launchTask.agent == AgentKind.OpenCode) {
+        val openCodeBeforeSessionId = if (launchTask.runtimeKind() == AgentKind.OpenCode) {
             launchTask.vendorSessionId
                 ?: OpenCodeSessionIds.findNewestSession(binary, launchTask.cwd)
         } else {
             null
         }
-        val piBeforeSessionId = if (launchTask.agent == AgentKind.Pi) {
+        val piBeforeSessionId = if (launchTask.runtimeKind() == AgentKind.Pi) {
             launchTask.vendorSessionId
                 ?: PiSessionIds.findNewestSession(launchTask.cwd)
         } else {
@@ -2144,7 +2193,7 @@ class DesktopAgentRunService(
                 }
             }
         }
-        if (launchTask.agent == AgentKind.OpenCode) {
+        if (launchTask.runtimeKind() == AgentKind.OpenCode) {
             scope.launch(Dispatchers.IO) {
                 captureOpenCodeSessionId(
                     taskId = taskId,
@@ -2155,7 +2204,7 @@ class DesktopAgentRunService(
                 )
             }
         }
-        if (launchTask.agent == AgentKind.Pi) {
+        if (launchTask.runtimeKind() == AgentKind.Pi) {
             scope.launch(Dispatchers.IO) {
                 capturePiSessionId(
                     taskId = taskId,
@@ -2412,7 +2461,7 @@ class DesktopAgentRunService(
         }.orEmpty()
         val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
             AndyStatusHookInstaller.TASK_ID_ENV to taskForLaunch.id,
-        )
+        ) + extraProviderLaunchEnv(taskForLaunch)
         val mcpEndpoint = if (taskForLaunch.attachAndyMcp) {
             runCatching { prepareAcpMcp(taskForLaunch.id) }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, null, "failed to prepare Andy MCP: ${error.message}")
@@ -2498,7 +2547,7 @@ class DesktopAgentRunService(
                 }.orEmpty()
                 val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
                     AndyStatusHookInstaller.TASK_ID_ENV to task.id,
-                )
+                ) + extraProviderLaunchEnv(task)
                 val endpoint = if (task.attachAndyMcp) prepareAcpMcp(task.id) else null
                 runCatching {
                     acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
@@ -3092,8 +3141,8 @@ class DesktopAgentRunService(
         ) {
             return app.andy.terminal.TmuxAndy.attachArgv(taskId).joinToString(" ") { shellQuote(it) }
         }
-        val adapter = adapters[task.agent] ?: return null
-        val binary = binaryFor(task.agent) ?: task.agent.cliName
+        val adapter = adapters[task.runtimeKind()] ?: return null
+        val binary = binaryFor(task.runtimeKind()) ?: task.runtimeKind().cliName
         // Resolve vendor session for External open: disk lookup, then ACP id as shared key.
         val forResume = enrichTaskWithVendorSession(task)
             ?: task.acpSessionId?.takeIf { it.isNotBlank() }?.let { acpId ->
@@ -3227,7 +3276,14 @@ class DesktopAgentRunService(
             }
         }
         _cliStatuses.value = statuses
-        if (!enableProbes) return
+        if (!enableProbes) {
+            _localModelBackends.value = emptyMap()
+            return
+        }
+        val workspace = when (val store = workspaceStore) {
+            is DesktopWorkspaceStore -> store.state.value
+            else -> runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
+        }
         val models = withContext(Dispatchers.IO) {
             statuses
                 .mapNotNull { status ->
@@ -3238,11 +3294,56 @@ class DesktopAgentRunService(
                 .filterNotNull()
                 .toMap()
         }
-        if (models.isNotEmpty()) {
-            _providerModels.update { current -> current + models }
-            AgentModelCatalog.publishDiscovered(_providerModels.value)
+        val localModels = withContext(Dispatchers.IO) { localModelProbe.query(workspace) }
+        publishLocalModels(localModels)
+        _providerModels.update { current ->
+            current.filterKeys { !it.isLocalModelBackend } + models + localModels
+        }
+        AgentModelCatalog.publishDiscovered(_providerModels.value)
+    }
+
+    private fun watchLocalModelSettings() {
+        val store = workspaceStore as? DesktopWorkspaceStore ?: return
+        scope.launch {
+            ready.await()
+            var debounce: Job? = null
+            var last = localModelSettingsKey(store.state.value)
+            store.state.collect { workspace ->
+                val key = localModelSettingsKey(workspace)
+                if (key == last) return@collect
+                last = key
+                debounce?.cancel()
+                debounce = scope.launch {
+                    delay(500)
+                    if (!enableProbes) {
+                        _localModelBackends.value = emptyMap()
+                        return@launch
+                    }
+                    val latest = store.state.value
+                    last = localModelSettingsKey(latest)
+                    val localModels = withContext(Dispatchers.IO) { localModelProbe.query(latest) }
+                    publishLocalModels(localModels)
+                    _providerModels.update { current ->
+                        current.filterKeys { !it.isLocalModelBackend } + localModels
+                    }
+                    AgentModelCatalog.publishDiscovered(_providerModels.value)
+                }
+            }
         }
     }
+
+    private fun publishLocalModels(localModels: Map<AgentKind, List<AgentModelOption>>) {
+        _localModelBackends.value = AgentKind.entries.filter { it.isLocalModelBackend }
+            .associateWith { it in localModels }
+    }
+
+    private fun localModelSettingsKey(workspace: app.andy.model.WorkspaceState): String =
+        listOf(
+            workspace.ollamaBaseUrl,
+            workspace.ollamaBearerToken,
+            workspace.lmStudioBaseUrl,
+            workspace.lmStudioBearerToken,
+        ).joinToString("\u0000")
 
     override suspend fun refreshProviderQuotas() {
         ready.await()
@@ -3390,7 +3491,23 @@ class DesktopAgentRunService(
                 McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenClaw, port, cwd, bearerToken = bearer)
                 null
             }
+            AgentKind.Goose -> {
+                McpClientConfig.writeConfig(McpClientConfig.ClientType.Goose, port, cwd, bearerToken = bearer)
+                mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
+            }
+            AgentKind.Ollama, AgentKind.LMStudio ->
+                error("local model backends must launch through OpenCode, Pi, or Goose")
         }
+    }
+
+    private fun extraProviderLaunchEnv(task: AgentTask): Map<String, String> {
+        val workspace = when (val store = workspaceStore) {
+            is DesktopWorkspaceStore -> store.state.value
+            else -> app.andy.model.WorkspaceState()
+        }
+        val sidecar = LocalModelSidecar.envFor(task, workspace)
+        val goose = if (task.runtimeKind() == AgentKind.Goose) gooseLaunchEnvironment(task) else emptyMap()
+        return goose + sidecar
     }
 
     /** ACP receives an MCP server descriptor directly; it must not mutate provider config files. */
@@ -3572,6 +3689,7 @@ class DesktopAgentRunService(
         title = title,
         prompt = prompt,
         agent = agent,
+        localRuntime = localRuntime,
         projectId = projectId,
         directory = directory,
         useWorktree = useWorktree && existingWorktreePath == null,
@@ -3580,7 +3698,7 @@ class DesktopAgentRunService(
         sandboxMode = if (planMode) AgentSandboxMode.ReadOnly else sandboxMode,
         planMode = planMode,
         confirmToolCalls = confirmToolCalls,
-        model = model,
+        model = model?.let { if (agent.isLocalModelBackend) prefixedLocalModelId(agent, it) else it },
         reasoningEffort = reasoningEffort,
         fastMode = fastMode,
         imagePaths = imagePaths,

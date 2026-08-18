@@ -280,6 +280,7 @@ object UnavailableAgentRunService : AgentRunService {
     override val quotaAccess = MutableStateFlow(AgentQuotaAccess())
     override val providerDefaults = MutableStateFlow(emptyMap<AgentKind, AgentProviderDefaults>())
     override val lastUsedAgent = MutableStateFlow<AgentKind?>(null)
+    override val localModelBackends = MutableStateFlow(emptyMap<AgentKind, Boolean>())
     override suspend fun refreshProviderQuotas() = Unit
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
     override fun skills(agent: AgentKind, directory: String?) = MutableStateFlow(emptyList<AgentSkill>())

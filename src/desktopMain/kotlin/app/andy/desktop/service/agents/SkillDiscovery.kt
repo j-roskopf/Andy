@@ -103,6 +103,14 @@ internal fun skillRootsFor(
         workspace?.let { File(it, "skills") },
         File(home, ".openclaw/skills"),
     )
+    AgentKind.Goose -> listOfNotNull(
+        workspace?.let { File(it, ".goose/skills") },
+        workspace?.let { File(it, ".agents/skills") },
+        File(home, ".config/goose/skills"),
+        File(home, ".goose/skills"),
+        File(home, ".agents/skills"),
+    )
+    AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
 }
 
 /** Names of locally installed skills that an ACP provider may accidentally advertise globally. */

@@ -269,4 +269,37 @@ class ProviderModelParsingTest {
         assertEquals(AgentModelFamily.Cursor, modelFamilyForId("cursor-grok-4.5"))
         assertEquals(AgentModelFamily.XAI, modelFamilyForId("grok-4"))
     }
+
+    @Test
+    fun parsesGooseConfigYamlAndInfoDump() {
+        val fromYaml = parseGooseModels(
+            """
+            GOOSE_PROVIDER: anthropic
+            GOOSE_MODEL: claude-sonnet-4-5
+            extensions:
+              developer:
+                enabled: true
+                type: builtin
+                name: developer
+            providers:
+              openai:
+                enabled: true
+                model: gpt-5.4
+            """.trimIndent(),
+        )
+        assertTrue(fromYaml.any { it.id == "anthropic/claude-sonnet-4-5" })
+        assertTrue(fromYaml.any { it.id == "openai/gpt-5.4" })
+        assertEquals(AgentModelFamily.Anthropic, fromYaml.single { it.id == "anthropic/claude-sonnet-4-5" }.modelFamily())
+
+        val fromInfo = parseGooseModels(
+            """
+            active_provider: google
+            GOOSE_MODEL: gemini-2.5-pro
+            """.trimIndent(),
+        )
+        assertEquals("google/gemini-2.5-pro", fromInfo.single().id)
+        assertTrue(gooseLooksConfigured("GOOSE_PROVIDER: anthropic\n"))
+        assertTrue(gooseLooksConfigured("active_provider: databricks\n"))
+        assertFalse(gooseLooksConfigured("extensions:\n  developer:\n    enabled: true\n"))
+    }
 }

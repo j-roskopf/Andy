@@ -6,6 +6,7 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
+import app.andy.model.LocalAgentRuntime
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
@@ -210,6 +211,34 @@ class DesktopAgentTaskStoreTest {
         val loaded = store.load()
         assertEquals(mapOf(AgentKind.Codex to defaults), loaded.providerDefaults)
         assertEquals(AgentKind.Codex, loaded.lastUsedAgent)
+    }
+
+    @Test
+    fun roundTripsLocalRuntimeOnTaskAndDefaults() = withStore { store ->
+        val task = AgentTask(
+            id = "local-1",
+            title = "local llama",
+            prompt = "hi",
+            agent = AgentKind.Ollama,
+            localRuntime = LocalAgentRuntime.Goose,
+            model = "ollama/llama3.2",
+            createdAtMillis = 1,
+        )
+        val defaults = AgentProviderDefaults(
+            model = "ollama/llama3.2",
+            localRuntime = LocalAgentRuntime.Goose,
+        )
+        store.save(
+            AgentStoreState(
+                tasks = listOf(task),
+                providerDefaults = mapOf(AgentKind.Ollama to defaults),
+                lastUsedAgent = AgentKind.Ollama,
+            ),
+        )
+        val loaded = store.load()
+        assertEquals(LocalAgentRuntime.Goose, loaded.tasks.single().localRuntime)
+        assertEquals(LocalAgentRuntime.Goose, loaded.providerDefaults[AgentKind.Ollama]?.localRuntime)
+        assertEquals(AgentKind.Ollama, loaded.lastUsedAgent)
     }
 
     @Test
