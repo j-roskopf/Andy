@@ -694,11 +694,16 @@ static void apply_presenter_frame(GpuPresenter *presenter) {
         under = candidate;
     }
     NSWindow *parent = presenter->window.parentWindow;
+    // Fullscreen / Space transitions often detach child windows. Re-parenting must also
+    // force a Metal repaint: drawable size can be unchanged while the layer lost its
+    // contents while orphaned (black Canvas until the next decode or a click re-front).
+    bool reparented = false;
     if (under && under != presenter->window && parent != under) {
         if (parent) {
             [parent removeChildWindow:presenter->window];
         }
         [under addChildWindow:presenter->window ordered:NSWindowAbove];
+        reparented = true;
     } else if (under && parent == under) {
         // Already parented — do not re-addChildWindow here; that can flash on every resize.
     }
@@ -716,9 +721,9 @@ static void apply_presenter_frame(GpuPresenter *presenter) {
     if (presenter->visible && !presenter->window.isVisible) {
         [presenter->window orderFront:nil];
     }
-    // Only repaint when the drawable actually changed. Clearing+presenting on every focus /
-    // geometry tick flashes black under the Metal overlay.
-    if (drawable_changed) {
+    // Prefer not to clear+present on every focus/geometry tick (flashes black under Metal).
+    // Reparent after fullscreen is the exception: same drawable, empty layer.
+    if (drawable_changed || reparented) {
         andy_hub_repaint_presenter(presenter->id);
     }
 }
@@ -766,6 +771,11 @@ static bool open_presenter_window(GpuPresenter *presenter) {
         presenter->window.hasShadow = NO;
         presenter->window.ignoresMouseEvents = YES;
         presenter->window.level = NSNormalWindowLevel;
+        // Match the legacy inline overlay: without FullScreenAuxiliary the borderless Metal
+        // child is left on the desktop Space when the Andy window enters macOS fullscreen,
+        // so Live shows only the black AWT Canvas until a click re-parents / re-fronts it.
+        presenter->window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+            NSWindowCollectionBehaviorFullScreenAuxiliary;
         presenter->layer = (CAMetalLayer *) presenter->view.layer;
         presenter->layer.opaque = YES;
         presenter->layer.framebufferOnly = YES;
