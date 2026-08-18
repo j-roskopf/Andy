@@ -28,21 +28,20 @@ internal class LocalModelProbe(
             query(backend, workspace) != null
         }
 
-    fun query(backend: AgentKind, workspace: WorkspaceState): List<AgentModelOption>? {
-        val url = workspace.localModelBaseUrl(backend).trimEnd('/') + "/models"
-        val request = HttpRequest.newBuilder(URI.create(url))
-            .timeout(Duration.ofSeconds(3))
-            .header("Accept", "application/json")
-            .GET()
-        workspace.localModelBearerToken(backend)?.let { token ->
-            request.header("Authorization", "Bearer $token")
-        }
-        val body = runCatching {
+    fun query(backend: AgentKind, workspace: WorkspaceState): List<AgentModelOption>? =
+        runCatching {
+            val url = workspace.localModelBaseUrl(backend).trimEnd('/') + "/models"
+            val request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(3))
+                .header("Accept", "application/json")
+                .GET()
+            workspace.localModelBearerToken(backend)?.let { token ->
+                request.header("Authorization", "Bearer $token")
+            }
             val response = client.send(request.build(), HttpResponse.BodyHandlers.ofString())
-            if (response.statusCode() !in 200..299) return null
-            response.body()
-        }.getOrNull() ?: return null
-        return parseOpenAiCompatModels(body, backend).takeIf { it.isNotEmpty() }
-            ?: emptyList<AgentModelOption>().takeIf { body.isNotBlank() }
-    }
+            if (response.statusCode() !in 200..299) return@runCatching null
+            val body = response.body()
+            parseOpenAiCompatModels(body, backend).takeIf { it.isNotEmpty() }
+                ?: emptyList<AgentModelOption>().takeIf { body.isNotBlank() }
+        }.getOrNull()
 }

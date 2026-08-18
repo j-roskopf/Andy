@@ -122,6 +122,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Terminal-lane transcript cap; ACP transcripts are coalesced and bounded by disk (8 MB). */
 private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
+/** GUI Settings writes `workspace.properties`; standalone andyd must reload it. */
+private const val LOCAL_MODEL_SETTINGS_POLL_MILLIS = 750L
 /**
  * Review/verify agents can look idle on screen before the JSON artifact lands on disk.
  * Production waits this long after process exit; tests inject a short value so missing
@@ -3280,10 +3282,7 @@ class DesktopAgentRunService(
             _localModelBackends.value = emptyMap()
             return
         }
-        val workspace = when (val store = workspaceStore) {
-            is DesktopWorkspaceStore -> store.state.value
-            else -> runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
-        }
+        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
         val models = withContext(Dispatchers.IO) {
             statuses
                 .mapNotNull { status ->
@@ -3294,7 +3293,9 @@ class DesktopAgentRunService(
                 .filterNotNull()
                 .toMap()
         }
-        val localModels = withContext(Dispatchers.IO) { localModelProbe.query(workspace) }
+        val localModels = withContext(Dispatchers.IO) {
+            runCatching { localModelProbe.query(workspace) }.getOrElse { emptyMap() }
+        }
         publishLocalModels(localModels)
         _providerModels.update { current ->
             current.filterKeys { !it.isLocalModelBackend } + models + localModels
@@ -3303,31 +3304,33 @@ class DesktopAgentRunService(
     }
 
     private fun watchLocalModelSettings() {
-        val store = workspaceStore as? DesktopWorkspaceStore ?: return
+        // GUI Settings persist ~/.andy/workspace.properties from the Compose process.
+        // In daemon-client mode that is a different DesktopWorkspaceStore instance than
+        // andyd's, so in-memory StateFlow never updates — poll load() like
+        // NetworkAccessHttpReconciler.
         scope.launch {
             ready.await()
-            var debounce: Job? = null
-            var last = localModelSettingsKey(store.state.value)
-            store.state.collect { workspace ->
+            var last = localModelSettingsKey(
+                runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() },
+            )
+            while (isActive) {
+                delay(LOCAL_MODEL_SETTINGS_POLL_MILLIS)
+                val workspace = runCatching { workspaceStore.load() }.getOrNull() ?: continue
                 val key = localModelSettingsKey(workspace)
-                if (key == last) return@collect
+                if (key == last) continue
                 last = key
-                debounce?.cancel()
-                debounce = scope.launch {
-                    delay(500)
-                    if (!enableProbes) {
-                        _localModelBackends.value = emptyMap()
-                        return@launch
-                    }
-                    val latest = store.state.value
-                    last = localModelSettingsKey(latest)
-                    val localModels = withContext(Dispatchers.IO) { localModelProbe.query(latest) }
-                    publishLocalModels(localModels)
-                    _providerModels.update { current ->
-                        current.filterKeys { !it.isLocalModelBackend } + localModels
-                    }
-                    AgentModelCatalog.publishDiscovered(_providerModels.value)
+                if (!enableProbes) {
+                    _localModelBackends.value = emptyMap()
+                    continue
                 }
+                val localModels = withContext(Dispatchers.IO) {
+                    runCatching { localModelProbe.query(workspace) }.getOrElse { emptyMap() }
+                }
+                publishLocalModels(localModels)
+                _providerModels.update { current ->
+                    current.filterKeys { !it.isLocalModelBackend } + localModels
+                }
+                AgentModelCatalog.publishDiscovered(_providerModels.value)
             }
         }
     }
@@ -3500,11 +3503,8 @@ class DesktopAgentRunService(
         }
     }
 
-    private fun extraProviderLaunchEnv(task: AgentTask): Map<String, String> {
-        val workspace = when (val store = workspaceStore) {
-            is DesktopWorkspaceStore -> store.state.value
-            else -> app.andy.model.WorkspaceState()
-        }
+    private suspend fun extraProviderLaunchEnv(task: AgentTask): Map<String, String> {
+        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
         val sidecar = LocalModelSidecar.envFor(task, workspace)
         val goose = if (task.runtimeKind() == AgentKind.Goose) gooseLaunchEnvironment(task) else emptyMap()
         return goose + sidecar
